@@ -1,9 +1,61 @@
-# sonos-lms
+# YeneY
 
-Make a Sonos speaker behave like a real Logitech Media Server player: synchronisable
-with other Squeezebox players, controllable from any LMS app (Material, iPeng,
-Squeezer, ...), and driven entirely through the standard slimproto protocol -- no
-Sonos-specific app, no separate remote, no manual pairing step per track.
+Make a Sonos speaker behave like a real [Lyrion Music Server](https://lyrion.org)
+(LMS, formerly Logitech Media Server) player: controllable from any LMS app
+(Material, iPeng, Squeezer, ...), with LMS's full sound processing,
+in lossless 24-bit FLAC, and driven entirely through the standard slimproto
+protocol -- no Sonos-specific app, no separate remote, no manual pairing step per
+track.
+
+**YeneY** is pronounced **YEN-ee**. The palindrome nods to *Sonos* and to
+[noson](https://github.com/janbar/noson), the library this project started on:
+YeneY is the "yes" answer to noson.
+
+> **Name change in progress.** This project was called *sonos-lms*. The repository,
+> the binary, the systemd services (`sonos-lms@<room>`), the settings
+> (`SONOS_LMS_*`) and the paths (`/opt/sonos-lms`, `/etc/sonos-lms`) still use the
+> old name until the rename is completed. The commands below are the ones that work
+> today.
+
+## YeneY compared with LMS-uPnP
+
+[philippe44/LMS-uPnP](https://github.com/philippe44/LMS-uPnP) (UPnPBridge) is the
+mature, general-purpose bridge between LMS and UPnP/DLNA speakers, Sonos being one
+of many. It has two modes: *per track* (the speaker plays one track at a time) and
+*flow* (one continuous stream). YeneY always uses one continuous stream, built
+for Sonos only.
+
+| | YeneY | LMS-uPnP, per track | LMS-uPnP, flow mode |
+|---|---|---|---|
+| LMS sound processing | ✔ ReplayGain, crossfade, DSP | ~ ReplayGain and resampling, no crossfade (none at all in pass-through mode) | ✔ ReplayGain, resampling and crossfade |
+| Lossless | ✔ 24-bit FLAC, including radio and streaming services | ✔ FLAC for files; radio passed through as is | ~ lossless, but changing titles need MP3/AAC |
+| Gapless | ✔ one continuous stream | ~ via SetNextAVTransportURI; depends on the speaker | ✔ gapless and crossfade |
+| Pause/resume from LMS and the Sonos app | ✔ without errors; Sonos-app pause passed back to LMS (see [Pause and resume on Sonos](#pause-and-resume-on-sonos)) | ✔ native per-track pause | ~ Sonos sees a live stream; pause needs a workaround (`live_pause`) |
+| Synchronises with other LMS players | ✔ | ? not verified | ? not verified |
+| Track title in the Sonos app | ✘ does not change during an album *(work in progress)* | ✔ per track | ~ only with MP3/AAC (ICY) |
+| Next/Previous in the Sonos app | ✘ *(under investigation)* | ? not verified | ✘ live stream |
+| Seeking in the Sonos app | ✘ only from LMS *(under investigation)* | ? not verified | ✘ live stream |
+| Other UPnP/DLNA speakers | ✘ Sonos only | ✔ | ✔ |
+| Maturity | new; tested on one Sonos Play:1 | mature, years of use on many devices | mature |
+
+✔ yes · ✘ no · ~ partly · ? not verified yet
+
+### Which one should I use?
+
+| Choose YeneY if you… | Choose LMS-uPnP if you… |
+|---|---|
+| control playback from LMS: Material Skin, the web interface, iPeng | mainly control playback from the Sonos app |
+| want the full LMS sound: ReplayGain, crossfade, DSP, in lossless 24-bit | want the right track title and Next/Previous in the Sonos app today |
+| want pause and resume to work from both LMS and the Sonos app, without error messages | have speakers from other brands as well |
+| only have Sonos speakers | prefer a long-proven solution |
+
+**Why YeneY exists.** LMS-uPnP makes you choose between two modes, and each gives
+something up. YeneY does everything in one mode: always lossless, gapless, with all
+LMS processing. It also solves a Sonos limit that affects any continuous stream: a
+Sonos cannot resume a paused radio-style FLAC stream without an error. YeneY works
+around that, and passes pause and play in the Sonos app back to LMS. The gap in the
+Sonos app itself (titles, Next/Previous, seeking) is being worked on; see
+[Why a continuous stream](#why-a-continuous-stream-and-how-this-differs-from-track-by-track-upnp).
 
 ## The problem this solves
 
@@ -69,22 +121,13 @@ FLAC stream, the way it would play an internet radio station. The audio is
 produced by squeezelite under full LMS control: LMS decides what plays, when, and
 how it sounds; the Sonos simply renders what it receives.
 
-The trade-off, honestly:
-
-| Continuous stream (sonos-lms) | Track-by-track UPnP |
-|---|---|
-| ✔ LMS processes everything: ReplayGain, crossfade, DSP | ✘ Needs workarounds -- the Sonos plays the original file |
-| ✔ Synchronises with every other LMS player | ✘ LMS sync groups need a shared stream |
-| ✔ Lossless FLAC, including internet radio and streaming services in LMS | ✔ Lossless for local files; radio/services need separate handling |
-| ✔ Pause/resume from LMS or the Sonos app without errors (see [Pause and resume on Sonos](#pause-and-resume-on-sonos)) | ✔ Native Sonos pause |
-| ✘ No Next/Previous button in the Sonos app *(under investigation)* | ✔ Next/Previous in the Sonos app |
-| ✘ Track title in the Sonos app does not change during an album *(work in progress)* | ✔ Correct title per track |
-| ✘ Seeking only from LMS *(under investigation)* | ✔ Seeking in the Sonos app too |
+The comparison table at the top shows the trade-off for YeneY and both LMS-uPnP
+modes.
 
 **In short:** a track-by-track approach mainly improves things *in the Sonos
 app*. If you control playback from LMS -- Material Skin, the web interface,
 iPeng -- what you gain is limited, and what you give up (LMS sound processing and
-synchronisation) is real. sonos-lms deliberately chooses the continuous stream and
+synchronisation) is real. YeneY deliberately chooses the continuous stream and
 treats the Sonos as a real LMS player.
 
 The three ✘ points share one root cause: Sonos treats the stream as internet
@@ -445,23 +488,22 @@ simple fix: stop instead of pause.
 
 ## The UPnP layer
 
-### yeney — our own UPnP layer
+### The YeneY UPnP layer
 
-**yeney** (pronounced **YEN-ee**) is our small UPnP discovery and SOAP control
-layer. Its palindrome name nods to sonos and noson: the “yes” answer to noson.
-It gradually replaces [noson](https://github.com/janbar/noson), the library by
+YeneY's own UPnP layer is a small discovery, SOAP control and event layer. It
+gradually replaces [noson](https://github.com/janbar/noson), the library by
 Jean-Luc Barrière that made this bridge possible.
 
-`SONOS_LMS_UPNP=yeney` selects yeney once at startup. `own` remains a permanent
-alias so existing drop-ins keep working. **noson remains the default until yeney
-has proven itself**; yeney is experimental in phase 1. For example:
+`SONOS_LMS_UPNP=yeney` selects the YeneY layer once at startup. `own` remains a
+permanent alias so existing drop-ins keep working. **noson remains the default
+until the YeneY layer has proven itself**; it is still experimental. For example:
 
 ```sh
 SONOS_LMS_UPNP=yeney ./sonos-lms --room="Sonos Port" --server=192.0.2.10
 ```
 
 For a service, set `Environment=SONOS_LMS_UPNP=yeney` in its systemd override.
-yeney discovers speakers with SSDP and keeps one speaker-state snapshot from
+The YeneY layer discovers speakers with SSDP and keeps one speaker-state snapshot from
 AVTransport, RenderingControl and ZoneGroupTopology events. AVTransport commands
 and reads target the group coordinator; volume and topology target the room's own
 speaker. Bridging a member room therefore controls its group, as noson does. The
@@ -476,7 +518,7 @@ move only AVTransport. The listener binds an ephemeral port on `0.0.0.0`; use
 The first NOTIFY body after each subscription or renewal is logged per service,
 on one line, truncated to 4 KB, to collect real device fixtures.
 
-With all three subscriptions active, yeney polls only position while PLAYING or
+With all three subscriptions active, the YeneY layer polls only position while PLAYING or
 TRANSITIONING (at most once per second), plus a transport sanity check every
 30 seconds. A missing subscription enables polling only for that service until
 it recovers. Logs report `yeney: monitor events` or the affected polling service
@@ -501,14 +543,12 @@ library service or external-playback ownership policy is enabled by this switch.
 
 ## Related
 
-[philippe44/LMS-uPnP](https://github.com/philippe44/LMS-uPnP) (UPnPBridge) is the
-mature, general-purpose bridge between LMS and UPnP/DLNA renderers, Sonos being
-one of many. It offers both a per-track mode and a continuous "flow" mode; in flow
-mode it can show changing titles only with MP3/AAC, because that is the only case
-in which Sonos accepts ICY metadata. sonos-lms is Sonos-only by design: always
-lossless FLAC, error-free pause/resume from LMS and the Sonos app, Sonos-app
-pause/play relayed back to LMS, and a per-room installer. If you need non-Sonos
-UPnP renderers or Next/Previous in the Sonos app today, LMS-uPnP is worth a look.
+- [philippe44/LMS-uPnP](https://github.com/philippe44/LMS-uPnP) -- the mature,
+  general-purpose LMS-to-UPnP bridge; see the comparison at the top.
+- [janbar/noson](https://github.com/janbar/noson) -- the Sonos library by
+  Jean-Luc Barrière that YeneY started on and is gradually replacing.
+- [ralph-irving/squeezelite](https://github.com/ralph-irving/squeezelite) --
+  the LMS player YeneY is built on.
 
 ## License
 
