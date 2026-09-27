@@ -16,3 +16,5 @@ attic
 /upnp-test
 /own-control-test
 /noson-golden
+
+speaker-state-test

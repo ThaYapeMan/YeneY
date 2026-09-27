@@ -121,13 +121,13 @@ class Speaker(BaseHTTPRequestHandler):
 
 
 def run(mode, command, golden=None):
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Speaker)
+    server = ThreadingHTTPServer(('0.0.0.0', 0), Speaker)
     server.current_uri = ''  # GetMediaInfo can precede the first SetAVTransportURI.
     server.mode, server.counts, server.requests, server.errors, server.golden = mode, {}, [], [], golden or {}
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        result = subprocess.run([*command, str(server.server_port)], cwd=ROOT, check=True, timeout=40, capture_output=True, text=True)
+        result = subprocess.run([*command, str(server.server_port)], cwd=ROOT, check=True, timeout=40, capture_output=True, text=True, env={**os.environ, "SONOS_LMS_YENEY_POLL": "legacy"})
         print(result.stdout, end='')
         server.output = result.stdout
         assert not server.errors, server.errors
@@ -176,7 +176,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-play-timeout-') as temp:
         assert tested.counts['Play'] == tested.counts['SetAVTransportURI'] == 1
         assert tested.output.count('PlaySqueezeBox: title=') == 1
         if mode == 'timeout-playing':
-            assert 'UPnP Play failed: timeout (HTTP 0)' in tested.output
+            assert 'yeney: SOAP action=Play error=timeout HTTP=0' in tested.output
             assert 'PlayStream(stream 7): device already playing current stream; no retry' in tested.output
         else:
             assert 'failed' not in tested.output
@@ -229,36 +229,57 @@ class EventSpeaker(Speaker):
         super().setup()
         self.server = getattr(self.server, 'root', self.server)
     def do_SUBSCRIBE(self):
-        assert self.path == '/MediaRenderer/AVTransport/Event'
+        path = self.path
+        assert path in ('/MediaRenderer/AVTransport/Event', '/MediaRenderer/RenderingControl/Event', '/ZoneGroupTopology/Event')
         now = time.monotonic()
         sid = self.headers.get('SID')
-        self.server.subscriptions.append((now, dict(self.headers), self.headers['Host']))
-        assert self.headers['TIMEOUT'] == 'Second-3600'
-        if self.server.mode == 'fallback':
+        self.server.subscriptions.append((now, dict(self.headers), self.headers['Host'], path))
+        assert self.headers['TIMEOUT'] == 'Second-300'
+        if self.server.mode == 'fallback' or (self.server.mode == 'partial' and 'RenderingControl' in path):
             self.send('', 503)
             return
+        slot = self.server.services.setdefault(path, {'fresh': 0, 'renewals': 0, 'sid': ''})
+        suffix = '/avt' if 'AVTransport' in path else '/rc' if 'RenderingControl' in path else '/zgt'
         if sid:
             assert 'CALLBACK' not in self.headers and 'NT' not in self.headers
-            assert sid == self.server.sid
-            self.server.renewals += 1
-            if self.server.renewals == 1 and self.server.mode == 'lifecycle':
+            assert sid == slot['sid']
+            slot['renewals'] += 1
+            if slot['renewals'] == 1 and self.server.mode == 'lifecycle' and suffix == '/avt':
                 self.send('', 412)
                 return
         else:
             assert self.headers['NT'] == 'upnp:event'
             callback = self.headers['CALLBACK']
-            assert callback.startswith('<http://127.0.0.1:') and callback.endswith('/avt>')
-            self.server.callback = callback[1:-1]
-            self.server.fresh += 1
-            self.server.sid = f'uuid:gena-{self.server.fresh}'
+            assert callback.startswith(('<http://127.0.0.1:', '<http://127.0.0.2:')) and callback.endswith(suffix + '>')
+            slot['callback'] = callback[1:-1]
+            slot['fresh'] += 1
+            slot['sid'] = f'uuid:{suffix[1:]}-{slot["fresh"]}'
+            if suffix == '/avt':
+                self.server.callback = slot['callback']
+                self.server.sid = slot['sid']
+        if not sid and self.server.mode in ('events', 'partial'):
+            def initial():
+                try:
+                    fixture = 'sonos-lastchange.xml' if suffix == '/avt' else 'rendering-lastchange.xml' if suffix == '/rc' else 'zone-group-notify.xml'
+                    body = (ROOT / 'tests/fixtures' / fixture).read_text().replace('PLAYING', 'STOPPED')
+                    endpoint = urlsplit(slot['callback'])
+                    connection = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=2)
+                    connection.request('NOTIFY', endpoint.path, body=body.encode(), headers={
+                        'SID': slot['sid'], 'SEQ': '0', 'NT': 'upnp:event', 'NTS': 'upnp:propchange'})
+                    response = connection.getresponse()
+                    assert response.status == 200, response.status
+                    response.read(); connection.close()
+                except Exception as error: self.server.errors.append(error)
+            # Send initial NOTIFY before the SUBSCRIBE response publishes its SID.
+            threading.Thread(target=initial).start()
+            time.sleep(.05)
         self.send_response(200)
-        self.send_header('SID', self.server.sid)
-        self.send_header('TIMEOUT', 'Second-2' if self.server.mode == 'lifecycle' else 'Second-3600')
+        self.send_header('SID', slot['sid'])
+        self.send_header('TIMEOUT', 'Second-2' if self.server.mode in ('lifecycle', 'ip-change') else 'Second-300')
         self.send_header('Content-Length', '0')
         self.end_headers()
     def do_UNSUBSCRIBE(self):
-        assert self.path == '/MediaRenderer/AVTransport/Event'
-        self.server.unsubscriptions.append((self.headers['SID'], self.headers['Host']))
+        self.server.unsubscriptions.append((self.headers['SID'], self.headers['Host'], self.path))
         self.send('')
     def notify(self, state, sid=None, expected=200):
         endpoint = urlsplit(self.server.callback)
@@ -276,7 +297,7 @@ def event_run(mode, command):
     server.mode, server.counts, server.requests, server.errors, server.golden = mode, {}, [], [], {}
     server.current_uri = ''
     server.sid, server.callback = '', ''
-    server.fresh, server.renewals = 0, 0
+    server.services = {}
     server.subscriptions, server.unsubscriptions = [], []
     peer = ThreadingHTTPServer(('127.0.0.2', server.server_port), EventSpeaker)
     peer.root = server
@@ -284,22 +305,50 @@ def event_run(mode, command):
     for thread in threads: thread.start()
     try:
         result = subprocess.run([*command, mode, str(server.server_port)], cwd=ROOT,
-                                check=True, capture_output=True, text=True, timeout=20)
+                                check=True, capture_output=True, text=True, timeout=20, env={**os.environ, "SONOS_LMS_YENEY_POLL": "legacy"})
         print(result.stdout, end='')
         assert not server.errors, server.errors
+        avt = '/MediaRenderer/AVTransport/Event'
         if mode == 'fallback':
-            assert server.fresh == 0 and not server.unsubscriptions
-            assert 'polling only' in result.stdout
-        elif mode == 'lifecycle':
-            assert server.fresh == 3  # original, 412 recovery, coordinator change
-            assert server.renewals >= 2
-            delta = server.subscriptions[1][0] - server.subscriptions[0][0]
-            assert .8 <= delta < 1.7, delta
-            assert len(server.unsubscriptions) == 2, server.unsubscriptions
-            assert server.unsubscriptions[0][1].startswith('127.0.0.1:')
-            assert server.unsubscriptions[1][1].startswith('127.0.0.2:')
+            assert not server.services and not server.unsubscriptions
+            assert 'reason=HTTP-503' in result.stdout
+            for path in set(s[3] for s in server.subscriptions):
+                times = [s[0] for s in server.subscriptions if s[3] == path]
+                assert len(times) >= 3, times
+                assert .8 <= times[1] - times[0] < 1.8
+                assert 4.8 <= times[2] - times[1] < 5.8
         else:
-            assert server.fresh == 1 and len(server.unsubscriptions) == 1
+            assert len(server.services) == (2 if mode == 'partial' else 3), server.services
+            slot = server.services[avt]
+            if mode == 'ip-change':
+                assert all(s['fresh'] == 2 for s in server.services.values()), server.services
+                assert len(server.unsubscriptions) == 6
+                callbacks = [s[1].get('CALLBACK', '') for s in server.subscriptions]
+                assert any(c.startswith('<http://127.0.0.2:') for c in callbacks)
+            elif mode in ('events', 'partial'):
+                assert server.counts['GetTransportInfo'] == 1, server.counts
+                assert server.counts['GetMediaInfo'] == 1, server.counts
+                assert server.counts['GetPositionInfo'] == 1, server.counts
+                assert server.counts['GetZoneGroupState'] == 2, server.counts
+                assert server.counts['GetVolume'] == 1 if mode == 'events' else server.counts['GetVolume'] >= 3
+                assert result.stdout.count('yeney: first NOTIFY') == len(server.services)
+                assert 'yeney: monitor events' in result.stdout if mode == 'events' else 'yeney: monitor polling RenderingControl reason=HTTP-503' in result.stdout
+                assert len(server.unsubscriptions) == len(server.services)
+            elif mode == 'lifecycle':
+                assert slot['fresh'] == 3, slot
+                assert slot['renewals'] >= 2
+                avt_requests = [s for s in server.subscriptions if s[3] == avt]
+                delta = avt_requests[1][0] - avt_requests[0][0]
+                assert .8 <= delta < 1.7, delta
+                retry = avt_requests[2][0] - avt_requests[1][0]
+                assert .8 <= retry < 1.7, retry
+                assert all(s['fresh'] == 1 for p,s in server.services.items() if p != avt)
+                assert len(server.unsubscriptions) == 4, server.unsubscriptions
+                assert any(s[1].startswith('127.0.0.2:') and s[2] == avt for s in server.unsubscriptions)
+                assert all(s[1].startswith('127.0.0.1:') for s in server.unsubscriptions if s[2] != avt)
+            else:
+                assert all(s['fresh'] == 1 for s in server.services.values())
+                assert len(server.unsubscriptions) == 3
         checks = 'polling fallback after subscription failure' if mode == 'fallback' else (
             'SUBSCRIBE headers/SID, half-time renewal, 412 recovery, coordinator handoff and UNSUBSCRIBE' if mode == 'lifecycle'
             else 'SID validation, callback delivery and shutdown UNSUBSCRIBE')
@@ -317,7 +366,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-gena-') as temp:
                       ('gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
                     '-lpthread', '-o', str(executable)], check=True)
     subprocess.run([str(executable)], cwd=ROOT, check=True)
-    for mode in ('lifecycle', 'fallback', 'stale'):
+    for mode in ('lifecycle', 'fallback', 'stale', 'events', 'partial', 'ip-change'):
         event_run(mode, [str(executable)])
 
     # Reuse the existing device-resume fixture and all production transport
@@ -369,7 +418,7 @@ try:
         speaker = run('stopped-media-info', [str(ROOT / 'own-control-test'), '--stopped-media-info'])
         assert speaker.counts['GetMediaInfo'] == expected, speaker.counts
         assert speaker.counts['GetTransportInfo'] == 4, speaker.counts
-        assert f'yeney stopped GetMediaInfo: {mode or 0}' in speaker.output
+        assert f'stopped_mediainfo={mode or 0}' in speaker.output
         print(f'PASS: STOPPED_MEDIAINFO={mode or "default"}, held={held}: STOPPED/PAUSED polling, active polling and explicit reads verified')
 finally:
     os.environ.pop('TEST_HELD_REQUEST', None)

@@ -36,6 +36,7 @@ HttpResponse httpPost(const HttpUrl&, const std::map<std::string, std::string>& 
 }
 }
 int main() {
+    setenv("SONOS_LMS_YENEY_POLL", "legacy", 1);
     upnp::OwnSpeakerControl control([] { return 1400u; }, 1400, [&] { return activity; });
     assert(control.discover("Study", "127.0.0.1"));
     control.poll();

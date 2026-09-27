@@ -43,7 +43,7 @@ sonos-lms: $(OBJS) $(OBJS_SL) noson/noson/libnoson.a
 		-lpthread -lm -lrt -ldl -lasound
 
 clean:
-	rm -f *.o tests/*.o upnp/*.o squeezelite/*.o sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+	rm -f speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
 
 slimproto_sonos.o: slimproto_sonos.c squeezelite/slimproto.c squeezelite/squeezelite.h
 
@@ -53,7 +53,8 @@ install: sonos-lms
 encoder-test: tests/audio_pack_fixture.o squeezelite/output_pack.o upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h noson/noson/libnoson.a
 	g++ -g -O2 -Wall -I. -Inoson/noson/src -Inoson/noson/public/noson -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.o squeezelite/output_pack.o sbencoder.cpp upnp/encoded_buffer.cpp noson/noson/libnoson.a -lFLAC++ -lFLAC -lcrypto -lssl -lz -lpthread
 
-test: sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+test: speaker-state-test sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+	./speaker-state-test
 	./upnp-test
 	python3 tests/list_rooms_test.py
 	python3 tests/installer_test.py
@@ -70,6 +71,7 @@ test: sonos-lms position-test encoder-test resume-state-test streamer-test upnp-
 	SONOS_LMS_PAUSE=pause ./streamer-test
 	env -u SONOS_LMS_PAUSE ./streamer-test stop
 	python3 tests/device_resume_test.py
+	python3 tests/yeney_timeline_test.py
 	python3 tests/lms_discovery_test.py
 	python3 tests/device_test_script_test.py
 	python3 tests/pause_mode_test.py
@@ -99,7 +101,7 @@ sonos-lms.o sbstreamer.o streamer-test: stream_session.h
 
 $(OBJS) streamer-test: upnp/speaker_control.h upnp/stream_server.h upnp/noson_stream_server.h upnp/noson_speaker_control.h
 
-$(UPNP_OBJS) sonos-lms.o: upnp/xml.h upnp/http.h upnp/soap.h upnp/discovery.h upnp/own_speaker_control.h upnp/backend.h upnp/gena.h
+$(UPNP_OBJS) sonos-lms.o: $(wildcard upnp/*.h)
 
 upnp-test: $(wildcard upnp/*.h) tests/upnp_test.cpp upnp/xml.cpp upnp/soap.cpp upnp/http.cpp upnp/discovery.cpp
 	g++ -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^)
@@ -121,3 +123,6 @@ sonos-lms.o sonos-status.o: sonos-status.h
 sonos-status.o: speaker_uri.h stream_session.h
 
 output_sonos.o slimproto_sonos.o audio_mode.o sonos-lms.o sbstreamer.o streamer-test: audio_mode.h
+
+speaker-state-test: tests/speaker_state_test.cpp $(wildcard upnp/*.h) upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
+	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/speaker_state_test.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp

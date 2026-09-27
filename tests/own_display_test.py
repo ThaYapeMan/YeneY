@@ -12,6 +12,6 @@ with tempfile.TemporaryDirectory(prefix='sonos-own-display-') as directory:
                     '-lpthread', '-o', str(executable)], check=True)
     result = subprocess.run([str(executable)], capture_output=True, text=True, check=True)
     print(result.stdout, end='')
-    message = 'UPnP GetPositionInfo: no reply while speaker holds a stream request (paused)'
+    message = 'yeney: SOAP action=GetPositionInfo reason=no-reply-held-request state=paused'
     assert result.stdout.count(message) == 2, result.stdout  # two distinct pauses
     assert 'failed' not in result.stdout, result.stdout

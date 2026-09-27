@@ -57,11 +57,30 @@ int main(int argc, char** argv) {
     assert(!sample.empty());
     if (argc == 1) { listenerTest(); return 0; }
     const std::string mode = argv[1]; const unsigned port = std::stoul(argv[2]);
+    if (mode == "ip-change") {
+        const auto began = std::chrono::steady_clock::now();
+        Subscriptions subscriptions(port, 0, [] { return std::array<std::string,3>{{"127.0.0.1", "127.0.0.1", "127.0.0.1"}}; },
+            [](const GenaEvent&) { return true; }, [&](const std::string&, unsigned) {
+                return std::chrono::steady_clock::now() - began < std::chrono::milliseconds(1500) ? "127.0.0.1" : "127.0.0.2";
+            });
+        std::this_thread::sleep_for(std::chrono::milliseconds(2400));
+        const auto health = subscriptions.health(); assert(health.active[0] && health.active[1] && health.active[2]);
+        std::cout << "PASS: GENA local-address change resubscribes with the new callback URL\n";
+        return 0;
+    }
+    if (mode == "events" || mode == "partial") setenv("SONOS_LMS_YENEY_POLL", "events", 1);
     std::atomic<unsigned> events{0};
     OwnSpeakerControl control([] { return 1450u; }, port, {}, [&] { ++events; });
     assert(control.discover("Study", "127.0.0.1"));
-    if (mode == "lifecycle" || mode == "fallback") {
-        std::this_thread::sleep_for(std::chrono::milliseconds(mode == "lifecycle" ? 2600 : 200));
+    if (mode == "events" || mode == "partial") {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        assert(control.transportInfo().state == "STOPPED");
+        for (unsigned i = 0; i < 5; ++i) { control.poll(); std::this_thread::sleep_for(std::chrono::milliseconds(500)); }
+        if (mode == "events") assert(control.displayVolume() == 15);
+        assert(control.transportInfo().uriKnown);
+        std::cout << "PASS: GENA " << mode << ": stopped monitor uses only missing services\n";
+    } else if (mode == "lifecycle" || mode == "fallback") {
+        std::this_thread::sleep_for(std::chrono::milliseconds(mode == "lifecycle" ? 2600 : 6500));
         TransportInfo info; assert(control.readTransportInfo(info) && info.state == "PLAYING");
         if (mode == "lifecycle") {
             std::this_thread::sleep_for(std::chrono::seconds(3));
