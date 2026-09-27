@@ -169,7 +169,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-play-timeout-') as temp:
     executable = temp / 'play-timeout-test'
     subprocess.run(['g++', '-O2', '-Wall', '-Wextra', '-I', str(ROOT), '-I', str(temp),
                     str(ROOT / 'tests/play_timeout_fixture.cpp'),
-                    *[str(ROOT / ('upnp/' + name + '.cpp')) for name in ('gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
+                    *[str(ROOT / ('upnp/' + name + '.cpp')) for name in ('http_server', 'gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
                     '-lpthread', '-lcrypto', '-o', str(executable)], check=True)
     for mode in ('delayed-play', 'timeout-playing'):
         tested = run(mode, [str(executable)])
@@ -189,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-own-poll-') as temp:
     executable = temp / 'poll-test'
     subprocess.run(['g++', '-O2', '-Wall', '-Wextra', '-I', str(ROOT), '-I', str(temp),
                     str(ROOT / 'tests/own_poll_fixture.cpp'), str(ROOT / 'sonos-status.cpp'),
-                    *[str(ROOT / ('upnp/' + name + '.cpp')) for name in ('gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
+                    *[str(ROOT / ('upnp/' + name + '.cpp')) for name in ('http_server', 'gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
                     '-lpthread', '-lcrypto', '-o', str(executable)], check=True)
     run('poll', [str(executable)])
     settings = temp / 'settings.cpp'
@@ -368,7 +368,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-gena-') as temp:
     subprocess.run(['g++', '-O2', '-Wall', '-Wextra', '-I', str(ROOT),
                     str(ROOT / 'tests/gena_fixture.cpp'),
                     *[str(ROOT / ('upnp/' + name + '.cpp')) for name in
-                      ('gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
+                      ('http_server', 'gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
                     '-lpthread', '-o', str(executable)], check=True)
     subprocess.run([str(executable)], cwd=ROOT, check=True)
     for mode in ('lifecycle', 'fallback', 'stale', 'events', 'partial', 'ip-change'):
@@ -406,7 +406,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-gena-') as temp:
     executable = Path(temp, 'gena-resume')
     subprocess.run(['g++', '-O2', '-Wall', '-Wextra', '-I', str(ROOT), '-I', str(ROOT/'tests'), '-I', temp,
                     str(path), *[str(ROOT / ('upnp/' + name + '.cpp')) for name in
-                      ('gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
+                      ('http_server', 'gena', 'own_speaker_control', 'xml', 'soap', 'http', 'discovery')],
                     '-lpthread', '-lcrypto', '-o', str(executable)], check=True)
     for mode in ('event-first', 'get-first'):
         output = event_run(mode, [str(executable)])

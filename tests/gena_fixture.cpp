@@ -27,7 +27,8 @@ static void listenerTest() {
         "&lt;Event&gt;&lt;InstanceID val=\"0\"&gt;&lt;CurrentTransportStatus val=\"OK\"/&gt;&lt;/InstanceID&gt;&lt;/Event&gt;"
         "</LastChange></e:property></e:propertyset>";
     assert(parseLastChange(delta, e) && e.state.empty() && e.status == "OK");
-    GenaListener listener([](const GenaEvent& e) { return e.sid == "uuid:test" && e.state == "PLAYING" && e.sequence == 3; });
+    HttpServer listener(0);
+    listener.setNotifyHandler([](const GenaEvent& e) { return e.sid == "uuid:test" && e.state == "PLAYING" && e.sequence == 3; });
     const HttpUrl url{"127.0.0.1", "/avt", listener.port()};
     assert(httpRequest("NOTIFY", url, headers, sample).status == 200);
     headers["SID"] = "uuid:wrong";
@@ -39,12 +40,13 @@ static void listenerTest() {
     const int slow = socket(AF_INET, SOCK_STREAM, 0); assert(slow >= 0);
     sockaddr_in address{}; address.sin_family = AF_INET; address.sin_port = htons(listener.port());
     inet_pton(AF_INET, "127.0.0.1", &address.sin_addr);
-    timeval timeout{2, 0}; setsockopt(slow, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+    timeval timeout{7, 0}; setsockopt(slow, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     assert(connect(slow, reinterpret_cast<sockaddr*>(&address), sizeof(address)) == 0);
     assert(send(slow, "NOTIFY /avt HTTP/1.1\r\n", 22, 0) == 22);
     auto begin = std::chrono::steady_clock::now();
-    char byte; assert(recv(slow, &byte, 1, 0) == 0);
-    assert(std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(1500));
+    char bytes[512]; const auto n = recv(slow, bytes, sizeof(bytes), 0);
+    assert(n > 0 && std::string(bytes,n).find("408 Request Timeout") != std::string::npos);
+    assert(std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(6500));
     close(slow);
     assert(httpRequest("NOTIFY", url, headers, sample).status == 200);
     std::cout << "PASS: GENA incomplete request deadline releases listener for the next NOTIFY\n";
@@ -59,7 +61,8 @@ int main(int argc, char** argv) {
     const std::string mode = argv[1]; const unsigned port = std::stoul(argv[2]);
     if (mode == "ip-change") {
         const auto began = std::chrono::steady_clock::now();
-        Subscriptions subscriptions(port, 0, [] { return std::array<std::string,3>{{"127.0.0.1", "127.0.0.1", "127.0.0.1"}}; },
+        HttpServer server(0);
+        Subscriptions subscriptions(port, server, [] { return std::array<std::string,3>{{"127.0.0.1", "127.0.0.1", "127.0.0.1"}}; },
             [](const GenaEvent&) { return true; }, [&](const std::string&, unsigned) {
                 return std::chrono::steady_clock::now() - began < std::chrono::milliseconds(1500) ? "127.0.0.1" : "127.0.0.2";
             });

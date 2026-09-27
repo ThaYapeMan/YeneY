@@ -513,8 +513,9 @@ HTTP stream, artwork and file server still use noson in both modes.
 request 300 seconds, renew halfway through the granted lifetime, and retry after
 one second, then every five seconds. Each renewal checks the local address towards
 the speaker; an address change creates a new subscription. Coordinator changes
-move only AVTransport. The listener binds an ephemeral port on `0.0.0.0`; use
-`Environment=SONOS_LMS_EVENT_PORT=1403` in the unit override for packet captures.
+move only AVTransport. The listener shares the HTTP stream port on `0.0.0.0`, selecting the first
+available port from 1400 through 1409. `SONOS_LMS_EVENT_PORT` has been removed;
+use the stream URL port for packet captures.
 The first NOTIFY body after each subscription or renewal is logged per service,
 on one line, truncated to 4 KB, to collect real device fixtures.
 

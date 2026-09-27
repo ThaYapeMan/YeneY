@@ -6,9 +6,10 @@
 #include <cstdlib>
 namespace upnp {
 OwnSpeakerControl::OwnSpeakerControl(std::function<unsigned()> port, unsigned controlPort,
-                                     std::function<StreamActivity()> activity, std::function<void()> callback)
+                                     std::function<StreamActivity()> activity, std::function<void()> callback,
+                                     std::shared_ptr<HttpServer> server)
     : streamPort(std::move(port)), speakerPort(controlPort), streamActivity(std::move(activity)),
-      eventCallback(std::move(callback)) {
+      eventCallback(std::move(callback)), eventServer(std::move(server)) {
     const char* mode = std::getenv("SONOS_LMS_YENEY_POLL");
     monitor.legacy = mode && std::string(mode) == "legacy";
     if (mode && std::string(mode) != "events" && std::string(mode) != "legacy")
@@ -22,14 +23,9 @@ OwnSpeakerControl::OwnSpeakerControl(std::function<unsigned()> port, unsigned co
 OwnSpeakerControl::~OwnSpeakerControl() { shutdownEvents(); }
 void OwnSpeakerControl::shutdownEvents() { subscriptions.reset(); }
 void OwnSpeakerControl::startEvents() {
-    unsigned port = 0;
-    if (const char* value = std::getenv("SONOS_LMS_EVENT_PORT")) {
-        char* end = nullptr; const auto number = std::strtoul(value, &end, 10);
-        if (!*value || *end || number > 65535) printf("yeney: setting key=SONOS_LMS_EVENT_PORT result=invalid fallback=ephemeral\n");
-        else port = number;
-    }
     try {
-        subscriptions.reset(new Subscriptions(speakerPort, port, [this] {
+        if (!eventServer) eventServer = std::make_shared<HttpServer>(0);
+        subscriptions.reset(new Subscriptions(speakerPort, *eventServer, [this] {
             const auto s = state.snapshot();
             return std::array<std::string, 3>{{s.group.ip, s.room.ip, s.room.ip}};
         }, [this](const GenaEvent& event) { return receiveEvent(event); }));

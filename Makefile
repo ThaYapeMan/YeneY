@@ -1,6 +1,6 @@
 FLAGS_SL = -g -O3 -Wall -fno-common -Isqueezelite -Wno-error=incompatible-pointer-types -fpermissive
 
-OWN_UPNP_SOURCES = upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
+OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o upnp/noson_stream_server.o upnp/noson_speaker_control.o
 
 OBJS = audio_mode.o $(UPNP_OBJS) sonos-lms.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
@@ -130,5 +130,7 @@ speaker-state-test: tests/speaker_state_test.cpp $(wildcard upnp/*.h) upnp/xml.c
 
 sonos-lms.o sbstreamer.o streamer-test resume-state-test: upnp/timing.h
 
-http-server-test: tests/http_server_fixture.cpp upnp/http_server.cpp upnp/http_server.h upnp/stream_server.h upnp/timing.h
-	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/http_server_fixture.cpp upnp/http_server.cpp -lpthread
+http-server-test: $(wildcard upnp/*.h) tests/http_server_fixture.cpp upnp/http_server.cpp upnp/http_server.h upnp/stream_server.h upnp/timing.h
+	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/http_server_fixture.cpp upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp -lpthread
+
+http-server-test: upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp noson/noson/src/data/pulseaudio_png.h

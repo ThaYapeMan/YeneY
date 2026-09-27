@@ -30,6 +30,12 @@ int main() {
         }
         return true;
     });
+    server.setNotifyHandler([](const GenaEvent& event) {
+        if (event.sid != "uuid:test" || event.sequence != 7) return false;
+        if (event.service == Service::AVTransport) return event.state == "PLAYING";
+        if (event.service == Service::RenderingControl) return event.update.volume == 26;
+        return event.topology.size() == 3 && event.topology.front().name == "Study";
+    });
     std::cout << "PORT " << server.port() << std::endl;
     std::cin.get();
 }

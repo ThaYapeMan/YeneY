@@ -1,4 +1,6 @@
 """Exercise the own listener on loopback, including real TCP backpressure."""
+from pathlib import Path
+import re
 import socket
 import subprocess
 import time
@@ -38,6 +40,26 @@ try:
     start = time.monotonic()
     assert b'408 Request Timeout' in request(b'GET /stream HTTP/1.1\r\n')
     assert 4.9 <= time.monotonic() - start < 6
+    for path, fixture in (('/avt', 'sonos-lastchange.xml'), ('/rc', 'rendering-lastchange.xml'), ('/zgt', 'zone-group-notify.xml')):
+        body = Path('tests/fixtures', fixture).read_bytes()
+        headers = (f'NOTIFY {path} HTTP/1.1\r\nNT: upnp:event\r\nNTS: upnp:propchange\r\n'
+                   f'SID: uuid:test\r\nSEQ: 7\r\nContent-Length: {len(body)}\r\n').encode()
+        assert b'200 OK' in request(headers + b'\r\n' + body)
+        for invalid in (headers.replace(b'SEQ: 7', b'SEQ: -1'), headers.replace(b'SEQ: 7', b'SEQ: 4294967296'),
+                        headers.replace(b'uuid:test', b'uuid:wrong'), headers + b'Transfer-Encoding: chunked\r\n',
+                        headers + b'SID: uuid:duplicate\r\n', headers.replace(b'NT: upnp:event', b'NT: wrong')):
+            assert b'412 Precondition Failed' in request(invalid + b'\r\n' + body)
+    assert b'404 Not Found' in request(b'NOTIFY /unknown HTTP/1.1\r\n\r\n')
+    icon = request(b'GET /images/pulseaudio.png?id=2.13.2 HTTP/1.1\r\n\r\n')
+    header, body = icon.split(b'\r\n\r\n', 1)
+    source = Path('noson/noson/src/data/pulseaudio_png.h').read_text().split('};')[0]
+    expected = bytes(int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{2})', source))
+    assert body == expected
+    assert b'Content-Type: image/png' in header and b'Cache-Control: public, max-age=86400' in header
+    assert f'Content-Length: {len(expected)}'.encode() in header
+    head = request(b'HEAD /images/pulseaudio.png HTTP/1.1\r\n\r\n')
+    assert head.split(b'\r\n\r\n',1)[1] == b''
+    print('PASS: shared-port NOTIFY dispatches AVTransport/RenderingControl/Topology with validation; icon GET/HEAD matches repository asset')
     print('PASS: own HTTP decoded query, case-insensitive headers, HEAD, 404, 16 KiB limit and 5 s header deadline')
     clients = [connect() for _ in range(16)]
     for client in clients:

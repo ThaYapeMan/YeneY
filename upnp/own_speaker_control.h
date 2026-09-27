@@ -16,7 +16,8 @@ class OwnSpeakerControl : public SpeakerControl {
 public:
     explicit OwnSpeakerControl(std::function<unsigned()> streamPort, unsigned speakerPort = 1400,
                                std::function<StreamActivity()> activity = {},
-                               std::function<void()> eventCallback = {});
+                               std::function<void()> eventCallback = {},
+                               std::shared_ptr<HttpServer> server = {});
     ~OwnSpeakerControl() override;
     void shutdownEvents();
     bool discover(const std::string&, const std::string& = {}) override;
@@ -49,6 +50,7 @@ private:
     MonitorPolicy monitor;
     std::string monitorLog;
     std::function<void()> eventCallback;
+    std::shared_ptr<HttpServer> eventServer;
     std::unique_ptr<Subscriptions> subscriptions;
     void startEvents();
     bool receiveEvent(const GenaEvent&);

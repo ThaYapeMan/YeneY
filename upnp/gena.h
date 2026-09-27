@@ -1,10 +1,9 @@
 #pragma once
 #include "event_parsers.h"
-#include <atomic>
+#include "stream_server.h"
 #include <cstdint>
 #include <functional>
 #include <string>
-#include <thread>
 namespace upnp {
 struct GenaEvent {
     std::string sid, state, status;
@@ -14,23 +13,10 @@ struct GenaEvent {
     StateUpdate update;
     std::vector<Speaker> topology;
 };
-// LastChange is XML text inside a namespaced propertyset. No bridge state.
-bool parseLastChange(const std::string& body, GenaEvent& event);
-class GenaListener {
-public:
-    using Handler = std::function<bool(const GenaEvent&)>;
-    explicit GenaListener(Handler handler, unsigned port = 0);
-    ~GenaListener();
-    unsigned port() const { return boundPort; }
-    GenaListener(const GenaListener&) = delete;
-    GenaListener& operator=(const GenaListener&) = delete;
-private:
-    void run();
-    void serve(int client);
-    Handler handler;
-    int fd = -1;
-    unsigned boundPort = 0;
-    std::atomic<bool> stopping{false};
-    std::thread worker;
-};
+using GenaHandler = std::function<bool(const GenaEvent&)>;
+// Validation is independent of the shared HTTP listener and bridge state.
+bool parseLastChange(const std::string&, GenaEvent&);
+bool parseGenaHeaders(const std::string& path, const std::string& version,
+                      const RequestHeaders&, size_t& length, GenaEvent&);
+bool parseGenaBody(const std::string&, GenaEvent&);
 }

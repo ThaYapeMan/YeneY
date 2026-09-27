@@ -1,5 +1,6 @@
 #pragma once
 #include "stream_server.h"
+#include "gena.h"
 #include <memory>
 
 namespace upnp {
@@ -22,6 +23,8 @@ public:
         const std::string&, const std::string&, Handler) override;
     StreamResource resource(const std::string&) override;
     unsigned port() override;
+    // Clearing waits for any in-flight handler, so its owner can be destroyed.
+    void setNotifyHandler(GenaHandler);
     HttpServer(const HttpServer&) = delete;
     HttpServer& operator=(const HttpServer&) = delete;
 private:

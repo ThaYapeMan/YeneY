@@ -1,5 +1,7 @@
 #pragma once
 #include "gena.h"
+#include "http_server.h"
+#include <thread>
 #include "http.h"
 #include "timing.h"
 #include <algorithm>
@@ -46,17 +48,18 @@ class Subscriptions {
 public:
     using Targets = std::function<std::array<std::string, 3>()>;
     using Address = std::function<std::string(const std::string&, unsigned)>;
-    Subscriptions(unsigned speakerPort, unsigned eventPort, Targets targets, GenaListener::Handler handler,
+    Subscriptions(unsigned speakerPort, HttpServer& server, Targets targets, GenaHandler handler,
                   Address address = routeAddress)
-        : port(speakerPort), targets(std::move(targets)), handler(std::move(handler)), address(std::move(address)) {
-        listener.reset(new GenaListener([this](const GenaEvent& event) { return receive(event); }, eventPort));
-        worker = std::thread([this] { run(); });
+        : port(speakerPort), server(server), targets(std::move(targets)), handler(std::move(handler)), address(std::move(address)) {
+        server.setNotifyHandler([this](const GenaEvent& event) { return receive(event); });
+        try { worker = std::thread([this] { run(); }); }
+        catch (...) { server.setNotifyHandler({}); throw; }
     }
     ~Subscriptions() {
         { std::lock_guard<std::mutex> lock(mutex); stopping = true; }
         wake.notify_all();
         if (worker.joinable()) worker.join();
-        listener.reset();
+        server.setNotifyHandler({});
     }
     SubscriptionHealth health() const {
         const auto desired = targets();
@@ -75,14 +78,14 @@ private:
         bool subscribing = false, first = true;
     };
     unsigned port;
+    HttpServer& server;
     Targets targets;
-    GenaListener::Handler handler;
+    GenaHandler handler;
     Address address;
     mutable std::mutex mutex;
     std::condition_variable wake;
     std::array<Slot, 3> slots;
     bool stopping = false;
-    std::unique_ptr<GenaListener> listener;
     std::thread worker;
     void unsubscribe(const Slot& slot, Service service) {
         if (!slot.sid.empty()) httpRequest("UNSUBSCRIBE", {slot.host, subscriptionPath(service), port},
@@ -132,7 +135,7 @@ private:
                 if (!fresh) headers["SID"] = before.sid;
                 else {
                     headers["NT"] = "upnp:event";
-                    headers["CALLBACK"] = "<http://" + local + ":" + std::to_string(listener->port()) + eventPath(service) + ">";
+                    headers["CALLBACK"] = "<http://" + local + ":" + std::to_string(server.port()) + eventPath(service) + ">";
                 }
                 HttpResponse response;
                 if (local.empty() || desired[i].empty()) response.error = "no-local-address";
