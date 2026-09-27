@@ -3,6 +3,21 @@
 #include <cassert>
 #include <iostream>
 int main() {
+    ResumeState pair;
+    const auto pairNow = ResumeState::Clock::time_point{};
+    pair.command('q'); pair.stopForPause(9);
+    assert(!pair.observeGetPair(9, std::chrono::microseconds(1200), pairNow));
+    pair.completedQStop(9);
+    assert(!pair.observeGetPair(8, std::chrono::microseconds(1200), pairNow));
+    assert(!pair.observeGetPair(9, std::chrono::milliseconds(30), pairNow));
+    assert(pair.observeGetPair(9, std::chrono::microseconds(1200), pairNow));
+    assert(pair.takeResume(9, 9, pairNow));
+    assert(pair.expireResume(pairNow + std::chrono::seconds(5)));
+    pair.observe("TRANSITIONING");
+    assert(!pair.takeResume(9, 9, pairNow + std::chrono::seconds(5)));
+    assert(!pair.expireGetPairConfirmation(pairNow + std::chrono::seconds(15)));
+    std::cout << "PASS: pair only after completed q-Stop; stale IDs and 30 ms rejected; late event after lease cannot repeat play\n";
+
     ResumeState lease;
     const auto leaseNow = ResumeState::Clock::now();
     lease.command('p'); lease.stopForPause(9); lease.observe("STOPPED");

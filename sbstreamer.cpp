@@ -12,6 +12,7 @@
 
 #include "sbstreamer.h"
 #include "stream_session.h"
+#include "upnp/timing.h"
 #include "stream_close_log.h"
 
 #include "sbencoder.h"
@@ -56,6 +57,7 @@ extern "C" void set_squeezebox_audio_rate(unsigned stream, unsigned rate) {
 // Ownership is independent of socket state. All request fields and slots are
 // protected by g_enc_mutex; only ACTIVE requests have an encoder.
 struct StreamRequest {
+    std::chrono::steady_clock::time_point arrived = std::chrono::steady_clock::now();
     unsigned long long id;
     unsigned stream;
     std::shared_ptr<SBEncoder> encoder;
@@ -93,6 +95,8 @@ static void activateRequest(const std::shared_ptr<StreamRequest>& request, bool 
 }
 static unsigned endedByPause = 0;
 extern void ResumeSqueezeBox(unsigned current);
+extern void ResumeSqueezeBoxGetPair(unsigned, unsigned long long, unsigned long long,
+                                  std::chrono::steady_clock::duration);
 extern std::string SqueezeBoxURL(unsigned current);
 extern "C" unsigned get_squeezebox_stream_id(void);
 extern "C" unsigned get_lms_stream_serial(void);
@@ -297,6 +301,8 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
         return;
     }
 
+    unsigned long long pairActive = 0;
+    std::chrono::steady_clock::duration pairSeparation{};
     {
         std::lock_guard<std::mutex> lock(g_enc_mutex);
         // A track change may have won the race since request validation.
@@ -314,10 +320,16 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
                 activateRequest(request, false);
             } else {
                 standbyRequests.push_back(request);
+                pairSeparation = request->arrived - activeRequest->arrived;
+                if (pairSeparation >= std::chrono::steady_clock::duration::zero()
+                    && pairSeparation <= upnp::timing::kGetPairWindow)
+                    pairActive = activeRequest->id;
                 printf("stream %d: GET #%llu STANDBY\n", stream, request->id);
             }
         }
     }
+
+    if (pairActive) ResumeSqueezeBoxGetPair(stream, pairActive, request->id, pairSeparation);
 
     std::shared_ptr<SBEncoder> enc;
     bool opened = false;

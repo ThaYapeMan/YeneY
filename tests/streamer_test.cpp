@@ -50,6 +50,7 @@ extern "C" int squeezebox_response_open(unsigned stream);
 extern "C" void acknowledge_squeezebox_resume(unsigned stream);
 extern "C" void invalidate_squeezebox_held_get(unsigned stream);
 std::string SqueezeBoxURL(unsigned id) { return "http://bridge/music/squeezebox.flac?session=" + streamSessionToken() + "&stream=" + std::to_string(id); }
+void ResumeSqueezeBoxGetPair(unsigned, unsigned long long, unsigned long long, std::chrono::steady_clock::duration) {}
 void ResumeSqueezeBox(unsigned id) {
     std::lock_guard<std::mutex> lock(stateMutex);
     state.observe(deviceState);

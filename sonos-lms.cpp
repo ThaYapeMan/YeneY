@@ -294,7 +294,18 @@ static void dispatchDeferredStop()
                         : "strm q -> UPnP Pause (400 ms elapsed)\n");
     if (!(stopForPause ? gPlayer->stop() : gPlayer->pause()))
         printf("strm q: device transport command failed\n");
+    else if (stopForPause) {
+        std::lock_guard<std::mutex> lock(resumeMutex);
+        resumeState.completedQStop(streamId.load());
+    }
     flush_squeezebox_response();
+}
+
+static void checkGetPairConfirmation()
+{
+    std::lock_guard<std::mutex> lock(resumeMutex);
+    if (resumeState.expireGetPairConfirmation())
+        printf("Device-initiated resume: GET pair not confirmed\n");
 }
 
 class StopTimer {
@@ -303,6 +314,7 @@ public:
         while (running.load()) {
             dispatchTransportIntent();
             dispatchDeferredStop();
+            checkGetPairConfirmation();
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
     }) {}
@@ -559,6 +571,23 @@ void ResumeSqueezeBox(unsigned requested)
             printf("Device-initiated resume: LMS play failed; retaining 5 s lease\n");
         }
     }
+}
+
+// Called outside the stream ownership lock, in the same backend-independent
+// resume path used by transport events. Never wait for SOAP to resolve a pair.
+void ResumeSqueezeBoxGetPair(unsigned stream, unsigned long long active, unsigned long long standby,
+                           ResumeState::Clock::duration separation)
+{
+    if (!ourStreamStarted.load() || stream_just_restarted() || stream != streamId.load()) return;
+    bool accepted;
+    {
+        std::lock_guard<std::mutex> lock(resumeMutex);
+        accepted = resumeState.observeGetPair(stream, separation);
+    }
+    if (!accepted) return;
+    printf("Device-initiated resume: GET pair #%llu/#%llu dt=%.1f ms\n", active, standby,
+           std::chrono::duration<double, std::milli>(separation).count());
+    ResumeSqueezeBox(stream);
 }
 
 static bool alreadyPlayingCurrentStream(unsigned stream)

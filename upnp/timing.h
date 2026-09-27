@@ -1,6 +1,12 @@
 #pragma once
 #include <chrono>
 namespace upnp { namespace timing {
+// Study captures, 27 Sep (2afa221/c35063a): 13/20 Plays after q-Stop
+// sent ACTIVE/STANDBY GETs 0.8–6.8 ms apart; none during 32 idle minutes.
+// Allow scheduling jitter without treating the ~30 s solitary probe as Play.
+constexpr auto kGetPairWindow = std::chrono::milliseconds(25);
+// Diagnose a pair without a confirming transport event; never roll it back.
+constexpr auto kGetPairConfirmation = std::chrono::seconds(15);
 // Preserve the existing noson-compatible transport socket deadline.
 constexpr unsigned transportMs = 20000;
 // Sonos may withhold SOAP for ~5 s while holding a GET (26 Sep runs).

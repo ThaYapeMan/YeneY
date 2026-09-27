@@ -21,14 +21,15 @@ struct TimelineClock {
     using time_point = std::chrono::steady_clock::time_point;
     using duration = std::chrono::steady_clock::duration;
     static inline std::atomic<long long> ms{0};
-    static time_point now() { return time_point{} + std::chrono::milliseconds(ms.load()); }
+    static inline std::atomic<long long> us{0};
+    static time_point now() { return time_point{} + std::chrono::milliseconds(ms.load()) + std::chrono::microseconds(us.load()); }
 };
 '''
     (temp / 'clock.h').write_text(clock)
     for name in ('sbstreamer.cpp', 'resume_state.h'):
         (temp / name).write_text('#include "clock.h"\n' + (ROOT / name).read_text().replace('std::chrono::steady_clock', 'TimelineClock'))
     (temp / 'production_resume.inc').write_text('\n'.join(function(s) for s in (
-        'static void ObserveDeviceTransport(', 'void ResumeSqueezeBox(')))
+        'static void checkGetPairConfirmation(', 'static void ObserveDeviceTransport(', 'void ResumeSqueezeBox(', 'void ResumeSqueezeBoxGetPair(')))
     exe = temp / 'timeline'
     subprocess.run(['g++', '-O2', '-Wall', '-Wextra', '-I', str(temp), '-I', str(ROOT),
                     '-Inoson/noson/src', '-Inoson/noson/public/noson',
@@ -38,3 +39,6 @@ struct TimelineClock {
                     '-o', str(exe)], cwd=ROOT, check=True)
     for event_ms, second in [(21, 0), (5030, 1), (4990, 1), (-1, 0)]:
         subprocess.run([str(exe), str(event_ms), str(second)], check=True, timeout=10)
+
+    for scenario in ('pair12', 'pair68', 'pair30', 'single20', 'spontaneous', 'playing', 'pause', 'late', 'unconfirmed'):
+        subprocess.run([str(exe), scenario], check=True, timeout=10)

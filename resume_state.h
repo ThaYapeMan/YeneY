@@ -3,8 +3,10 @@
 
 #include <string>
 #include <chrono>
+#include "upnp/timing.h"
 
-// Caller serializes access. HTTP requests never change LMS transport intent.
+// Caller serializes access. A q-Stop GET pair may observe device Play;
+// HTTP requests never change LMS transport intent.
 class ResumeState {
 public:
     using Clock = std::chrono::steady_clock;
@@ -54,6 +56,7 @@ public:
             return relay;
         }
         if (state == "PLAYING" || state == "TRANSITIONING") {
+            pairConfirmationPending = false;
             transitioning = sawPause;
             if (state == "PLAYING") {
                 awaitingPlay = false;
@@ -68,10 +71,31 @@ public:
     }
 
     bool takeResume(unsigned requestedId, unsigned currentId, Clock::time_point now = Clock::now()) {
-        if (requestedId != currentId || (!paused && !stoppedResume) || !sawPause || !transitioning || requested)
+        if (requestedId != currentId || (!paused && !stoppedResume) || !sawPause || (!transitioning && !getPairObserved) || requested || getPairTaken)
             return false;
         requested = true;
+        getPairTaken = getPairObserved;
         resumeDeadline = now + std::chrono::seconds(5);
+        return true;
+    }
+
+    // Only a successfully completed q-Stop can enable the GET-pair rule.
+    void completedQStop(unsigned stream) {
+        if (stoppedPauseId == stream && stoppedResume && !paused) pairEligible = true;
+    }
+    bool observeGetPair(unsigned stream, Clock::duration separation, Clock::time_point now = Clock::now()) {
+        if (!pairEligible || !stoppedResume || paused || requested || stream != stoppedPauseId
+            || separation < Clock::duration::zero() || separation > upnp::timing::kGetPairWindow)
+            return false;
+        pairEligible = false;
+        getPairObserved = sawPause = true;
+        pairConfirmationPending = true;
+        pairConfirmationDeadline = now + upnp::timing::kGetPairConfirmation;
+        return true;
+    }
+    bool expireGetPairConfirmation(Clock::time_point now = Clock::now()) {
+        if (!pairConfirmationPending || now < pairConfirmationDeadline) return false;
+        pairConfirmationPending = false;
         return true;
     }
 
@@ -80,6 +104,7 @@ public:
     void streamStarted() { newStreamPending = false; clearStoppedPause(); }
 
     void stopForPause(unsigned stream) {
+        pairEligible = getPairObserved = getPairTaken = false;
         stoppedPauseId = stream;
         stoppedResume = true;
         sawStoppedPause = sawPause = transitioning = requested = false;
@@ -97,10 +122,13 @@ private:
     void clearStoppedPause() {
         if (stoppedPauseId || sawStoppedPause)
             sawPause = transitioning = requested = false;
+        pairEligible = getPairObserved = getPairTaken = false;
         stoppedPauseId = 0;
         stoppedResume = false;
         sawStoppedPause = false;
     }
+    bool pairEligible = false, getPairObserved = false, getPairTaken = false, pairConfirmationPending = false;
+    Clock::time_point pairConfirmationDeadline{};
     unsigned stoppedPauseId = 0;
     bool stoppedResume = false; // completed Stop from p or q permits device resume
     bool sawStoppedPause = false;

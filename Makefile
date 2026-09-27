@@ -126,3 +126,5 @@ output_sonos.o slimproto_sonos.o audio_mode.o sonos-lms.o sbstreamer.o streamer-
 
 speaker-state-test: tests/speaker_state_test.cpp $(wildcard upnp/*.h) upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/speaker_state_test.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
+
+sonos-lms.o sbstreamer.o streamer-test resume-state-test: upnp/timing.h
