@@ -1,0 +1,2 @@
+<!-- documented sample, replace with captured; synthetic values from the device API schema: https://sonos.svrooij.io/services/rendering-control -->
+<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0"><e:property><LastChange>&lt;Event xmlns="urn:schemas-upnp-org:metadata-1-0/RCS/"&gt;&lt;InstanceID val="0"&gt;&lt;Volume channel="Master" val="15"/&gt;&lt;Volume channel="LF" val="100"/&gt;&lt;Volume channel="RF" val="100"/&gt;&lt;/InstanceID&gt;&lt;/Event&gt;</LastChange></e:property></e:propertyset>
