@@ -16,7 +16,7 @@ int sonos_audio_legacy(void) { return legacy; }
 unsigned get_squeezebox_stream_id(void) { return id; }
 void new_squeezebox_stream_id(void) { ++id; }
 void set_squeezebox_audio_rate(unsigned next, unsigned rate) { assert(next == id+1); published_rate = rate; }
-uint64_t get_sonos_position_frames(unsigned rate) { return position; }
+uint64_t get_sonos_audible_frames(unsigned rate) { return position; }
 void encode_squeezebox_audio(const char* data, int len, uint64_t first) {
     assert(len > 0); ++batches; last_id = id; last_anchor = first;
 }

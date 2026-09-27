@@ -103,7 +103,10 @@ outputting once its own network and playback buffering is accounted for. A
 background poll of the Sonos device's actual transport position (via UPnP) feeds
 a corrected figure back into the same counter LMS reads for its progress bar and
 `ms_played` calculation, so the displayed position tracks what you actually hear
-rather than what has merely been decoded.
+rather than what has merely been decoded. A zero speaker position remains zero
+while Sonos buffers, including its early startup reconnect. STAT reports use the
+speaker-derived frame difference without a wall-clock fallback or extrapolation
+from a blocked output pump, and never move backwards within a track.
 
 ## Why a continuous stream, and how this differs from track-by-track UPnP
 
@@ -437,7 +440,8 @@ continued audio, and no dialog.
 The app still shows Play. Its fresh GET receives a normal FLAC header and
 chunked audio when LMS resumes; an LMS resume without a GET reissues the same
 URL. Each connection's RelTime is anchored to its first PCM's track offset so
-LMS position continues across reconnects. LMS stop (`strm q`) ends HTTP immediately
+LMS position continues across reconnects. Before any positive speaker position,
+a startup reconnect discards that queued PCM offset from the audible clock. LMS stop (`strm q`) ends HTTP immediately
 and sends Stop after 400 ms unless superseded by `strm s`; track changes send no
 transport command. STOPPED itself never resumes LMS. Sonos-app Play sends one
 LMS `play` per resume attempt and feeds the fresh GET; if LMS starts a new stream,

@@ -1,10 +1,42 @@
-// Compile the upstream implementation unchanged, then replace its strm handler.
+// Keep the upstream implementation unchanged. Adapt its outgoing STAT clock
+// as well as its strm handler: a network speaker reports an audible position,
+// including a valid zero while it buffers; local-device elapsed-time fallback
+// and extrapolation from the output pump timestamp do not apply.
+#include <sys/socket.h>
+#include <stdint.h>
+static ssize_t sonos_slimproto_send(int fd, uint8_t *packet, size_t len, int flags);
+#define send sonos_slimproto_send
 #define slimproto slimproto_original
 #include "squeezelite/slimproto.c"
 #undef slimproto
+#undef send
 
 #include "audio_mode.h"
 extern void sonos_lms_transport(char command);
+
+static ssize_t sonos_slimproto_send(int fd, u8_t *packet, size_t len, int flags)
+{
+    static u32_t epoch, last_ms;
+    if (len == sizeof(struct STAT_packet) && !memcmp(packet, "STAT", 4)
+        && !getenv("DISABLE_SONOS_POSITION_FIX")) {
+        // send_packet owns mutable storage. Correct it before the first send
+        // so short writes/retries also transmit the corrected remaining bytes.
+        struct STAT_packet *stat = (struct STAT_packet *)packet;
+        u32_t ms = 0;
+        if (status.current_sample_rate && status.frames_played > status.device_frames)
+            ms = (u32_t)((u64_t)(status.frames_played - status.device_frames)
+                        * 1000 / status.current_sample_rate);
+        if (epoch != status.stream_start || !status.frames_played) {
+            epoch = status.stream_start;
+            last_ms = 0;
+        }
+        if (ms < last_ms) ms = last_ms;
+        last_ms = ms;
+        packN(&stat->elapsed_seconds, ms / 1000);
+        packN(&stat->elapsed_milliseconds, ms);
+    }
+    return send(fd, packet, len, flags);
+}
 
 /* Two transport state machines (LMS and device), plus independent stream state:
  * LMS strm p -> device Pause; q -> HTTP EOF, Pause deferred 400 ms (s cancels).

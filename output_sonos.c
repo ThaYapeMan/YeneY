@@ -131,12 +131,10 @@ int sonos_output_running(void)
     return atomic_load(&pump_running);
 }
 
-// Derives output.device_frames from the Sonos device's own reported playback
-// position, so slimproto's ms_played calculation
-//   ms_played = (frames_played_dmp - device_frames) * 1000 / sample_rate + (now - updated)
-// converges on what Sonos is actually audibly playing rather than on our
-// internal decode position, which normally runs well over a second ahead of
-// the speaker because of Sonos-side buffering.
+// Derive the buffered-frame count from the speaker's audible coordinate.
+// slimproto_sonos reports the resulting frame difference without the upstream
+// local-device fallback or extrapolation: zero means the Sonos is buffering,
+// and a blocked encoder is not evidence that the speaker clock has advanced.
 static void update_device_frames_from_sonos_position(void)
 {
     if (position_fix_disabled || (!sonos_audio_legacy() && stream_boundary_pending)) {
@@ -145,7 +143,7 @@ static void update_device_frames_from_sonos_position(void)
     }
 
     u32_t sample_rate = output.current_sample_rate;
-    u64_t sonos_frames = get_sonos_position_frames(sample_rate);
+    u64_t sonos_frames = get_sonos_audible_frames(sample_rate);
     if (!sonos_audio_legacy())
         sonos_frames = sonos_frames > track_stream_offset ? sonos_frames - track_stream_offset : 0;
     u64_t decoded_frames = (u64_t)output.frames_played_dmp;

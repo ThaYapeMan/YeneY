@@ -64,6 +64,7 @@ test: stream-content-test http-server-test speaker-state-test sonos-lms position
 	python3 tests/upnp_mock_test.py
 	python3 tests/own_display_test.py
 	./position-test
+	python3 tests/position_reconnect_test.py
 	python3 tests/send_error_test.py
 	./streamer-test session
 	./streamer-test position

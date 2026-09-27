@@ -32,6 +32,8 @@ void sonos_position_pcm(unsigned stream, uint64_t request, uint64_t first_frame)
 uint64_t sonos_position_poll_token(void);
 void set_sonos_position_ms(uint64_t token, uint32_t ms);
 uint64_t get_sonos_position_frames(uint32_t sample_rate);
+// Audible coordinate: excludes PCM discarded by a reconnect before playback.
+uint64_t get_sonos_audible_frames(uint32_t sample_rate);
 
 #ifdef __cplusplus
 }

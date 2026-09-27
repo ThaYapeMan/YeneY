@@ -55,3 +55,8 @@ uint64_t get_sonos_position_frames(uint32_t rate) {
     std::lock_guard<std::mutex> lock(positionMutex);
     return position.frames(rate);
 }
+
+uint64_t get_sonos_audible_frames(uint32_t rate) {
+    std::lock_guard<std::mutex> lock(positionMutex);
+    return position.audibleFrames(rate);
+}
