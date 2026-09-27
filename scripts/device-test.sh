@@ -696,10 +696,11 @@ resolve_lms_host() {
 }
 
 discover_coordinator() {
-    local details diagnostics="$OUT/discovery.err"
-    if ! details=$(SONOS_LMS_UPNP=yeney ./sonos-lms --list-rooms --details 2> "$diagnostics"); then
+    local details diagnostics="$OUT/discovery.err" layer=${SONOS_LMS_UPNP-yeney}
+    if ! details=$(SONOS_LMS_UPNP="$layer" ./sonos-lms --list-rooms --details 2> "$diagnostics"); then
         cat "$diagnostics" >&2
-        say "yeney discovery failed; retrying with noson"
+        [[ $layer != noson ]] || return 1
+        say "$layer discovery failed; retrying with noson"
         details=$(SONOS_LMS_UPNP=noson ./sonos-lms --list-rooms --details 2> "$diagnostics") || { cat "$diagnostics" >&2; return 1; }
     fi
     printf '%s\n' "$details" | python3 "$AUTO_HELPER" coordinator --room "$ROOM"

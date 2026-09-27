@@ -36,7 +36,7 @@ for Sonos only.
 | Next/Previous in the Sonos app | ✘ *(under investigation)* | ? not verified | ✘ live stream |
 | Seeking in the Sonos app | ✘ only from LMS *(under investigation)* | ? not verified | ✘ live stream |
 | Other UPnP/DLNA speakers | ✘ Sonos only | ✔ | ✔ |
-| Maturity | new; tested on one Sonos Play:1 | mature, years of use on many devices | mature |
+| Maturity | tested on Study, a Sonos Play:1 | mature, years of use on many devices | mature |
 
 ✔ yes · ✘ no · ~ partly · ? not verified yet
 
@@ -518,15 +518,19 @@ YeneY's own UPnP layer is a small discovery, SOAP control and event layer. It
 gradually replaces [noson](https://github.com/janbar/noson), the library by
 Jean-Luc Barrière that made this bridge possible.
 
-`SONOS_LMS_UPNP=yeney` selects the YeneY layer once at startup. `own` remains a
-permanent alias so existing drop-ins keep working. **noson remains the default
-until the YeneY layer has proven itself**; it is still experimental. For example:
+**YeneY is the default UPnP layer**, tested on Study, a Sonos Play:1.
+`SONOS_LMS_UPNP=noson` selects the original noson backend; explicit
+`SONOS_LMS_UPNP=yeney` selects YeneY. `own` remains a permanent alias for YeneY.
+Selection is read and logged once at startup. For example:
 
 ```sh
 SONOS_LMS_UPNP=yeney ./sonos-lms --room="Sonos Port" --server=192.0.2.10
 ```
 
-For a service, set `Environment=SONOS_LMS_UPNP=yeney` in its systemd override.
+For a service, set `Environment=SONOS_LMS_UPNP=noson` in its systemd override
+to use the original backend. `--list-rooms` follows the same selection, as does
+`scripts/device-test.sh` room discovery, which retries with noson if the selected
+YeneY discovery fails.
 The YeneY layer discovers speakers with SSDP and keeps one speaker-state snapshot from
 AVTransport, RenderingControl and ZoneGroupTopology events. AVTransport commands
 and reads target the group coordinator; volume and topology target the room's own

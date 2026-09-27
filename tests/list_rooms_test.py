@@ -80,7 +80,7 @@ try:
             assert result.returncode == (2 if empty else 0), result
             assert result.stdout == ('' if empty else 'Living & Dining\nSonos Port\nStudy\n'), result
             if empty: assert 'No Sonos rooms found.' in result.stderr, result
-            expected_backend = 'yeney (alias own)' if backend == 'own' else backend or 'noson'
+            expected_backend = 'yeney (alias own)' if backend == 'own' else backend or 'yeney'
             assert f'UPnP layer: {expected_backend}\n' in result.stderr
             assert 'Stream session:' not in result.stderr and 'SONOS_LMS_PAUSE=' not in result.stderr
             assert 'GetZoneGroupState' in server.actions, server.actions

@@ -206,10 +206,10 @@ int main(int argc, char** argv) {
         env = dict(os.environ)
         env.pop('SONOS_LMS_UPNP', None)
         if value is not None: env['SONOS_LMS_UPNP'] = value
-        result = subprocess.run([str(temp / 'settings'), str(int(value in ('yeney', 'own')))], env=env,
+        result = subprocess.run([str(temp / 'settings'), str(int(value != 'noson'))], env=env,
                                 check=True, capture_output=True, text=True)
-        expected_log = 'UPnP layer: yeney (alias own)' if value == 'own' else 'UPnP layer: yeney' if value == 'yeney' else 'UPnP layer: noson'
-        expected = (f"Warning: invalid SONOS_LMS_UPNP='{value}'; using noson\n" if value in ('', 'invalid') else '') + expected_log + '\n'
+        expected_log = 'UPnP layer: yeney (alias own)' if value == 'own' else 'UPnP layer: yeney' if value != 'noson' else 'UPnP layer: noson'
+        expected = (f"Warning: invalid SONOS_LMS_UPNP='{value}'; using yeney\n" if value in ('', 'invalid') else '') + expected_log + '\n'
         assert result.stdout == expected, result.stdout
         print(f'PASS: SONOS_LMS_UPNP={value!r}: {expected_log}; exact warning and read-once selection')
         assert result.stdout.count('UPnP layer:') == 1

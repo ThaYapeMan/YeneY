@@ -468,25 +468,29 @@ exit "$AUTO_FAILED"
 print('PASS: AUTO empty monitor log fails scenario even when final synchronous sample is OK')
 
 with tempfile.TemporaryDirectory(prefix='sonos-discovery-backend-') as directory:
-    for fallback in ('0', '1'):
+    for selected in (None, 'yeney', 'own', 'noson'):
+      for fallback in ('0', '1'):
         calls = Path(directory) / 'calls'; calls.write_text('')
+        env = {**os.environ, 'OUT': directory, 'FALLBACK': fallback, 'CALLS': str(calls),
+               'REAL_HELPER': str(ROOT / 'scripts/device_test_auto.py')}
+        env.pop('SONOS_LMS_UPNP', None)
+        if selected is not None: env['SONOS_LMS_UPNP'] = selected
         result = subprocess.run(['bash', '-c', prefix + r'''
 ROOM=Study
 ./sonos-lms() {
     printf '%s %s\n' "$SONOS_LMS_UPNP" "$*" >> "$CALLS"
     printf 'UPnP layer: %s\n' "$SONOS_LMS_UPNP" >&2
-    [[ $FALLBACK != 1 || $SONOS_LMS_UPNP != yeney ]] || return 2
+    [[ $FALLBACK != 1 || $SONOS_LMS_UPNP == noson ]] || return 2
     printf 'Study\tPlay:1\t192.0.2.10\tStudy\tStudy\n'
 }
 python3() { command python3 "$REAL_HELPER" "${@:2}"; }
 discover_coordinator
-'''], env={**os.environ, 'OUT': directory, 'FALLBACK': fallback, 'CALLS': str(calls),
-           'REAL_HELPER': str(ROOT / 'scripts/device_test_auto.py')}, capture_output=True, text=True)
+'''], env=env, capture_output=True, text=True)
         assert result.returncode == 0 and result.stdout.strip() == '192.0.2.10', result
         if fallback == '0': assert 'UPnP layer:' not in result.stderr, result.stderr
-        assert calls.read_text().splitlines() == ['yeney --list-rooms --details'] + (
-            ['noson --list-rooms --details'] if fallback == '1' else [])
-print('PASS: AUTO discovery explicitly selects yeney, uses noson only after yeney failure')
+        assert calls.read_text().splitlines() == [f'{selected or "yeney"} --list-rooms --details'] + (
+            ['noson --list-rooms --details'] if fallback == '1' and selected != 'noson' else [])
+print('PASS: AUTO discovery defaults to yeney, honors explicit yeney/own/noson, retains noson fallback')
 
 with tempfile.TemporaryDirectory(prefix='sonos-diagnostics-') as directory:
     env = {**os.environ, 'OUT': directory, 'AUTO': '1', 'IDLE_SECS': '120', 'UNIT': 'fixture'}

@@ -7,11 +7,12 @@ enum class Backend { Noson, Own };
 inline Backend backend() {
     static const Backend selected = [] {
         const char* value = std::getenv("SONOS_LMS_UPNP");
-        Backend result = Backend::Noson;
+        Backend result = Backend::Own;
         const bool alias = value && std::strcmp(value, "own") == 0;
         if (alias || (value && std::strcmp(value, "yeney") == 0)) result = Backend::Own;
-        else if (value && std::strcmp(value, "noson") != 0)
-            printf("Warning: invalid SONOS_LMS_UPNP='%s'; using noson\n", value);
+        else if (value && std::strcmp(value, "noson") == 0) result = Backend::Noson;
+        else if (value)
+            printf("Warning: invalid SONOS_LMS_UPNP='%s'; using yeney\n", value);
         printf("UPnP layer: %s%s\n", result == Backend::Own ? "yeney" : "noson",
             alias ? " (alias own)" : "");
         return result;
