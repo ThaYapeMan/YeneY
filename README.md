@@ -552,9 +552,20 @@ library service or external-playback ownership policy is enabled by this switch.
 
 ## License
 
-GPL-3.0. See [LICENSE](LICENSE). The vendored `noson` and `squeezelite` submodules
-are GPL-3.0 as well; GPL-3.0's copyleft means a derivative or combined work needs a
-GPL-compatible outbound license -- no additional, more restrictive terms (e.g. a
-noncommercial clause) can be layered on top.
+Project-owned code is licensed under the
+[PolyForm Noncommercial License 1.0.0](LICENSE)
+(`PolyForm-Noncommercial-1.0.0`). See the license for permitted purposes and terms.
+
+Third-party code retains its existing licenses, including the GPL-3.0 licenses
+in [noson/LICENSE](noson/LICENSE) and [squeezelite/LICENSE.txt](squeezelite/LICENSE.txt).
+This change does not relicense third-party code or revoke rights granted by
+previous GPL releases.
+
+The current executable links GPL-covered dependencies. PolyForm Noncommercial's
+noncommercial restriction is incompatible with distributing that combined work
+under the GPL. Distributing a combined executable requires resolving this
+conflict, for example through separate permission from the relevant copyright
+holders or replacement of the GPL-covered code. See the
+[GNU GPL FAQ](https://www.gnu.org/licenses/gpl-faq.en.html#GPLIncompatibleLibs).
 
 Copyright (C) 2026 Jaap van Vliet

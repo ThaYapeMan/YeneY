@@ -2,9 +2,9 @@
 //
 // Copyright (c) 2026 Jaap van Vliet
 //
-// Original implementation for the sonos-lms project. Licensed under
-// the GNU General Public License, version 3 or (at your option) any later
-// version, matching the rest of this project. See LICENSE.
+// Original implementation for the sonos-lms project.
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 //
 // THIS SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
