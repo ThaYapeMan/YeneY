@@ -461,29 +461,40 @@ SONOS_LMS_UPNP=yeney ./sonos-lms --room="Sonos Port" --server=192.0.2.10
 ```
 
 For a service, set `Environment=SONOS_LMS_UPNP=yeney` in its systemd override.
-yeney discovers speakers with SSDP, maps room/group topology, and sends SOAP
-control directly. Transport state is also polled every 500 ms; slow/failed calls
-can extend that interval. Group changes are logged only:
-this phase does not coordinate grouped-room transport or LMS sync. The HTTP stream,
-artwork and file server still use noson in both modes. Pause defaults to Stop and
-all existing stream/session/resume rules remain in effect.
+yeney discovers speakers with SSDP and keeps one speaker-state snapshot from
+AVTransport, RenderingControl and ZoneGroupTopology events. AVTransport commands
+and reads target the group coordinator; volume and topology target the room's own
+speaker. Bridging a member room therefore controls its group, as noson does. The
+HTTP stream, artwork and file server still use noson in both modes.
 
-**Events (GENA).** yeney subscribes to the group coordinator's AVTransport
-LastChange events, so Sonos-app Play can resume LMS even while the speaker holds
-a stream GET and delays SOAP replies. Events update the cache immediately; older
-in-flight polls cannot overwrite them. Subscriptions renew halfway through the
-granted timeout, follow coordinator changes, and unsubscribe on clean shutdown.
-Subscription failures are logged and leave polling available. The separate event
-listener uses an ephemeral TCP port on `0.0.0.0`; set `SONOS_LMS_EVENT_PORT` to
-choose a fixed callback port, for example `Environment=SONOS_LMS_EVENT_PORT=1403`
-in the unit override when taking packet captures.
+**Events (GENA).** One listener accepts `/avt`, `/rc` and `/zgt`. Subscriptions
+request 300 seconds, renew halfway through the granted lifetime, and retry after
+one second, then every five seconds. Each renewal checks the local address towards
+the speaker; an address change creates a new subscription. Coordinator changes
+move only AVTransport. The listener binds an ephemeral port on `0.0.0.0`; use
+`Environment=SONOS_LMS_EVENT_PORT=1403` in the unit override for packet captures.
+The first NOTIFY body after each subscription or renewal is logged per service,
+on one line, truncated to 4 KB, to collect real device fixtures.
 
-**Stopped polling experiment.** `SONOS_LMS_YENEY_STOPPED_MEDIAINFO=0` (default)
-skips periodic `GetMediaInfo` while STOPPED or PAUSED_PLAYBACK and retains the last
-known URI. Set it to `1` to restore the previous polling behavior (which still
-skips the call while a paused stream request is open). The mode is read and logged
-at startup. Explicit URI checks, transport polling, resume handling and the noson
-backend are unchanged.
+With all three subscriptions active, yeney polls only position while PLAYING or
+TRANSITIONING (at most once per second), plus a transport sanity check every
+30 seconds. A missing subscription enables polling only for that service until
+it recovers. Logs report `yeney: monitor events` or the affected polling service
+and reason. A delayed poll cannot overwrite fields updated by an event after that
+request began. Metadata-only events preserve other fields.
+
+For A/B testing, `SONOS_LMS_YENEY_POLL=legacy` restores the previous polling
+schedule; the default is `events`. `SONOS_LMS_YENEY_STOPPED_MEDIAINFO=0` (default)
+skips fallback/legacy periodic GetMediaInfo while STOPPED or PAUSED_PLAYBACK.
+Setting it to `1` restores the earlier behavior, which still skips that read while
+a paused stream request is open. Explicit URI checks are unaffected. Both modes
+are read and logged at startup. Pause/stop ordering, resume decisions and action
+timeouts are unchanged.
+
+The parser fixtures retain the existing Sonos AVTransport capture. The new
+RenderingControl and ZoneGroupTopology examples use documented device API schemas
+with synthetic values and are marked “documented sample, replace with captured”;
+they are not claimed as captures from this project's speakers.
 
 See [the UPnP layer inventory and wire fixtures](docs/upnp-layer.md). No SMAPI
 library service or external-playback ownership policy is enabled by this switch.
