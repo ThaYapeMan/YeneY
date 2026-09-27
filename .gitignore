@@ -18,3 +18,5 @@ attic
 /noson-golden
 
 speaker-state-test
+
+/http-server-test

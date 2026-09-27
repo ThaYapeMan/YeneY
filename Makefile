@@ -43,7 +43,7 @@ sonos-lms: $(OBJS) $(OBJS_SL) noson/noson/libnoson.a
 		-lpthread -lm -lrt -ldl -lasound
 
 clean:
-	rm -f speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+	rm -f http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
 
 slimproto_sonos.o: slimproto_sonos.c squeezelite/slimproto.c squeezelite/squeezelite.h
 
@@ -53,7 +53,8 @@ install: sonos-lms
 encoder-test: tests/audio_pack_fixture.o squeezelite/output_pack.o upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h noson/noson/libnoson.a
 	g++ -g -O2 -Wall -I. -Inoson/noson/src -Inoson/noson/public/noson -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.o squeezelite/output_pack.o sbencoder.cpp upnp/encoded_buffer.cpp noson/noson/libnoson.a -lFLAC++ -lFLAC -lcrypto -lssl -lz -lpthread
 
-test: speaker-state-test sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+test: http-server-test speaker-state-test sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+	python3 tests/http_server_test.py
 	./speaker-state-test
 	./upnp-test
 	python3 tests/list_rooms_test.py
@@ -128,3 +129,6 @@ speaker-state-test: tests/speaker_state_test.cpp $(wildcard upnp/*.h) upnp/xml.c
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/speaker_state_test.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
 
 sonos-lms.o sbstreamer.o streamer-test resume-state-test: upnp/timing.h
+
+http-server-test: tests/http_server_fixture.cpp upnp/http_server.cpp upnp/http_server.h upnp/stream_server.h upnp/timing.h
+	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/http_server_fixture.cpp upnp/http_server.cpp -lpthread

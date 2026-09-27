@@ -1,5 +1,6 @@
 #pragma once
 #include <chrono>
+#include <cstddef>
 namespace upnp { namespace timing {
 // Study captures, 27 Sep (2afa221/c35063a): 13/20 Plays after q-Stop
 // sent ACTIVE/STANDBY GETs 0.8–6.8 ms apart; none during 32 idle minutes.
@@ -29,6 +30,15 @@ constexpr unsigned subscribeMs = 2000;
 // Best-effort shutdown and the initial SID publication race are bounded.
 constexpr unsigned unsubscribeMs = 500;
 constexpr auto sidRace = std::chrono::milliseconds(500);
+// Device captures show ACTIVE plus several STANDBY requests arriving within
+// milliseconds. Bound concurrent workers, while leaving room for GENA/icon I/O.
+constexpr unsigned httpConnections = 16;
+// A local Sonos request header is small; cap untrusted headers at 16 KiB and
+// allow five seconds for a complete request line/header block.
+constexpr size_t httpHeaderBytes = 16 * 1024;
+constexpr auto httpHeaderDeadline = std::chrono::seconds(5);
+// Match sbstreamer's existing 500 ms send deadline for stalled receivers.
+constexpr unsigned httpSendMs = 500;
 // Keep the listener responsive to shutdown and incomplete local NOTIFY requests.
 constexpr int acceptMs = 50, receiveMs = 25, notifyMs = 750;
 } }

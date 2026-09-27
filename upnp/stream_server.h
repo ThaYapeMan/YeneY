@@ -31,6 +31,14 @@ public:
     virtual Method method() const = 0;
     virtual std::string parameter(const std::string& name) const = 0;
     virtual RequestHeaders headers() const { return {}; }
+    std::string header(std::string name) const {
+        for (auto& c : name) c = std::tolower(static_cast<unsigned char>(c));
+        for (auto h : headers()) {
+            for (auto& c : h.first) c = std::tolower(static_cast<unsigned char>(c));
+            if (h.first == name) return h.second;
+        }
+        return {};
+    }
     virtual bool send(const char* data, size_t size) = 0;
     virtual bool peerClosed() = 0;
     virtual void sendTimeout(unsigned milliseconds) = 0;
