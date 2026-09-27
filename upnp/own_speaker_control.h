@@ -2,6 +2,9 @@
 #include "speaker_control.h"
 #include "soap.h"
 #include "gena.h"
+#include "subscriptions.h"
+#include "monitor.h"
+#include "targets.h"
 #include <condition_variable>
 #include <memory>
 #include <chrono>
@@ -32,41 +35,24 @@ public:
     bool currentUri(std::string&) override;
     std::string controllerUri() override;
     void poll() override;
-    unsigned pollIntervalMs() const override { return 500; }
+    unsigned pollIntervalMs() const override { return timing::pollMs; }
 private:
     using Clock = std::chrono::steady_clock;
     std::function<unsigned()> streamPort;
     unsigned speakerPort;
     std::function<StreamActivity()> streamActivity;
-    mutable std::mutex cacheMutex;
-    // SOAP is called only by status/control threads; HTTP readers take cacheMutex
-    // briefly, never a mutex held across socket I/O.
-    std::mutex positionMutex;
-    Speaker selected;
-    TransportInfo cachedTransport;
-    std::string localAddress, room, positionText;
-    uint32_t positionMs = 0;
-    Clock::time_point positionAt{}, topologyAt{}, volumeAt{};
-    uint8_t volume = 0;
-    std::string sentTitle, sentUri, sentUrl;
-    bool freshStreamPosition = false, pauseTimeoutLogged = false;
-    bool positionKnown = false;
-    bool stoppedMediaInfo = false;
-    uint64_t eventRevision = 0;
+    SpeakerStateStore state;
+    std::mutex runtimeMutex;
+    std::string localAddress, room, sentTitle, sentUri, sentUrl;
+    Clock::time_point positionAt{};
+    bool positionReading = false, freshStreamPosition = false, pauseTimeoutLogged = false;
+    MonitorPolicy monitor;
+    std::string monitorLog;
     std::function<void()> eventCallback;
-    std::unique_ptr<GenaListener> eventListener;
-    std::mutex eventMutex;
-    std::condition_variable eventWake;
-    std::thread subscriptionThread;
-    bool eventsStopping = false, subscribing = false;
-    std::string eventHost, eventCoordinator, eventSid;
-    uint64_t eventTarget = 0;
+    std::unique_ptr<Subscriptions> subscriptions;
     void startEvents();
-    void subscriptions();
     bool receiveEvent(const GenaEvent&);
-    // Caller holds cacheMutex. Shared by polling and LastChange.
-    void updateTransport(const std::string& state, const std::string& status);
-    bool paused() const;
+    void apply(StateUpdate);
     SoapResult call(const std::string& action, const SoapArguments& args,
                     const std::string& host = {}, const std::string& service = "AVTransport");
     bool topology(const std::string& host, bool initial);

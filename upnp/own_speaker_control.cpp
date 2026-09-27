@@ -9,197 +9,112 @@ OwnSpeakerControl::OwnSpeakerControl(std::function<unsigned()> port, unsigned co
                                      std::function<StreamActivity()> activity, std::function<void()> callback)
     : streamPort(std::move(port)), speakerPort(controlPort), streamActivity(std::move(activity)),
       eventCallback(std::move(callback)) {
-    const char* mode = std::getenv("SONOS_LMS_YENEY_STOPPED_MEDIAINFO");
-    stoppedMediaInfo = mode && std::string(mode) == "1";
-    if (mode && std::string(mode) != "0" && std::string(mode) != "1")
-        printf("Invalid SONOS_LMS_YENEY_STOPPED_MEDIAINFO; using 0\n");
-    printf("yeney stopped GetMediaInfo: %d (SONOS_LMS_YENEY_STOPPED_MEDIAINFO)\n", stoppedMediaInfo ? 1 : 0);
+    const char* mode = std::getenv("SONOS_LMS_YENEY_POLL");
+    monitor.legacy = mode && std::string(mode) == "legacy";
+    if (mode && std::string(mode) != "events" && std::string(mode) != "legacy")
+        printf("yeney: setting key=SONOS_LMS_YENEY_POLL invalid=%s fallback=events\n", logValue(mode).c_str());
+    const char* media = std::getenv("SONOS_LMS_YENEY_STOPPED_MEDIAINFO");
+    monitor.stoppedMediaInfo = media && std::string(media) == "1";
+    if (media && std::string(media) != "0" && std::string(media) != "1")
+        printf("yeney: setting key=SONOS_LMS_YENEY_STOPPED_MEDIAINFO invalid=%s fallback=0\n", logValue(media).c_str());
+    printf("yeney: settings poll=%s stopped_mediainfo=%d\n", monitor.legacy ? "legacy" : "events", monitor.stoppedMediaInfo);
 }
 OwnSpeakerControl::~OwnSpeakerControl() { shutdownEvents(); }
-void OwnSpeakerControl::shutdownEvents() {
-    { std::lock_guard<std::mutex> lock(eventMutex); eventsStopping = true; }
-    eventWake.notify_all();
-    if (subscriptionThread.joinable()) subscriptionThread.join();
-    eventListener.reset(); // join all callbacks before cached state is destroyed
-}
+void OwnSpeakerControl::shutdownEvents() { subscriptions.reset(); }
 void OwnSpeakerControl::startEvents() {
     unsigned port = 0;
     if (const char* value = std::getenv("SONOS_LMS_EVENT_PORT")) {
         char* end = nullptr; const auto number = std::strtoul(value, &end, 10);
-        if (!*value || *end || number > 65535) printf("UPnP events: invalid SONOS_LMS_EVENT_PORT; using an ephemeral port\n");
+        if (!*value || *end || number > 65535) printf("yeney: setting key=SONOS_LMS_EVENT_PORT result=invalid fallback=ephemeral\n");
         else port = number;
     }
     try {
-        eventListener.reset(new GenaListener([this](const GenaEvent& event) { return receiveEvent(event); }, port));
-        subscriptionThread = std::thread(&OwnSpeakerControl::subscriptions, this);
+        subscriptions.reset(new Subscriptions(speakerPort, port, [this] {
+            const auto s = state.snapshot();
+            return std::array<std::string, 3>{{s.group.ip, s.room.ip, s.room.ip}};
+        }, [this](const GenaEvent& event) { return receiveEvent(event); }));
     } catch (const std::exception& error) {
-        eventListener.reset();
-        printf("UPnP events: %s; polling only\n", error.what());
+        printf("yeney: subscription result=unavailable reason=%s\n", logValue(error.what()).c_str());
     }
 }
-void OwnSpeakerControl::subscriptions() {
-    std::string host, sid;
-    unsigned long grantedTimeout = 0;
-    uint64_t target = 0;
-    auto due = Clock::now();
-    auto unsubscribe = [&] {
-        if (!sid.empty()) httpRequest("UNSUBSCRIBE", {host, "/MediaRenderer/AVTransport/Event", speakerPort}, {{"SID", sid}}, "", 500);
-        sid.clear();
-    };
-    for (;;) {
-        std::unique_lock<std::mutex> lock(eventMutex);
-        eventWake.wait_until(lock, due, [&] { return eventsStopping || target != eventTarget; });
-        if (eventsStopping) { lock.unlock(); unsubscribe(); return; }
-        if (target != eventTarget) {
-            lock.unlock(); unsubscribe(); lock.lock();
-            host = eventHost; target = eventTarget;
-        }
-        const bool renewal = !sid.empty();
-        subscribing = !renewal;
-        lock.unlock();
-        std::string address;
-        { std::lock_guard<std::mutex> cache(cacheMutex); address = localAddress; }
-        std::map<std::string, std::string> headers{{"TIMEOUT", "Second-3600"}};
-        if (renewal) headers["SID"] = sid;
-        else {
-            headers["NT"] = "upnp:event";
-            headers["CALLBACK"] = "<http://" + address + ":" + std::to_string(eventListener->port()) + "/avt>";
-        }
-        const auto response = httpRequest("SUBSCRIBE", {host, "/MediaRenderer/AVTransport/Event", speakerPort}, headers, "", 2000);
-        const auto id = response.headers.find("sid"), timeout = response.headers.find("timeout");
-        unsigned long seconds = 0;
-        if (timeout != response.headers.end()) {
-            const auto text = timeout->second;
-            if (text == "Second-infinite") seconds = 3600; // periodically verify even indefinite subscriptions
-            else if (text.compare(0, 7, "Second-") == 0) {
-                char* end = nullptr; seconds = std::strtoul(text.c_str() + 7, &end, 10);
-                if (!*(text.c_str() + 7) || *end || seconds > UINT32_MAX) seconds = 0;
-            }
-        }
-        const bool ok = response.error.empty() && response.status == 200 && id != response.headers.end() && !id->second.empty() && seconds;
-        lock.lock();
-        subscribing = false;
-        if (ok) {
-            sid = id->second;
-            grantedTimeout = seconds;
-            if (target == eventTarget) eventSid = sid;
-            due = Clock::now() + std::chrono::milliseconds(uint64_t(grantedTimeout) * 500);
-            printf("UPnP events: %s SID=%s timeout=%lu s\n", renewal ? "renewed" : "subscribed", sid.c_str(), seconds);
-        } else {
-            printf("UPnP events: SUBSCRIBE %s (HTTP %u); polling only%s\n", response.error.empty() ? "failed" : response.error.c_str(),
-                   response.status, renewal ? "; subscribing afresh" : "");
-            sid.clear();
-            if (target == eventTarget) eventSid.clear();
-            due = Clock::now() + (renewal ? std::chrono::seconds(0) : std::chrono::seconds(30));
-        }
-        lock.unlock(); eventWake.notify_all();
+void OwnSpeakerControl::apply(StateUpdate update) {
+    const auto before = state.snapshot();
+    if (update.title) {
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        const auto baseStart = sentUrl.rfind('/', sentUrl.find('?'));
+        const auto basename = sentUrl.substr(baseStart == std::string::npos ? 0 : baseStart + 1);
+        const auto bare = basename.substr(0, basename.find('?'));
+        if (update.title->empty() || *update.title == sentUrl || *update.title == sentUri
+            || *update.title == basename || *update.title == bare) update.title = sentTitle;
     }
+    state.apply(update);
+    const auto after = state.snapshot();
+    {
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        if (before.paused() && !after.paused()) freshStreamPosition = true;
+        if (!after.paused() || !before.paused()) pauseTimeoutLogged = false;
+    }
+    if (update.group && (before.group.uuid != after.group.uuid || before.group.members != after.group.members))
+        printf("yeney: group room=%s coordinator=%s members=%s\n", logValue(after.room.name).c_str(),
+            logValue(after.group.name).c_str(), logValue(groupDescription(after.room)).c_str());
 }
 bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
-    std::string state;
-    {
-        std::unique_lock<std::mutex> lock(eventMutex);
-        // The initial NOTIFY can race the SUBSCRIBE response's SID publication.
-        if (subscribing && eventSid.empty())
-            eventWake.wait_for(lock, std::chrono::milliseconds(500), [&] { return !subscribing || eventsStopping; });
-        if (eventsStopping || eventSid.empty() || event.sid != eventSid) return false;
-        std::lock_guard<std::mutex> cache(cacheMutex);
-        ++eventRevision;
-        updateTransport(event.state, event.status);
-        state = cachedTransport.state;
+    auto update = event.update;
+    update.source = Source::Event;
+    if (event.service == Service::ZoneGroupTopology) {
+        const auto previous = state.snapshot();
+        if (!topologyUpdate(event.topology, room, previous.room.uuid, update)) return false;
     }
-    printf("UPnP event: TransportState=%s seq=%u\n", state.c_str(), event.sequence);
+    apply(update);
+    printf("yeney: event service=%s TransportState=%s seq=%u\n", serviceName(event.service),
+        logValue(state.snapshot().transport.state).c_str(), event.sequence);
     if (eventCallback) eventCallback();
     return true;
 }
-void OwnSpeakerControl::updateTransport(const std::string& state, const std::string& status) {
-    const bool wasPaused = paused();
-    if (!state.empty()) cachedTransport.state = state;
-    if (wasPaused && !paused()) freshStreamPosition = true;
-    if (!paused() || !wasPaused) pauseTimeoutLogged = false;
-    if (!status.empty()) cachedTransport.status = status;
-    cachedTransport.available = true;
-}
-Speaker OwnSpeakerControl::speaker() const { std::lock_guard<std::mutex> lock(cacheMutex); return selected; }
-TransportInfo OwnSpeakerControl::transportInfo() { std::lock_guard<std::mutex> lock(cacheMutex); return cachedTransport; }
+Speaker OwnSpeakerControl::speaker() const { return state.snapshot().room; }
+TransportInfo OwnSpeakerControl::transportInfo() { return state.snapshot().transport; }
+uint8_t OwnSpeakerControl::displayVolume() { return state.snapshot().volume; }
 std::string OwnSpeakerControl::controllerUri() {
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    auto port = streamPort();
+    const auto port = streamPort();
+    std::lock_guard<std::mutex> lock(runtimeMutex);
     return localAddress.empty() || !port ? "" : "http://" + localAddress + ":" + std::to_string(port);
 }
 unsigned OwnSpeakerControl::actionTimeoutMs(const std::string& action) {
     return action == "Play" || action == "SetAVTransportURI" || action == "Stop" || action == "Pause"
-        ? 20000 : 5000;
-}
-uint8_t OwnSpeakerControl::displayVolume() {
-    std::lock_guard<std::mutex> lock(cacheMutex); return volume;
-}
-bool OwnSpeakerControl::paused() const {
-    return cachedTransport.state == "STOPPED" || cachedTransport.state == "PAUSED_PLAYBACK";
+        ? timing::transportMs : timing::readMs;
 }
 SoapResult OwnSpeakerControl::call(const std::string& action, const SoapArguments& args,
                                   const std::string& host, const std::string& service) {
-    const std::string address = host.empty() ? speaker().ip : host;
+    const std::string address = host.empty() ? targetFor(action, state.snapshot()) : host;
     const auto path = service == "ZoneGroupTopology" ? "/ZoneGroupTopology/Control" :
         service == "RenderingControl" ? "/MediaRenderer/RenderingControl/Control" : "/MediaRenderer/AVTransport/Control";
     const auto activityBefore = action == "GetPositionInfo" && streamActivity ? streamActivity() : StreamActivity{};
     auto http = httpPost({address, path, speakerPort}, {
-        {"Content-Type", "text/xml"},
-        {"SOAPACTION", "\"urn:schemas-upnp-org:service:" + service + ":1#" + action + "\""}
+        {"Content-Type", "text/xml"}, {"SOAPACTION", "\"urn:schemas-upnp-org:service:" + service + ":1#" + action + "\""}
     }, soapBody(service, action, args), actionTimeoutMs(action));
-    // Only a connection to the selected speaker determines its callback address.
-    if (!http.localAddress.empty() && (host.empty() || speaker().ip.empty())) {
-        std::lock_guard<std::mutex> lock(cacheMutex); localAddress = http.localAddress;
-    }
+    if (!http.localAddress.empty()) { std::lock_guard<std::mutex> lock(runtimeMutex); localAddress = http.localAddress; }
     auto result = parseSoap(http.body, action);
     if (!result.faultCode.empty() || !result.faultDescription.empty()) {
-        printf("UPnP %s fault %s: %s\n", action.c_str(), result.faultCode.c_str(), result.faultDescription.c_str());
+        printf("yeney: SOAP action=%s fault=%s description=%s\n", action.c_str(), logValue(result.faultCode).c_str(), logValue(result.faultDescription).c_str());
     } else if (!http.error.empty() || http.status != 200 || !result.ok) {
         const auto activity = streamActivity ? streamActivity() : StreamActivity{};
-        std::lock_guard<std::mutex> lock(cacheMutex);
-        if (action == "GetPositionInfo" && http.error == "timeout" && paused() && (activityBefore.requestOpen || activity.requestOpen)) {
-            if (!pauseTimeoutLogged) printf("UPnP GetPositionInfo: no reply while speaker holds a stream request (paused)\n");
+        const auto paused = state.snapshot().paused();
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        if (action == "GetPositionInfo" && http.error == "timeout" && paused && (activityBefore.requestOpen || activity.requestOpen)) {
+            if (!pauseTimeoutLogged) printf("yeney: SOAP action=GetPositionInfo reason=no-reply-held-request state=paused\n");
             pauseTimeoutLogged = true;
-        } else {
-            printf("UPnP %s failed: %s (HTTP %u)\n", action.c_str(),
-                http.error.empty() ? "invalid SOAP response" : http.error.c_str(), http.status);
-        }
+        } else printf("yeney: SOAP action=%s error=%s HTTP=%u\n", action.c_str(),
+                     http.error.empty() ? "invalid-response" : logValue(http.error).c_str(), http.status);
     }
     result.ok = result.ok && http.error.empty() && http.status == 200;
     return result;
 }
 bool OwnSpeakerControl::topology(const std::string& host, bool initial) {
+    StateUpdate update; const auto previous = state.snapshot(); update.startedRevision = previous.revision;
     auto response = call("GetZoneGroupState", {}, host, "ZoneGroupTopology");
-    if (!response.ok) return false;
-    auto speakers = parseTopology(response.response.value("ZoneGroupState"));
-    Speaker next;
-    if (initial) {
-        if (!matchRoom(speakers, room, next)) return false;
-    } else {
-        const auto previous = speaker();
-        bool found = false;
-        for (const auto& candidate : speakers) if (candidate.uuid == previous.uuid) { next = candidate; found = true; break; }
-        if (!found) return false;
-    }
-    bool changed;
-    {
-        std::lock_guard<std::mutex> lock(cacheMutex);
-        changed = selected.name != next.name || selected.coordinator != next.coordinator || selected.members != next.members;
-        selected = next;
-    }
-    std::string coordinatorIp, coordinatorId;
-    for (const auto& candidate : speakers) if (candidate.name == next.coordinator) {
-        coordinatorIp = candidate.ip; coordinatorId = candidate.uuid; break;
-    }
-    {
-        std::lock_guard<std::mutex> lock(eventMutex);
-        if (eventHost != coordinatorIp || eventCoordinator != coordinatorId) {
-            eventHost = coordinatorIp; eventCoordinator = coordinatorId;
-            ++eventTarget; eventSid.clear(); eventWake.notify_all();
-        }
-    }
-    if (changed) printf("%s\n", groupDescription(next).c_str());
-    return true;
+    if (!response.ok || !topologyUpdate(parseTopology(response.response.value("ZoneGroupState")), room,
+        initial ? "" : previous.room.uuid, update)) return false;
+    apply(update); return true;
 }
 bool OwnSpeakerControl::discover(const std::string& requestedRoom, const std::string& seed) {
     room = requestedRoom;
@@ -214,10 +129,10 @@ bool OwnSpeakerControl::discover(const std::string& requestedRoom, const std::st
         // Probe selected endpoint as well: seed may be reachable on another NIC.
         poll();
         if (!transportInfo().available || controllerUri().empty()) return false;
-        if (!eventListener) startEvents();
+        if (!subscriptions) startEvents();
         return true;
     }
-    printf("UPnP: failed to discover room '%s'\n", room.c_str());
+    printf("yeney: discovery room=%s result=failed\n", logValue(room).c_str());
     return false;
 }
 std::vector<std::string> OwnSpeakerControl::discoverRooms(const std::string& seed) {
@@ -257,103 +172,87 @@ bool OwnSpeakerControl::playStream(const std::string& url, const std::string& ti
     if (!parseXml(metadata, item) || !item.child("item")) return false;
     const auto uri = item.child("item")->value("res");
     {
-        std::lock_guard<std::mutex> lock(cacheMutex);
+        std::lock_guard<std::mutex> lock(runtimeMutex);
         freshStreamPosition = sentUrl != url;
-        sentTitle = title; sentUri = uri; sentUrl = url; cachedTransport.title = title;
+        sentTitle = title; sentUri = uri; sentUrl = url;
     }
+    StateUpdate update; update.startedRevision = state.snapshot().revision; update.title = title; apply(update);
     return call("SetAVTransportURI", {{"InstanceID", "0"}, {"CurrentURI", uri}, {"CurrentURIMetaData", metadata}}).ok && play();
 }
 bool OwnSpeakerControl::play() { return call("Play", {{"InstanceID", "0"}, {"Speed", "1"}}).ok; }
 bool OwnSpeakerControl::pause() { return call("Pause", {{"InstanceID", "0"}, {"Speed", "1"}}).ok; }
 bool OwnSpeakerControl::stop() { return call("Stop", {{"InstanceID", "0"}, {"Speed", "1"}}).ok; }
 bool OwnSpeakerControl::currentUri(std::string& uri) {
-    auto result = call("GetMediaInfo", {{"InstanceID", "0"}});
+    StateUpdate update; update.startedRevision = state.snapshot().revision;
+    const auto result = call("GetMediaInfo", {{"InstanceID", "0"}});
     const auto current = result.response.child("CurrentURI");
     if (!result.ok || !current) return false;
-    uri = current->text;
-    { std::lock_guard<std::mutex> lock(cacheMutex); cachedTransport.uri = uri; cachedTransport.uriKnown = true; }
-    return true;
+    update.uri = current->text; apply(update);
+    uri = state.snapshot().transport.uri; return true;
 }
 bool OwnSpeakerControl::positionInfo(uint32_t& ms, std::string* text) {
-    std::lock_guard<std::mutex> lock(positionMutex);
+    const auto before = state.snapshot();
     const auto activity = streamActivity ? streamActivity() : StreamActivity{};
-    bool fresh;
+    auto cached = [&] { const auto s = state.snapshot(); ms = s.positionMs; if (text && s.positionKnown) *text = s.positionText; return s.positionKnown; };
     {
-        std::lock_guard<std::mutex> cache(cacheMutex);
-        fresh = freshStreamPosition;
-        if (paused() && !activity.streaming && !fresh) {
-            ms = positionMs; if (text && positionKnown) *text = positionText;
-            return positionKnown;
-        }
-        freshStreamPosition = false;
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        const bool skip = !monitor.legacy ? !before.playing() : before.paused() && !activity.streaming && !freshStreamPosition;
+        if (skip || positionReading || (Clock::now() < positionAt && !(monitor.legacy && freshStreamPosition))) return cached();
+        positionReading = true; freshStreamPosition = false; positionAt = Clock::now() + timing::position;
     }
-    if (fresh || Clock::now() >= positionAt) {
-        auto result = call("GetPositionInfo", {{"InstanceID", "0"}});
-        if (!result.ok) return false;
-        const auto time = result.response.value("RelTime");
-        unsigned long long h, m, s; char tail;
-        if (sscanf(time.c_str(), "%llu:%llu:%llu%c", &h, &m, &s, &tail) != 3 || m >= 60 || s >= 60
-            || h > std::numeric_limits<uint32_t>::max() / 3600000u
-            || (h * 3600 + m * 60 + s) * 1000 > std::numeric_limits<uint32_t>::max()) return false;
-        {
-            std::lock_guard<std::mutex> lock(cacheMutex);
-            cachedTransport.duration = result.response.value("TrackDuration");
-            XmlNode metadata;
-            const auto xml = result.response.value("TrackMetaData");
-            const auto valid = parseXml(xml, metadata);
-            const auto item = valid ? metadata.child("item") : nullptr;
-            const auto title = item ? item->value("title") : "";
-            const auto query = sentUrl.find('?');
-            const auto baseStart = sentUrl.rfind('/', query);
-            const auto basename = sentUrl.substr(baseStart == std::string::npos ? 0 : baseStart + 1);
-            const auto bare = basename.substr(0, basename.find('?'));
-            cachedTransport.title = title.empty() || title == sentUrl || title == sentUri
-                || title == basename || title == bare ? sentTitle : title;
-        }
-        positionKnown = true;
-        positionMs = (h * 3600 + m * 60 + s) * 1000; positionText = time;
-        positionAt = Clock::now() + std::chrono::seconds(1);
+    const auto result = call("GetPositionInfo", {{"InstanceID", "0"}});
+    { std::lock_guard<std::mutex> lock(runtimeMutex); positionReading = false; }
+    if (!result.ok) {
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        if (monitor.legacy) positionAt = {};
+        return false;
     }
-    ms = positionMs; if (text) *text = positionText; return true;
+    const auto time = result.response.value("RelTime");
+    unsigned long long h, m, s; char tail;
+    if (sscanf(time.c_str(), "%llu:%llu:%llu%c", &h, &m, &s, &tail) != 3 || m >= 60 || s >= 60
+        || h > std::numeric_limits<uint32_t>::max() / 3600000u
+        || (h * 3600 + m * 60 + s) * 1000 > std::numeric_limits<uint32_t>::max()) return false;
+    StateUpdate update; update.startedRevision = before.revision;
+    update.positionMs = (h * 3600 + m * 60 + s) * 1000; update.positionText = time;
+    if (result.response.child("TrackDuration")) update.duration = result.response.value("TrackDuration");
+    XmlNode metadata;
+    if (parseXml(result.response.value("TrackMetaData"), metadata) && metadata.child("item"))
+        update.title = metadata.child("item")->value("title");
+    apply(update); return cached();
 }
 bool OwnSpeakerControl::readTransportInfo(TransportInfo& info) {
-    uint64_t revision;
-    { std::lock_guard<std::mutex> lock(cacheMutex); revision = eventRevision; }
-    auto result = call("GetTransportInfo", {{"InstanceID", "0"}});
-    std::lock_guard<std::mutex> lock(cacheMutex);
-    if (revision == eventRevision) {
-        cachedTransport.available = result.ok && result.response.child("CurrentTransportState") && result.response.child("CurrentTransportStatus");
-        if (cachedTransport.available)
-            updateTransport(result.response.value("CurrentTransportState"), result.response.value("CurrentTransportStatus"));
-    }
-    info = cachedTransport;
-    return info.available;
+    StateUpdate update; update.startedRevision = state.snapshot().revision;
+    const auto result = call("GetTransportInfo", {{"InstanceID", "0"}});
+    update.available = result.ok && result.response.child("CurrentTransportState") && result.response.child("CurrentTransportStatus");
+    if (*update.available) { update.state = result.response.value("CurrentTransportState"); update.status = result.response.value("CurrentTransportStatus"); }
+    apply(update); info = state.snapshot().transport; return info.available;
 }
 void OwnSpeakerControl::poll() {
-    TransportInfo info;
-    readTransportInfo(info);
-    uint32_t ms;
-    positionInfo(ms);
-    if (Clock::now() >= volumeAt) {
-        volumeAt = Clock::now() + std::chrono::seconds(1);
-        std::string uri;
-        const auto activity = streamActivity ? streamActivity() : StreamActivity{};
-        bool isPaused;
-        { std::lock_guard<std::mutex> lock(cacheMutex); isPaused = paused(); }
-        // Mode 1 preserves the existing held-request guard. Mode 0 also skips
-        // idle paused reads, retaining the URI without changing explicit reads.
-        if (!isPaused || (stoppedMediaInfo && !activity.requestOpen))
-            currentUri(uri);
+    const auto health = subscriptions ? subscriptions->health() : SubscriptionHealth{};
+    const auto activity = streamActivity ? streamActivity() : StreamActivity{};
+    MonitorWork work;
+    {
+        std::lock_guard<std::mutex> lock(runtimeMutex);
+        std::string description;
+        for (size_t i = 0; i < health.active.size(); ++i) if (monitor.legacy || !health.active[i])
+            description += std::string("yeney: monitor polling ") + serviceName(static_cast<Service>(i)) + " reason="
+                + (monitor.legacy ? "legacy" : health.reason[i]) + "\n";
+        if (description.empty()) description = "yeney: monitor events\n";
+        if (description != monitorLog) { printf("%s", description.c_str()); monitorLog = description; }
+        work = monitor.next(Clock::now(), state.snapshot(), health.active, activity.requestOpen);
+    }
+    if (work.transport) { TransportInfo info; readTransportInfo(info); }
+    // Recheck the freshly observed state; positionInfo enforces its own one-second lease.
+    if (work.position || state.snapshot().playing()) { uint32_t ms; positionInfo(ms); }
+    if (work.mediaDue && (!state.snapshot().paused() || (monitor.stoppedMediaInfo && !activity.requestOpen))) {
+        std::string uri; currentUri(uri);
+    }
+    if (work.volume) {
+        StateUpdate update; update.startedRevision = state.snapshot().revision;
         auto result = call("GetVolume", {{"InstanceID", "0"}, {"Channel", "Master"}}, "", "RenderingControl");
-        const auto value = result.response.value("CurrentVolume");
-        unsigned parsed; char tail;
-        if (result.ok && sscanf(value.c_str(), "%u%c", &parsed, &tail) == 1 && parsed <= 100) {
-            std::lock_guard<std::mutex> lock(cacheMutex); volume = parsed;
-        }
+        const auto value = result.response.value("CurrentVolume"); unsigned parsed; char tail;
+        if (result.ok && sscanf(value.c_str(), "%u%c", &parsed, &tail) == 1 && parsed <= 100) { update.volume = parsed; apply(update); }
     }
-    if (Clock::now() >= topologyAt) {
-        topologyAt = Clock::now() + std::chrono::seconds(5);
-        topology(speaker().ip, false);
-    }
+    if (work.topology) topology(speaker().ip, false);
 }
 }
