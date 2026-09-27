@@ -7,6 +7,8 @@
 #include <iostream>
 #include <thread>
 int main(int argc, char** argv) {
+    // Preserve the original byte-identical comparison against noson.
+    setenv("SONOS_LMS_STREAM_CONTENT", "off", 1);
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (argc == 3 && std::string(argv[1]) == "--stopped-media-info") {
         unsigned port = std::strtoul(argv[2], nullptr, 10);

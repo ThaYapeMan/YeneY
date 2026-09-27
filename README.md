@@ -397,6 +397,19 @@ and album are sent as `dc:creator` and `upnp:album` in the Sonos DIDL metadata.
 Empty values are omitted. The noson backend still sends title and artwork only;
 its `PlayStream()` API does not accept artist or album.
 
+The Sonos app ignores `dc:creator` and `upnp:album` for radio items using
+`x-rincon-mp3radio`; its now-playing text comes from `r:streamContent` instead.
+For YeneY, `SONOS_LMS_STREAM_CONTENT` selects the text sent in that element:
+
+- `structured` (default): `TYPE=SNG|TITLE <title>|ARTIST <artist>|ALBUM <album>`.
+  Empty fields are omitted and `|` inside a value becomes `/`.
+- `plain`: `<artist> - <title>`, or just `<title>` when artist is empty.
+- `off`: empty, preserving the earlier radio-text behavior.
+
+The setting is read and logged once at startup. Invalid values warn and use
+`structured`. All text is XML-escaped; `dc:creator` and `upnp:album` are retained.
+The noson backend is unaffected.
+
 **In-stream metadata updates don't work.** Updating the "now playing" title
 mid-stream (without restarting it) was attempted via Shoutcast-style ICY metadata
 injection into the FLAC stream -- the mechanism itself was fully implemented and

@@ -10,6 +10,7 @@ OwnSpeakerControl::OwnSpeakerControl(std::function<unsigned()> port, unsigned co
                                      std::shared_ptr<HttpServer> server)
     : streamPort(std::move(port)), speakerPort(controlPort), streamActivity(std::move(activity)),
       eventCallback(std::move(callback)), eventServer(std::move(server)) {
+    (void)streamContentMode();
     const char* mode = std::getenv("SONOS_LMS_YENEY_POLL");
     monitor.legacy = mode && std::string(mode) == "legacy";
     if (mode && std::string(mode) != "events" && std::string(mode) != "legacy")

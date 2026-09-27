@@ -43,7 +43,7 @@ sonos-lms: $(OBJS) $(OBJS_SL) noson/noson/libnoson.a
 		-lpthread -lm -lrt -ldl -lasound
 
 clean:
-	rm -f http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+	rm -f stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
 
 slimproto_sonos.o: slimproto_sonos.c squeezelite/slimproto.c squeezelite/squeezelite.h
 
@@ -53,10 +53,12 @@ install: sonos-lms
 encoder-test: tests/audio_pack_fixture.o squeezelite/output_pack.o upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h noson/noson/libnoson.a
 	g++ -g -O2 -Wall -I. -Inoson/noson/src -Inoson/noson/public/noson -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.o squeezelite/output_pack.o sbencoder.cpp upnp/encoded_buffer.cpp noson/noson/libnoson.a -lFLAC++ -lFLAC -lcrypto -lssl -lz -lpthread
 
-test: http-server-test speaker-state-test sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+test: stream-content-test http-server-test speaker-state-test sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
 	python3 tests/http_server_test.py
 	./speaker-state-test
 	./upnp-test
+	./stream-content-test
+	python3 tests/stream_content_setting_test.py
 	python3 tests/list_rooms_test.py
 	python3 tests/installer_test.py
 	python3 tests/upnp_mock_test.py
@@ -141,3 +143,6 @@ http-server-test: $(wildcard upnp/*.h) tests/http_server_fixture.cpp upnp/http_s
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/http_server_fixture.cpp upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp -lpthread
 
 http-server-test: upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp noson/noson/src/data/pulseaudio_png.h
+
+stream-content-test: tests/stream_content_test.cpp upnp/soap.cpp upnp/xml.cpp $(wildcard upnp/*.h)
+	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/stream_content_test.cpp upnp/soap.cpp upnp/xml.cpp

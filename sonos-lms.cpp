@@ -872,6 +872,7 @@ int main(int argc, char** argv)
     }
     (void)pauseMode();
     (void)audioMode();
+    (void)upnp::streamContentMode();
     const auto backend = upnp::backend();
     try {
         printf("Stream session: %s\n", streamSessionToken().c_str());

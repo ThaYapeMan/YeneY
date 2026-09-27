@@ -8,7 +8,7 @@ std::string soapBody(const std::string& service, const std::string& action, cons
     return body + "</u:" + action + "></s:Body></s:Envelope>";
 }
 std::string streamDidl(const std::string& url, const std::string& title, const std::string& art,
-                       const std::string& artist, const std::string& album) {
+                       const std::string& artist, const std::string& album, StreamContentMode contentMode) {
     if (url.find(':') == std::string::npos) return {};
     auto path = url.substr(0, url.find('?'));
     bool flac = path.size() >= 5 && path.compare(path.size() - 5, 5, ".flac") == 0;
@@ -16,7 +16,8 @@ std::string streamDidl(const std::string& url, const std::string& title, const s
     std::string didl = "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\""
         " xmlns:r=\"urn:schemas-rinconnetworks-com:metadata-1-0/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\""
         " xmlns:upnp=\"urn:schemas-upnp-org:metadata-1-0/upnp/\" ><item><upnp:class>object.item.audioItem</upnp:class>"
-        "<dc:title>" + xmlEscape(title) + "</dc:title><r:streamContent></r:streamContent>";
+        "<dc:title>" + xmlEscape(title) + "</dc:title><r:streamContent>"
+        + xmlEscape(streamContent(title, artist, album, contentMode)) + "</r:streamContent>";
     if (!artist.empty()) didl += "<dc:creator>" + xmlEscape(artist) + "</dc:creator>";
     if (!album.empty()) didl += "<upnp:album>" + xmlEscape(album) + "</upnp:album>";
     if (!art.empty()) didl += "<upnp:albumArtURI>" + xmlEscape(art) + "</upnp:albumArtURI>";

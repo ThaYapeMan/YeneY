@@ -20,3 +20,5 @@ attic
 speaker-state-test
 
 /http-server-test
+
+/stream-content-test

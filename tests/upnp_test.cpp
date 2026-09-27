@@ -9,6 +9,8 @@
 using namespace upnp;
 std::string file(const char* name) { std::ifstream in(name); assert(in); std::ostringstream out; out << in.rdbuf(); return out.str(); }
 int main() {
+    // Preserve the original byte-identical comparison against noson.
+    setenv("SONOS_LMS_STREAM_CONTENT", "off", 1);
     assert(streamHeaderLog({{"User-Agent", "Sonos"}, {"Range", "bytes=0-"},
         {"Icy-MetaData", "1"}, {"Connection", "close"}, {"x-Test", "a"},
         {"Some-SoNoS-Field", "b"}, {"Host", "ignored"}}) ==
