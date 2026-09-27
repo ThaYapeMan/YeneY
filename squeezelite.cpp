@@ -1,4 +1,4 @@
-// sonos-lms -- deploy Sonos in a Logitech Media Server (LMS) streaming environment
+// sonos-lms -- deploy Sonos in a Lyrion Music Server (LMS) streaming environment
 //
 // Copyright (C) 2026 Jaap van Vliet
 //
