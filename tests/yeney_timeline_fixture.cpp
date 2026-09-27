@@ -64,7 +64,7 @@ template<class F> static void wait(F condition) {
 static void pairScenario(const std::string& scenario) {
     const bool single = scenario == "single20" || scenario == "spontaneous";
     const bool expected = scenario == "pair12" || scenario == "pair68" || scenario == "late"
-        || scenario == "unconfirmed" || scenario == "single20";
+        || scenario == "unconfirmed" || scenario == "late-unconfirmed" || scenario == "single20";
     bridge::SBStreamer streamer;
     resumeState.command(scenario == "pause" ? 'p' : 'q');
     if (scenario != "playing") resumeState.stopForPause(30);
@@ -105,6 +105,12 @@ static void pairScenario(const std::string& scenario) {
             TimelineClock::ms = 14999; TimelineClock::us = 1200;
             checkGetPairConfirmation(); assert(unconfirmed == 0);
             TimelineClock::ms = 15000;
+            checkGetPairConfirmation(); assert(unconfirmed == 1);
+            checkGetPairConfirmation(); assert(unconfirmed == 1);
+        }
+        if (scenario == "late-unconfirmed") {
+            TimelineClock::ms = 16000; update.state = "TRANSITIONING";
+            speakerState.apply(update); ObserveDeviceTransport(*update.state);
             checkGetPairConfirmation(); assert(unconfirmed == 1);
             checkGetPairConfirmation(); assert(unconfirmed == 1);
         }

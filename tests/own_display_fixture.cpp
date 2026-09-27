@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <map>
 #include <thread>
+static std::string lastSetUri;
 static std::string state = "PLAYING", title = "Speaker title";
 static bool timeoutPosition = false, closeRequestOnTimeout = false;
 static upnp::StreamActivity activity;
@@ -17,10 +18,11 @@ HttpResponse httpRequest(const std::string&, const HttpUrl&, const std::map<std:
 }
 HttpResponse httpGet(const HttpUrl&, unsigned) { return {}; }
 HttpResponse httpPost(const HttpUrl&, const std::map<std::string, std::string>& headers,
-                      const std::string&, unsigned) {
+                      const std::string& body, unsigned) {
     auto header = headers.at("SOAPACTION");
     auto action = header.substr(header.find('#') + 1); action.pop_back();
     ++calls[action];
+    if (action == "SetAVTransportURI") lastSetUri = body;
     if (action == "GetPositionInfo" && timeoutPosition) {
         if (closeRequestOnTimeout) activity = {};
         return {0, "", "127.0.0.1", "timeout"};
@@ -43,6 +45,14 @@ int main() {
     assert(control.transportInfo().uriKnown);
     assert(control.transportInfo().uri == "x-rincon-mp3radio://bridge/stream?session=fixture&stream=21");
     puts("PASS: own polling caches observed CurrentURI independently of TrackMetaData title");
+    const std::string artist = "Björk & < > \" ' 東京", album = "Album & < > \" ' 🎵";
+    assert(control.playStream("http://bridge/stream.flac", "Title", "", artist, album));
+    upnp::XmlNode envelope, metadata;
+    assert(upnp::parseXml(lastSetUri, envelope));
+    const auto didl = envelope.child("Body")->child("SetAVTransportURI")->value("CurrentURIMetaData");
+    assert(upnp::parseXml(didl, metadata));
+    assert(metadata.child("item")->value("creator") == artist && metadata.child("item")->value("album") == album);
+    puts("PASS: own PlayStream sends artist and album through both DIDL and SOAP escaping");
     unsigned stream = 0;
     uint32_t ms;
     for (const auto variant : {"URL", "basename/query", "basename", "empty", "real title"}) {

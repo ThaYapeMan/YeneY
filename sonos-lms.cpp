@@ -618,7 +618,7 @@ static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)
             ? gPlayer->controllerUri() + res.iconUri : track.artworkUrl;
         printf("PlaySqueezeBox: title='%s' art='%s'\n", title.c_str(), artUrl.c_str());
         if (resetPosition) reset_sonos_position(stream_id);
-        ok = gPlayer->playStream(streamURL, title, artUrl);
+        ok = gPlayer->playStream(streamURL, title, artUrl, track.artist, track.album);
         if (ok) {
             ourStreamStarted.store(true);
             acknowledge_squeezebox_resume(stream_id);

@@ -161,9 +161,10 @@ std::vector<Speaker> OwnSpeakerControl::discoverRoomDetails(const std::string& s
     }
     return {};
 }
-bool OwnSpeakerControl::playStream(const std::string& url, const std::string& title, const std::string& art) {
+bool OwnSpeakerControl::playStream(const std::string& url, const std::string& title, const std::string& art,
+                                 const std::string& artist, const std::string& album) {
     if (url.find(':') == std::string::npos) return false;
-    const auto metadata = streamDidl(url, title, art);
+    const auto metadata = streamDidl(url, title, art, artist, album);
     XmlNode item;
     if (!parseXml(metadata, item) || !item.child("item")) return false;
     const auto uri = item.child("item")->value("res");

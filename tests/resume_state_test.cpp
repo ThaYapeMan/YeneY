@@ -4,7 +4,7 @@
 #include <iostream>
 int main() {
     ResumeState pair;
-    const auto pairNow = ResumeState::Clock::time_point{};
+    const auto pairNow = ResumeState::Clock::now();
     pair.command('q'); pair.stopForPause(9);
     assert(!pair.observeGetPair(9, std::chrono::microseconds(1200), pairNow));
     pair.completedQStop(9);

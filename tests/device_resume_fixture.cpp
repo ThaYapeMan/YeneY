@@ -41,7 +41,9 @@ struct FakePlayer {
     bool currentUri(std::string& out) { out = uri; return true; }
     Transport transportInfo() { return property; }
     std::string controllerUri() { return "http://bridge"; }
-    bool playStream(const std::string& url, const std::string&, const std::string&) {
+    bool playStream(const std::string& url, const std::string&, const std::string&,
+                    const std::string& artist, const std::string& album) {
+        assert(artist == "Test artist" && album == "Test album");
         assert(url == "http://bridge/music/squeezebox.flac?session=" + streamSessionToken() + "&stream=6");
         callOrder.push_back("PlayStream");
         if (!testingStreamStart) {
@@ -103,8 +105,8 @@ struct FakeServer {
     Resource resource(const char*) { return value; }
 } serverStub;
 static FakeServer* gStreamServer = &serverStub;
-struct TrackInfo { std::string title, artworkUrl; };
-static TrackInfo fetchLmsTrackInfo(int, int) { return {"Test track", "http://bridge/art"}; }
+struct TrackInfo { std::string title, artworkUrl, artist, album; };
+static TrackInfo fetchLmsTrackInfo(int, int) { return {"Test track", "http://bridge/art", "Test artist", "Test album"}; }
 static void reset_sonos_position(unsigned) {}
 namespace bridge {
 struct Status {

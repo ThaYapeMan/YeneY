@@ -56,7 +56,10 @@ public:
             return relay;
         }
         if (state == "PLAYING" || state == "TRANSITIONING") {
-            pairConfirmationPending = false;
+            // A transport call can delay the diagnostic timer. An event
+            // arriving after the window must not erase the missed deadline.
+            if (pairConfirmationPending && Clock::now() <= pairConfirmationDeadline)
+                pairConfirmationPending = false;
             transitioning = sawPause;
             if (state == "PLAYING") {
                 awaitingPlay = false;

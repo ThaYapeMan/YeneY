@@ -392,12 +392,10 @@ Agents never SSH to or deploy on LXC 113; the owner runs physical tests there.
 
 ## Where it falls short
 
-**No artist or album on the Sonos display.** The vendored noson library's
-`PlayStream()` call only accepts a title and an artwork URL; there is no field for
-artist or album, so neither reaches Sonos's DIDL metadata. The speaker's own
-display and the Sonos app show title and cover art correctly, but the artist/album
-lines stay blank. Fixing this needs either an extension to noson's `PlayStream()`
-or a hand-built DIDL payload that bypasses it.
+**Artist and album require YeneY.** With `SONOS_LMS_UPNP=yeney`, the LMS artist
+and album are sent as `dc:creator` and `upnp:album` in the Sonos DIDL metadata.
+Empty values are omitted. The noson backend still sends title and artwork only;
+its `PlayStream()` API does not accept artist or album.
 
 **In-stream metadata updates don't work.** Updating the "now playing" title
 mid-stream (without restarting it) was attempted via Shoutcast-style ICY metadata
@@ -431,6 +429,15 @@ and sends Stop after 400 ms unless superseded by `strm s`; track changes send no
 transport command. STOPPED itself never resumes LMS. Sonos-app Play sends one
 LMS `play` per resume attempt and feeds the fresh GET; if LMS starts a new stream,
 the waiting GET survives LMS's q/s flush and redirects when the new ID exists.
+After a successfully completed q-Stop, an ACTIVE GET followed by a STANDBY GET
+for the current stream within 25 ms also counts as device Play, in both backends.
+Study captures on September 27 showed Play pairs 0.8–6.8 ms apart and no pairs
+during 32 minutes idle. The bridge logs the request IDs and separation, sends
+one LMS play, and holds the ACTIVE GET through the normal feed/redirect path.
+A single GET still waits for a transport event and times out after five seconds.
+Pairs during playback or after pause-Stop do not use this rule. If no
+TRANSITIONING/PLAYING is observed within 15 seconds, a single “GET pair not
+confirmed” diagnostic is logged without rollback.
 Only a GET classified as a device resume after Stop gets this protection;
 ordinary q still ends the response. A held resume sends no bytes if the client
 closes it, or returns the existing 503 after its five-second deadline. Each
@@ -536,8 +543,8 @@ schedule; the default is `events`. `SONOS_LMS_YENEY_STOPPED_MEDIAINFO=0` (defaul
 skips fallback/legacy periodic GetMediaInfo while STOPPED or PAUSED_PLAYBACK.
 Setting it to `1` restores the earlier behavior, which still skips that read while
 a paused stream request is open. Explicit URI checks are unaffected. Both modes
-are read and logged at startup. Pause/stop ordering, resume decisions and action
-timeouts are unchanged.
+are read and logged at startup. These polling settings do not change pause/stop
+ordering, resume decisions or action timeouts.
 
 The parser fixtures include captured Sonos AVTransport, RenderingControl and
 ZoneGroupTopology notifications. The latter two cover Master volume 26 and

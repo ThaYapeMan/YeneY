@@ -9,7 +9,7 @@ public:
     bool discover(const std::string&, const std::string&) override { return true; }
     std::vector<std::string> discoverRooms(const std::string&) override { return {}; }
     upnp::Speaker speaker() const override { return {}; }
-    bool playStream(const std::string&, const std::string&, const std::string&) override { return true; }
+    bool playStream(const std::string&, const std::string&, const std::string&, const std::string&, const std::string&) override { return true; }
     bool play() override { return true; }
     bool pause() override { return true; }
     bool stop() override { return true; }

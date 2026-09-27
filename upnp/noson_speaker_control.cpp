@@ -65,7 +65,8 @@ std::vector<Speaker> NosonSpeakerControl::discoverRoomDetails(const std::string&
     return rooms;
 }
 Speaker NosonSpeakerControl::speaker() const { return impl->speaker; }
-bool NosonSpeakerControl::playStream(const std::string& url, const std::string& title, const std::string& art) { return impl->player->PlayStream(url, title, art); }
+bool NosonSpeakerControl::playStream(const std::string& url, const std::string& title, const std::string& art,
+                                   const std::string&, const std::string&) { return impl->player->PlayStream(url, title, art); }
 bool NosonSpeakerControl::play() { return impl->player->Play(); }
 bool NosonSpeakerControl::pause() { return impl->player->Pause(); }
 bool NosonSpeakerControl::stop() { return impl->player->Stop(); }

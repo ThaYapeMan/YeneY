@@ -55,6 +55,16 @@ int main() {
     const std::string url = "http://bridge:1400/music/squeezebox.flac?session=0123456789abcdef&stream=7";
     const auto didl = streamDidl(url, "A & B <Live> \"Mix\" '26", "http://lms:9000/art?a=1&b=2");
     assert(didl + "\n" == file("tests/fixtures/noson-didl.xml"));
+    const std::string artist = "Artist & < > \" ' Björk 東京", album = "Album & < > \" ' café 🎵";
+    const auto richDidl = streamDidl(url, "A & B <Live> \"Mix\" '26", "http://lms:9000/art?a=1&b=2", artist, album);
+    assert(richDidl + "\n" == file("tests/fixtures/yeney-didl.xml"));
+    XmlNode rich;
+    assert(parseXml(richDidl, rich));
+    assert(rich.child("item")->value("creator") == artist && rich.child("item")->value("album") == album);
+    assert(didl.find("<dc:creator>") == std::string::npos && didl.find("<upnp:album>") == std::string::npos);
+    assert(streamDidl(url, "", "", artist, "").find("<upnp:album>") == std::string::npos);
+    assert(streamDidl(url, "", "", "", album).find("<dc:creator>") == std::string::npos);
+    std::cout << "PASS: golden artist/album DIDL escapes XML, preserves apostrophes and Unicode, omits empty fields; empty metadata matches noson\n";
     const auto body = soapBody("AVTransport", "SetAVTransportURI", {{"InstanceID", "0"}, {"CurrentURI", url}, {"CurrentURIMetaData", didl}});
     assert(body == file("tests/fixtures/noson-set-uri.xml"));
     std::ofstream("/tmp/sonos-own-set-uri.xml") << body;

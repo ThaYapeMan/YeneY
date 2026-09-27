@@ -31,7 +31,8 @@ public:
     }
     virtual Speaker speaker() const = 0;
     virtual bool playStream(const std::string& url, const std::string& title,
-                            const std::string& artUrl = {}) = 0;
+                            const std::string& artUrl = {}, const std::string& artist = {},
+                            const std::string& album = {}) = 0;
     virtual bool play() = 0;
     virtual bool pause() = 0;
     virtual bool stop() = 0;

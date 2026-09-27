@@ -11,7 +11,8 @@ public:
     std::vector<std::string> discoverRooms(const std::string& = {}) override;
     std::vector<Speaker> discoverRoomDetails(const std::string& = {}) override;
     Speaker speaker() const override;
-    bool playStream(const std::string&, const std::string&, const std::string& = {}) override;
+    bool playStream(const std::string&, const std::string&, const std::string& = {},
+                    const std::string& artist = {}, const std::string& album = {}) override;
     bool play() override;
     bool pause() override;
     bool stop() override;

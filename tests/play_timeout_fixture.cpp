@@ -21,7 +21,7 @@ static const char* SBSTREAMER_CNAME = "test";
 struct Resource { std::string iconUri = "/art"; };
 struct Server { Resource resource(const char*) { return {}; } } server;
 static auto gStreamServer = &server;
-struct TrackInfo { std::string title = "Delayed track", artworkUrl; };
+struct TrackInfo { std::string title = "Delayed track", artworkUrl, artist, album; };
 static TrackInfo fetchLmsTrackInfo(int, int) { return {}; }
 static void reset_sonos_position(unsigned) {}
 static void acknowledge_squeezebox_resume(unsigned) {}

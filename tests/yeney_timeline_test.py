@@ -40,5 +40,5 @@ struct TimelineClock {
     for event_ms, second in [(21, 0), (5030, 1), (4990, 1), (-1, 0)]:
         subprocess.run([str(exe), str(event_ms), str(second)], check=True, timeout=10)
 
-    for scenario in ('pair12', 'pair68', 'pair30', 'single20', 'spontaneous', 'playing', 'pause', 'late', 'unconfirmed'):
+    for scenario in ('pair12', 'pair68', 'pair30', 'single20', 'spontaneous', 'playing', 'pause', 'late', 'unconfirmed', 'late-unconfirmed'):
         subprocess.run([str(exe), scenario], check=True, timeout=10)
