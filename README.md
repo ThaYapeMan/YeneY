@@ -533,10 +533,9 @@ a paused stream request is open. Explicit URI checks are unaffected. Both modes
 are read and logged at startup. Pause/stop ordering, resume decisions and action
 timeouts are unchanged.
 
-The parser fixtures retain the existing Sonos AVTransport capture. The new
-RenderingControl and ZoneGroupTopology examples use documented device API schemas
-with synthetic values and are marked “documented sample, replace with captured”;
-they are not claimed as captures from this project's speakers.
+The parser fixtures include captured Sonos AVTransport, RenderingControl and
+ZoneGroupTopology notifications. The latter two cover Master volume 26 and
+three solo rooms: Study and MBR on firmware 86.10, and Sonos Port on 97.1.
 
 See [the UPnP layer inventory and wire fixtures](docs/upnp-layer.md). No SMAPI
 library service or external-playback ownership policy is enabled by this switch.

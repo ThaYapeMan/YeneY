@@ -262,6 +262,11 @@ class EventSpeaker(Speaker):
                 try:
                     fixture = 'sonos-lastchange.xml' if suffix == '/avt' else 'rendering-lastchange.xml' if suffix == '/rc' else 'zone-group-notify.xml'
                     body = (ROOT / 'tests/fixtures' / fixture).read_text().replace('PLAYING', 'STOPPED')
+                    if suffix == '/zgt':
+                        # Preserve the captured payload; route its addresses to
+                        # local fake speakers so tests never contact real devices.
+                        body = body.replace('192.168.178.132', '127.0.0.1').replace('192.168.178.145', '127.0.0.2').replace('192.168.178.140', '127.0.0.3')
+                        body = body.replace('RINCON_949F3EFABA6601400', 'RINCON_00112233445501400')
                     endpoint = urlsplit(slot['callback'])
                     connection = http.client.HTTPConnection(endpoint.hostname, endpoint.port, timeout=2)
                     connection.request('NOTIFY', endpoint.path, body=body.encode(), headers={

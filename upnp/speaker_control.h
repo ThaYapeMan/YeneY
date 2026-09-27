@@ -7,7 +7,7 @@ namespace upnp {
 struct Speaker {
     std::string ip, uuid, name, coordinator;
     std::vector<std::string> members;
-    std::string model{}, location{};
+    std::string model{}, location{}, firmware{};
 };
 struct TransportInfo {
     std::string state, status;

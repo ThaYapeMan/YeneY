@@ -82,7 +82,7 @@ std::vector<Speaker> parseTopology(const std::string& xml) {
             if (member.attribute("Invisible") == "1") continue;
             HttpUrl url;
             if (uuid.empty() || name.empty() || !parseHttpUrl(member.attribute("Location"), url) || !uuids.insert(uuid).second) return {};
-            members.push_back({url.host, uuid, name, "", {}, "", member.attribute("Location")});
+            members.push_back({url.host, uuid, name, "", {}, "", member.attribute("Location"), member.attribute("SoftwareVersion")});
         }
         if (coordinator.empty() || members.empty()) continue;
         std::vector<std::string> names;

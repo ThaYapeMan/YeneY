@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
         assert(control.transportInfo().state == "STOPPED");
         for (unsigned i = 0; i < 5; ++i) { control.poll(); std::this_thread::sleep_for(std::chrono::milliseconds(500)); }
-        if (mode == "events") assert(control.displayVolume() == 15);
+        if (mode == "events") assert(control.displayVolume() == 26);
         assert(control.transportInfo().uriKnown);
         std::cout << "PASS: GENA " << mode << ": stopped monitor uses only missing services\n";
     } else if (mode == "lifecycle" || mode == "fallback") {

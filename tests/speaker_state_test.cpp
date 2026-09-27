@@ -10,9 +10,21 @@ static std::string file(const char* name) { std::ifstream f(name); assert(f); re
 int main() {
     StateUpdate u;
     assert(parseAvTransport(file("tests/fixtures/sonos-lastchange.xml"), u) && *u.state == "PLAYING");
-    assert(parseRenderingControl(file("tests/fixtures/rendering-lastchange.xml"), u) && *u.volume == 15);
+    assert(parseRenderingControl(file("tests/fixtures/rendering-lastchange.xml"), u) && *u.volume == 26);
     std::vector<Speaker> rooms;
     assert(parseZoneGroupEvent(file("tests/fixtures/zone-group-notify.xml"), rooms) && rooms.size() == 3);
+    for (const auto& room : rooms) {
+        assert(room.coordinator == room.name && room.members == std::vector<std::string>{room.name});
+        if (room.name == "Study") {
+            assert(room.uuid == "RINCON_949F3EFABA6601400" && room.ip == "192.168.178.132");
+            assert(room.firmware == "86.10-80260");
+        } else if (room.name == "MBR") {
+            assert(room.ip == "192.168.178.145" && room.firmware == "86.10-80260");
+        } else {
+            assert(room.name == "Sonos Port" && room.ip == "192.168.178.140" && room.firmware == "97.1-80312");
+        }
+    }
+    std::cout << "PASS: captured Master volume 26 ignores LF/RF 100; Study/MBR/Port solo groups, real IPs, UUID and firmware\n";
     for (const auto bad : {"<broken>", "<propertyset><property><LastChange>&lt;Event&gt;</LastChange></property></propertyset>"}) {
         assert(!parseAvTransport(bad, u)); assert(!parseRenderingControl(bad, u)); assert(!parseZoneGroupEvent(bad, rooms));
     }
@@ -76,6 +88,9 @@ int main() {
     w = legacy.next(t, state, {{true,true,true}}); assert(w.transport && w.media && w.volume && w.topology && w.position);
     w = legacy.next(t + std::chrono::milliseconds(500), state, {{true,true,true}}); assert(w.transport && !w.media && !w.volume && !w.topology && !w.position);
     std::cout << "PASS: fake-clock monitor events sanity, service-specific fallback/recovery and legacy intervals\n";
+    // Keep the synthetic grouped/coordinator-change coverage independently of
+    // the real capture, whose three rooms are all solo.
+    rooms = parseTopology(file("tests/fixtures/topology.xml"));
     assert(topologyUpdate(rooms, "Sonos Port", "", u)); state.apply(u, t);
     assert(targetFor("Play", state) == "127.0.0.1" && targetFor("GetVolume", state) == "127.0.0.2");
     assert(targetFor("GetZoneGroupState", state) == "127.0.0.2");
