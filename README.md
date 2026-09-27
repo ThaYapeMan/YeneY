@@ -507,7 +507,12 @@ The YeneY layer discovers speakers with SSDP and keeps one speaker-state snapsho
 AVTransport, RenderingControl and ZoneGroupTopology events. AVTransport commands
 and reads target the group coordinator; volume and topology target the room's own
 speaker. Bridging a member room therefore controls its group, as noson does. The
-HTTP stream, artwork and file server still use noson in both modes.
+YeneY HTTP server handles the stream, icon and GENA events on one port without
+constructing or initializing noson. The noson selection keeps its original server.
+YeneY accepts up to 16 simultaneous connections; excess connections receive 503.
+Headers are limited to 16 KiB and five seconds. The diagnostic `--file` mode
+requires the noson backend; YeneY serves only the registered stream, icon and
+GENA paths.
 
 **Events (GENA).** One listener accepts `/avt`, `/rc` and `/zgt`. Subscriptions
 request 300 seconds, renew halfway through the granted lifetime, and retry after

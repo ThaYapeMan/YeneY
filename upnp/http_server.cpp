@@ -164,7 +164,8 @@ struct HttpServer::Impl {
         boundPort = ntohs(addr.sin_port);
         acceptThread = std::thread([this] { run(); });
     }
-    ~Impl() { stopping = true; listener->disconnect(); if (acceptThread.joinable()) acceptThread.join(); }
+    void stop() { stopping = true; listener->disconnect(); if (acceptThread.joinable()) acceptThread.join(); }
+    ~Impl() { stop(); }
     void run() {
         while (!stopping) {
             for (auto i = workers.begin(); i != workers.end();) {
@@ -263,6 +264,7 @@ struct HttpServer::Impl {
 };
 HttpServer::HttpServer(unsigned port, unsigned attempts) : impl(new Impl(port, attempts)) {}
 HttpServer::~HttpServer() = default;
+void HttpServer::shutdown() { impl->stop(); }
 StreamResource HttpServer::registerStream(const std::string& name, const std::string& path, const std::string&,
     const std::string&, const std::string&, Handler handler) {
     std::lock_guard<std::mutex> lock(impl->routesMutex);

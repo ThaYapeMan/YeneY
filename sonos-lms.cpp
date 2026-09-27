@@ -59,7 +59,7 @@ const char* findFlag(int argc, char** argv, const std::string& flag);
 const char* findOption(int argc, char** argv, const std::string& option);
 }  // namespace
 
-std::unique_ptr<upnp::StreamServer> gStreamServer;
+std::shared_ptr<upnp::StreamServer> gStreamServer;
 std::shared_ptr<upnp::SpeakerControl> gPlayer;
 uint8_t gMac[6];
 std::atomic<bool> gEvent{true};
@@ -886,24 +886,37 @@ int main(int argc, char** argv)
     const char* filename = findOption(argc, argv, "--file");
     const char* server = findOption(argc, argv, "--server");
 
+    if (filename && backend == upnp::Backend::Own) {
+        fprintf(stderr, "--file requires SONOS_LMS_UPNP=noson; YeneY serves LMS streams only\n");
+        return EXIT_FAILURE;
+    }
+
     printf("\n\n| sonos-lms -- bridges a Sonos zone player into an LMS/squeezelite session\n\n\n");
 
     configure_squeezebox_close_logging(backend == upnp::Backend::Own);
-    auto serverBackend = new upnp::NosonStreamServer(debugLevel, onSonosEvent);
-    gStreamServer.reset(serverBackend);
     if (backend == upnp::Backend::Own) {
+        auto serverBackend = std::make_shared<upnp::HttpServer>();
+        gStreamServer = serverBackend;
+        if (std::getenv("SONOS_LMS_EVENT_PORT"))
+            printf("yeney: SONOS_LMS_EVENT_PORT removed; events share HTTP port %u\n", serverBackend->port());
+        printf("yeney: HTTP port=%u max_connections=16\n", serverBackend->port());
         gPlayer = std::make_shared<upnp::OwnSpeakerControl>([] { return gStreamServer->port(); }, 1400, [] {
             const auto id = streamId.load();
             return upnp::StreamActivity{bool(squeezebox_response_streaming(id)), bool(squeezebox_request_open(id))};
-        }, [] { onSonosEvent(nullptr); });
+        }, [] { onSonosEvent(nullptr); }, serverBackend);
         // squeezelite's clean signal path calls exit(), which skips main's
         // automatic Status (and its shared player reference) destructor.
         std::atexit([] {
             auto own = std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer);
             if (own) own->shutdownEvents();
+            auto server = std::dynamic_pointer_cast<upnp::HttpServer>(gStreamServer);
+            if (server) server->shutdown();
         });
-    } else
+    } else {
+        auto serverBackend = std::make_shared<upnp::NosonStreamServer>(debugLevel, onSonosEvent);
+        gStreamServer = serverBackend;
         gPlayer = std::make_shared<upnp::NosonSpeakerControl>(*serverBackend, onSonosEvent);
+    }
     if (!room) {
         printf("Please specify a room to join with the --room option\n");
         return EXIT_FAILURE;

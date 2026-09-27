@@ -114,7 +114,15 @@ only updates/logs the topology; it does not redirect commands to a new coordinat
 regroup speakers, or alter LMS sync. Topology is checked every five seconds from
 the status loop; unavailable/malformed topology keeps the last good snapshot.
 `controllerUri()` combines getsockname on the socket connected to the selected
-speaker with the actual port of NosonStreamServer, including listener port fallback.
+speaker with the actual port of the selected StreamServer, including listener
+port fallback. YeneY uses its own accept thread and at most 16 connection workers,
+searching ports 1400 through 1409 just like noson. Its `/music/squeezebox.flac`
+URLs retain `session` and `stream` parameters. Stream 200 responses retain
+`Server: libnoson/2.13.2`; helper responses (including HEAD) retain
+`Server: SONOS/2.13.2`. Every response closes the connection. The existing
+`/images/pulseaudio.png?id=2.13.2` asset is served with image/png, Content-Length
+and `Cache-Control: public, max-age=86400`. `/avt`, `/rc` and `/zgt` share that
+same listener; the separate `SONOS_LMS_EVENT_PORT` setting is removed.
 
 yeney transport state is polled by Status::update on the existing main status loop
 at a 500 ms interval. The resulting snapshot feeds the same refreshStatus,

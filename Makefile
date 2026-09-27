@@ -71,6 +71,13 @@ test: http-server-test speaker-state-test sonos-lms position-test encoder-test r
 	./resume-state-test
 	SONOS_LMS_PAUSE=pause ./streamer-test
 	env -u SONOS_LMS_PAUSE ./streamer-test stop
+	TEST_OWN_HTTP=1 python3 tests/send_error_test.py
+	TEST_OWN_HTTP=1 ./streamer-test session
+	TEST_OWN_HTTP=1 ./streamer-test position
+	TEST_OWN_HTTP=1 ./streamer-test shutdown
+	TEST_OWN_HTTP=1 SONOS_LMS_PAUSE=pause ./streamer-test
+	env -u SONOS_LMS_PAUSE TEST_OWN_HTTP=1 ./streamer-test stop
+	python3 tests/http_streamer_test.py
 	python3 tests/device_resume_test.py
 	python3 tests/yeney_timeline_test.py
 	python3 tests/lms_discovery_test.py
@@ -85,8 +92,8 @@ sonos-lms.o: resume_state.h stop_debounce.h
 resume-state-test: tests/resume_state_test.cpp resume_state.h stop_debounce.h
 	g++ -g -O2 -Wall -I. -o $@ tests/resume_state_test.cpp
 
-streamer-test: upnp/encoded_buffer.cpp upnp/encoded_buffer.h upnp/noson_stream_server.cpp pause_mode.h tests/streamer_test.cpp sbstreamer.cpp sbstreamer.h sbencoder.cpp sbencoder.h resume_state.h noson/noson/libnoson.a
-	g++ -g -O2 -Wall -I. -Inoson/noson/src -Inoson/noson/public/noson -o $@ tests/streamer_test.cpp sbstreamer.cpp sbencoder.cpp sonos-position.cpp upnp/noson_stream_server.cpp upnp/encoded_buffer.cpp noson/noson/libnoson.a -lFLAC++ -lFLAC -lcrypto -lssl -lz -lpthread
+streamer-test: upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h upnp/noson_stream_server.cpp pause_mode.h tests/streamer_test.cpp sbstreamer.cpp sbstreamer.h sbencoder.cpp sbencoder.h resume_state.h noson/noson/libnoson.a
+	g++ -g -O2 -Wall -I. -Inoson/noson/src -Inoson/noson/public/noson -o $@ tests/streamer_test.cpp sbstreamer.cpp sbencoder.cpp sonos-position.cpp upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp upnp/noson_stream_server.cpp upnp/encoded_buffer.cpp noson/noson/libnoson.a -lFLAC++ -lFLAC -lcrypto -lssl -lz -lpthread
 
 sonos-lms.o streamer-test: pause_mode.h
 

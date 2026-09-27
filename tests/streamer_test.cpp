@@ -1,5 +1,6 @@
 #include "sbstreamer.h"
 #include "upnp/noson_stream_server.h"
+#include "upnp/http_server.h"
 #include "sonos-position.h"
 #include "resume_state.h"
 #include "pause_mode.h"
@@ -158,9 +159,20 @@ private:
 };
 
 static void serve(SBStreamer& broker, Socket& socket) {
-    WSRequestBroker request(&socket, /*secure=*/false, /*timeout ms=*/1000);
-    assert(request.IsParsed());
-    auto handle = upnp::nosonRequest(request);
+    std::unique_ptr<upnp::StreamRequest> handle;
+    std::unique_ptr<WSRequestBroker> request;
+    if (std::getenv("TEST_OWN_HTTP")) {
+        char headers[16384]; const auto n = socket.ReceiveData(headers, sizeof(headers));
+        handle = upnp::httpRequestFromHeaders(std::string(headers,n), {
+            [&](const char* p, size_t n) { return socket.SendData(p,n); },
+            [&] { return !socket.IsValid(); }, [] { return false; },
+            [](unsigned) {}, [&] { socket.Disconnect(); }});
+        assert(handle);
+    } else {
+        request.reset(new WSRequestBroker(&socket, /*secure=*/false, /*timeout ms=*/1000));
+        assert(request->IsParsed());
+        handle = upnp::nosonRequest(*request);
+    }
     assert(upnp::streamHeaderLog(handle->headers()) == "User-Agent=Sonos fixture; X-Sonos-Test=probe");
     assert(broker.HandleRequest(handle.get()));
 }
@@ -394,6 +406,16 @@ static void sessionTest() {
 }
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "http-network") {
+        setvbuf(stdout, nullptr, _IOLBF, 0);
+        SBStreamer streamer;
+        upnp::HttpServer server(0);
+        streamer.registerWith(server);
+        std::cout << "HTTP " << server.port() << " " << streamSessionToken() << std::endl;
+        std::cin.get();
+        streamer.Abort(); end_squeezebox_response(); server.shutdown();
+        return 0;
+    }
     if (argc > 1 && std::string(argv[1]).find("own-close-") == 0) {
         configure_squeezebox_close_logging(true);
         const std::string mode = argv[1];

@@ -19,6 +19,7 @@ public:
     // Match noson's 1400..1409 search. Zero requests an ephemeral test port.
     explicit HttpServer(unsigned firstPort = 1400, unsigned attempts = 10);
     ~HttpServer() override;
+    void shutdown();
     StreamResource registerStream(const std::string&, const std::string&, const std::string&,
         const std::string&, const std::string&, Handler) override;
     StreamResource resource(const std::string&) override;
