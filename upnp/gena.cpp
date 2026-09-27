@@ -1,5 +1,6 @@
 #include "gena.h"
 #include "xml.h"
+#include "timing.h"
 #include <arpa/inet.h>
 #include <chrono>
 #include <cerrno>
@@ -10,33 +11,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 namespace upnp {
-namespace {
-std::string localName(const XmlNode& node) {
-    const auto colon = node.name.find(':');
-    return colon == std::string::npos ? node.name : node.name.substr(colon + 1);
-}
-}
 bool parseLastChange(const std::string& body, GenaEvent& event) {
-    XmlNode properties, change;
-    if (!parseXml(body, properties) || localName(properties) != "propertyset") return false;
-    for (const auto& property : properties.children) {
-        if (localName(property) != "property") continue;
-        const auto last = property.child("LastChange");
-        if (!last || !parseXml(last->text, change) || localName(change) != "Event") continue;
-        for (const auto& instance : change.children) {
-            if (localName(instance) != "InstanceID" || instance.attribute("val") != "0") continue;
-            const auto state = instance.child("TransportState");
-            if (state && state->attribute("val").empty()) return false;
-            // LastChange is a delta: metadata-only updates are valid NOTIFYs too.
-            event.state = state ? state->attribute("val") : "";
-            auto status = instance.child("CurrentTransportStatus");
-            if (!status) status = instance.child("TransportStatus");
-            event.status = status ? status->attribute("val") : "";
-            return event.state.find_first_of("\r\n") == std::string::npos
-                && event.status.find_first_of("\r\n") == std::string::npos;
-        }
-    }
-    return false;
+    StateUpdate update;
+    if (!parseAvTransport(body, update)) return false;
+    event.update = update;
+    event.state = update.state.value_or(""); event.status = update.status.value_or("");
+    return true;
 }
 GenaListener::GenaListener(Handler fn, unsigned port) : handler(std::move(fn)) {
     if (port > 65535) throw std::runtime_error("invalid event port");
@@ -62,7 +42,7 @@ GenaListener::~GenaListener() {
 void GenaListener::run() {
     while (!stopping) {
         pollfd p{fd, POLLIN, 0};
-        if (::poll(&p, 1, 50) <= 0) continue;
+        if (::poll(&p, 1, timing::acceptMs) <= 0) continue;
         int client = accept4(fd, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
         if (client < 0) continue;
         serve(client); close(client);
@@ -80,12 +60,12 @@ bool decimal(const std::string& text, uint64_t& value, uint64_t max) {
 }
 }
 void GenaListener::serve(int client) {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(750);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timing::notifyMs);
     std::string wire;
     auto receive = [&] {
         while (!stopping && std::chrono::steady_clock::now() < deadline) {
             pollfd p{client, POLLIN, 0};
-            if (::poll(&p, 1, 25) <= 0) continue;
+            if (::poll(&p, 1, timing::receiveMs) <= 0) continue;
             char bytes[4096]; const auto n = recv(client, bytes, sizeof(bytes), 0);
             if (n < 0 && (errno == EINTR || errno == EAGAIN)) continue;
             if (n <= 0 || wire.size() + n > 1024 * 1024) return false;
@@ -100,7 +80,8 @@ void GenaListener::serve(int client) {
     }
     const auto first = wire.find("\r\n");
     if (wire.compare(0, 7, "NOTIFY ")) status = 405;
-    else if (wire.substr(0, first) == "NOTIFY /avt HTTP/1.1") {
+    else if (wire.substr(0, first) == "NOTIFY /avt HTTP/1.1" || wire.substr(0, first) == "NOTIFY /rc HTTP/1.1"
+             || wire.substr(0, first) == "NOTIFY /zgt HTTP/1.1") {
         std::map<std::string, std::string> headers;
         bool valid = true;
         for (size_t pos = first + 2; pos < split;) {
@@ -121,7 +102,13 @@ void GenaListener::serve(int client) {
         if (valid) {
             while (wire.size() < split + 4 + length) if (!receive()) return;
             GenaEvent event; event.sid = headers["sid"]; event.sequence = seq;
-            if (parseLastChange(wire.substr(split + 4, length), event) && handler(event)) status = 200;
+            event.body = wire.substr(split + 4, length);
+            event.service = wire.substr(7, 4) == "/avt" ? Service::AVTransport :
+                wire.substr(7, 3) == "/rc" ? Service::RenderingControl : Service::ZoneGroupTopology;
+            const bool parsed = event.service == Service::AVTransport ? parseLastChange(event.body, event) :
+                event.service == Service::RenderingControl ? parseRenderingControl(event.body, event.update) :
+                parseZoneGroupEvent(event.body, event.topology);
+            if (parsed && handler(event)) status = 200;
         }
     }
     const std::string response = "HTTP/1.1 " + std::to_string(status) + (status == 200 ? " OK" : status == 405 ? " Method Not Allowed" : " Precondition Failed")

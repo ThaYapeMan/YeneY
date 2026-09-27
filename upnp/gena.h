@@ -1,4 +1,5 @@
 #pragma once
+#include "event_parsers.h"
 #include <atomic>
 #include <cstdint>
 #include <functional>
@@ -8,6 +9,10 @@ namespace upnp {
 struct GenaEvent {
     std::string sid, state, status;
     uint32_t sequence = 0;
+    Service service = Service::AVTransport;
+    std::string body;
+    StateUpdate update;
+    std::vector<Speaker> topology;
 };
 // LastChange is XML text inside a namespaced propertyset. No bridge state.
 bool parseLastChange(const std::string& body, GenaEvent& event);
