@@ -145,10 +145,12 @@ sonos-lms.o sbstreamer.o streamer-test resume-state-test: upnp/timing.h
 http-server-test: $(wildcard upnp/*.h) tests/http_server_fixture.cpp upnp/http_server.cpp upnp/http_server.h upnp/stream_server.h upnp/timing.h
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/http_server_fixture.cpp upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp -lpthread
 
-http-server-test: upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp noson/noson/src/data/pulseaudio_png.h
+http-server-test: upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp upnp/icon.h
 
 stream-content-test: tests/stream_content_test.cpp upnp/soap.cpp upnp/xml.cpp $(wildcard upnp/*.h)
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/stream_content_test.cpp upnp/soap.cpp upnp/xml.cpp
 
 encoded-buffer-test: tests/encoded_buffer_test.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/encoded_buffer_test.cpp upnp/encoded_buffer.cpp -lpthread
+
+upnp/http_server.o streamer-test own-control-test: upnp/icon.h

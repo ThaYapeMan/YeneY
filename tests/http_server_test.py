@@ -52,8 +52,7 @@ try:
     assert b'404 Not Found' in request(b'NOTIFY /unknown HTTP/1.1\r\n\r\n')
     icon = request(b'GET /images/pulseaudio.png?id=2.13.2 HTTP/1.1\r\n\r\n')
     header, body = icon.split(b'\r\n\r\n', 1)
-    source = Path('noson/noson/src/data/pulseaudio_png.h').read_text().split('};')[0]
-    expected = bytes(int(x, 16) for x in re.findall(r'0x([0-9a-fA-F]{2})', source))
+    expected = Path('upnp/icon.png').read_bytes()
     assert body == expected
     assert b'Content-Type: image/png' in header and b'Cache-Control: public, max-age=86400' in header
     assert f'Content-Length: {len(expected)}'.encode() in header
