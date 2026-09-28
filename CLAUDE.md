@@ -29,7 +29,7 @@ YeneY is the only backend. `SONOS_LMS_UPNP=yeney` and `own` are accepted; other 
 
 ## Rejected approaches
 
-**ICY/Shoutcast in-band metadata** — Sonos never sends the `Icy-MetaData: 1` opt-in header for `audio/flac` streams, so injecting ICY blocks corrupts the stream. See README for details.
+**ICY/Shoutcast in-band metadata** — 28 September device probes show that the CurrentURI scheme selects the client: `http://` does not request ICY and plays FLAC; `x-rincon-mp3radio://` requests ICY for MP3 and FLAC but cannot play FLAC. Keep the bridge's HTTP CurrentURI with radio `audio/flac` protocolInfo. MP3 ICY StreamTitle reaches streamContent, but the current app still shows only the title. See README for details.
 
 ## Diagnostics
 

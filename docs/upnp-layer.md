@@ -42,7 +42,15 @@ are served.
 
 ## Metadata and SOAP
 
-`streamDidl()` retains the HTTP URL for FLAC and uses the radio protocolInfo.
+`streamDidl()` retains an `http://` CurrentURI for FLAC with
+`x-rincon-mp3radio:*:audio/flac:*` protocolInfo. Device probes on 28 September 2026
+using `scripts/stream-probe.py` showed why: the URI scheme selects the client.
+The normal HTTP client plays FLAC without requesting ICY. Changing CurrentURI to
+`x-rincon-mp3radio://` selects the radio client, which requests `Icy-MetaData: 1`
+with a User-Agent ending in `Nullsoft Winamp3` for both MP3 and FLAC. In that
+client FLAC buffers and reconnects; MP3 plays and ICY StreamTitle reaches
+`r:streamContent`, but the current Sonos app still displays only the title.
+Keep the HTTP URI and radio protocolInfo combination unchanged.
 The item has no id, parentID or restricted attributes. Class precedes title;
 namespace order and the space before the closing DIDL opening-tag `>` are pinned
 by fixtures. XML escapes `& < > "` and leaves apostrophes literal. Empty artist,

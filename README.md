@@ -131,15 +131,18 @@ iPeng -- what you gain is limited, and what you give up (LMS sound processing an
 synchronisation) is real. YeneY deliberately chooses the continuous stream and
 treats the Sonos as a real LMS player.
 
-The three ✘ points share one root cause: Sonos treats the stream as internet
-radio, and radio has no next track, no seek bar, and only updates its title via
-ICY metadata, which Sonos requests for MP3/AAC but never for FLAC (see
-[Where it falls short](#where-it-falls-short)). Status:
+The continuous item has radio-style controls, but the CurrentURI scheme selects
+which Sonos playback client handles it. In the 28 September device probes,
+`x-rincon-mp3radio://` selected the radio client and requested ICY for both MP3
+and FLAC; `http://` selected the normal HTTP client and never requested ICY.
+This is a URI-scheme distinction, not an MP3/AAC-versus-FLAC rule. See
+[Where it falls short](#where-it-falls-short) for the playback and app results.
+Status:
 
-- **Track titles -- work in progress.** Solvable within stream mode, as options:
-  start a new stream at each track change (correct titles, but a short gap between
-  tracks -- not for gapless albums or DJ mixes), or a lossy MP3/AAC stream that
-  carries ICY titles.
+- **Track titles -- work in progress.** Starting a new stream at each track change
+  updates the title but can introduce a gap, unsuitable for gapless albums or DJ
+  mixes. In the probes, MP3 ICY titles reached `r:streamContent`, but the current
+  Sonos app still showed only the title; ICY support alone did not solve app updates.
 - **Next/Previous and seeking in the Sonos app -- under investigation.** Not
   possible while the Sonos sees a radio stream. The idea being explored: give the
   Sonos one item per track that still points to this bridge, so LMS keeps producing
@@ -471,13 +474,29 @@ logs stream request headers and ICY opt-in, changes ICY titles every 15 seconds
 when enabled, and samples the speaker's stored metadata and position every five
 seconds, printing changes. Ctrl+C stops the speaker and the probe server.
 
-**In-stream metadata updates don't work.** Updating the "now playing" title
-mid-stream (without restarting it) was attempted via Shoutcast-style ICY metadata
-injection into the FLAC stream -- the mechanism itself was fully implemented and
-tested. It doesn't work because Sonos never sends the `Icy-MetaData: 1` opt-in
-header for `audio/flac` requests, and injecting the blocks anyway just corrupts
-the stream (`ERROR_CORRUPT_FILE`). Track title and artwork are therefore only ever
-set once, at stream start.
+**URI scheme, ICY and FLAC playback.** Device probes on 28 September 2026 with
+`scripts/stream-probe.py` showed that a CurrentURI beginning with
+`x-rincon-mp3radio://` selects Sonos's radio client. It sends `Icy-MetaData: 1`
+and a User-Agent ending in `Nullsoft Winamp3` for MP3 and FLAC alike. A CurrentURI
+beginning with `http://` uses the normal HTTP client and never requested ICY in
+these probes. The request depends on the URI scheme, not simply the audio codec.
+
+The radio client buffered and reconnected instead of playing FLAC. MP3 played,
+and its ICY `StreamTitle` reached `r:streamContent`, but the current Sonos app
+still displayed only the title. Therefore ICY delivery and Sonos-app title
+display are separate observations.
+
+YeneY deliberately keeps FLAC's CurrentURI as `http://` while advertising
+`x-rincon-mp3radio:*:audio/flac:*` in DIDL `protocolInfo`. This combination keeps
+the normal HTTP client, which plays FLAC. Changing CurrentURI to
+`x-rincon-mp3radio://` breaks FLAC playback; the radio protocolInfo alone does
+not switch clients. This wire behaviour is unchanged.
+
+**In-stream metadata updates don't work in the bridge.** The normal HTTP client
+used by the bridge does not opt into ICY. Injecting ICY blocks into that FLAC
+response anyway corrupts playback (`ERROR_CORRUPT_FILE`). Track title and artwork
+are still set only at stream start. Switching to the radio URI is not a FLAC
+metadata workaround, and the MP3 probe did not make the app display StreamTitle.
 
 Stream URLs include a random token generated once per process start:
 `/music/squeezebox.flac?session=<token>&stream=<N>`. The startup log prints
@@ -488,7 +507,8 @@ or device-resume handling. Old URLs cannot match a reused stream ID after restar
 ## Pause and resume on Sonos
 
 Pausing ends the HTTP response and sends UPnP **Stop** by default. Sonos resumes
-FLAC radio (`x-rincon-mp3radio` with `audio/flac`) incorrectly from PAUSED:
+FLAC with radio protocolInfo (`x-rincon-mp3radio:*:audio/flac:*` and an HTTP URI)
+incorrectly from PAUSED:
 the first Play can close the GET with ERROR_CORRUPT_FILE and an app dialog.
 A plain native-FLAC relay reproduced the pause/resume failure independently of
 the bridge. Stopping after pause made all three reference resumes play cleanly;

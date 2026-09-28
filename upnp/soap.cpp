@@ -12,6 +12,10 @@ std::string streamDidl(const std::string& url, const std::string& title, const s
     if (url.find(':') == std::string::npos) return {};
     auto path = url.substr(0, url.find('?'));
     bool flac = path.size() >= 5 && path.compare(path.size() - 5, 5, ".flac") == 0;
+    // Device probes, 28 Sep 2026: the URI scheme selects the playback client.
+    // Keep FLAC on http:// with x-rincon-mp3radio:*:audio/flac:* protocolInfo:
+    // the normal HTTP client plays it without ICY. An x-rincon-mp3radio:// URI
+    // selects the ICY radio client, where FLAC buffers and reconnects instead of playing.
     auto uri = flac ? url : "x-rincon-mp3radio" + url.substr(url.find(':'));
     std::string didl = "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\""
         " xmlns:r=\"urn:schemas-rinconnetworks-com:metadata-1-0/\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\""
