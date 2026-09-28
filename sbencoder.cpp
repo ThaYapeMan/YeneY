@@ -11,6 +11,7 @@
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 #include "sbencoder.h"
+#include <set>
 
 #include <chrono>
 #include <cstdio>
@@ -83,7 +84,15 @@ SBEncoder::SBEncoder(unsigned streamId)
     , m_pendingPacketConsumed(0)
     , m_flac(nullptr)
 {
-    m_encodedRing = new upnp::EncodedBuffer(kEncodedRingCapacity);
+    m_encodedRing = new upnp::EncodedBuffer(kEncodedRingCapacity, [streamId](int capacity) {
+        // Reconnects create another encoder for the same stream. Log only once
+        // across those encoders; retain IDs only for streams that overflowed.
+        static std::mutex mutex;
+        static std::set<unsigned> warnedStreams;
+        std::lock_guard<std::mutex> lock(mutex);
+        if (warnedStreams.insert(streamId).second)
+            printf("encoded buffer: overwrote oldest packet, capacity %d packets\n", capacity);
+    });
     m_flac = new WriteBridge(this);
 }
 

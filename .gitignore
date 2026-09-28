@@ -22,3 +22,5 @@ speaker-state-test
 /http-server-test
 
 /stream-content-test
+
+/encoded-buffer-test
