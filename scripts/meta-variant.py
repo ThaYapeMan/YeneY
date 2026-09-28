@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# Device-test aid: re-send the active stream to inspect Sonos app metadata.
 """Try metadata variants on the stream a Sonos is currently playing.
 
 Reads the current stream URI and metadata from the speaker, changes the DIDL
@@ -8,7 +7,10 @@ stream URL. The bridge serves that request like any reconnect; LMS is not
 touched. Look at the Sonos app after each run.
 
 Usage (on the bridge host, while the room plays from LMS):
-  python3 meta-variant.py <speaker-ip> <variant>
+  python3 meta-variant.py <speaker-ip> <variant> [noplay]
+
+  noplay: send only SetAVTransportURI (same URL, new metadata), no Play
+  afterwards. Tells whether the Sonos refreshes metadata without restarting.
 
 Variants:
   show      print the current metadata only, change nothing
@@ -22,6 +24,7 @@ Variants:
 import html
 import re
 import sys
+import time
 import urllib.request
 import xml.etree.ElementTree as ET
 
@@ -60,9 +63,10 @@ def set_tag(didl, name, value, after="</dc:title>"):
 
 
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 4) or (len(sys.argv) == 4 and sys.argv[3] != "noplay"):
         sys.exit(__doc__)
     ip, variant = sys.argv[1], sys.argv[2]
+    noplay = len(sys.argv) == 4
     info = soap(ip, "GetMediaInfo", [("InstanceID", "0")])
     uri, didl = info.get("CurrentURI", ""), info.get("CurrentURIMetaData", "")
     if "squeezebox.flac" not in uri:
@@ -86,9 +90,15 @@ def main():
         didl = set_tag(didl, "upnp:album", artist)
     elif variant != "original":
         sys.exit(f"Unknown variant {variant!r}.\n{__doc__}")
+    t0 = time.monotonic()
     soap(ip, "SetAVTransportURI", [("InstanceID", "0"), ("CurrentURI", uri), ("CurrentURIMetaData", didl)])
-    soap(ip, "Play", [("InstanceID", "0"), ("Speed", "1")])
-    print(f"sent variant {variant!r}; look at the Sonos app now (give it ~5 s)")
+    if not noplay:
+        soap(ip, "Play", [("InstanceID", "0"), ("Speed", "1")])
+    print(f"sent variant {variant!r}{' without Play' if noplay else ''}; look at the Sonos app now (give it ~5 s)")
+    for _ in range(4):
+        time.sleep(2)
+        state = soap(ip, "GetTransportInfo", [("InstanceID", "0")]).get("CurrentTransportState", "?")
+        print(f"  +{time.monotonic() - t0:4.1f} s transport state: {state}")
 
 
 if __name__ == "__main__":

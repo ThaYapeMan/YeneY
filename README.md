@@ -437,15 +437,39 @@ bridge stream, run from a host that can reach its coordinator:
 ```sh
 python3 scripts/meta-variant.py 192.168.178.145 show
 python3 scripts/meta-variant.py 192.168.178.145 original
+python3 scripts/meta-variant.py 192.168.178.145 title noplay
 ```
 
 `show` only reads metadata; `original` resends it unchanged. The variants `title`,
 `show-md`, `track`, `broadcast` and `album` modify one metadata field, then send
 SetAVTransportURI and Play with the same stream URL, without issuing LMS commands.
+The optional final `noplay` argument omits Play: it sends only SetAVTransportURI
+to test whether metadata refreshes without restarting playback. After either
+form, the diagnostic reads and prints transport state four times at two-second
+intervals. `show` remains read-only and returns immediately.
 Inspect the Sonos app after each run. For a clean `title` experiment, start the
 bridge with `SONOS_LMS_TITLE_FORMAT=title` and start a fresh LMS stream first:
 the diagnostic deliberately prefixes the current title without deduplication.
 Restart the LMS stream to restore the bridge's configured metadata.
+
+`scripts/stream-probe.py` is a separate device-test aid that serves an audio source
+from this host on port 18080 and points the speaker at it without using the bridge.
+Stop the room's bridge service before running it, then restart that service when
+finished. For example, on the bridge host:
+
+```sh
+sudo systemctl stop 'sonos-lms@Study'
+python3 scripts/stream-probe.py 192.168.178.145 flac-radio 'http://<lms>:9000/music/<id>/download'
+sudo systemctl start 'sonos-lms@Study'
+```
+
+Replace the source URL with a reachable audio file or stream; the script's default
+is a site-specific LMS track. `mp3-radio` requires an explicit MP3 source URL.
+The other variants are `flac-radio-mpeg`, `flac-radio-force`, `flac-radio-noicy`
+and `flac-track`; run without arguments to print their descriptions. The probe
+logs stream request headers and ICY opt-in, changes ICY titles every 15 seconds
+when enabled, and samples the speaker's stored metadata and position every five
+seconds, printing changes. Ctrl+C stops the speaker and the probe server.
 
 **In-stream metadata updates don't work.** Updating the "now playing" title
 mid-stream (without restarting it) was attempted via Shoutcast-style ICY metadata
