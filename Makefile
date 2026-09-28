@@ -60,6 +60,7 @@ test: encoded-buffer-test stream-content-test http-server-test speaker-state-tes
 	./speaker-state-test
 	./upnp-test
 	./stream-content-test
+	python3 tests/title_format_setting_test.py
 	python3 tests/stream_content_setting_test.py
 	python3 tests/list_rooms_test.py
 	python3 tests/installer_test.py

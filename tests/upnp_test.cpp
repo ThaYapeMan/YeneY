@@ -11,6 +11,7 @@ std::string file(const char* name) { std::ifstream in(name); assert(in); std::os
 int main() {
     // Preserve the original byte-identical comparison against noson.
     setenv("SONOS_LMS_STREAM_CONTENT", "off", 1);
+    setenv("SONOS_LMS_TITLE_FORMAT", "title", 1);
     assert(streamHeaderLog({{"User-Agent", "Sonos"}, {"Range", "bytes=0-"},
         {"Icy-MetaData", "1"}, {"Connection", "close"}, {"x-Test", "a"},
         {"Some-SoNoS-Field", "b"}, {"Host", "ignored"}}) ==

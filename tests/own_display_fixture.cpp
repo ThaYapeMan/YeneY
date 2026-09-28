@@ -52,17 +52,19 @@ int main() {
     const auto didl = envelope.child("Body")->child("SetAVTransportURI")->value("CurrentURIMetaData");
     assert(upnp::parseXml(didl, metadata));
     assert(metadata.child("item")->value("creator") == artist && metadata.child("item")->value("album") == album);
+    assert(metadata.child("item")->value("title") == upnp::formatTitle("Title", artist));
+    assert(control.transportInfo().title == upnp::formatTitle("Title", artist));
     puts("PASS: own PlayStream sends artist and album through both DIDL and SOAP escaping");
     unsigned stream = 0;
     uint32_t ms;
-    for (const auto variant : {"URL", "basename/query", "basename", "empty", "real title"}) {
+    for (const auto variant : {"URL", "basename/query", "basename", "empty", "sent title", "real title"}) {
         auto url = "http://bridge/music/squeezebox.flac?session=test&stream=" + std::to_string(++stream);
-        assert(control.playStream(url, "The track we sent"));
+        assert(control.playStream(url, "The track we sent", "", artist));
         const std::string kind = variant;
         title = kind == "URL" ? url : kind == "basename/query" ? url.substr(url.rfind('/') + 1)
-            : kind == "basename" ? "squeezebox.flac" : kind == "empty" ? "" : "A real device title";
+            : kind == "basename" ? "squeezebox.flac" : kind == "empty" ? "" : kind == "sent title" ? upnp::formatTitle("The track we sent", artist) : "A real device title";
         assert(control.positionInfo(ms) && ms == 123000);
-        const auto expected = kind == "real title" ? "A real device title" : "The track we sent";
+        const auto expected = kind == "real title" ? "A real device title" : upnp::formatTitle("The track we sent", artist);
         assert(control.transportInfo().title == expected);
         printf("Title (%s): %s\n", variant, control.transportInfo().title.c_str());
     }

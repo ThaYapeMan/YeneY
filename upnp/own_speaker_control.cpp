@@ -169,12 +169,13 @@ bool OwnSpeakerControl::playStream(const std::string& url, const std::string& ti
     XmlNode item;
     if (!parseXml(metadata, item) || !item.child("item")) return false;
     const auto uri = item.child("item")->value("res");
+    const auto displayTitle = item.child("item")->value("title");
     {
         std::lock_guard<std::mutex> lock(runtimeMutex);
         freshStreamPosition = sentUrl != url;
-        sentTitle = title; sentUri = uri; sentUrl = url;
+        sentTitle = displayTitle; sentUri = uri; sentUrl = url;
     }
-    StateUpdate update; update.startedRevision = state.snapshot().revision; update.title = title; apply(update);
+    StateUpdate update; update.startedRevision = state.snapshot().revision; update.title = displayTitle; apply(update);
     return call("SetAVTransportURI", {{"InstanceID", "0"}, {"CurrentURI", uri}, {"CurrentURIMetaData", metadata}}).ok && play();
 }
 bool OwnSpeakerControl::play() { return call("Play", {{"InstanceID", "0"}, {"Speed", "1"}}).ok; }

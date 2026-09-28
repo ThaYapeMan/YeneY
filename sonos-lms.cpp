@@ -13,6 +13,7 @@
 #include "upnp/noson_speaker_control.h"
 #include "upnp/own_speaker_control.h"
 #include "upnp/backend.h"
+#include "upnp/title_format.h"
 #include "upnp/list_rooms.h"
 #include <iostream>
 #include "upnp/noson_stream_server.h"
@@ -616,7 +617,7 @@ static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)
         std::string title = track.title.empty() ? "Squeezebox" : track.title;
         std::string artUrl = track.artworkUrl.empty()
             ? gPlayer->controllerUri() + res.iconUri : track.artworkUrl;
-        printf("PlaySqueezeBox: title='%s' art='%s'\n", title.c_str(), artUrl.c_str());
+        printf("PlaySqueezeBox: title='%s' art='%s'\n", upnp::formatTitle(title, track.artist).c_str(), artUrl.c_str());
         if (resetPosition) reset_sonos_position(stream_id);
         ok = gPlayer->playStream(streamURL, title, artUrl, track.artist, track.album);
         if (ok) {
@@ -873,6 +874,7 @@ int main(int argc, char** argv)
     (void)pauseMode();
     (void)audioMode();
     (void)upnp::streamContentMode();
+    (void)upnp::titleFormat();
     const auto backend = upnp::backend();
     try {
         printf("Stream session: %s\n", streamSessionToken().c_str());
