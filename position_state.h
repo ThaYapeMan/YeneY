@@ -34,7 +34,7 @@ public:
         if (token != generation || !anchored || ms == 0) return;
         // Stop may report zero before the next GET; retain the last position.
         // A new connection/PCM anchor already clears relative to zero.
-        // noson caches GetPositionInfo for one second. Ignore that cache after
+        // Position reads are cached for one second. Ignore that cache after
         // a handoff, and reject an old RelTime larger than this GET's lifetime.
         if (now - started < 1100 || ms > now - started + 1000) return;
         relative = ms;

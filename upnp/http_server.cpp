@@ -16,7 +16,7 @@
 
 namespace upnp {
 namespace {
-// Preserve the headers of the existing stream writer and noson reply helper.
+// These Server strings are kept exactly for device compatibility.
 #include "icon.h"
 constexpr char streamServerName[] = "libnoson/2.13.2";
 constexpr char replyServerName[] = "SONOS/2.13.2";

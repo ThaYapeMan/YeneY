@@ -7,7 +7,7 @@
 #include <iostream>
 #include <thread>
 int main(int argc, char** argv) {
-    // Preserve the original byte-identical comparison against noson.
+    // Pin the established wire metadata with radio text disabled.
     setenv("SONOS_LMS_STREAM_CONTENT", "off", 1);
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (argc == 3 && std::string(argv[1]) == "--stopped-media-info") {

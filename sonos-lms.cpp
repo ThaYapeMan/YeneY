@@ -10,13 +10,11 @@
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
-#include "upnp/noson_speaker_control.h"
 #include "upnp/own_speaker_control.h"
 #include "upnp/backend.h"
 #include "upnp/title_format.h"
 #include "upnp/list_rooms.h"
 #include <iostream>
-#include "upnp/noson_stream_server.h"
 
 #include "resume_state.h"
 #include "transport_intent.h"
@@ -324,26 +322,6 @@ private:
     std::atomic<bool> running{true};
     std::thread worker;
 };
-
-namespace {
-// Percent-encodes everything outside the RFC 3986 "unreserved" set.
-std::string percentEncode(const std::string& raw)
-{
-    static const char* hexDigits = "0123456789abcdef";
-    std::string out;
-    out.reserve(raw.size());
-    for (unsigned char c : raw) {
-        if (isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') {
-            out += (char)c;
-        } else {
-            out += '%';
-            out += hexDigits[c >> 4];
-            out += hexDigits[c & 0x0f];
-        }
-    }
-    return out;
-}
-}  // namespace
 
 struct TrackInfo {
     std::string id;
@@ -665,28 +643,8 @@ static void dispatchStreamStart()
 
 namespace {
 
-// One-shot mode: play a local file straight from the filesystem instead of
-// bridging an LMS/squeezelite session. Used for ad hoc testing, not the
-// normal service path.
-void playLocalFileOnce(const std::string& filePath)
-{
-    std::string extension = "none";
-    auto dot = filePath.rfind('.');
-    if (dot != std::string::npos)
-        extension = filePath.substr(dot + 1);
-
-    std::string url = gPlayer->controllerUri() + "/music/track." + extension
-        + "?path=" + percentEncode(filePath);
-
-    if (gPlayer->playStream(url, ""))
-        printf("Started playing URL %s\n", url.c_str());
-    else
-        printf("Failed to start URL %s\n", url.c_str());
-}
-
-// Polls the actual Sonos playback position once per loop iteration. noson
-// caches GetPositionInfo() for 1s internally, so this costs about one
-// network round trip per second, not one per iteration.
+// Poll the playback position once per loop; successful reads are cached for
+// one second, retaining the device-tested polling interval.
 void pollSonosPosition()
 {
     auto token = sonos_position_poll_token();
@@ -829,7 +787,7 @@ static int findServerCommand()
 
 // Keep stdout machine-readable even when the selected backend logs discovery.
 // Complete backend destruction while diagnostics are still redirected.
-static int listRoomsCommand(const std::string& ip, int debug, bool details)
+static int listRoomsCommand(const std::string& ip, bool details)
 {
     fflush(stdout);
     const int outputFd = dup(STDOUT_FILENO);
@@ -841,14 +799,9 @@ static int listRoomsCommand(const std::string& ip, int debug, bool details)
     std::ostringstream rooms;
     int result = 2;
     try {
-        if (upnp::backend() == upnp::Backend::Own) {
-            upnp::OwnSpeakerControl control([] { return 0u; });
-            result = upnp::listRooms(control, ip, rooms, std::cerr, details);
-        } else {
-            upnp::NosonStreamServer server(debug, nullptr);
-            upnp::NosonSpeakerControl control(server, nullptr);
-            result = upnp::listRooms(control, ip, rooms, std::cerr, details);
-        }
+        (void)upnp::backend();
+        upnp::OwnSpeakerControl control([] { return 0u; });
+        result = upnp::listRooms(control, ip, rooms, std::cerr, details);
     } catch (const std::exception& error) {
         fprintf(stderr, "Room discovery failed: %s\n", error.what());
     }
@@ -866,16 +819,20 @@ static int listRoomsCommand(const std::string& ip, int debug, bool details)
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    if (findOption(argc, argv, "--file") || findFlag(argc, argv, "--file")) {
+        fprintf(stderr, "--file is no longer supported\n");
+        return EXIT_FAILURE;
+    }
     if (findFlag(argc, argv, "--find-server")) return findServerCommand();
     if (findFlag(argc, argv, "--list-rooms")) {
         const auto ip = findOption(argc, argv, "--ip");
-        return listRoomsCommand(ip ? ip : "", findFlag(argc, argv, "--debug") ? 4 : 0, findFlag(argc, argv, "--details"));
+        return listRoomsCommand(ip ? ip : "", findFlag(argc, argv, "--details"));
     }
     (void)pauseMode();
     (void)audioMode();
     (void)upnp::streamContentMode();
     (void)upnp::titleFormat();
-    const auto backend = upnp::backend();
+    (void)upnp::backend();
     try {
         printf("Stream session: %s\n", streamSessionToken().c_str());
     } catch (const std::exception& error) {
@@ -883,21 +840,14 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    int debugLevel = findFlag(argc, argv, "--debug") ? 4 : 0;
     const char* ip = findOption(argc, argv, "--ip");
     const char* room = findOption(argc, argv, "--room");
-    const char* filename = findOption(argc, argv, "--file");
     const char* server = findOption(argc, argv, "--server");
-
-    if (filename && backend == upnp::Backend::Own) {
-        fprintf(stderr, "--file requires SONOS_LMS_UPNP=noson; YeneY serves LMS streams only\n");
-        return EXIT_FAILURE;
-    }
 
     printf("\n\n| sonos-lms -- bridges a Sonos zone player into an LMS/squeezelite session\n\n\n");
 
-    configure_squeezebox_close_logging(backend == upnp::Backend::Own);
-    if (backend == upnp::Backend::Own) {
+    configure_squeezebox_close_logging(true);
+    {
         auto serverBackend = std::make_shared<upnp::HttpServer>();
         gStreamServer = serverBackend;
         if (std::getenv("SONOS_LMS_EVENT_PORT"))
@@ -915,10 +865,6 @@ int main(int argc, char** argv)
             auto server = std::dynamic_pointer_cast<upnp::HttpServer>(gStreamServer);
             if (server) server->shutdown();
         });
-    } else {
-        auto serverBackend = std::make_shared<upnp::NosonStreamServer>(debugLevel, onSonosEvent);
-        gStreamServer = serverBackend;
-        gPlayer = std::make_shared<upnp::NosonSpeakerControl>(*serverBackend, onSonosEvent);
     }
     if (!room) {
         printf("Please specify a room to join with the --room option\n");
@@ -949,17 +895,11 @@ int main(int argc, char** argv)
     }
 
     static StopTimer stopTimer;
-    std::thread* squeezeliteThread = nullptr;
-    if (filename) {
-        playLocalFileOnce(filename);
-    } else {
-        squeezeliteThread = new std::thread(runSqueezeliteClient, gServer.empty() ? nullptr : gServer.c_str(), std::string(room) + " (Sonos)");
-    }
+    std::thread squeezeliteThread(runSqueezeliteClient, gServer.empty() ? nullptr : gServer.c_str(), std::string(room) + " (Sonos)");
 
     runBridgeLoop(status);
 
-    if (squeezeliteThread)
-        squeezeliteThread->join();
+    squeezeliteThread.join();
     return 0;
 }
 

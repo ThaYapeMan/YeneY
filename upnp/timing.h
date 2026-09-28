@@ -8,7 +8,7 @@ namespace upnp { namespace timing {
 constexpr auto kGetPairWindow = std::chrono::milliseconds(25);
 // Diagnose a pair without a confirming transport event; never roll it back.
 constexpr auto kGetPairConfirmation = std::chrono::seconds(15);
-// Preserve the existing noson-compatible transport socket deadline.
+// Preserve the device-tested transport socket deadline.
 constexpr unsigned transportMs = 20000;
 // Sonos may withhold SOAP for ~5 s while holding a GET (26 Sep runs).
 constexpr unsigned readMs = 5000;
@@ -20,9 +20,9 @@ constexpr auto position = std::chrono::seconds(1);
 constexpr auto topology = std::chrono::seconds(5);
 // Events carry state; a low-frequency read detects a silently stale subscription.
 constexpr auto sanity = std::chrono::seconds(30);
-// noson requests five-minute subscriptions; renew halfway through the grant.
+// Request five-minute subscriptions; renew halfway through the grant.
 constexpr unsigned subscriptionSeconds = 300;
-// noson retries first after one second, then every five seconds.
+// Retry first after one second, then every five seconds.
 constexpr auto retryFirst = std::chrono::seconds(1);
 constexpr auto retryLater = std::chrono::seconds(5);
 // Bound subscription I/O independently from slow transport actions.

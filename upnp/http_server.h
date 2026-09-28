@@ -16,7 +16,7 @@ struct HttpRequestIO {
 std::unique_ptr<StreamRequest> httpRequestFromHeaders(const std::string&, HttpRequestIO);
 class HttpServer : public StreamServer {
 public:
-    // Match noson's 1400..1409 search. Zero requests an ephemeral test port.
+    // Search the device-tested port range 1400..1409. Zero requests an ephemeral test port.
     explicit HttpServer(unsigned firstPort = 1400, unsigned attempts = 10);
     ~HttpServer() override;
     void shutdown();

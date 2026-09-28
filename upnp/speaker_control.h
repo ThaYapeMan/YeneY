@@ -11,7 +11,7 @@ struct Speaker {
 };
 struct TransportInfo {
     std::string state, status;
-    // Display fields retained so the noson adapter preserves the existing table.
+    // Display fields shared by the controller snapshot and status table.
     std::string title, album, artist, duration;
     bool available = false;
     std::string uri;

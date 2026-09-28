@@ -699,9 +699,7 @@ discover_coordinator() {
     local details diagnostics="$OUT/discovery.err" layer=${SONOS_LMS_UPNP-yeney}
     if ! details=$(SONOS_LMS_UPNP="$layer" ./sonos-lms --list-rooms --details 2> "$diagnostics"); then
         cat "$diagnostics" >&2
-        [[ $layer != noson ]] || return 1
-        say "$layer discovery failed; retrying with noson"
-        details=$(SONOS_LMS_UPNP=noson ./sonos-lms --list-rooms --details 2> "$diagnostics") || { cat "$diagnostics" >&2; return 1; }
+        return 1
     fi
     printf '%s\n' "$details" | python3 "$AUTO_HELPER" coordinator --room "$ROOM"
 }
@@ -711,7 +709,7 @@ bridge_layer() {
     invocation=$(systemctl show "$UNIT" -p InvocationID --value 2>/dev/null) || invocation=''
     if [[ $invocation =~ ^[[:xdigit:]]{32}$ ]]; then
         layer=$(journalctl -u "$UNIT" "_SYSTEMD_INVOCATION_ID=$invocation" -o cat --no-pager 2>/dev/null |
-            sed -nE 's/^UPnP layer: (noson|yeney).*/\1/p' | tail -n1)
+            sed -nE 's/^UPnP layer: (yeney).*/\1/p' | tail -n1)
     fi
     BRIDGE_LAYER=${layer:-unknown}
     say "Bridge UPnP layer: $BRIDGE_LAYER"

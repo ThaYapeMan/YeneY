@@ -273,8 +273,8 @@ bool SBStreamer::HandleRequest(upnp::StreamRequest* handle)
 void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsigned long long requestId)
 {
     printf("Sonos requested stream %d\n", stream);
-    // Bound a stalled peer as well as a stalled PCM producer. noson SendData
-    // uses the socket directly, so SetTimeout (receive only) is insufficient.
+    // Bound a stalled peer as well as a stalled PCM producer. Sending uses
+    // the socket directly, so a receive timeout alone is insufficient.
     handle->sendTimeout(500);
     auto peerClosed = [handle] { return handle->peerClosed(); };
 

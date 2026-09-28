@@ -1,13 +1,10 @@
 #include "sbstreamer.h"
-#include "upnp/noson_stream_server.h"
 #include "upnp/http_server.h"
 #include "sonos-position.h"
 #include "resume_state.h"
 #include "pause_mode.h"
 #include "audio_mode.h"
 #include "stream_session.h"
-#include "private/socket.h"
-#include "private/wsrequestbroker.h"
 #include <FLAC++/decoder.h>
 #include <atomic>
 #include <cassert>
@@ -24,7 +21,6 @@
 
 extern "C" void note_squeezebox_device_close(void);
 extern "C" void configure_squeezebox_close_logging(bool own);
-using namespace SONOS;
 using bridge::SBStreamer;
 static std::atomic<unsigned> generation(1), resumeCommands(0), sameURLRequests(0);
 static std::atomic<bool> paused(false), outputRunning(true);
@@ -74,19 +70,19 @@ void ResumeSqueezeBox(unsigned id) {
     }
 }
 
-// Exercise the real HTTP broker with an in-memory noson socket. No device or
+// Exercise the HTTP request parser with an in-memory socket. No device or
 // network access: only the socket I/O and LMS/device event source are simulated.
-class Socket : public TcpSocket {
+class Socket {
 public:
     explicit Socket(unsigned id, bool probe = false, bool stayOpen = false, const char* method = "GET", const std::string& session = streamSessionToken()) : probe(probe), stayOpen(stayOpen) {
         input = std::string(method) + " /music/squeezebox.flac?stream=" + std::to_string(id)
             + (session.empty() ? "" : "&session=" + session) + " HTTP/1.1\r\nHost: bridge\r\nUser-Agent: Sonos fixture\r\nX-Sonos-Test: probe\r\n\r\n";
     }
-    size_t ReceiveData(void* buf, size_t n) override {
+    size_t ReceiveData(void* buf, size_t n) {
         n = std::min(n, input.size() - offset);
         memcpy(buf, input.data() + offset, n); offset += n; return n;
     }
-    bool SendData(const char* data, size_t n) override {
+    bool SendData(const char* data, size_t n) {
         if (closeReason) {
             if (closeReason == 1) end_squeezebox_response();
             else note_squeezebox_device_close();
@@ -120,8 +116,8 @@ public:
         if (phase == 0 && audioSeen && !stayOpen) { drop = true; return false; }
         return true;
     }
-    bool IsValid() const override { return !disconnected.load() && !clientClosed.load(); }
-    void Disconnect() override { disconnected = true; }
+    bool IsValid() const { return !disconnected.load() && !clientClosed.load(); }
+    void Disconnect() { disconnected = true; }
     int failureFd = -1;
     int closeReason = 0, closeError = ECONNRESET;
     std::atomic<bool> clientClosed{false}, sendError{false};
@@ -160,19 +156,12 @@ private:
 
 static void serve(SBStreamer& broker, Socket& socket) {
     std::unique_ptr<upnp::StreamRequest> handle;
-    std::unique_ptr<WSRequestBroker> request;
-    if (std::getenv("TEST_OWN_HTTP")) {
-        char headers[16384]; const auto n = socket.ReceiveData(headers, sizeof(headers));
-        handle = upnp::httpRequestFromHeaders(std::string(headers,n), {
-            [&](const char* p, size_t n) { return socket.SendData(p,n); },
-            [&] { return !socket.IsValid(); }, [] { return false; },
-            [](unsigned) {}, [&] { socket.Disconnect(); }});
-        assert(handle);
-    } else {
-        request.reset(new WSRequestBroker(&socket, /*secure=*/false, /*timeout ms=*/1000));
-        assert(request->IsParsed());
-        handle = upnp::nosonRequest(*request);
-    }
+    char headers[16384]; const auto n = socket.ReceiveData(headers, sizeof(headers));
+    handle = upnp::httpRequestFromHeaders(std::string(headers,n), {
+        [&](const char* p, size_t n) { return socket.SendData(p,n); },
+        [&] { return !socket.IsValid(); }, [] { return false; },
+        [](unsigned) {}, [&] { socket.Disconnect(); }});
+    assert(handle);
     assert(upnp::streamHeaderLog(handle->headers()) == "User-Agent=Sonos fixture; X-Sonos-Test=probe");
     assert(broker.HandleRequest(handle.get()));
 }
@@ -533,7 +522,7 @@ int main(int argc, char** argv) {
     Socket real(1);
     connection(broker, real, 200);
     playable(real, 200);
-    assert(real.headers == "HTTP/1.1 200 OK\r\nServer: libnoson/" LIBVERSION "\r\nConnection: close\r\n"
+    assert(real.headers == "HTTP/1.1 200 OK\r\nServer: libnoson/2.13.2\r\nConnection: close\r\n"
         "Content-Type: audio/flac\r\nTransfer-Encoding: chunked\r\n\r\n");
     std::cout << "PASS: streaming response restores Server and Connection: close headers\n";
     assert(generation == 1 && resumeCommands == 0);

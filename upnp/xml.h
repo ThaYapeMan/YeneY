@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 namespace upnp {
-// Text or double-quoted attributes; apostrophes intentionally match noson's bytes.
+// Text or double-quoted attributes; apostrophes remain literal, as pinned by the wire fixtures.
 std::string xmlEscape(const std::string& text);
 bool xmlUnescape(const std::string& text, std::string& out);
 struct XmlNode {

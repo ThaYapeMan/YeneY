@@ -15,7 +15,7 @@ class Speaker(BaseHTTPRequestHandler):
     def log_message(self, *args): pass
 
     def do_SUBSCRIBE(self):
-        # Force noson's existing SOAP topology fallback; no callback to a real device.
+        # Force SOAP topology fallback; no callback to a real device.
         self.send_response(412)
         self.send_header('Content-Length', '0')
         self.send_header('Connection', 'close')
@@ -68,7 +68,7 @@ try:
                  'UUID="DUPLICATE" ZoneName="Study" Location="http://127.0.0.8:1400/xml/device_description.xml"/>'
                  '</ZoneGroup>')
     topology = topology.replace('</ZoneGroups>', duplicate + '</ZoneGroups>')
-    for backend in ('yeney', 'own', 'noson', None):
+    for backend in ('yeney', 'own', None):
         for empty in (False, True):
             server.topology = '<ZoneGroupState><ZoneGroups/></ZoneGroupState>' if empty else topology
             server.actions = []
@@ -93,7 +93,7 @@ try:
     expected = ('Living & Dining\t-\t127.0.0.8\tLiving & Dining\tLiving & Dining\n'
                 'Sonos Port\tPort\t127.0.0.8\tStudy\tStudy,Sonos Port\n'
                 'Study\tPlay:1\t127.0.0.8\tStudy\tStudy,Sonos Port\n')
-    for backend in ('yeney', 'own', 'noson'):
+    for backend in ('yeney', 'own'):
         server.topology = topology
         result = subprocess.run([str(ROOT / 'sonos-lms'), '--list-rooms', '--details', '--ip=127.0.0.8'],
                                 env=dict(os.environ, SONOS_LMS_UPNP=backend), capture_output=True, text=True, timeout=30)

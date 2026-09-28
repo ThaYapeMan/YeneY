@@ -468,7 +468,7 @@ exit "$AUTO_FAILED"
 print('PASS: AUTO empty monitor log fails scenario even when final synchronous sample is OK')
 
 with tempfile.TemporaryDirectory(prefix='sonos-discovery-backend-') as directory:
-    for selected in (None, 'yeney', 'own', 'noson'):
+    for selected in (None, 'yeney', 'own'):
       for fallback in ('0', '1'):
         calls = Path(directory) / 'calls'; calls.write_text('')
         env = {**os.environ, 'OUT': directory, 'FALLBACK': fallback, 'CALLS': str(calls),
@@ -480,17 +480,18 @@ ROOM=Study
 ./sonos-lms() {
     printf '%s %s\n' "$SONOS_LMS_UPNP" "$*" >> "$CALLS"
     printf 'UPnP layer: %s\n' "$SONOS_LMS_UPNP" >&2
-    [[ $FALLBACK != 1 || $SONOS_LMS_UPNP == noson ]] || return 2
+    [[ $FALLBACK != 1 ]] || return 2
     printf 'Study\tPlay:1\t192.0.2.10\tStudy\tStudy\n'
 }
 python3() { command python3 "$REAL_HELPER" "${@:2}"; }
 discover_coordinator
 '''], env=env, capture_output=True, text=True)
-        assert result.returncode == 0 and result.stdout.strip() == '192.0.2.10', result
+        assert result.returncode == (1 if fallback == '1' else 0), result
+        if fallback == '0': assert result.stdout.strip() == '192.0.2.10', result
         if fallback == '0': assert 'UPnP layer:' not in result.stderr, result.stderr
-        assert calls.read_text().splitlines() == [f'{selected or "yeney"} --list-rooms --details'] + (
-            ['noson --list-rooms --details'] if fallback == '1' and selected != 'noson' else [])
-print('PASS: AUTO discovery defaults to yeney, honors explicit yeney/own/noson, retains noson fallback')
+        assert calls.read_text().splitlines() == [f'{selected or "yeney"} --list-rooms --details']
+print('PASS: AUTO discovery defaults to yeney, honors yeney/own and reports failure without a backend retry')
+
 
 with tempfile.TemporaryDirectory(prefix='sonos-diagnostics-') as directory:
     env = {**os.environ, 'OUT': directory, 'AUTO': '1', 'IDLE_SECS': '120', 'UNIT': 'fixture'}
@@ -518,7 +519,7 @@ exit "$AUTO_FAILED"
         assert ('S8 | PASS |' if code == 0 else 'S8 | FAIL |') in result.stdout
     print('PASS: S8 sends only LMS stop, waits IDLE_SECS, reports all idle GETs and requires STOPPED plus LMS stop')
 
-    for layer in ('noson', 'yeney'):
+    for layer in ('yeney',):
         code = r'''
 UNIT=fixture
 systemctl() { printf '0123456789abcdef0123456789abcdef\n'; }

@@ -32,10 +32,9 @@ struct TimelineClock {
         'static void checkGetPairConfirmation(', 'static void ObserveDeviceTransport(', 'void ResumeSqueezeBox(', 'void ResumeSqueezeBoxGetPair(')))
     exe = temp / 'timeline'
     subprocess.run(['g++', '-O2', '-Wall', '-Wextra', '-I', str(temp), '-I', str(ROOT),
-                    '-Inoson/noson/src', '-Inoson/noson/public/noson',
                     str(ROOT / 'tests/yeney_timeline_fixture.cpp'), str(temp / 'sbstreamer.cpp'),
                     'sbencoder.cpp', 'sonos-position.cpp', 'upnp/encoded_buffer.cpp',
-                    'noson/noson/libnoson.a', '-lFLAC++', '-lFLAC', '-lcrypto', '-lssl', '-lz', '-lpthread',
+                    '-lFLAC++', '-lFLAC', '-lcrypto', '-lpthread',
                     '-o', str(exe)], cwd=ROOT, check=True)
     for event_ms, second in [(21, 0), (5030, 1), (4990, 1), (-1, 0)]:
         subprocess.run([str(exe), str(event_ms), str(second)], check=True, timeout=10)

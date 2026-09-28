@@ -199,7 +199,7 @@ track replacements still start a new stream. Each new stream logs, for example,
 
 ```sh
 sudo apt-get install -y --no-install-recommends \
-    make cmake g++ python3 libz-dev libssl-dev libflac++-dev libpulse-dev \
+    make g++ python3 libssl-dev libflac++-dev \
     libasound-dev libvorbis-dev libfaad-dev libmad0-dev libmpg123-dev libsoxr-dev
 
 git clone --recursive https://github.com/ThaYapeMan/sonos-lms.git

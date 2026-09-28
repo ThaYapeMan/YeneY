@@ -1,7 +1,7 @@
 FLAGS_SL = -g -O3 -Wall -fno-common -Isqueezelite -Wno-error=incompatible-pointer-types -fpermissive
 
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
-UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o upnp/noson_stream_server.o upnp/noson_speaker_control.o
+UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
 OBJS = audio_mode.o $(UPNP_OBJS) sonos-lms.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
@@ -23,12 +23,8 @@ OBJS_SL = squeezelite.o \
 
 all: sonos-lms
 
-noson/noson/libnoson.a: noson/CMakeLists.txt noson/noson/CMakeLists.txt
-	cmake -D CMAKE_POLICY_VERSION_MINIMUM=3.5 -D CMAKE_BUILD_TYPE=Release -S noson -B noson
-	make -C noson
-
-%.o: %.cpp noson/noson/libnoson.a
-	g++ -g -O3 -Wall -Inoson/noson/src -Inoson/noson/public/noson -c -o $@ $<
+%.o: %.cpp
+	g++ -g -O3 -Wall -c -o $@ $<
 
 %.o: %.c
 	gcc $(FLAGS_SL) -c -o $@ $<
@@ -36,24 +32,23 @@ noson/noson/libnoson.a: noson/CMakeLists.txt noson/noson/CMakeLists.txt
 squeezelite.o: squeezelite.cpp
 	g++ $(FLAGS_SL) -c -o $@ $<
 
-sonos-lms: $(OBJS) $(OBJS_SL) noson/noson/libnoson.a
+sonos-lms: $(OBJS) $(OBJS_SL)
 	g++ -g -o $@ $^ \
-		-Lnoson/noson -lnoson \
-		-lFLAC++ -lFLAC -lcrypto -lssl -lz \
+		-lFLAC++ -lFLAC -lcrypto \
 		-lpthread -lm -lrt -ldl -lasound
 
 clean:
-	rm -f encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+	rm -f encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 slimproto_sonos.o: slimproto_sonos.c squeezelite/slimproto.c squeezelite/squeezelite.h
 
 .PHONY: test install
 install: sonos-lms
 	scripts/install-devices.sh
-encoder-test: tests/audio_pack_fixture.o squeezelite/output_pack.o upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h noson/noson/libnoson.a
-	g++ -g -O2 -Wall -I. -Inoson/noson/src -Inoson/noson/public/noson -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.o squeezelite/output_pack.o sbencoder.cpp upnp/encoded_buffer.cpp noson/noson/libnoson.a -lFLAC++ -lFLAC -lcrypto -lssl -lz -lpthread
+encoder-test: tests/audio_pack_fixture.o squeezelite/output_pack.o upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
+	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.o squeezelite/output_pack.o sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
-test: encoded-buffer-test stream-content-test http-server-test speaker-state-test sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test noson-golden
+test: encoded-buffer-test stream-content-test http-server-test speaker-state-test sonos-lms position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	./encoded-buffer-test
 	python3 tests/encoded_overwrite_test.py
 	python3 tests/http_server_test.py
@@ -77,12 +72,6 @@ test: encoded-buffer-test stream-content-test http-server-test speaker-state-tes
 	./resume-state-test
 	SONOS_LMS_PAUSE=pause ./streamer-test
 	env -u SONOS_LMS_PAUSE ./streamer-test stop
-	TEST_OWN_HTTP=1 python3 tests/send_error_test.py
-	TEST_OWN_HTTP=1 ./streamer-test session
-	TEST_OWN_HTTP=1 ./streamer-test position
-	TEST_OWN_HTTP=1 ./streamer-test shutdown
-	TEST_OWN_HTTP=1 SONOS_LMS_PAUSE=pause ./streamer-test
-	env -u SONOS_LMS_PAUSE TEST_OWN_HTTP=1 ./streamer-test stop
 	python3 tests/http_streamer_test.py
 	python3 tests/device_resume_test.py
 	python3 tests/yeney_timeline_test.py
@@ -98,8 +87,8 @@ sonos-lms.o: resume_state.h stop_debounce.h
 resume-state-test: tests/resume_state_test.cpp resume_state.h stop_debounce.h
 	g++ -g -O2 -Wall -I. -o $@ tests/resume_state_test.cpp
 
-streamer-test: upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h upnp/noson_stream_server.cpp pause_mode.h tests/streamer_test.cpp sbstreamer.cpp sbstreamer.h sbencoder.cpp sbencoder.h resume_state.h noson/noson/libnoson.a
-	g++ -g -O2 -Wall -I. -Inoson/noson/src -Inoson/noson/public/noson -o $@ tests/streamer_test.cpp sbstreamer.cpp sbencoder.cpp sonos-position.cpp upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp upnp/noson_stream_server.cpp upnp/encoded_buffer.cpp noson/noson/libnoson.a -lFLAC++ -lFLAC -lcrypto -lssl -lz -lpthread
+streamer-test: upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h pause_mode.h tests/streamer_test.cpp sbstreamer.cpp sbstreamer.h sbencoder.cpp sbencoder.h resume_state.h
+	g++ -g -O2 -Wall -I. -o $@ tests/streamer_test.cpp sbstreamer.cpp sbencoder.cpp sonos-position.cpp upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
 sonos-lms.o streamer-test: pause_mode.h
 
@@ -113,7 +102,7 @@ sonos-lms.o: transport_intent.h retry_budget.h
 
 sonos-lms.o sbstreamer.o streamer-test: stream_session.h
 
-$(OBJS) streamer-test: upnp/speaker_control.h upnp/stream_server.h upnp/noson_stream_server.h upnp/noson_speaker_control.h
+$(OBJS) streamer-test: upnp/speaker_control.h upnp/stream_server.h
 
 $(UPNP_OBJS) sonos-lms.o: $(wildcard upnp/*.h)
 
@@ -122,10 +111,6 @@ upnp-test: $(wildcard upnp/*.h) tests/upnp_test.cpp upnp/xml.cpp upnp/soap.cpp u
 
 own-control-test: $(wildcard upnp/*.h) tests/own_control_fixture.cpp $(OWN_UPNP_SOURCES)
 	g++ -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^) -lpthread
-
-noson-golden: tests/noson_golden.cpp noson/noson/libnoson.a
-	g++ -g -O2 -Wall -Inoson/noson/src -Inoson/noson/public/noson -o $@ $^ -lcrypto -lssl -lz -lpthread
-
 
 upnp/encoded_buffer.o sbencoder.o: upnp/encoded_buffer.h
 

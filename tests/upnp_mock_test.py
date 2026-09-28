@@ -1,4 +1,4 @@
-"""Loopback speaker: capture actual noson bytes, then test own control and bridge polling."""
+"""Loopback speaker: test fixed wire fixtures, YeneY control and bridge polling."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import os
@@ -75,7 +75,7 @@ class Speaker(BaseHTTPRequestHandler):
             if action in self.server.golden:
                 assert body == self.server.golden[action], action
         if action == 'SetAVTransportURI' and self.server.mode in ('control', 'golden'):
-            assert body == (ROOT / 'tests/fixtures/noson-set-uri.xml').read_bytes()
+            assert body == (ROOT / 'tests/fixtures/radio-set-uri.xml').read_bytes()
         if action == 'Play':
             assert node.findtext('Speed') == '1'
             if self.server.mode in ('control', 'delayed-play') and count == 1: time.sleep(6)
@@ -137,10 +137,13 @@ def run(mode, command, golden=None):
         server.server_close()
         thread.join()
 
-# The fixture's --all form accepts the port last, like the other executables.
-reference = run('golden', [str(ROOT / 'noson-golden'), '--all'])
-golden = dict(reference.requests)
-assert set(golden) == {'SetAVTransportURI', 'Play', 'Pause', 'Stop', 'GetTransportInfo', 'GetPositionInfo', 'GetMediaInfo'}
+golden = {'SetAVTransportURI': (ROOT / 'tests/fixtures/radio-set-uri.xml').read_bytes()}
+for action in ('Play', 'Pause', 'Stop', 'GetTransportInfo', 'GetPositionInfo', 'GetMediaInfo'):
+    args = '<InstanceID>0</InstanceID>' + ('<Speed>1</Speed>' if action in ('Play', 'Pause', 'Stop') else '')
+    golden[action] = ('<?xml version="1.0" encoding="utf-8"?>'
+        '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+        f'<s:Body><u:{action} xmlns:u="urn:schemas-upnp-org:service:AVTransport:1">'
+        f'{args}</u:{action}></s:Body></s:Envelope>').encode()
 control = run('control', [str(ROOT / 'own-control-test')], golden)
 assert control.counts['GetPositionInfo'] == 3
 assert control.counts['GetVolume'] == 2
@@ -148,7 +151,7 @@ assert control.counts['GetTransportInfo'] == 3
 assert control.counts['GetZoneGroupState'] == 3
 for action, body in control.requests:
     if action in golden: assert body == golden[action]
-print('PASS: all seven own AVTransport request bodies match actual noson SOAP bytes')
+print('PASS: all seven own AVTransport request bodies match fixed SOAP wire fixtures')
 
 source = (ROOT / 'sonos-lms.cpp').read_text()
 def production_function(signature):
@@ -196,9 +199,9 @@ with tempfile.TemporaryDirectory(prefix='sonos-own-poll-') as temp:
     settings.write_text('''#include "upnp/backend.h"
 #include <cassert>
 int main(int argc, char** argv) {
-    const auto expected = argv[1][0] == '1' ? upnp::Backend::Own : upnp::Backend::Noson;
+    const auto expected = upnp::Backend::Own;
     assert(upnp::backend() == expected);
-    setenv("SONOS_LMS_UPNP", expected == upnp::Backend::Own ? "noson" : "own", 1);
+    setenv("SONOS_LMS_UPNP", "changed", 1);
     assert(upnp::backend() == expected);
 }''')
     subprocess.run(['g++', '-I', str(ROOT), str(settings), '-o', str(temp / 'settings')], check=True)
@@ -206,14 +209,14 @@ int main(int argc, char** argv) {
         env = dict(os.environ)
         env.pop('SONOS_LMS_UPNP', None)
         if value is not None: env['SONOS_LMS_UPNP'] = value
-        result = subprocess.run([str(temp / 'settings'), str(int(value != 'noson'))], env=env,
+        result = subprocess.run([str(temp / 'settings')], env=env,
                                 check=True, capture_output=True, text=True)
-        expected_log = 'UPnP layer: yeney (alias own)' if value == 'own' else 'UPnP layer: yeney' if value != 'noson' else 'UPnP layer: noson'
-        expected = (f"Warning: invalid SONOS_LMS_UPNP='{value}'; using yeney\n" if value in ('', 'invalid') else '') + expected_log + '\n'
+        expected_log = 'UPnP layer: yeney (alias own)' if value == 'own' else 'UPnP layer: yeney'
+        expected = (f"SONOS_LMS_UPNP={value} is no longer supported; using YeneY\n" if value in ('noson', '', 'invalid') else '') + expected_log + '\n'
         assert result.stdout == expected, result.stdout
         print(f'PASS: SONOS_LMS_UPNP={value!r}: {expected_log}; exact warning and read-once selection')
         assert result.stdout.count('UPnP layer:') == 1
-        assert result.stdout.count('Warning:') == int(value in ('', 'invalid'))
+        assert result.stdout.count('is no longer supported') == int(value in ('noson', '', 'invalid'))
     print('PASS: SONOS_LMS_UPNP defaults, validation and read-once startup logging')
 
 

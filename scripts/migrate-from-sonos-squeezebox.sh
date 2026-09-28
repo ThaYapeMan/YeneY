@@ -73,12 +73,6 @@ step "4. remove old unit, build, install new services"
 rm -f -- "/etc/systemd/system/$OLD@.service"
 systemctl daemon-reload
 cd "/opt/$NEW"
-# noson's CMake cache records the old absolute path; a stale cache makes any
-# later noson rebuild fail. The built library stays; only the cache goes.
-if grep -qs "/opt/$OLD" noson/CMakeCache.txt; then
-    rm -rf -- noson/CMakeCache.txt noson/CMakeFiles
-    echo "   removed stale noson CMake cache (old path)"
-fi
 make
 scripts/install-devices.sh "${rooms[@]}"
 

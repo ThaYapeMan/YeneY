@@ -9,7 +9,7 @@
 using namespace upnp;
 std::string file(const char* name) { std::ifstream in(name); assert(in); std::ostringstream out; out << in.rdbuf(); return out.str(); }
 int main() {
-    // Preserve the original byte-identical comparison against noson.
+    // Pin the established wire metadata with radio text disabled.
     setenv("SONOS_LMS_STREAM_CONTENT", "off", 1);
     setenv("SONOS_LMS_TITLE_FORMAT", "title", 1);
     assert(streamHeaderLog({{"User-Agent", "Sonos"}, {"Range", "bytes=0-"},
@@ -57,7 +57,7 @@ int main() {
     std::cout << groupDescription(study) << '\n' << groupDescription(port) << '\n';
     const std::string url = "http://bridge:1400/music/squeezebox.flac?session=0123456789abcdef&stream=7";
     const auto didl = streamDidl(url, "A & B <Live> \"Mix\" '26", "http://lms:9000/art?a=1&b=2");
-    assert(didl + "\n" == file("tests/fixtures/noson-didl.xml"));
+    assert(didl + "\n" == file("tests/fixtures/radio-didl.xml"));
     const std::string artist = "Artist & < > \" ' Björk 東京", album = "Album & < > \" ' café 🎵";
     const auto richDidl = streamDidl(url, "A & B <Live> \"Mix\" '26", "http://lms:9000/art?a=1&b=2", artist, album);
     assert(richDidl + "\n" == file("tests/fixtures/yeney-didl.xml"));
@@ -67,9 +67,9 @@ int main() {
     assert(didl.find("<dc:creator>") == std::string::npos && didl.find("<upnp:album>") == std::string::npos);
     assert(streamDidl(url, "", "", artist, "").find("<upnp:album>") == std::string::npos);
     assert(streamDidl(url, "", "", "", album).find("<dc:creator>") == std::string::npos);
-    std::cout << "PASS: golden artist/album DIDL escapes XML, preserves apostrophes and Unicode, omits empty fields; empty metadata matches noson\n";
+    std::cout << "PASS: golden artist/album DIDL escapes XML, preserves apostrophes and Unicode, omits empty fields; empty metadata matches the wire fixture\n";
     const auto body = soapBody("AVTransport", "SetAVTransportURI", {{"InstanceID", "0"}, {"CurrentURI", url}, {"CurrentURIMetaData", didl}});
-    assert(body == file("tests/fixtures/noson-set-uri.xml"));
+    assert(body == file("tests/fixtures/radio-set-uri.xml"));
     std::ofstream("/tmp/sonos-own-set-uri.xml") << body;
     assert(streamDidl(url, "", "").find("albumArtURI") == std::string::npos);
     assert(streamDidl("http://bridge/track.mp3", "", "").find("x-rincon-mp3radio://bridge/track.mp3") != std::string::npos);
@@ -78,5 +78,5 @@ int main() {
     const auto media = parseSoap("<s:Envelope><s:Body><u:GetMediaInfoResponse><CurrentURI>http://external/?x=1&amp;y=2</CurrentURI><TrackURI>wrong</TrackURI></u:GetMediaInfoResponse></s:Body></s:Envelope>", "GetMediaInfo");
     assert(media.ok && media.response.value("CurrentURI") == "http://external/?x=1&y=2");
     assert(!parseSoap("<GetMediaInfoResponse/>", "GetMediaInfo").ok);
-    std::cout << "PASS: XML, SSDP, room/group topology, faults, CurrentURI and byte-identical noson golden SOAP\n";
+    std::cout << "PASS: XML, SSDP, room/group topology, faults, CurrentURI and golden SOAP wire bytes\n";
 }

@@ -16,7 +16,7 @@ int main() {
     p.pcm(1, 2, 18 * rate, 20000);
     assert(p.frames(rate) == 18 * rate);
     p.poll(oldPoll, 17000, 21000); // request crossing the handoff
-    p.poll(p.token(), 17000, 20500); // noson's old cached result
+    p.poll(p.token(), 17000, 20500); // old cached position result
     p.poll(p.token(), 17000, 21500); // implausible old connection time
     assert(p.frames(rate) == 18 * rate);
     p.poll(p.token(), 0, 21500);
