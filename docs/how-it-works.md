@@ -416,3 +416,19 @@ invocation. Packet captures include all traffic to/from the discovered speaker
 coordinator (`SONOS_IP` overrides it), including stream and GENA ports, with a
 512-byte snaplen; Slimproto traffic is also retained.
 Agents never SSH to or deploy on LXC 113; the owner runs physical tests there.
+
+For an objective ReplayGain check, run
+`sudo env SCENARIOS="9" RG_TRACK="The Lady Is A Tramp" RG_SECS=25 scripts/device-test.sh`
+(or add `AUTO=1`). S9 is excluded from all default lists and needs no app prompts.
+`RG_TRACK` accepts a title or `id:<n>` and must have a track ReplayGain tag in LMS.
+Install the FLAC tool with `apt-get install -y flac`; Python 3 and tcpdump are also
+required. S9 changes the player's `replayGainMode` to track gain then off, and
+restores the saved preference on completion, failure or interrupt.
+
+S9 reads LMS's `songinfo` ReplayGain tag (`Y`), captures full TCP payloads for each
+run, and compares the gain in `strm s` with the measured level difference in the
+FLAC streamed to the speaker coordinator. It aligns 10 ms energy envelopes,
+checks output within 0.5 dB of the sent gain, and reports correlation and peak
+dBFS. Missing tags or unreliable alignment are INVALID. The tarball retains the
+two full pcaps, FLAC/WAV files and `s9-report.txt`. This measures the digital stream,
+not acoustic output. See [S9 verification details](../DEVICE-VERIFICATION.md#s9--measure-replaygain-in-the-streamed-audio).

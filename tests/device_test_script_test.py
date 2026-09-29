@@ -584,3 +584,150 @@ scenario_7() { if [[ $RUN_LABEL == '7#2' ]]; then auto_fail 'second run failed';
         assert f'monitor=7#{number}' in result.stdout, result
     assert 'AUTO_STATUS_FILE="$OUT/auto-status-$1.log"' in script
     print('PASS: repeated scenarios have separate labels and monitor files; a failed run is retained in the summary')
+
+# S9 runs the production main driver, CLI parsing, cleanup trap and archive step.
+# Only physical I/O/capture and the separately tested analyser are substituted.
+import tarfile
+s9_stubs = r'''
+UNIT=fixture
+RG_HELPER=/fixture/replaygain_probe.py
+have() { [[ $1 != logger && $1 != journalctl && $1 != systemctl && $1 != systemd-escape ]]; }
+resolve_lms_host() { LMS=192.0.2.1; }
+discover_coordinator() { printf '192.0.2.3'; }
+bridge_layer() { BRIDGE_LAYER=yeney; }
+start_capture() { :; }
+snapshot() { :; }
+cli_raw() {
+    printf '%s\n' "$*" >> "$OUT/cli-calls"
+    case "$*" in
+        'version ?') printf 'version 9.0';;
+        'titles 0 5 search:'*) printf 'id:123 title:The%%20Lady%%20Is%%20A%%20Tramp artist:Frank';;
+        'songinfo 0 100 track_id:123 tags:Y')
+            [[ $S9_CASE != missing ]] && printf 'replay_gain:-8.01' || printf 'title:Untagged';;
+        'fixture playerpref replayGainMode ?') printf 'fixture playerpref replayGainMode %s' "$(cat "$OUT/pref")";;
+        'fixture playerpref replayGainMode '*)
+            printf '%s' "${1##* }" > "$OUT/pref"; printf '%s' "$1";;
+        'fixture playlistcontrol cmd:load track_id:123')
+            [[ $S9_CASE != load-failure ]] || return 1
+            printf '%s' "$1";;
+        'fixture status 0 1 tags:') printf 'mode:play id:123 replay_gain:-8.01 time:25';;
+        'fixture stop'|'fixture pause 1') printf '%s' "$1";;
+        *) printf 'Unexpected CLI: %s\n' "$*" >&2; return 1;;
+    esac
+}
+s9_start_capture() {
+    printf '%s\n' "$1" >> "$OUT/captures"
+    : > "$1"; : > "$1.err"
+}
+s9_stop_capture() { :; }
+wait_s() {
+    printf '%s\n' "$1" >> "$OUT/waits"
+    if [[ $1 == "$RG_SECS" && $S9_CASE == interrupt ]]; then kill -INT $$; fi
+    if [[ $1 == "$RG_SECS" && $S9_CASE == terminate ]]; then kill -TERM $$; fi
+}
+python3() {
+    if [[ $1 == -c ]]; then printf '192.0.2.1'; return; fi
+    [[ $1 == "$RG_HELPER" && $* == *'--tag-db -8.01'* && $* == *'--effective-db -8.01'* ]] || return 95
+    : > "$RG_DIR/s9-track.wav"; : > "$RG_DIR/s9-off.wav"
+    if [[ $S9_CASE == analysis-failure ]]; then
+        printf 'FAIL output difference: measured=0; sent=-8.01\nFAIL | measured=0 dB; sent=-8.01 dB\n'; return 1
+    fi
+    printf 'PASS run 1 sent gain: -8.01\nPASS run 2 sent gain: 0\nPASS output difference: -8.01\nPASS alignment: 1\nPASS | measured=-8.01 dB; sent=-8.01/0 dB; correlation=1\n'
+}
+'''
+with tempfile.TemporaryDirectory(prefix='yeney-s9-script-') as directory:
+    for mode in ('0', '1'):
+        for case, expected, code in [('success', 'PASS', 0), ('analysis-failure', 'FAIL', 1),
+                                     ('load-failure', 'INVALID', 1), ('missing', 'INVALID', 1),
+                                     ('interrupt', 'INVALID', 130), ('terminate', 'INVALID', 130)]:
+            out = Path(directory)/f'{mode}-{case}'
+            out.mkdir(); (out/'pref').write_text('2')
+            env = {**os.environ, 'OUT': str(out), 'AUTO': mode, 'SCENARIOS': '9', 'PLAYER': 'fixture',
+                   'RG_SECS': '17', 'S9_CASE': case}
+            env.pop('RG_TRACK', None)
+            result = subprocess.run(['bash', '-c', prefix + s9_stubs + main], env=env,
+                                    capture_output=True, text=True, timeout=20)
+            assert result.returncode == code, (case, result)
+            assert (out/'pref').read_text() == '2', (case, result)
+            report = (out/'s9-report.txt').read_text()
+            assert f'S9 | {expected} |' in result.stdout, (case, result)
+            assert 'Press Enter' not in result.stderr and 'PROMPT' not in result.stderr
+            calls = (out/'cli-calls').read_text()
+            assert 'search:The%20Lady%20Is%20A%20Tramp' in calls
+            assert 'Just' not in calls and 'False' not in calls
+            if case == 'missing':
+                assert 'No ReplayGain on track' in report and 'playerpref' not in calls
+            else:
+                assert 'saved playerpref replayGainMode=2' in report
+                assert 'restored playerpref replayGainMode=2' in report
+                settings = [line.rsplit(' ', 1)[-1] for line in calls.splitlines()
+                            if 'playerpref replayGainMode ' in line and not line.endswith('?')]
+                assert settings == ([ '1', '0', '2'] if case in ('success', 'analysis-failure') else ['1', '2']), settings
+            if case in ('success', 'analysis-failure'):
+                assert (out/'waits').read_text().splitlines() == ['1', '17', '1', '1', '17', '1']
+                assert [Path(s).name for s in (out/'captures').read_text().splitlines()] == ['s9-track.pcap', 's9-off.pcap']
+                with tarfile.open(str(out)+'.tar.gz') as archive:
+                    names = {Path(name).name for name in archive.getnames()}
+                assert {'s9-report.txt', 's9-track.pcap', 's9-off.pcap', 's9-track.wav', 's9-off.wav'} <= names
+            print(f'PASS: S9 AUTO={mode} {case}: preference restored, {expected}, no prompts, report archived')
+    out = Path(directory)/'explicit'; out.mkdir(); (out/'pref').write_text('3')
+    result = subprocess.run(['bash', '-c', prefix + s9_stubs + main],
+        env={**os.environ, 'OUT': str(out), 'AUTO': '1', 'SCENARIOS': '9', 'PLAYER': 'fixture',
+             'RG_TRACK': 'id:123', 'S9_CASE': 'success', 'RG_SECS': '25'}, capture_output=True, text=True)
+    assert result.returncode == 0, result
+    assert 'titles ' not in (out/'cli-calls').read_text()
+    assert (out/'pref').read_text() == '3'
+    defaults = subprocess.run(['bash', '-c', prefix + 'printf "%s|%s" "$RG_TRACK" "$RG_SECS"'],
+        env={k: v for k, v in {**os.environ, 'OUT': str(out)}.items() if k not in ('RG_TRACK', 'RG_SECS')},
+        capture_output=True, text=True)
+    assert defaults.stdout == 'The Lady Is A Tramp|25', defaults
+    assert 'tcpdump -i any -s 0 -U' in script
+    assert '(host $RG_LMS_IP and tcp port 3483) or (dst host $COORDINATOR_IP and tcp src portrange 1400-1409)' in script
+    assert 'S9 requires flac: apt-get install -y flac' in script
+    print('PASS: S9 opt-in defaults, RG_TRACK title/id, RG_SECS, full-payload capture filter, mode 1 then 0 and required flac diagnostic')
+
+with tempfile.TemporaryDirectory(prefix='yeney-s9-capture-') as directory:
+    tmp = Path(directory)
+    tcpdump = tmp/'tcpdump'
+    tcpdump.write_text('''#!/usr/bin/env python3
+import json, os, signal, sys, time
+from pathlib import Path
+Path(os.environ['CAPTURE_ARGS']).write_text(json.dumps(sys.argv[1:]))
+if os.environ.get('CAPTURE_FAIL') == '1': sys.exit(1)
+Path(sys.argv[sys.argv.index('-w')+1]).write_bytes(b'pcap fixture')
+signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
+print('tcpdump: listening on any', file=sys.stderr, flush=True)
+while True: time.sleep(.1)
+''')
+    tcpdump.chmod(0o755)
+    env = {**os.environ, 'OUT': directory, 'PATH': directory+os.pathsep+os.environ['PATH'],
+           'CAPTURE_ARGS': str(tmp/'args')}
+    body = r'''
+RG_LMS_IP=192.0.2.1; COORDINATOR_IP=192.0.2.3
+s9_start_capture "$OUT/full.pcap" || exit 1
+pid=$RG_CAPTURE_PID
+s9_stop_capture || exit 2
+[[ -z $RG_CAPTURE_PID ]] || exit 3
+kill -0 "$pid" 2>/dev/null && exit 4
+exit 0
+'''
+    result = subprocess.run(['bash', '-c', prefix+body], env=env, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 0, result
+    import json
+    args = json.loads((tmp/'args').read_text())
+    assert args[:5] == ['-i', 'any', '-s', '0', '-U']
+    assert args[-1] == '(host 192.0.2.1 and tcp port 3483) or (dst host 192.0.2.3 and tcp src portrange 1400-1409)'
+    result = subprocess.run(['bash', '-c', prefix+body], env={**env, 'CAPTURE_FAIL': '1'}, capture_output=True, text=True, timeout=10)
+    assert result.returncode == 1, result
+    print('PASS: S9 real capture lifecycle waits for tcpdump readiness, uses snaplen 0/filter, flushes/reaps on stop, rejects startup failure')
+
+    for case, message in [('flac', 'apt-get install -y flac'), ('no-pcap', 'remove NO_PCAP=1'), ('seconds', 'RG_SECS must be positive')]:
+        out = tmp/case; out.mkdir(); (out/'pref').write_text('2')
+        override = 'have() { [[ $1 != flac && $1 != logger && $1 != systemctl && $1 != systemd-escape ]]; }' if case == 'flac' else ''
+        env = {**os.environ, 'OUT': str(out), 'AUTO': '0', 'SCENARIOS': '9', 'PLAYER': 'fixture',
+               'S9_CASE': 'success', 'RG_SECS': '0' if case == 'seconds' else '25',
+               'NO_PCAP': '1' if case == 'no-pcap' else '0'}
+        result = subprocess.run(['bash', '-c', prefix+s9_stubs+override+'\n'+main], env=env, capture_output=True, text=True)
+        assert result.returncode == 1 and message in result.stderr, result
+        assert 'playerpref' not in (out/'cli-calls').read_text()
+    print('PASS: S9 rejects missing flac, NO_PCAP and invalid RG_SECS before changing the player preference')

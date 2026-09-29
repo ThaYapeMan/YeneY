@@ -170,3 +170,66 @@ stream M` or `closed by client`. Same-stream u logs `fed`. Only an unanswered
 five-second hold logs `expired` and retains the prior 503 fallback. Local tests
 reproduce the gap between q, s and ID allocation for both p-Stop and q-Stop;
 physical status and absence of a dialog still require S7 on the speaker.
+
+## S9 — measure ReplayGain in the streamed audio
+
+S9 measures LMS's transmitted ReplayGain and the resulting PCM in YeneY's FLAC
+HTTP response. It does not measure acoustic speaker output or Sonos volume.
+It is opt-in, like S8; neither manual nor AUTO defaults include it. Both commands
+run without app prompts:
+
+```bash
+sudo env SCENARIOS="9" scripts/device-test.sh
+sudo env AUTO=1 SCENARIOS="9" RG_TRACK="id:123" RG_SECS=25 scripts/device-test.sh
+```
+
+`RG_TRACK` defaults to `The Lady Is A Tramp`. It accepts a title search (first LMS
+hit) or `id:<n>`, just like `TRACK_A`. The track needs a track ReplayGain tag in
+LMS's library; missing metadata gives **INVALID**. S9 uses `songinfo ... tags:Y`
+(`Y` is track `replay_gain`, `X` is album gain in
+[LMS Queries.pm](https://github.com/LMS-Community/slimserver/blob/public/9.0/Slim/Control/Queries.pm#L5162)).
+Install `tcpdump`, Python 3 and the FLAC command-line tool (`apt-get install -y flac`).
+`NO_PCAP=1` is not supported for S9. Run from the repository on the bridge host;
+the coordinator is discovered even in manual mode. Agents do not run this on the LXC.
+
+S9 saves and logs the player's `playerpref replayGainMode`, then temporarily sets
+it to **1 (track gain)** and **0 (off)**, in that order. Each run loads the same
+track from its start, captures for `RG_SECS` seconds (default 25), then pauses.
+The saved preference is restored and verified after the runs, on failures and
+through the exit/interrupt trap. A failed restore is reported and retried at exit;
+if LMS is unreachable, the report retains the value to restore manually.
+
+Each run has its own full-payload `tcpdump -s 0` capture, filtered to LMS TCP 3483
+and stream-port responses (1400–1409) to the coordinator. The ordinary 512-byte
+capture is not used for this measurement. The stdlib-only Python helper
+`scripts/replaygain_probe.py` reassembles TCP, reads the packed Slimproto `strm s`
+gain, and selects the largest FLAC HTTP response. It removes HTTP chunking,
+retains a truncated final chunk and decodes with `flac -d --decode-through-errors`.
+The local LMS stream request's player ID selects the intended player; missing or
+multiple matching starts are INVALID, rather than guessing among rooms/tracks.
+
+The four reported checks are:
+
+- Track-run sent gain versus the track tag, within 0.1 dB. A different gain is
+  accepted only if LMS's calculated playback gain from `status` confirms it;
+  both values and the adjustment are reported. Otherwise this check fails.
+- Off-run raw gain equals zero (the Slimproto sentinel meaning no ReplayGain).
+- Measured track-minus-off level equals the **sent** gain difference within
+  0.5 dB, calculated as `10*log10(sum(track energy)/sum(off energy))`.
+- The 10 ms mean-square envelopes align within ±6 seconds with Pearson
+  correlation at least 0.95. The first second of each run is excluded, with at
+  least three seconds of overlap. Insufficient, silent, constant or poorly
+  correlated audio is INVALID, not evidence of a gain failure.
+
+The table prints tag/sent/measured dB, correlation, alignment offset and both
+peak dBFS values. Only all passing checks produce PASS; FAIL and INVALID exit
+nonzero. Avoid changing tracks or player settings during the run. Existing DSP,
+fades or clipping can affect the comparison; the captured evidence helps explain
+such differences.
+
+The tarball keeps `s9-track.pcap`, `s9-off.pcap`, extracted `.flac`, decoded `.wav`,
+decoder logs, CLI replies and `s9-report.txt`. Repeated S9 runs use separate
+`s9#1`, `s9#2`, … directories. Local `make test` covers packet reconstruction,
+16/24-bit WAV parsing, known-gain alignment, restoration and a real-FLAC round
+trip when `flac` is installed; without it that fixture prints an explicit SKIP.
+These synthetic checks do not replace a physical S9 run.

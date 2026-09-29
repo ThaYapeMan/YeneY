@@ -26,6 +26,8 @@
 #   TRACK_B     search text, or id:<n> for track B       (default: False Need)
 #   SCENARIOS   which scenarios to run                   (default: 1 2 3 4 5 6 7)
 #   IDLE_SECS   idle wait after LMS stop in S8           (default: 120)
+#   RG_TRACK    S9 title or id:<n> (default: The Lady Is A Tramp)
+#   RG_SECS     seconds per S9 capture (default: 25)
 #   SONOS_IP    capture peer (default: discovered room coordinator)
 #   LONG_PAUSE  seconds paused in scenario 6             (default: 120)
 #   LMS_SSH     ssh target for the LMS host; empty skips server.log
@@ -51,6 +53,8 @@ fi
 SCENARIOS=${SCENARIOS:-1 2 3 4 5 6 7}
 LONG_PAUSE=${LONG_PAUSE:-120}
 IDLE_SECS=${IDLE_SECS:-120}
+RG_TRACK=${RG_TRACK:-The Lady Is A Tramp}
+RG_SECS=${RG_SECS:-25}
 BRIDGE_LAYER=unknown
 S2_ROUNDS=${S2_ROUNDS:-3}
 LMS_SSH=${LMS_SSH:-}
@@ -75,6 +79,11 @@ AUTO_MEASUREMENTS=()
 SUMMARY=()
 AUTO_FAILED=0
 AUTO_MONITOR_PID=''
+RG_MODE_SAVED=''
+RG_CAPTURE_PID=''
+RG_REPORT=''
+RG_ACTIVE=0
+RG_HELPER=${AUTO_HELPER%/*}/replaygain_probe.py
 
 
 say()  { printf '%s\n' "$*" >&2; }
@@ -409,8 +418,14 @@ start_capture() {
 }
 
 finish() {
-    local entry pid
-    trap - EXIT INT TERM
+    local result=$? entry pid
+    trap - EXIT
+    trap '' INT TERM
+    s9_stop_capture || result=1
+    s9_restore || result=1
+    if [[ $RG_ACTIVE == 1 ]]; then
+        s9_result INVALID "interrupted before measurement completed (exit $result)"
+    fi
     if [[ -n $AUTO_MONITOR_PID ]]; then kill "$AUTO_MONITOR_PID" 2>/dev/null; wait "$AUTO_MONITOR_PID" 2>/dev/null; fi
     say ""
     say "Collecting results ..."
@@ -424,6 +439,7 @@ finish() {
     { echo "room=$ROOM unit=$UNIT player=$PLAYER lms=$LMS"
       echo "track_a=$TRACK_A_ID track_b=$TRACK_B_ID scenarios=$SCENARIOS long_pause=$LONG_PAUSE"
       echo "bridge_upnp_layer=$BRIDGE_LAYER sonos_ip=${SONOS_IP:-unknown} idle_secs=$IDLE_SECS"
+      echo "rg_track=$RG_TRACK rg_secs=$RG_SECS"
       echo "started=$START_TIME finished=$(date '+%Y-%m-%d %H:%M:%S')"
       [[ -d /opt/yeney/.git ]] && echo "bridge=$(git -C /opt/yeney rev-parse --short HEAD)"
     } > "$OUT/run-info.txt"
@@ -431,7 +447,8 @@ finish() {
     say ""
     say "Done. Send this file:"
     say "  $OUT.tar.gz"
-    [[ $AUTO != 1 ]] || auto_summary
+    if [[ $AUTO == 1 || -n $RG_REPORT ]]; then auto_summary; fi
+    exit "$result"
 }
 
 # ------------------------------------------------------------- scenarios ---
@@ -658,6 +675,143 @@ scenario_8() {
     fi
 }
 
+# ----------------------------------------------------------- ReplayGain S9 ---
+
+s9_note() {
+    printf '%s\n' "$*" >> "$RG_REPORT"
+    mark "S9 $*"
+}
+s9_result() {
+    local status=$1 reason=$2
+    RG_ACTIVE=0
+    s9_note "$status | $reason"
+    SUMMARY+=("S${RUN_LABEL:-9} | $status | $reason")
+    [[ $status == PASS ]] || AUTO_FAILED=1
+}
+s9_pref() {
+    local reply value
+    reply=$(cli_raw "$PLAYER playerpref replayGainMode ?") || return 1
+    value=$(urldec "${reply##* }")
+    [[ $value =~ ^[0-3]$ ]] || return 1
+    printf '%s' "$value"
+}
+s9_set_pref() {
+    cli_raw "$PLAYER playerpref replayGainMode $1" >/dev/null || return 1
+    [[ $(s9_pref) == "$1" ]]
+}
+s9_restore() {
+    [[ -n $RG_MODE_SAVED ]] || return 0
+    if s9_set_pref "$RG_MODE_SAVED"; then
+        s9_note "restored playerpref replayGainMode=$RG_MODE_SAVED"
+        RG_MODE_SAVED=''
+        return 0
+    fi
+    s9_note "FAIL could not restore playerpref replayGainMode=$RG_MODE_SAVED; retrying at exit"
+    return 1
+}
+s9_stop_capture() {
+    [[ -n $RG_CAPTURE_PID ]] || return 0
+    local pid=$RG_CAPTURE_PID status=0
+    RG_CAPTURE_PID=''
+    kill -INT "$pid" 2>/dev/null || status=1
+    wait "$pid" || status=1
+    return "$status"
+}
+s9_start_capture() {
+    local file=$1 i
+    LC_ALL=C tcpdump -i any -s 0 -U -w "$file" \
+        "(host $RG_LMS_IP and tcp port 3483) or (dst host $COORDINATOR_IP and tcp src portrange 1400-1409)" \
+        2> "$file.err" &
+    RG_CAPTURE_PID=$!
+    # Do not load the track until tcpdump has installed the filter.
+    for (( i=0; i<50; i++ )); do
+        kill -0 "$RG_CAPTURE_PID" 2>/dev/null || break
+        if grep -q 'listening on' "$file.err"; then return 0; fi
+        sleep .1
+    done
+    s9_stop_capture || true
+    return 1
+}
+s9_lms() {
+    local reply
+    reply=$(cli_raw "$PLAYER $*") || return 1
+    [[ -n $reply && $reply != *badparams* && $reply != *unknown_command* ]]
+}
+s9_runs() {
+    local mode name reply effective='' file
+    for mode in 1 0; do
+        [[ $mode == 1 ]] && name=track || name=off
+        s9_lms stop || return 1
+        wait_s 1
+        s9_set_pref "$mode" || return 1
+        s9_note "run $name: playerpref replayGainMode=$mode; track_id=$RG_TRACK_ID; seconds=$RG_SECS"
+        file="$RG_DIR/s9-$name.pcap"
+        s9_start_capture "$file" || return 1
+        s9_lms playlistcontrol cmd:load "track_id:$RG_TRACK_ID" || return 1
+        wait_s "$RG_SECS"
+        # No Y tag here: status's top-level replay_gain is LMS's calculated
+        # playingSong gain, distinct from songinfo's database tag (Queries.pm).
+        reply=$(cli_raw "$PLAYER status 0 1 tags:") || return 1
+        printf '%s\n' "$reply" > "$RG_DIR/s9-$name-status.txt"
+        [[ $(field "$reply" id) == "$RG_TRACK_ID" && $(field "$reply" mode) == play ]] || return 1
+        if [[ $mode == 1 ]]; then effective=$(field "$reply" replay_gain) || effective=''; fi
+        s9_lms pause 1 || return 1
+        wait_s 1
+        s9_stop_capture || return 1
+        if grep -Eq '^[1-9][0-9]* packets dropped by kernel' "$file.err"; then
+            s9_note "INVALID packet capture dropped packets: $file.err"
+            return 1
+        fi
+    done
+    local -a args=()
+    if [[ $effective =~ ^[+-]?[0-9]+([.][0-9]+)?$ ]]; then args+=(--effective-db "$effective"); fi
+    python3 "$RG_HELPER" --track "$RG_DIR/s9-track.pcap" --off "$RG_DIR/s9-off.pcap" \
+        --speaker "$COORDINATOR_IP" --player "$PLAYER" --tag-db "$RG_TAG_DB" "${args[@]}" \
+        > "$RG_DIR/s9-analysis.txt" 2>&1
+    RG_ANALYSIS_STATUS=$?
+    # The helper's 1/2 mean FAIL/INVALID, not a failed shell setup.
+    [[ $RG_ANALYSIS_STATUS -le 2 ]]
+}
+scenario_9() {
+    local reply analysis last status reason
+    RG_DIR="$OUT"
+    [[ ${RUN_LABEL:-9} == 9 ]] || RG_DIR="$OUT/s${RUN_LABEL}"
+    mkdir -p "$RG_DIR"
+    RG_REPORT="$RG_DIR/s9-report.txt"
+    : > "$RG_REPORT"
+    RG_ACTIVE=1
+    RG_TRACK_ID=$(resolve_track "$RG_TRACK") || { s9_result INVALID "track not found: $RG_TRACK"; return; }
+    # Y = track replay_gain; X is album gain. Verified in LMS-Community/slimserver
+    # Slim/Control/Queries.pm (%tagMap and %colMap), public/9.0 and public/9.2.
+    reply=$(cli_raw "songinfo 0 100 track_id:$RG_TRACK_ID tags:Y") || reply=''
+    printf '%s\n' "$reply" > "$RG_DIR/s9-songinfo.txt"
+    RG_TAG_DB=$(field "$reply" replay_gain) || RG_TAG_DB=''
+    RG_TAG_DB=${RG_TAG_DB% dB}
+    if [[ ! $RG_TAG_DB =~ ^[+-]?[0-9]+([.][0-9]+)?$ ]]; then
+        s9_result INVALID "No ReplayGain on track $RG_TRACK_ID ($RG_TRACK); add a track ReplayGain tag and rescan LMS"
+        return
+    fi
+    s9_note "track=$RG_TRACK (id:$RG_TRACK_ID); ReplayGain tag=$RG_TAG_DB dB"
+    RG_MODE_SAVED=$(s9_pref) || { RG_MODE_SAVED=''; s9_result INVALID 'cannot read playerpref replayGainMode'; return; }
+    s9_note "saved playerpref replayGainMode=$RG_MODE_SAVED"
+    RG_ANALYSIS_STATUS=2
+    if ! s9_runs; then
+        s9_stop_capture || true
+        s9_restore || true
+        s9_result INVALID 'capture, LMS command or track verification failed; see s9-report.txt and capture diagnostics'
+        return
+    fi
+    analysis=$(cat "$RG_DIR/s9-analysis.txt")
+    printf '%s\n' "$analysis" | tee -a "$RG_REPORT" "$OUT/steps.log" >&2
+    last=${analysis##*$'\n'}
+    status=${last%% | *}; reason=${last#* | }
+    if [[ ! $status =~ ^(PASS|FAIL|INVALID)$ || ($status == PASS && $RG_ANALYSIS_STATUS != 0) ]]; then
+        status=INVALID; reason="probe did not produce a valid result: $last"
+    fi
+    if ! s9_restore; then status=FAIL; reason+="; ReplayGain preference restoration failed"; fi
+    s9_result "$status" "$reason"
+}
+
 # --------------------------------------------------------- LMS discovery ---
 
 lms_from_exec_start() {
@@ -794,24 +948,43 @@ PLAYER=${PLAYER:-$(resolve_player)} || true
 [[ -n ${PLAYER:-} ]] || fail "no LMS player named '$ROOM (Sonos)'; set PLAYER=<mac>"
 
 say "Room $ROOM ($UNIT), LMS $LMS, player $PLAYER"
+HAS_S9=0
+NEEDS_AB=0
+for s in $SCENARIOS; do
+    if [[ $s == 9 ]]; then HAS_S9=1; else NEEDS_AB=1; fi
+done
+if [[ $HAS_S9 == 1 ]]; then
+    have python3 || fail "S9 requires python3"
+    have flac || fail "S9 requires flac: apt-get install -y flac"
+    have tcpdump || fail "S9 requires tcpdump: apt-get install -y tcpdump"
+    [[ $NO_PCAP != 1 ]] || fail "S9 requires full-payload captures; remove NO_PCAP=1"
+    [[ $RG_SECS =~ ^[1-9][0-9]*$ ]] || fail "RG_SECS must be positive integer seconds"
+    RG_LMS_IP=$(python3 -c 'import socket,sys; print(socket.getaddrinfo(sys.argv[1],3483,type=socket.SOCK_STREAM)[0][4][0])' "$LMS") || fail "S9 cannot resolve LMS address"
+    COORDINATOR_IP=$(discover_coordinator) || fail "S9 coordinator discovery failed"
+fi
+TRACK_A_ID=''; TRACK_B_ID=''
+if [[ $NEEDS_AB == 1 ]]; then
 say "Tracks:"
 TRACK_A_ID=$(resolve_track "$TRACK_A") || fail "track A not found: $TRACK_A"
 TRACK_B_ID=$(resolve_track "$TRACK_B") || fail "track B not found: $TRACK_B"
 TRACK_A_NAME=$(cat "$OUT/.name_$TRACK_A_ID" 2>/dev/null || echo "track A")
 TRACK_B_NAME=$(cat "$OUT/.name_$TRACK_B_ID" 2>/dev/null || echo "track B")
 rm -f "$OUT"/.name_*
+fi
 say "Output: $OUT"
 say ""
-if [[ $AUTO != 1 ]]; then
+if [[ $AUTO != 1 && $NEEDS_AB == 1 ]]; then
 say "Scenarios $SCENARIOS. Keep the Sonos app open on room $ROOM."
 say "When asked, do the action first, then press Enter immediately."
 read -r -p "Press Enter to start " _ || true
-else
+elif [[ $AUTO == 1 ]]; then
     have python3 || fail "AUTO requires python3"
     [[ -n ${SCENARIOS// /} && $S2_ROUNDS =~ ^[1-9][0-9]*$ && $LONG_PAUSE =~ ^[0-9]+$ ]] || fail "AUTO needs scenarios, positive S2_ROUNDS and nonnegative LONG_PAUSE"
     COORDINATOR_IP=$(discover_coordinator) || fail "AUTO coordinator discovery failed"
+    if [[ $NEEDS_AB == 1 ]]; then
     TRACK_B_TITLE=$(field "$(cli_raw "songinfo 0 100 track_id:$TRACK_B_ID")" title)
     [[ -n $TRACK_B_TITLE ]] || fail "AUTO could not resolve track B title"
+    fi
     mark "AUTO coordinator $COORDINATOR_IP; scenarios $SCENARIOS"
 fi
 
@@ -834,15 +1007,16 @@ for s in $SCENARIOS; do
     RUN_LABEL=$s
     if (( SCENARIO_TOTALS[$s] > 1 )); then RUN_LABEL="$s#${SCENARIO_COUNTS[$s]}"; fi
     mark "SCENARIO S$RUN_LABEL"
-    if [[ $AUTO == 1 ]]; then auto_begin "$RUN_LABEL"; fi
+    if [[ $AUTO == 1 && $s != 9 ]]; then auto_begin "$RUN_LABEL"; fi
     if declare -F "scenario_$s" >/dev/null; then "scenario_$s"; else
         say "unknown scenario $s"
         [[ $AUTO != 1 ]] || auto_fail "unknown scenario $s"
     fi
-    if [[ $AUTO == 1 ]]; then auto_end "$RUN_LABEL"; fi
+    if [[ $AUTO == 1 && $s != 9 ]]; then auto_end "$RUN_LABEL"; fi
+    [[ -z $RG_MODE_SAVED ]] || exit 1  # finish retries restoration; never overwrite the saved value
 done
 
 mark "RUN END (LMS pause)"
 lms pause 1
 
-if [[ $AUTO == 1 ]]; then auto_summary > "$OUT/auto-summary.txt"; exit "$AUTO_FAILED"; fi
+if [[ $AUTO == 1 || $HAS_S9 == 1 ]]; then auto_summary > "$OUT/auto-summary.txt"; exit "$AUTO_FAILED"; fi

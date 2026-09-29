@@ -364,6 +364,12 @@ tests on real Sonos speakers use `scripts/device-test.sh`; see
 [Testing and device-test tooling](docs/how-it-works.md#testing-and-device-test-tooling)
 and [DEVICE-VERIFICATION.md](DEVICE-VERIFICATION.md).
 
+The opt-in ReplayGain measurement runs with `SCENARIOS="9"` (also with `AUTO=1`),
+without app prompts. It needs a ReplayGain-tagged track and the `flac` tool
+(`apt-get install -y flac`). S9 measures the gain sent by LMS and the level change
+in YeneY's streamed FLAC, temporarily changes the player's ReplayGain preference,
+then restores it. See the linked testing guide for `RG_TRACK` and `RG_SECS`.
+
 Forgot `--recursive` when cloning? `git submodule update --init --recursive` fixes
 it after the fact. Existing checkouts upgrading past the removal of the noson
 backend should run this once after pulling:

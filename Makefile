@@ -78,6 +78,7 @@ test: encoded-buffer-test stream-content-test http-server-test speaker-state-tes
 	python3 tests/yeney_timeline_test.py
 	python3 tests/lms_discovery_test.py
 	python3 tests/device_test_script_test.py
+	python3 tests/replaygain_probe_test.py
 	python3 tests/pause_mode_test.py
 	python3 tests/audio_mode_test.py
 	python3 tests/audio_output_test.py
