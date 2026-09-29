@@ -438,9 +438,9 @@ Changing the title format does not change these radio-text fields.
 bridge stream, run from a host that can reach its coordinator:
 
 ```sh
-python3 scripts/meta-variant.py 192.168.178.145 show
-python3 scripts/meta-variant.py 192.168.178.145 original
-python3 scripts/meta-variant.py 192.168.178.145 title noplay
+python3 scripts/meta-variant.py 192.0.2.145 show
+python3 scripts/meta-variant.py 192.0.2.145 original
+python3 scripts/meta-variant.py 192.0.2.145 title noplay
 ```
 
 `show` only reads metadata; `original` resends it unchanged. The variants `title`,
@@ -462,7 +462,7 @@ finished. For example, on the bridge host:
 
 ```sh
 sudo systemctl stop 'sonos-lms@Study'
-python3 scripts/stream-probe.py 192.168.178.145 flac-radio 'http://<lms>:9000/music/<id>/download'
+python3 scripts/stream-probe.py 192.0.2.145 flac-radio 'http://<lms>:9000/music/<id>/download'
 sudo systemctl start 'sonos-lms@Study'
 ```
 
