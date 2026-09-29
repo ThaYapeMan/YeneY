@@ -109,7 +109,7 @@ static int _sonos_write_frames(frames_t out_frames, bool silence, s32_t gainL, s
     if (!pcm_staged_frames) pcm_first_frame = sonos_audio_legacy() ? output.frames_played : stream_frames;
     u8_t* decoded = outputbuf->readp;
     _scale_and_pack_frames(pcm_staging + pcm_staged_frames * frame_size_bytes,
-        (s32_t*)(void*)decoded, out_frames, FIXED_ONE, FIXED_ONE, 0, output.format);
+        (s32_t*)(void*)decoded, out_frames, gainL, gainR, 0, output.format);
     pcm_staged_frames += out_frames;
     stream_frames += out_frames;
 
@@ -214,6 +214,7 @@ void output_init_sonos(log_level level, unsigned output_buf_size, char* params, 
     pcm_staged_frames = 0;
 
     memset(&output, 0, sizeof(output));
+    output.gainL = output.gainR = FIXED_ONE;
     output.format = sonos_audio_legacy() ? S16_LE : S24_3LE;
     output.start_frames = FRAME_BLOCK * 2;
     output.write_cb = &_sonos_write_frames;
@@ -284,4 +285,7 @@ void set_volume(unsigned left, unsigned right)
     // yeney.cpp), not through squeezelite's own volume callback.
     (void)left;
     (void)right;
+    LOCK;
+    output.gainL = output.gainR = FIXED_ONE;
+    UNLOCK;
 }

@@ -131,3 +131,19 @@ int main(void) {
 ''')
     subprocess.run(['gcc', '-Wall', str(source), '-o', str(exe)], check=True)
     subprocess.run([str(exe)], check=True)
+
+# Keep the real audg parser alongside the gain fixture without changing upstream.
+slimproto = (root / 'squeezelite/slimproto.c').read_text()
+start = slimproto.index('static void process_audg(')
+end = slimproto.index('static void process_setd(', start)
+with tempfile.TemporaryDirectory(prefix='sonos-audio-gain-') as tmp:
+    (Path(tmp) / 'audg.inc').write_text(slimproto[start:end])
+    exe = Path(tmp) / 'gain'
+    subprocess.run(['gcc', '-std=gnu11', '-O2', '-ffunction-sections', '-fdata-sections',
+                    '-I'+tmp, '-I'+str(root), '-I'+str(root/'squeezelite'),
+                    str(root/'tests/audio_gain_fixture.c'),
+                    str(root/'squeezelite/output.c'), str(root/'squeezelite/output_pack.c'),
+                    str(root/'squeezelite/buffer.c'), str(root/'squeezelite/utils.c'),
+                    '-Wl,--gc-sections', '-lpthread', '-lm', '-o', str(exe)], check=True)
+    for args in ([], ['legacy']):
+        subprocess.run([str(exe), *args], check=True)

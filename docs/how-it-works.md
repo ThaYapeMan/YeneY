@@ -110,7 +110,9 @@ The default targets Sonos S2's 24-bit/48 kHz FLAC support.
 
 At 44.1 and 48 kHz, decoded PCM keeps its sample rate and up to 24 bits of
 precision. A 16-bit source is padded with zero bits, without changing its sample
-values. Bit-exact playback assumes LMS ReplayGain, DSP, crossfade and other sample
+values. LMS ReplayGain and fade-in, fade-out and fade-in-out are applied in both
+audio modes. LMS volume is not applied to PCM; Sonos volume remains independent.
+Bit-exact playback assumes LMS ReplayGain, fades, DSP, crossfade and other sample
 processing are disabled; lossy sources remain lossy.
 
 The output driver lists 48,000 and 44,100 Hz. Slimproto advertises
