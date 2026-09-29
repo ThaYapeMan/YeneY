@@ -27,7 +27,7 @@ static TrackInfo fetchLmsTrackInfo(int, int) { return {}; }
 static void reset_sonos_position(unsigned) {}
 static void acknowledge_squeezebox_resume(unsigned) {}
 static std::string SqueezeBoxURL(unsigned) {
-    return "http://bridge/music/squeezebox.flac?session=test-session&stream=7";
+    return "http://bridge/music/yeney.flac?session=test-session&stream=7";
 }
 #include "production_play_timeout.inc"
 int main(int argc, char** argv) {

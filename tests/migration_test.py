@@ -1,0 +1,143 @@
+"""Run the migration against isolated roots and stub host-changing commands."""
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+script = Path(__file__).resolve().parents[1] / 'scripts/migrate-from-sonos-lms.sh'
+old_units = ['sonos-lms@Study.service', r'sonos-lms@Sonos\x20Port.service', 'sonos-lms@MBR.service']
+settings = {
+    'SONOS_LMS_UPNP': 'YENEY_UPNP', 'SONOS_LMS_PAUSE': 'YENEY_PAUSE',
+    'SONOS_LMS_AUDIO': 'YENEY_AUDIO', 'SONOS_LMS_TITLE_FORMAT': 'YENEY_TITLE_FORMAT',
+    'SONOS_LMS_STREAM_CONTENT': 'YENEY_STREAM_CONTENT',
+    'SONOS_LMS_YENEY_POLL': 'YENEY_POLL',
+    'SONOS_LMS_YENEY_STOPPED_MEDIAINFO': 'YENEY_STOPPED_MEDIAINFO',
+}
+with tempfile.TemporaryDirectory(prefix='yeney-migration-') as tmp:
+    base = Path(tmp)
+    tools = base / 'bin'
+    tools.mkdir()
+    stub = '''#!/usr/bin/env python3
+import json, os, pathlib, sys
+root = pathlib.Path(os.environ['TEST_ROOT'])
+command = [pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]
+with (root / 'calls').open('a') as f: f.write(json.dumps(command) + '\\n')
+if command[0] == 'systemctl' and command[1] == 'list-unit-files':
+    print((root / 'enabled').read_text(), end='')
+if command[0] == 'systemctl' and command[1] == 'disable':
+    p = root / 'enabled'
+    p.write_text(''.join(line for line in p.read_text().splitlines(True) if line.split()[0] != command[2]))
+if command[0] == 'make':
+    if (root / 'fail-build').exists(): sys.exit(7)
+    pathlib.Path('yeney').write_text('built')
+if command[0] == 'install-devices.sh':
+    assert pathlib.Path('yeney').read_text() == 'built'
+    assert sys.argv[1:3] == ['--non-interactive', '--restart']
+    assert sorted(sys.argv[3:]) == ['MBR', 'Sonos Port', 'Study'], sys.argv
+    for room in sys.argv[3:]:
+        import subprocess
+        unit = subprocess.check_output(['systemd-escape', '--template=yeney@.service', '--', room], text=True).strip()
+        subprocess.run(['systemctl', 'enable', '--now', unit], check=True)
+'''
+    for name in ('systemctl', 'git', 'make'):
+        p = tools / name
+        p.write_text(stub)
+        p.chmod(0o755)
+    for interrupt in (False, True):
+        root = base / ('interrupted' if interrupt else 'normal')
+        repo, conf, units = root / 'opt/sonos-lms', root / 'etc/sonos-lms', root / 'etc/systemd/system'
+        (repo / 'scripts').mkdir(parents=True)
+        (repo / 'sonos-lms').write_text('old binary')
+        (repo / 'sonos-lms.o').write_text('old object')
+        conf.mkdir(parents=True)
+        units.mkdir(parents=True)
+        installer = repo / 'scripts/install-devices.sh'
+        installer.write_text(stub)
+        installer.chmod(0o755)
+        (conf / 'config').write_text('LMS_SERVER=192.0.2.23\nroom.Sonos Port=yes\n')
+        (conf / 'rooms').write_text('Study\nSonos Port\nMBR\n')
+        (units / 'sonos-lms@.service').write_text('old unit')
+        dropin = units / (old_units[1] + '.d')
+        dropin.mkdir()
+        (dropin / 'override.conf').write_text('[Service]\n' + ''.join(f'Environment="{key}=value"\n' for key in settings) +
+                                            'Environment=SONOS_LMS_EVENT_PORT=1401\nEnvironment=KEEP_ME=yes\n')
+        (root / 'enabled').write_text(''.join(unit + ' enabled\n' for unit in old_units))
+        env = dict(os.environ, TEST_ROOT=str(root), PATH=str(tools) + os.pathsep + os.environ['PATH'])
+        command = ['bash', str(script), '--root', str(root)]
+        if interrupt:
+            (root / 'fail-build').touch()
+            failed = subprocess.run(command, env=env, capture_output=True, text=True)
+            assert failed.returncode != 0, failed.stdout
+            assert (root / 'etc/yeney-migration.json').exists()
+            assert not any(json.loads(line)[0] == 'install-devices.sh' for line in (root / 'calls').read_text().splitlines())
+            (root / 'fail-build').unlink()
+        result = subprocess.run(command, env=env, capture_output=True, text=True)
+        assert result.returncode == 0, (result.stdout, result.stderr)
+        assert not repo.exists() and not conf.exists()
+        assert not (root / 'opt/yeney/sonos-lms').exists()
+        assert not (root / 'opt/yeney/sonos-lms.o').exists()
+        assert (root / 'etc/yeney/rooms').read_text() == 'Study\nSonos Port\nMBR\n'
+        assert (root / 'etc/yeney/config').read_text() == 'LMS_SERVER=192.0.2.23\nroom.Sonos Port=yes\n'
+        renamed = units / r'yeney@Sonos\x20Port.service.d/override.conf'
+        expected = '[Service]\n' + ''.join(f'Environment="{value}=value"\n' for value in settings.values()) + 'Environment=KEEP_ME=yes\n'
+        assert renamed.read_text() == expected, renamed.read_text()
+        assert not (units / 'sonos-lms@.service').exists()
+        assert not (root / 'etc/yeney-migration.json').exists()
+        calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+        for unit in old_units:
+            assert calls.count(['systemctl', 'stop', unit]) == 1
+            assert calls.count(['systemctl', 'disable', unit]) == 1
+            assert ['systemctl', 'enable', '--now', unit.replace('sonos-lms@', 'yeney@')] in calls
+        assert ['git', 'remote', 'set-url', 'origin', 'https://github.com/ThaYapeMan/YeneY.git'] in calls
+        assert calls.index(['systemctl', 'daemon-reload']) < calls.index(['make'])
+        assert "journalctl -u 'yeney@*' -f" in result.stdout
+        before = len(calls)
+        again = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+        assert 'Nothing to do' in again.stdout
+        extra = [json.loads(line) for line in (root / 'calls').read_text().splitlines()][before:]
+        assert len(extra) == 1 and extra[0][:2] == ['systemctl', 'list-unit-files'], extra
+        print(f'PASS: migration preserves three rooms including Sonos Port, settings, order and repeat-run safety (interrupted={interrupt})')
+
+# Migration diagnostics: old settings must warn, never configure the new binary.
+root = Path(__file__).resolve().parents[1]
+names = {
+    'SONOS_LMS_UPNP': 'YENEY_UPNP',
+    'SONOS_LMS_PAUSE': 'YENEY_PAUSE',
+    'SONOS_SQUEEZEBOX_PAUSE': 'YENEY_PAUSE',
+    'SONOS_LMS_TITLE_FORMAT': 'YENEY_TITLE_FORMAT',
+    'SONOS_LMS_STREAM_CONTENT': 'YENEY_STREAM_CONTENT',
+    'SONOS_LMS_AUDIO': 'YENEY_AUDIO',
+    'SONOS_LMS_YENEY_POLL': 'YENEY_POLL',
+    'SONOS_LMS_YENEY_STOPPED_MEDIAINFO': 'YENEY_STOPPED_MEDIAINFO',
+    'SONOS_LMS_EVENT_PORT': None,
+    'SONOS_LMS_UNKNOWN': None,
+    'SONOS_SQUEEZEBOX_UNKNOWN': None,
+}
+env = {k: v for k, v in os.environ.items() if not k.startswith(('SONOS_LMS_', 'SONOS_SQUEEZEBOX_', 'YENEY_'))}
+env.update({name: 'pause' for name in names})
+env['SONOS_LMS_UNKNOWN'] = ''  # Set but empty still warns.
+env['UNRELATED'] = 'pause'
+expected = sorted('yeney: ' + name + (' is no longer read; rename it to ' + new if new else ' is obsolete')
+                  for name, new in names.items())
+# The real startup path warns before parsing command options, without needing a device.
+result = subprocess.run([str(root / 'yeney'), '--file'], env=env, capture_output=True, text=True)
+assert result.returncode != 0
+assert sorted(result.stderr.splitlines()[:-1]) == expected, result.stderr
+assert result.stderr.splitlines()[-1] == '--file is no longer supported'
+with tempfile.TemporaryDirectory(prefix='yeney-old-settings-') as tmp:
+    source, exe = Path(tmp) / 'test.cpp', Path(tmp) / 'test'
+    source.write_text('''
+#include "pause_mode.h"
+#include "upnp/title_format.h"
+#include <cassert>
+int main(int argc, char**) {
+    assert((pauseMode() == PauseMode::Pause) == (argc > 1));
+    assert(upnp::titleFormat() == upnp::TitleFormat::ArtistTitle);
+}
+''')
+    subprocess.run(['g++', '-I', str(root), str(source), '-o', str(exe)], check=True)
+    subprocess.run([str(exe)], env=env, check=True)
+    env['YENEY_PAUSE'] = 'pause'
+    subprocess.run([str(exe), 'new'], env=env, check=True)
+print('PASS: old-variable warning table covers successors, obsolete/unknown/empty values; old pause fallback is ignored and new settings win')

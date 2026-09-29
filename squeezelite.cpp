@@ -1,8 +1,8 @@
-// sonos-lms -- deploy Sonos in a Lyrion Music Server (LMS) streaming environment
+// yeney -- deploy Sonos in a Lyrion Music Server (LMS) streaming environment
 //
 // Copyright (C) 2026 Jaap van Vliet
 //
-// This file is part of sonos-lms.
+// This file is part of yeney.
 //
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.

@@ -73,16 +73,16 @@ try:
             server.topology = '<ZoneGroupState><ZoneGroups/></ZoneGroupState>' if empty else topology
             server.actions = []
             env = dict(os.environ)
-            env.pop('SONOS_LMS_UPNP', None)
-            if backend is not None: env['SONOS_LMS_UPNP'] = backend
-            result = subprocess.run([str(ROOT / 'sonos-lms'), '--list-rooms', '--ip=127.0.0.8'],
+            env.pop('YENEY_UPNP', None)
+            if backend is not None: env['YENEY_UPNP'] = backend
+            result = subprocess.run([str(ROOT / 'yeney'), '--list-rooms', '--ip=127.0.0.8'],
                                     env=env, capture_output=True, text=True, timeout=30)
             assert result.returncode == (2 if empty else 0), result
             assert result.stdout == ('' if empty else 'Living & Dining\nSonos Port\nStudy\n'), result
             if empty: assert 'No Sonos rooms found.' in result.stderr, result
             expected_backend = 'yeney (alias own)' if backend == 'own' else backend or 'yeney'
             assert f'UPnP layer: {expected_backend}\n' in result.stderr
-            assert 'Stream session:' not in result.stderr and 'SONOS_LMS_PAUSE=' not in result.stderr
+            assert 'Stream session:' not in result.stderr and 'YENEY_PAUSE=' not in result.stderr
             assert 'GetZoneGroupState' in server.actions, server.actions
             assert set(server.actions) <= {'GetZoneGroupState', 'GetHouseholdID', 'GetZoneInfo', 'ListAvailableServices'}, server.actions
             print(f'PASS: --list-rooms backend={backend or "default"} empty={empty}: exact sorted unique rooms, group member, --ip, exit status and clean stdout')
@@ -95,8 +95,8 @@ try:
                 'Study\tPlay:1\t127.0.0.8\tStudy\tStudy,Sonos Port\n')
     for backend in ('yeney', 'own'):
         server.topology = topology
-        result = subprocess.run([str(ROOT / 'sonos-lms'), '--list-rooms', '--details', '--ip=127.0.0.8'],
-                                env=dict(os.environ, SONOS_LMS_UPNP=backend), capture_output=True, text=True, timeout=30)
+        result = subprocess.run([str(ROOT / 'yeney'), '--list-rooms', '--details', '--ip=127.0.0.8'],
+                                env=dict(os.environ, YENEY_UPNP=backend), capture_output=True, text=True, timeout=30)
         assert result.returncode == 0 and result.stdout == expected, result
         print(f'PASS: --list-rooms --details backend={backend}: model fallback, unknown model, groups, room device and satellites')
     Path('/tmp/sonos-room-details.txt').write_text(result.stdout)

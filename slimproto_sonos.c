@@ -12,7 +12,7 @@ static ssize_t sonos_slimproto_send(int fd, uint8_t *packet, size_t len, int fla
 #undef send
 
 #include "audio_mode.h"
-extern void sonos_lms_transport(char command);
+extern void yeney_transport(char command);
 
 static ssize_t sonos_slimproto_send(int fd, u8_t *packet, size_t len, int flags)
 {
@@ -75,7 +75,7 @@ static void sonos_process_strm(u8_t *pkt, int len)
     }
     // Nonzero p is a synchronisation delay, not a user pause.
     if (!continuous && (strm->command != 'p' || unpackN(&strm->replay_gain) == 0))
-        sonos_lms_transport(strm->command);
+        yeney_transport(strm->command);
     process_strm(pkt, len);
 }
 

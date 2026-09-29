@@ -8,13 +8,13 @@ namespace upnp {
 enum class StreamContentMode { Structured, Plain, Off };
 inline StreamContentMode streamContentMode() {
     static const StreamContentMode mode = [] {
-        const char* value = std::getenv("SONOS_LMS_STREAM_CONTENT");
+        const char* value = std::getenv("YENEY_STREAM_CONTENT");
         auto selected = StreamContentMode::Structured;
         if (value && !std::strcmp(value, "plain")) selected = StreamContentMode::Plain;
         else if (value && !std::strcmp(value, "off")) selected = StreamContentMode::Off;
         else if (value && std::strcmp(value, "structured"))
-            printf("Warning: invalid SONOS_LMS_STREAM_CONTENT='%s'; using structured\n", value);
-        printf("SONOS_LMS_STREAM_CONTENT=%s\n", selected == StreamContentMode::Structured ? "structured" :
+            printf("Warning: invalid YENEY_STREAM_CONTENT='%s'; using structured\n", value);
+        printf("YENEY_STREAM_CONTENT=%s\n", selected == StreamContentMode::Structured ? "structured" :
             selected == StreamContentMode::Plain ? "plain" : "off");
         return selected;
     }();

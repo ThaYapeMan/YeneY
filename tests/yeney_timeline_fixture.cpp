@@ -22,7 +22,7 @@ static bool sendLmsCommand(int, int, const char* text) { if (std::string(text) =
 extern "C" {
 unsigned get_squeezebox_stream_id() { return streamId; }
 unsigned get_lms_stream_serial() { return 1; }
-int sonos_lms_is_paused() { return 1; }
+int yeney_is_paused() { return 1; }
 int sonos_output_running() { return 1; }
 uint64_t get_sb_time_ms() { return TimelineClock::ms; }
 void hold_squeezebox_resume(unsigned);
@@ -46,7 +46,7 @@ class Request : public upnp::StreamRequest {
 public:
     std::atomic<bool> entered{false}, finished{false}, closed{false};
     std::string wire;
-    std::string path() const override { return "/music/squeezebox.flac"; }
+    std::string path() const override { return "/music/yeney.flac"; }
     Method method() const override { return Method::Get; }
     std::string parameter(const std::string& name) const override { return name == "session" ? streamSessionToken() : "30"; }
     bool send(const char* p, size_t n) override { wire.append(p, n); return true; }

@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-own-display-') as directory:
                     '-lpthread', '-o', str(executable)], check=True)
     for format in ('artist-title', 'title'):
         result = subprocess.run([str(executable)], capture_output=True, text=True, check=True,
-                                env={**os.environ, 'SONOS_LMS_TITLE_FORMAT': format})
+                                env={**os.environ, 'YENEY_TITLE_FORMAT': format})
         print(result.stdout, end='')
         message = 'yeney: SOAP action=GetPositionInfo reason=no-reply-held-request state=paused'
         assert result.stdout.count(message) == 2, result.stdout  # two distinct pauses

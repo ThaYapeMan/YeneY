@@ -2,7 +2,7 @@
 //
 // Copyright (c) 2026 Jaap van Vliet
 //
-// Original implementation for the sonos-lms project.
+// Original implementation for the YeneY project.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 //
@@ -66,7 +66,7 @@ FLAC__int32 nextSampleAsInt32(const char*& cursor, int bitDepth)
 extern "C" {
 uint64_t get_sb_time_ms(void);
 unsigned get_squeezebox_stream_id(void);
-int sonos_lms_is_paused(void);
+int yeney_is_paused(void);
 }  // extern "C"
 
 using namespace bridge;
@@ -249,7 +249,7 @@ int SBEncoder::read(char* data, int maxlen, unsigned timeout, bool holdWhilePaus
         }
 
         auto now = std::chrono::steady_clock::now();
-        if (holdWhilePaused && sonos_lms_is_paused())
+        if (holdWhilePaused && yeney_is_paused())
             deadline = now + std::chrono::milliseconds(timeout);
         if (limited && now >= deadline) {
             printf("SBEncoder::read: timeout\n");
@@ -291,7 +291,7 @@ int SBEncoder::write(const char* data, int len, unsigned timeout, const std::fun
         // encode-ahead window short: reconnect loss should stay under a
         // second, not the several seconds a fully-buffered decoder would
         // otherwise let build up.
-        if (!sonos_lms_is_paused() && encodedMs < playedMs + kMaxEncodeLeadMs) {
+        if (!yeney_is_paused() && encodedMs < playedMs + kMaxEncodeLeadMs) {
             std::lock_guard<std::mutex> lock(m_writeMutex);
             if (cancelled() || responseEnded() || producerRetired() || m_phase != Phase::Encoding)
                 return 0;
@@ -300,7 +300,7 @@ int SBEncoder::write(const char* data, int len, unsigned timeout, const std::fun
             return encodePcm(data, len);
         }
 
-        if (limited && !sonos_lms_is_paused()) {
+        if (limited && !yeney_is_paused()) {
             if (!timeout--) {
                 printf("SBEncoder::write: timeout\n");
                 return 0;

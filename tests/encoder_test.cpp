@@ -13,7 +13,7 @@ static std::atomic<unsigned> generation(1);
 static std::atomic<bool> paused(false);
 static std::atomic<uint64_t> fakeClock(0);
 extern "C" unsigned get_squeezebox_stream_id() { return generation.load(); }
-extern "C" int sonos_lms_is_paused() { return paused.load(); }
+extern "C" int yeney_is_paused() { return paused.load(); }
 extern "C" uint64_t get_sb_time_ms()
 {
     if (fakeClock.load()) return fakeClock.load();

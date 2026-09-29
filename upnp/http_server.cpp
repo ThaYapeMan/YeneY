@@ -1,3 +1,4 @@
+#include "stale_stream.h"
 #include "http_server.h"
 #include "timing.h"
 #include <algorithm>
@@ -241,6 +242,12 @@ struct HttpServer::Impl {
                 accepted = notifyHandler && notifyHandler(event);
             }
             request->reply(accepted ? 200 : 412); return;
+        }
+        // A speaker can retain the old product URI after an upgrade.
+        if (request->path() == "/music/squeezebox.flac" &&
+            (request->method() == StreamRequest::Method::Get || request->method() == StreamRequest::Method::Head)) {
+            rejectStaleStream(*request);
+            return;
         }
         Handler handler;
         bool icon = false;

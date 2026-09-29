@@ -7,12 +7,15 @@ StreamTitle every TITLE_SECS seconds. Every stream request's headers are printed
 so you can see whether the Sonos asks for ICY (Icy-MetaData: 1).
 
 Stop the room's bridge first (it would fight over the speaker):
-  systemctl stop 'sonos-lms@Study'
+  systemctl stop 'yeney@Study'
 and start it again afterwards:
-  systemctl start 'sonos-lms@Study'
+  systemctl start 'yeney@Study'
 
 Usage:
   python3 stream-probe.py <speaker-ip> <variant> [source-url]
+
+The source URL is fetched as supplied, including /music/yeney.flac and the
+pre-upgrade /music/squeezebox.flac path with their session and stream queries.
 
 Variants (source defaults to an LMS FLAC track; MP3 variants need an MP3 URL):
   flac-radio        like the bridge: x-rincon-mp3radio, audio/flac; ICY only if asked

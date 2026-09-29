@@ -1,11 +1,11 @@
 [Unit]
-Description=sonos-lms player for room %I
+Description=YeneY player for room %I
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/opt/sonos-lms/sonos-lms --room=%I
+ExecStart=/opt/yeney/yeney --room=%I
 Restart=on-failure
 RestartSec=5
 

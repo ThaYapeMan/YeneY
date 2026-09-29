@@ -6,11 +6,11 @@
 enum class AudioMode { Modern, Legacy };
 inline AudioMode audioMode() {
     static const AudioMode mode = [] {
-        const char* value = std::getenv("SONOS_LMS_AUDIO");
+        const char* value = std::getenv("YENEY_AUDIO");
         const bool legacy = value && !std::strcmp(value, "16/44");
         if (value && !legacy && std::strcmp(value, "24/48"))
-            printf("Warning: invalid SONOS_LMS_AUDIO='%s'; using 24/48\n", value);
-        printf("SONOS_LMS_AUDIO=%s\n", legacy ? "16/44" : "24/48");
+            printf("Warning: invalid YENEY_AUDIO='%s'; using 24/48\n", value);
+        printf("YENEY_AUDIO=%s\n", legacy ? "16/44" : "24/48");
         return legacy ? AudioMode::Legacy : AudioMode::Modern;
     }();
     return mode;

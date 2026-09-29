@@ -10,8 +10,8 @@ using namespace upnp;
 std::string file(const char* name) { std::ifstream in(name); assert(in); std::ostringstream out; out << in.rdbuf(); return out.str(); }
 int main() {
     // Pin the established wire metadata with radio text disabled.
-    setenv("SONOS_LMS_STREAM_CONTENT", "off", 1);
-    setenv("SONOS_LMS_TITLE_FORMAT", "title", 1);
+    setenv("YENEY_STREAM_CONTENT", "off", 1);
+    setenv("YENEY_TITLE_FORMAT", "title", 1);
     assert(streamHeaderLog({{"User-Agent", "Sonos"}, {"Range", "bytes=0-"},
         {"Icy-MetaData", "1"}, {"Connection", "close"}, {"x-Test", "a"},
         {"Some-SoNoS-Field", "b"}, {"Host", "ignored"}}) ==
@@ -55,7 +55,7 @@ int main() {
     assert(matchRoom(speakers, "Study + Sonos Port", combined) && combined.uuid == study.uuid);
     assert(!matchRoom(speakers, "sonos port", combined) && !matchRoom(speakers, "Sonos", combined));
     std::cout << groupDescription(study) << '\n' << groupDescription(port) << '\n';
-    const std::string url = "http://bridge:1400/music/squeezebox.flac?session=0123456789abcdef&stream=7";
+    const std::string url = "http://bridge:1400/music/yeney.flac?session=0123456789abcdef&stream=7";
     const auto didl = streamDidl(url, "A & B <Live> \"Mix\" '26", "http://lms:9000/art?a=1&b=2");
     assert(didl + "\n" == file("tests/fixtures/radio-didl.xml"));
     const std::string artist = "Artist & < > \" ' Björk 東京", album = "Album & < > \" ' café 🎵";

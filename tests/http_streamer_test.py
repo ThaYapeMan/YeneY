@@ -18,10 +18,27 @@ reader = threading.Thread(target=collect)
 reader.start()
 clients = []
 try:
+    def rejected(path, token, method='GET'):
+        with socket.create_connection(('127.0.0.1', port), timeout=3) as client:
+            client.sendall(f'{method} {path}?session={token}&stream=1 HTTP/1.1\r\nHost: localhost\r\n\r\n'.encode())
+            result = b''
+            while True:
+                data = client.recv(65536)
+                if not data:
+                    return result
+                result += data
+    expected = b'HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n'
+    for method in ('GET', 'HEAD'):
+        stale = rejected('/music/yeney.flac', 'stale-session', method)
+        assert stale == expected, stale
+        for token in (session, 'stale-session', ''):
+            assert rejected('/music/squeezebox.flac', token, method) == stale
+    assert rejected('/music/squeezebox.flac', session, 'POST') == rejected('/music/yeney.flac', 'stale-session', 'POST')
+    print('PASS: old stream path returns exactly the stale-session response, including current tokens and HEAD')
     # Establish all sockets first, then deliver complete GETs in a tight burst.
     for _ in range(4):
         clients.append(socket.create_connection(('127.0.0.1', port), timeout=3))
-    wire = f'GET /music/squeezebox.flac?session={session}&stream=1 HTTP/1.1\r\nHost: localhost\r\n\r\n'.encode()
+    wire = f'GET /music/yeney.flac?session={session}&stream=1 HTTP/1.1\r\nHost: localhost\r\n\r\n'.encode()
     start = time.monotonic_ns()
     for c in clients: c.sendall(wire)
     elapsed = (time.monotonic_ns() - start) / 1e6

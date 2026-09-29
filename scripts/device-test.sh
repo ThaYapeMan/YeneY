@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# device-test.sh -- repeatable physical test run for one sonos-lms room.
+# device-test.sh -- repeatable physical test run for one yeney room.
 #
 # Runs a fixed set of scenarios against a real Sonos speaker. LMS-side steps are
 # driven automatically over the LMS CLI (port 9090); Sonos-app steps are prompted.
@@ -315,7 +315,7 @@ position_check() {
 
 # Wait up to $2 seconds until the speaker reports state $1.
 # Speaker states that count as "paused": the bridge may answer a pause with a
-# UPnP Stop (SONOS_LMS_PAUSE=stop), so a paused speaker can be STOPPED.
+# UPnP Stop (YENEY_PAUSE=stop), so a paused speaker can be STOPPED.
 PAUSED_STATES='PAUSED_PLAYBACK|STOPPED'
 
 # wait_sonos <STATE or STATE|STATE...> <seconds>
@@ -425,7 +425,7 @@ finish() {
       echo "track_a=$TRACK_A_ID track_b=$TRACK_B_ID scenarios=$SCENARIOS long_pause=$LONG_PAUSE"
       echo "bridge_upnp_layer=$BRIDGE_LAYER sonos_ip=${SONOS_IP:-unknown} idle_secs=$IDLE_SECS"
       echo "started=$START_TIME finished=$(date '+%Y-%m-%d %H:%M:%S')"
-      [[ -d /opt/sonos-lms/.git ]] && echo "bridge=$(git -C /opt/sonos-lms rev-parse --short HEAD)"
+      [[ -d /opt/yeney/.git ]] && echo "bridge=$(git -C /opt/yeney rev-parse --short HEAD)"
     } > "$OUT/run-info.txt"
     tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
     say ""
@@ -677,7 +677,7 @@ lms_from_journal() {
 }
 
 resolve_lms_host() {
-    local config=${1:-/etc/sonos-lms/config}
+    local config=${1:-/etc/yeney/config}
     LMS_SOURCE='LMS override'
     if [[ -z ${LMS:-} ]]; then
         LMS=$(sed -n 's/^[[:space:]]*LMS_SERVER=[[:space:]]*//p' "$config" 2>/dev/null | head -n1)
@@ -701,8 +701,8 @@ resolve_lms_host() {
 }
 
 discover_coordinator() {
-    local details diagnostics="$OUT/discovery.err" layer=${SONOS_LMS_UPNP-yeney}
-    if ! details=$(SONOS_LMS_UPNP="$layer" ./sonos-lms --list-rooms --details 2> "$diagnostics"); then
+    local details diagnostics="$OUT/discovery.err" layer=${YENEY_UPNP-yeney}
+    if ! details=$(YENEY_UPNP="$layer" ./yeney --list-rooms --details 2> "$diagnostics"); then
         cat "$diagnostics" >&2
         return 1
     fi
@@ -780,8 +780,8 @@ auto_summary() {
 # ------------------------------------------------------------------ main ---
 
 [[ $EUID -eq 0 ]] || fail "run as root (tcpdump and journal access)"
-have systemd-escape && UNIT=$(systemd-escape --template=sonos-lms@.service -- "$ROOM") \
-    || UNIT="sonos-lms@$ROOM.service"
+have systemd-escape && UNIT=$(systemd-escape --template=yeney@.service -- "$ROOM") \
+    || UNIT="yeney@$ROOM.service"
 
 resolve_lms_host || fail "LMS host unknown; run with LMS=<ip>"
 cli_raw "version ?" >/dev/null || fail "no LMS CLI at $LMS:$CLI_PORT"

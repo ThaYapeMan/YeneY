@@ -11,14 +11,14 @@ OwnSpeakerControl::OwnSpeakerControl(std::function<unsigned()> port, unsigned co
     : streamPort(std::move(port)), speakerPort(controlPort), streamActivity(std::move(activity)),
       eventCallback(std::move(callback)), eventServer(std::move(server)) {
     (void)streamContentMode();
-    const char* mode = std::getenv("SONOS_LMS_YENEY_POLL");
+    const char* mode = std::getenv("YENEY_POLL");
     monitor.legacy = mode && std::string(mode) == "legacy";
     if (mode && std::string(mode) != "events" && std::string(mode) != "legacy")
-        printf("yeney: setting key=SONOS_LMS_YENEY_POLL invalid=%s fallback=events\n", logValue(mode).c_str());
-    const char* media = std::getenv("SONOS_LMS_YENEY_STOPPED_MEDIAINFO");
+        printf("yeney: setting key=YENEY_POLL invalid=%s fallback=events\n", logValue(mode).c_str());
+    const char* media = std::getenv("YENEY_STOPPED_MEDIAINFO");
     monitor.stoppedMediaInfo = media && std::string(media) == "1";
     if (media && std::string(media) != "0" && std::string(media) != "1")
-        printf("yeney: setting key=SONOS_LMS_YENEY_STOPPED_MEDIAINFO invalid=%s fallback=0\n", logValue(media).c_str());
+        printf("yeney: setting key=YENEY_STOPPED_MEDIAINFO invalid=%s fallback=0\n", logValue(media).c_str());
     printf("yeney: settings poll=%s stopped_mediainfo=%d\n", monitor.legacy ? "legacy" : "events", monitor.stoppedMediaInfo);
 }
 OwnSpeakerControl::~OwnSpeakerControl() { shutdownEvents(); }

@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
-source = (ROOT / 'sonos-lms.cpp').read_text()
+source = (ROOT / 'yeney.cpp').read_text()
 def function(signature):
     start = source.index(signature); opening = source.index('{', start)
     depth, end = 1, opening + 1

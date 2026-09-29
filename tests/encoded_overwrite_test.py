@@ -8,7 +8,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-overwrite-') as directory:
     source.write_text('''#include "sbencoder.h"
 #include <cassert>
 extern "C" unsigned get_squeezebox_stream_id() { return 1; }
-extern "C" int sonos_lms_is_paused() { return 0; }
+extern "C" int yeney_is_paused() { return 0; }
 extern "C" uint64_t get_sb_time_ms() { return 0; }
 namespace bridge {
 struct EncoderTestAccess {

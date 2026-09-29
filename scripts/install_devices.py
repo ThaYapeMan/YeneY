@@ -188,7 +188,7 @@ def build_identity(repo, run):
     commit = git('rev-parse', 'HEAD')
     if git('status', '--porcelain', '--untracked-files=no'):
         commit += '-dirty'
-    digest = hashlib.sha256((repo / 'sonos-lms').read_bytes()).hexdigest()
+    digest = hashlib.sha256((repo / 'yeney').read_bytes()).hexdigest()
     return describe, f'commit={commit}\nsha256={digest}\n'
 
 
@@ -207,7 +207,7 @@ def parse_details(text, warn):
 def service_states(names, run):
     result = {}
     for room in sorted(names):
-        unit = run(['systemd-escape', '--template=sonos-lms@.service', '--', room],
+        unit = run(['systemd-escape', '--template=yeney@.service', '--', room],
                    capture_output=True, text=True, check=True).stdout.strip()
         if not unit or '\n' in unit:
             raise ValueError(f'Invalid systemd-escape result for {room!r}')
@@ -327,14 +327,14 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
     interactive = input_stream.isatty() and output.isatty() and not non_interactive
     warn = lambda message: print('Warning: ' + message, file=errors)
     build, identity = build_identity(repo, run)
-    print(f'sonos-lms installer — build {build}', file=output)
+    print(f'YeneY installer — build {build}', file=output)
     config, stamp = config_dir / 'config', config_dir / 'installed-build'
     original = read_text(config)
     configured = parse_rooms(original, warn)
     current_server = lms_value(original)
     discovered_server = ''
     try:
-        result = run(['./sonos-lms', '--find-server'], cwd=repo, capture_output=True, text=True)
+        result = run(['./yeney', '--find-server'], cwd=repo, capture_output=True, text=True)
         if result.returncode == 0 and valid_server(result.stdout.strip()):
             discovered_server = result.stdout.strip()
     except OSError as error:
@@ -364,7 +364,7 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
             configure_server()
         found = {}
         try:
-            discovery = run(['./sonos-lms', '--list-rooms', '--details'], cwd=repo, capture_output=True, text=True)
+            discovery = run(['./yeney', '--list-rooms', '--details'], cwd=repo, capture_output=True, text=True)
             if discovery.returncode or not discovery.stdout.strip():
                 warn('Room discovery failed; keeping the existing configuration. ' + discovery.stderr.strip())
             else:
@@ -410,9 +410,9 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
             if names:
                 suffix = f' ({reason}); playback stops briefly' if kind == 'Restart' else ''
                 print(f'{kind + ":":9}' + ', '.join(names) + suffix, file=output)
-        target = unit_dir / 'sonos-lms@.service'
-        template = read_text(repo / 'packaging/sonos-lms@.service')
-        if not template: raise ValueError('Missing packaging/sonos-lms@.service')
+        target = unit_dir / 'yeney@.service'
+        template = read_text(repo / 'packaging/yeney@.service')
+        if not template: raise ValueError('Missing packaging/yeney@.service')
         template_changed = read_text(target) != template
         if template_changed: print('Service template: install/update', file=output)
         if migrate: print('Migration: rooms → rooms.migrated', file=output)
@@ -461,18 +461,18 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
     disabled_new = [room for room in new if not rooms[room]]
     if disabled_new and not interactive:
         print(f'New rooms added as no: {", ".join(disabled_new)} — edit {config} or run sudo make install in a terminal.', file=output)
-    print("Logs: journalctl -u 'sonos-lms@*' -f", file=output)
+    print("Logs: journalctl -u 'yeney@*' -f", file=output)
 
 def main():
     if os.geteuid() != 0:
         print('Error: Run as root.', file=sys.stderr)
         return 1
     repo = Path(__file__).resolve().parents[1]
-    if not (repo / 'sonos-lms').is_file():
-        print('Error: Missing ./sonos-lms; run make first.', file=sys.stderr)
+    if not (repo / 'yeney').is_file():
+        print('Error: Missing ./yeney; run make first.', file=sys.stderr)
         return 1
     try:
-        install(repo, Path('/etc/sonos-lms'), Path('/etc/systemd/system'), sys.argv[1:])
+        install(repo, Path('/etc/yeney'), Path('/etc/systemd/system'), sys.argv[1:])
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f'Error: {error}', file=sys.stderr)
         return 1

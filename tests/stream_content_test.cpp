@@ -7,7 +7,7 @@ static std::string file(const std::string& path) {
     std::ifstream f(path); assert(f); return {std::istreambuf_iterator<char>(f), {}};
 }
 int main() {
-    setenv("SONOS_LMS_TITLE_FORMAT", "title", 1);
+    setenv("YENEY_TITLE_FORMAT", "title", 1);
     const std::string title = "T| & < > \" ' café", artist = "A| & < > \" ' Björk", album = "B| & < > \" ' 東京";
     for (auto mode : {StreamContentMode::Structured, StreamContentMode::Plain, StreamContentMode::Off}) {
         const std::string name = mode == StreamContentMode::Structured ? "structured" : mode == StreamContentMode::Plain ? "plain" : "off";

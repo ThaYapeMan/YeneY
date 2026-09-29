@@ -2,7 +2,7 @@
 //
 // Copyright (c) 2026 Jaap van Vliet
 //
-// Original implementation for the sonos-lms project.
+// Original implementation for the YeneY project.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 //
@@ -61,7 +61,7 @@ void sonos_output_new_track(int continuous) {
 static bool position_fix_disabled = false;
 
 // new_squeezebox_stream_id() / get_squeezebox_stream_id() are defined in
-// sonos-lms.cpp, which owns the shared stream-id counter the encoder
+// yeney.cpp, which owns the shared stream-id counter the encoder
 // and streamer also read; this file only signals a boundary, never mints
 // the id itself.
 
@@ -281,7 +281,7 @@ bool test_open(const char* device, unsigned rates[], bool userdef_rates)
 void set_volume(unsigned left, unsigned right)
 {
     // Sonos volume is driven separately over UPnP (see sonos-status.cpp /
-    // sonos-lms.cpp), not through squeezelite's own volume callback.
+    // yeney.cpp), not through squeezelite's own volume callback.
     (void)left;
     (void)right;
 }

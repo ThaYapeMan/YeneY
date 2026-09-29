@@ -45,7 +45,7 @@ struct FakePlayer {
     bool playStream(const std::string& url, const std::string&, const std::string&,
                     const std::string& artist, const std::string& album) {
         assert(artist == "Test artist" && album == "Test album");
-        assert(url == "http://bridge/music/squeezebox.flac?session=" + streamSessionToken() + "&stream=6");
+        assert(url == "http://bridge/music/yeney.flac?session=" + streamSessionToken() + "&stream=6");
         callOrder.push_back("PlayStream");
         if (!testingStreamStart) {
             assert(heldGetInvalidations == streamPlays + 1);
@@ -100,7 +100,7 @@ static bool sendLmsCommand(int, int, const char* command) {
 }
 // The real PlaySqueezeBoxLocked runs too; only its network/data sources are fake.
 #define SBSTREAMER_CNAME "squeezebox"
-struct Resource { std::string iconUri = "/icon.png", uri = "/music/squeezebox.flac"; };
+struct Resource { std::string iconUri = "/icon.png", uri = "/music/yeney.flac"; };
 struct FakeServer {
     Resource value;
     Resource resource(const char*) { return value; }
@@ -146,7 +146,7 @@ static void paused(const char* status) {
     lmsPaused = false;
     resumeState.command('s');
     resumeState.observe("PLAYING");
-    sonos_lms_transport('p');
+    yeney_transport('p');
     player.property = {"PAUSED_PLAYBACK", status};
     bridge::Status snapshot;
     refreshStatus(snapshot);
@@ -160,10 +160,10 @@ static void paused(const char* status) {
 #include "retry_cases.h"
 
 int main() {
-    assert(SqueezeBoxURL(6) == "http://bridge/music/squeezebox.flac?session=" + streamSessionToken() + "&stream=6");
+    assert(SqueezeBoxURL(6) == "http://bridge/music/yeney.flac?session=" + streamSessionToken() + "&stream=6");
     serverStub.value.uri += "?existing=1";
-    assert(SqueezeBoxURL(7) == "http://bridge/music/squeezebox.flac?existing=1&session=" + streamSessionToken() + "&stream=7");
-    serverStub.value.uri = "/music/squeezebox.flac";
+    assert(SqueezeBoxURL(7) == "http://bridge/music/yeney.flac?existing=1&session=" + streamSessionToken() + "&stream=7");
+    serverStub.value.uri = "/music/yeney.flac";
     puts("PASS: production SqueezeBoxURL includes the process token and preserves existing query parameters");
     transportIntentCases();
     retryCases();
@@ -175,9 +175,9 @@ int main() {
     streamId = 0;
     for (char command : std::string("afpqsu")) {
         unsigned before = decisionLogs;
-        sonos_lms_transport('t');
+        yeney_transport('t');
         assert(decisionLogs == before);
-        sonos_lms_transport(command);
+        yeney_transport(command);
         assert(decisionLogs == before + 1);
     }
     resumeState = ResumeState{};
@@ -200,7 +200,7 @@ int main() {
         refreshStatus(snapshot); // repeated event must not send a second play
         assert(cliPlays == 1 && lmsPaused && !responseOpen);
         assert(!resumeState.takeResume(6, 6)); // requested guard is unchanged
-        sonos_lms_transport('u');
+        yeney_transport('u');
         assert(streamPlays == 1 && transportPlays == 0 && !lmsPaused);
         assert(!responseEnded && streamId == 6);
         refreshStatus(snapshot);
@@ -216,7 +216,7 @@ int main() {
     ResumeSqueezeBox(6); // production HTTP callback
     ResumeSqueezeBox(6);
     assert(cliPlays == 1);
-    sonos_lms_transport('u');
+    yeney_transport('u');
     assert(!responseOpen && !lmsPaused && !responseEnded);
     assert(streamPlays == 1 && transportPlays == 0);
     puts("PASS: open GET does not stop a device resume from reissuing PlayStream");
@@ -226,7 +226,7 @@ int main() {
     refreshStatus(snapshot);
     assert(cliPlays == 1);
     responseOpen = true; // GET arrives before the asynchronous LMS strm u
-    sonos_lms_transport('u');
+    yeney_transport('u');
     assert(streamPlays == 1 && !responseOpen && !lmsPaused);
     puts("PASS: GET arriving after status resume but before strm u still reissues PlayStream");
 
@@ -236,21 +236,21 @@ int main() {
     ResumeSqueezeBox(6);
     assert(cliPlays == 1);
     responseOpen = false; // client closes before the asynchronous LMS strm u
-    sonos_lms_transport('u');
+    yeney_transport('u');
     assert(streamPlays == 1 && !lmsPaused);
     puts("PASS: GET closed before strm u re-primes instead of feeding a missing response");
     puts("PASS: every SameURL resume invalidates the held GET exactly once before PlayStream");
 
     paused("OK");
     responseOpen = true; // ordinary LMS unpause, no takeResume
-    sonos_lms_transport('u');
+    yeney_transport('u');
     assert(responseOpen && !lmsPaused && streamPlays == 0);
     assert(heldGetInvalidations == 0 && callOrder.empty());
     puts("PASS: ordinary held-GET unpause does not invalidate or reissue PlayStream");
 
     paused("OK");
-    sonos_lms_transport('s');
-    sonos_lms_transport('u');
+    yeney_transport('s');
+    yeney_transport('u');
     assert(streamPlays == 0 && heldGetInvalidations == 0 && callOrder.empty());
     puts("PASS: pending new stream does not invalidate a held GET");
 

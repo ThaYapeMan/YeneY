@@ -5,7 +5,7 @@ import os
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-source = (ROOT / "sonos-lms.cpp").read_text()
+source = (ROOT / "yeney.cpp").read_text()
 
 
 def production_function(signature):
@@ -28,7 +28,7 @@ bodies = "\n\n".join(production_function(signature) for signature in (
     "static void dispatchDeferredStop(",
     "static void dispatchStreamStart(",
     "static void dispatchTransportIntent(",
-    'extern "C" void sonos_lms_transport(',
+    'extern "C" void yeney_transport(',
     "static void ObserveDeviceTransport(",
     "void ResumeSqueezeBox(",
     "void refreshStatus(",
@@ -44,4 +44,4 @@ with tempfile.TemporaryDirectory(prefix="sonos-device-resume-") as directory:
     ], check=True)
     for mode in ("stop", "pause"):
         subprocess.run([str(executable)], check=True,
-                       env={**os.environ, "SONOS_LMS_PAUSE": mode})
+                       env={**os.environ, "YENEY_PAUSE": mode})

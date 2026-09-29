@@ -111,7 +111,7 @@ struct { int state; unsigned frames_played; } output;
 static int legacy, continuous, notified, processed;
 int sonos_audio_legacy(void) { return legacy; }
 void sonos_output_new_track(int value) { continuous = value; }
-void sonos_lms_transport(char command) { ++notified; }
+void yeney_transport(char command) { ++notified; }
 void process_strm(u8_t* data, int length) { ++processed; }
 unsigned unpackN(const void* p) { return *(const uint32_t*)p; }
 ''' + wrapper + r'''

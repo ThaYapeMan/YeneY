@@ -127,7 +127,7 @@ def run(mode, command, golden=None):
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        result = subprocess.run([*command, str(server.server_port)], cwd=ROOT, check=True, timeout=40, capture_output=True, text=True, env={**os.environ, "SONOS_LMS_YENEY_POLL": "legacy"})
+        result = subprocess.run([*command, str(server.server_port)], cwd=ROOT, check=True, timeout=40, capture_output=True, text=True, env={**os.environ, "YENEY_POLL": "legacy"})
         print(result.stdout, end='')
         server.output = result.stdout
         assert not server.errors, server.errors
@@ -153,7 +153,7 @@ for action, body in control.requests:
     if action in golden: assert body == golden[action]
 print('PASS: all seven own AVTransport request bodies match fixed SOAP wire fixtures')
 
-source = (ROOT / 'sonos-lms.cpp').read_text()
+source = (ROOT / 'yeney.cpp').read_text()
 def production_function(signature):
     start = source.index(signature)
     opening = source.index('{', start)
@@ -201,23 +201,23 @@ with tempfile.TemporaryDirectory(prefix='sonos-own-poll-') as temp:
 int main(int argc, char** argv) {
     const auto expected = upnp::Backend::Own;
     assert(upnp::backend() == expected);
-    setenv("SONOS_LMS_UPNP", "changed", 1);
+    setenv("YENEY_UPNP", "changed", 1);
     assert(upnp::backend() == expected);
 }''')
     subprocess.run(['g++', '-I', str(ROOT), str(settings), '-o', str(temp / 'settings')], check=True)
     for value in (None, 'noson', 'yeney', 'own', '', 'invalid'):
         env = dict(os.environ)
-        env.pop('SONOS_LMS_UPNP', None)
-        if value is not None: env['SONOS_LMS_UPNP'] = value
+        env.pop('YENEY_UPNP', None)
+        if value is not None: env['YENEY_UPNP'] = value
         result = subprocess.run([str(temp / 'settings')], env=env,
                                 check=True, capture_output=True, text=True)
         expected_log = 'UPnP layer: yeney (alias own)' if value == 'own' else 'UPnP layer: yeney'
-        expected = (f"SONOS_LMS_UPNP={value} is no longer supported; using YeneY\n" if value in ('noson', '', 'invalid') else '') + expected_log + '\n'
+        expected = (f"YENEY_UPNP={value} is no longer supported; using YeneY\n" if value in ('noson', '', 'invalid') else '') + expected_log + '\n'
         assert result.stdout == expected, result.stdout
-        print(f'PASS: SONOS_LMS_UPNP={value!r}: {expected_log}; exact warning and read-once selection')
+        print(f'PASS: YENEY_UPNP={value!r}: {expected_log}; exact warning and read-once selection')
         assert result.stdout.count('UPnP layer:') == 1
         assert result.stdout.count('is no longer supported') == int(value in ('noson', '', 'invalid'))
-    print('PASS: SONOS_LMS_UPNP defaults, validation and read-once startup logging')
+    print('PASS: YENEY_UPNP defaults, validation and read-once startup logging')
 
 
 class EventSpeaker(Speaker):
@@ -313,7 +313,7 @@ def event_run(mode, command):
     for thread in threads: thread.start()
     try:
         result = subprocess.run([*command, mode, str(server.server_port)], cwd=ROOT,
-                                check=True, capture_output=True, text=True, timeout=20, env={**os.environ, "SONOS_LMS_YENEY_POLL": "legacy"})
+                                check=True, capture_output=True, text=True, timeout=20, env={**os.environ, "YENEY_POLL": "legacy"})
         print(result.stdout, end='')
         assert not server.errors, server.errors
         avt = '/MediaRenderer/AVTransport/Event'
@@ -396,7 +396,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-gena-') as temp:
         'static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)\n',
         'extern "C" void new_squeezebox_stream_id(', 'static void dispatchDeferredStop(',
         'static void dispatchStreamStart(', 'static void dispatchTransportIntent(',
-        'extern "C" void sonos_lms_transport(', 'static void ObserveDeviceTransport(',
+        'extern "C" void yeney_transport(', 'static void ObserveDeviceTransport(',
         'void ResumeSqueezeBox(', 'void refreshStatus(')
     Path(temp, 'production_resume.inc').write_text('\n'.join(production_function(s) for s in signatures))
     # Match the definition rather than the forward declaration.
@@ -416,11 +416,11 @@ with tempfile.TemporaryDirectory(prefix='sonos-gena-') as temp:
         assert output.count('Device-initiated resume: current stream') == 1
 
 # Both modes keep transport polling running; only idle GetMediaInfo differs.
-previous = os.environ.get('SONOS_LMS_YENEY_STOPPED_MEDIAINFO')
+previous = os.environ.get('YENEY_STOPPED_MEDIAINFO')
 try:
     for mode, held, expected in [(None, False, 3), ('0', False, 3), ('0', True, 3), ('1', False, 5), ('1', True, 3)]:
-        if mode is None: os.environ.pop('SONOS_LMS_YENEY_STOPPED_MEDIAINFO', None)
-        else: os.environ['SONOS_LMS_YENEY_STOPPED_MEDIAINFO'] = mode
+        if mode is None: os.environ.pop('YENEY_STOPPED_MEDIAINFO', None)
+        else: os.environ['YENEY_STOPPED_MEDIAINFO'] = mode
         if held: os.environ['TEST_HELD_REQUEST'] = '1'
         else: os.environ.pop('TEST_HELD_REQUEST', None)
         speaker = run('stopped-media-info', [str(ROOT / 'own-control-test'), '--stopped-media-info'])
@@ -430,5 +430,5 @@ try:
         print(f'PASS: STOPPED_MEDIAINFO={mode or "default"}, held={held}: STOPPED/PAUSED polling, active polling and explicit reads verified')
 finally:
     os.environ.pop('TEST_HELD_REQUEST', None)
-    if previous is None: os.environ.pop('SONOS_LMS_YENEY_STOPPED_MEDIAINFO', None)
-    else: os.environ['SONOS_LMS_YENEY_STOPPED_MEDIAINFO'] = previous
+    if previous is None: os.environ.pop('YENEY_STOPPED_MEDIAINFO', None)
+    else: os.environ['YENEY_STOPPED_MEDIAINFO'] = previous

@@ -23,12 +23,12 @@ static void retryCases() {
     puts("PASS: ambiguous Play timeout reconciles PLAYING/TRANSITIONING on exact session URL without retry");
     reset(); playStreamFailures = 1;
     dispatchStreamStart(); player.property.state = "PLAYING";
-    player.uri = "http://bridge/music/squeezebox.flac?session=previous&stream=6";
+    player.uri = "http://bridge/music/yeney.flac?session=previous&stream=6";
     std::this_thread::sleep_for(std::chrono::milliseconds(1010));
     dispatchStreamStart(); assert(streamPlays == 2 && completedStream == 6);
     puts("PASS: playing another session does not suppress PlayStream retry");
     reset(); testingStreamStart = false; completedStream = 6; playStreamFailures = 1;
-    sonos_lms_transport('u');
+    yeney_transport('u');
     player.property.state = "PLAYING"; player.uri = SqueezeBoxURL(6);
     std::this_thread::sleep_for(std::chrono::milliseconds(1010));
     dispatchTransportIntent();
@@ -53,14 +53,14 @@ static void retryCases() {
     assert(streamPlays == 3 && completedStream == 5);
     std::this_thread::sleep_for(std::chrono::milliseconds(1010));
     dispatchStreamStart(); assert(streamPlays == 3);
-    sonos_lms_transport('u'); // explicit command rearms the exhausted setup
+    yeney_transport('u'); // explicit command rearms the exhausted setup
     dispatchStreamStart();
     assert(streamPlays == 4 && completedStream == 6);
     dispatchTransportIntent(); assert(streamPlays == 4); // setup already played
     puts("PASS: stream setup gives up after three attempts; new command rearms it without duplicate PlayStream");
 
     reset(); testingStreamStart = false; completedStream = 6; playStreamFailures = 1;
-    sonos_lms_transport('u');
+    yeney_transport('u');
     assert(streamPlays == 1 && transportIntent.pending);
     dispatchTransportIntent(); assert(streamPlays == 1);
     std::this_thread::sleep_for(std::chrono::milliseconds(1010));

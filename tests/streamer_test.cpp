@@ -33,7 +33,7 @@ static bool pendingResume = false, manualResume = false;
 static std::chrono::steady_clock::time_point resumeAt;
 extern "C" unsigned get_lms_stream_serial() { return generation.load(); }
 extern "C" unsigned get_squeezebox_stream_id() { return generation.load(); }
-extern "C" int sonos_lms_is_paused() { return paused.load(); }
+extern "C" int yeney_is_paused() { return paused.load(); }
 extern "C" uint64_t get_sb_time_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -46,7 +46,7 @@ extern "C" int squeezebox_response_ended(unsigned stream);
 extern "C" int squeezebox_response_open(unsigned stream);
 extern "C" void acknowledge_squeezebox_resume(unsigned stream);
 extern "C" void invalidate_squeezebox_held_get(unsigned stream);
-std::string SqueezeBoxURL(unsigned id) { return "http://bridge/music/squeezebox.flac?session=" + streamSessionToken() + "&stream=" + std::to_string(id); }
+std::string SqueezeBoxURL(unsigned id) { return "http://bridge/music/yeney.flac?session=" + streamSessionToken() + "&stream=" + std::to_string(id); }
 void ResumeSqueezeBoxGetPair(unsigned, unsigned long long, unsigned long long, std::chrono::steady_clock::duration) {}
 void ResumeSqueezeBox(unsigned id) {
     std::lock_guard<std::mutex> lock(stateMutex);
@@ -75,7 +75,7 @@ void ResumeSqueezeBox(unsigned id) {
 class Socket {
 public:
     explicit Socket(unsigned id, bool probe = false, bool stayOpen = false, const char* method = "GET", const std::string& session = streamSessionToken()) : probe(probe), stayOpen(stayOpen) {
-        input = std::string(method) + " /music/squeezebox.flac?stream=" + std::to_string(id)
+        input = std::string(method) + " /music/yeney.flac?stream=" + std::to_string(id)
             + (session.empty() ? "" : "&session=" + session) + " HTTP/1.1\r\nHost: bridge\r\nUser-Agent: Sonos fixture\r\nX-Sonos-Test: probe\r\n\r\n";
     }
     size_t ReceiveData(void* buf, size_t n) {

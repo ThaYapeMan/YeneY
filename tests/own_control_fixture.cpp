@@ -8,7 +8,7 @@
 #include <thread>
 int main(int argc, char** argv) {
     // Pin the established wire metadata with radio text disabled.
-    setenv("SONOS_LMS_STREAM_CONTENT", "off", 1);
+    setenv("YENEY_STREAM_CONTENT", "off", 1);
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (argc == 3 && std::string(argv[1]) == "--stopped-media-info") {
         unsigned port = std::strtoul(argv[2], nullptr, 10);
@@ -40,7 +40,7 @@ int main(int argc, char** argv) {
     assert(std::chrono::steady_clock::now() - begin < std::chrono::milliseconds(100));
     slow.join();
     begin = std::chrono::steady_clock::now();
-    assert(control.playStream("http://bridge:1400/music/squeezebox.flac?session=0123456789abcdef&stream=7",
+    assert(control.playStream("http://bridge:1400/music/yeney.flac?session=0123456789abcdef&stream=7",
         "A & B <Live> \"Mix\" '26", "http://lms:9000/art?a=1&b=2"));
     assert(std::chrono::steady_clock::now() - begin >= std::chrono::seconds(6));
     assert(control.transportInfo().title == "A & B <Live> \"Mix\" '26");

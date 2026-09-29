@@ -24,7 +24,7 @@ static void transportIntentCases() {
         });
         while (!acquired) std::this_thread::yield();
         if (std::string(commands) != "p") responseOpen = false;
-        for (char command : std::string(commands)) sonos_lms_transport(command);
+        for (char command : std::string(commands)) yeney_transport(command);
         dispatchTransportIntent();
         assert(transportIntent.pending && transportIntent.deferred);
         assert(pauseCalls == 0 && stopCalls == 0 && streamPlays == 0);
@@ -40,7 +40,7 @@ static void transportIntentCases() {
     }
     reset();
     completedStream = 5;
-    sonos_lms_transport('p');
+    yeney_transport('p');
     dispatchTransportIntent();
     assert(transportIntent.pending && pauseCalls + stopCalls == 0);
     completedStream = 6;

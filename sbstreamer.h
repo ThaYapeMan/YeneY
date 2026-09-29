@@ -2,7 +2,7 @@
 //
 // Copyright (c) 2026 Jaap van Vliet
 //
-// Original implementation for the sonos-lms project.
+// Original implementation for the YeneY project.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 //
@@ -19,11 +19,11 @@
 #include <vector>
 
 #define SBSTREAMER_CNAME "squeezebox"
-#define SBSTREAMER_URI "/music/squeezebox.flac"
+#define SBSTREAMER_URI "/music/yeney.flac"
 
 namespace bridge {
 
-// Registers "/music/squeezebox.flac" as a Sonos-facing HTTP resource and
+// Registers "/music/yeney.flac" as a Sonos-facing HTTP resource and
 // serves the live FLAC-encoded PCM squeezelite hands to encode_squeezebox_audio().
 class SBStreamer {
 public:

@@ -7,8 +7,8 @@ transport-intent state. No SMAPI service is implemented.
 
 ## Startup and discovery
 
-`SONOS_LMS_UPNP=yeney` and `own` (permanent alias) select YeneY. Unset also selects
-YeneY. Other values log `SONOS_LMS_UPNP=<value> is no longer supported; using YeneY`
+`YENEY_UPNP=yeney` and `own` (permanent alias) select YeneY. Unset also selects
+YeneY. Other values log `YENEY_UPNP=<value> is no longer supported; using YeneY`
 and continue. Selection is read and logged once: `UPnP layer: yeney`, adding
 ` (alias own)` for the alias. `--list-rooms` uses the same discovery implementation
 and sends diagnostics to stderr to keep stdout machine-readable.
@@ -27,7 +27,7 @@ or changing LMS sync. Failed topology reads retain the last good snapshot.
 The server binds `0.0.0.0`, searching ports 1400 through 1409, and accepts up to
 16 connections. Excess connections receive 503. Headers are limited to 16 KiB
 and five seconds. The stream URL remains
-`/music/squeezebox.flac?session=<process-token>&stream=<generation>`. Invalid or
+`/music/yeney.flac?session=<process-token>&stream=<generation>`. Invalid or
 missing session tokens receive an empty 404 before stream ownership is touched.
 
 The named Server constants retain `libnoson/2.13.2` for stream responses and
@@ -56,13 +56,13 @@ namespace order and the space before the closing DIDL opening-tag `>` are pinned
 by fixtures. XML escapes `& < > "` and leaves apostrophes literal. Empty artist,
 album and artwork fields are omitted; streamContent remains an explicit element.
 
-`SONOS_LMS_TITLE_FORMAT=artist-title|title` defaults to `artist-title`. With an
+`YENEY_TITLE_FORMAT=artist-title|title` defaults to `artist-title`. With an
 artist, dc:title becomes `Artist - Title`; without one it remains `Title`. The
 `title` setting preserves the unformatted track title. Invalid values warn and
 select the default; the setting is read/logged once at startup. The controller
 caches the actual serialized title for status and fallback matching; bridge logs
 use the same formatter. Radio text still uses the original title:
-`SONOS_LMS_STREAM_CONTENT=structured|plain|off` is unchanged. Creator and album
+`YENEY_STREAM_CONTENT=structured|plain|off` is unchanged. Creator and album
 remain available to other controllers.
 
 On 28 September 2026, Study's Sonos app displayed only dc:title for radio-type
@@ -90,7 +90,7 @@ bodies after subscription/renewal are logged on one line, limited to 4 KB.
 
 With all subscriptions active, position is polled at most once per second while
 PLAYING/TRANSITIONING, plus a 30-second transport sanity check. Missing services
-individually fall back to polling. `SONOS_LMS_YENEY_POLL=legacy` restores the older
+individually fall back to polling. `YENEY_POLL=legacy` restores the older
 500 ms polling schedule; `events` is the default. Delayed reads cannot overwrite
 fields updated by a later event. HTTP workers read cached snapshots and never
 perform SOAP I/O for transport status or display volume.
@@ -104,7 +104,7 @@ The transport deadline allows the standby GET probe to finish before Play is
 acknowledged. Position reads have a one-second cache. STOPPED/PAUSED_PLAYBACK
 without a streaming response retains the last position; a new stream allows a
 fresh read. A timeout overlapping a paused open request logs once per pause.
-`SONOS_LMS_YENEY_STOPPED_MEDIAINFO=0` skips periodic GetMediaInfo while stopped or
+`YENEY_STOPPED_MEDIAINFO=0` skips periodic GetMediaInfo while stopped or
 paused; `1` restores those reads except while a paused request remains open.
 Explicit currentUri reads are unaffected.
 

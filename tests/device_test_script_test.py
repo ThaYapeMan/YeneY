@@ -52,7 +52,7 @@ with tempfile.TemporaryDirectory(prefix="sonos-device-script-") as tmp:
     for label, override, contents, recent, unit, full, expected, sources in cases:
         config.write_text(contents + "\n")
         calls.write_text("")
-        env = {**os.environ, "LMS": override, "UNIT": "sonos-lms@Study Room.service",
+        env = {**os.environ, "LMS": override, "UNIT": "yeney@Study Room.service",
                "CONFIG": str(config), "CALLS": str(calls),
                "EXEC_START": "ExecStart={ path=/bridge ; argv[]=/bridge " + unit + " ; ignore_errors=no ; }",
                "RECENT": "LMS server from discovery: " + recent if recent else "unrelated status output",
@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-auto-fixture-') as directory:
         result = run_shell('journal_tail() { printf "%s" "$JOURNAL"; }; speaker_stream', JOURNAL=journal+extra)
         assert result.returncode == 0 and result.stdout.strip() == expected, result
     result = run_shell('journal_tail() { printf "%s" "$JOURNAL"; }; speaker_stream',
-                       JOURNAL='| Title  squeezebox.flac?session=abc&stream=99 |\n')
+                       JOURNAL='| Title  yeney.flac?session=abc&stream=99 |\n')
     assert result.stdout.strip() == ''
     print('PASS: device-test speaker URI parser uses real-title journal, clears external/stale/restarted streams')
 
@@ -180,7 +180,7 @@ mark() { printf '=== %s\n' "$*"; }
 lms() { :; }
 finish() { auto_summary; }
 python3() { printf '192.0.2.10\n'; }
-./sonos-lms() { :; }
+./yeney() { :; }
 auto_begin() { AUTO_REASONS=(); }
 auto_end() { auto_record "$1"; }
 scenario_1() { prompt 'S1 press PAUSE in the Sonos app'; observe 'S1 question'; }
@@ -360,7 +360,7 @@ esac
 ''')
     journalctl.chmod(0o755)
     calls = base / 'calls'
-    env = {**os.environ, 'OUT': directory, 'AUTO': '1', 'UNIT': 'sonos-lms@Study.service',
+    env = {**os.environ, 'OUT': directory, 'AUTO': '1', 'UNIT': 'yeney@Study.service',
            'PATH': directory + os.pathsep + os.environ['PATH'], 'CALLS': str(calls)}
     stale = subprocess.run(['journalctl', '-u', env['UNIT'], '-n', '600', '--grep=Creating'],
                            env=env, capture_output=True, text=True, check=True)
@@ -508,13 +508,13 @@ with tempfile.TemporaryDirectory(prefix='sonos-discovery-backend-') as directory
         calls = Path(directory) / 'calls'; calls.write_text('')
         env = {**os.environ, 'OUT': directory, 'FALLBACK': fallback, 'CALLS': str(calls),
                'REAL_HELPER': str(ROOT / 'scripts/device_test_auto.py')}
-        env.pop('SONOS_LMS_UPNP', None)
-        if selected is not None: env['SONOS_LMS_UPNP'] = selected
+        env.pop('YENEY_UPNP', None)
+        if selected is not None: env['YENEY_UPNP'] = selected
         result = subprocess.run(['bash', '-c', prefix + r'''
 ROOM=Study
-./sonos-lms() {
-    printf '%s %s\n' "$SONOS_LMS_UPNP" "$*" >> "$CALLS"
-    printf 'UPnP layer: %s\n' "$SONOS_LMS_UPNP" >&2
+./yeney() {
+    printf '%s %s\n' "$YENEY_UPNP" "$*" >> "$CALLS"
+    printf 'UPnP layer: %s\n' "$YENEY_UPNP" >&2
     [[ $FALLBACK != 1 ]] || return 2
     printf 'Study\tPlay:1\t192.0.2.10\tStudy\tStudy\n'
 }

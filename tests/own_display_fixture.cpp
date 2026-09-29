@@ -38,7 +38,7 @@ HttpResponse httpPost(const HttpUrl&, const std::map<std::string, std::string>& 
 }
 }
 int main() {
-    setenv("SONOS_LMS_YENEY_POLL", "legacy", 1);
+    setenv("YENEY_POLL", "legacy", 1);
     upnp::OwnSpeakerControl control([] { return 1400u; }, 1400, [&] { return activity; });
     assert(control.discover("Study", "127.0.0.1"));
     control.poll();
@@ -58,11 +58,11 @@ int main() {
     unsigned stream = 0;
     uint32_t ms;
     for (const auto variant : {"URL", "basename/query", "basename", "empty", "sent title", "real title"}) {
-        auto url = "http://bridge/music/squeezebox.flac?session=test&stream=" + std::to_string(++stream);
+        auto url = "http://bridge/music/yeney.flac?session=test&stream=" + std::to_string(++stream);
         assert(control.playStream(url, "The track we sent", "", artist));
         const std::string kind = variant;
         title = kind == "URL" ? url : kind == "basename/query" ? url.substr(url.rfind('/') + 1)
-            : kind == "basename" ? "squeezebox.flac" : kind == "empty" ? "" : kind == "sent title" ? upnp::formatTitle("The track we sent", artist) : "A real device title";
+            : kind == "basename" ? "yeney.flac" : kind == "empty" ? "" : kind == "sent title" ? upnp::formatTitle("The track we sent", artist) : "A real device title";
         assert(control.positionInfo(ms) && ms == 123000);
         const auto expected = kind == "real title" ? "A real device title" : upnp::formatTitle("The track we sent", artist);
         assert(control.transportInfo().title == expected);
@@ -86,7 +86,7 @@ int main() {
     assert(std::chrono::steady_clock::now() - before < std::chrono::milliseconds(control.pollIntervalMs()));
     puts("PASS: paused position polling suppressed; transport polling detects resume in one interval");
     state = "STOPPED"; control.poll();
-    assert(control.playStream("http://bridge/music/squeezebox.flac?session=test&stream=new", "New track"));
+    assert(control.playStream("http://bridge/music/yeney.flac?session=test&stream=new", "New track"));
     assert(control.positionInfo(ms));
     assert(calls["GetPositionInfo"] == ++positions);
     puts("PASS: new stream refreshes position even with a previously stopped transport snapshot");

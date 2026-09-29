@@ -8,7 +8,7 @@ static void stopPauseCases() {
         streamPlays = transportPlays = heldGetInvalidations = 0;
         callOrder.clear();
         resumeState.command('s'); resumeState.observe("PLAYING");
-        sonos_lms_transport('p');
+        yeney_transport('p');
         assert(stopCalls == 1 && pauseCalls == 0 && responseEnds == 1);
         assert(resumeState.stoppedForPause(6));
         player.property = {"STOPPED", "OK"};
@@ -22,7 +22,7 @@ static void stopPauseCases() {
         player.property.state = state;
         ResumeSqueezeBox(6); ResumeSqueezeBox(6);
         assert(cliPlays == 1);
-        sonos_lms_transport('u');
+        yeney_transport('u');
         assert(responseOpen && !lmsPaused && !responseEnded);
         assert(streamPlays == 0 && transportPlays == 0 && heldGetInvalidations == 0);
         ObserveDeviceTransport("PLAYING");
@@ -30,7 +30,7 @@ static void stopPauseCases() {
     }
     puts("PASS: pause sends Stop after EOF; STOPPED is ignored; fresh GET after STOPPED resumes LMS once without a second device command");
     pause();
-    sonos_lms_transport('u'); // LMS resume without an open GET
+    yeney_transport('u'); // LMS resume without an open GET
     assert(streamPlays == 1 && transportPlays == 0);
     ObserveDeviceTransport("PLAYING");
     assert(!resumeState.stoppedForPause(6));
@@ -41,7 +41,7 @@ static void stopPauseCases() {
     assert(!resumeState.takeResume(7, 7));
     streamId = 6;
     for (char command : {'s', 'q'}) {
-        pause(); sonos_lms_transport(command);
+        pause(); yeney_transport(command);
         assert(!resumeState.stoppedForPause(6));
         assert(stopCalls == 1);
     }
@@ -51,7 +51,7 @@ static void stopPauseCases() {
     ObserveDeviceTransport("PAUSED_PLAYBACK");
     assert(cliPauses == 1); // the ensuing LMS p must use Stop too
     responseEnds = stopCalls = 0; responseOpen = true;
-    sonos_lms_transport('p');
+    yeney_transport('p');
     assert(stopCalls == 1 && responseEnds == 1);
     puts("PASS: device pause relays LMS pause, whose strm p sends Stop");
 }
@@ -65,12 +65,12 @@ static void deferredStopCases() {
         streamPlays = transportPlays = heldGetInvalidations = 0;
         callOrder.clear();
         resumeState.command('s'); resumeState.observe("PLAYING");
-        sonos_lms_transport('q');
+        yeney_transport('q');
         dispatchDeferredStop();
         assert(stopCalls == 0 && pauseCalls == 0 && responseEnds == 1);
     };
     setup();
-    sonos_lms_transport('s');
+    yeney_transport('s');
     std::this_thread::sleep_for(std::chrono::milliseconds(410));
     dispatchDeferredStop();
     assert(stopCalls == 0 && pauseCalls == 0);
@@ -93,7 +93,7 @@ static void deferredStopCases() {
         player.property.state = next;
         ResumeSqueezeBox(6); ResumeSqueezeBox(6); refreshStatus(status);
         assert(cliPlays == 1 && cliPauses == 0);
-        sonos_lms_transport('u');
+        yeney_transport('u');
         assert(responseOpen && !lmsPaused && !responseEnded);
         assert(streamPlays == 0 && transportPlays == 0 && heldGetInvalidations == 0);
     }

@@ -69,7 +69,7 @@ def main():
     noplay = len(sys.argv) == 4
     info = soap(ip, "GetMediaInfo", [("InstanceID", "0")])
     uri, didl = info.get("CurrentURI", ""), info.get("CurrentURIMetaData", "")
-    if "squeezebox.flac" not in uri:
+    if not any(path in uri for path in ("/music/yeney.flac", "/music/squeezebox.flac")):
         sys.exit(f"Not playing the bridge stream (CurrentURI={uri!r}). Ungroup the room and start LMS first.")
     title, artist, album = tag(didl, "dc:title"), tag(didl, "dc:creator"), tag(didl, "upnp:album")
     print(f"current: title={title!r} artist={artist!r} album={album!r}")

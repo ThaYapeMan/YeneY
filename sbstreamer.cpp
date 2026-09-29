@@ -2,7 +2,7 @@
 //
 // Copyright (c) 2026 Jaap van Vliet
 //
-// Original implementation for the sonos-lms project.
+// Original implementation for the YeneY project.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 //
@@ -10,6 +10,7 @@
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
+#include "upnp/stale_stream.h"
 #include "sbstreamer.h"
 #include "stream_session.h"
 #include "upnp/timing.h"
@@ -100,7 +101,7 @@ extern void ResumeSqueezeBoxGetPair(unsigned, unsigned long long, unsigned long 
 extern std::string SqueezeBoxURL(unsigned current);
 extern "C" unsigned get_squeezebox_stream_id(void);
 extern "C" unsigned get_lms_stream_serial(void);
-extern "C" int sonos_lms_is_paused(void);
+extern "C" int yeney_is_paused(void);
 extern "C" int sonos_output_running(void);
 
 // Signal only the HTTP lifetime. Its worker sends EOF and retains the encoder
@@ -211,7 +212,7 @@ void encode_squeezebox_audio(const char* data, int len, uint64_t firstFrame)
                 return;
             }
         }
-        if (sonos_lms_is_paused())
+        if (yeney_is_paused())
             deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         if (std::chrono::steady_clock::now() >= deadline) {
             printf("encode_squeezebox_audio: timeout waiting for stream request\n");
@@ -249,9 +250,7 @@ bool SBStreamer::HandleRequest(upnp::StreamRequest* handle)
     const std::string session = handle->parameter("session");
     if (session != streamSessionToken()) {
         printf("stale request: session %s != %s\n", session.c_str(), streamSessionToken().c_str());
-        const std::string response = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-        handle->send(response.c_str(), response.size());
-        handle->disconnect();
+        upnp::rejectStaleStream(*handle);
         return true;
     }
 
@@ -351,7 +350,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
                 printf("stream %d: GET #%llu standby closed by client\n", stream, request->id);
                 disconnect = true;
             } else if (!obsolete && !request->pauseEnded && !(IsAborted() || handle->aborted())
-                       && !sonos_lms_is_paused() && activeRequest
+                       && !yeney_is_paused() && activeRequest
                        && activeRequest->encoder->hasAudio()
                        && std::chrono::steady_clock::now() >= standbyDeadline) {
                 printf("stream %d: GET #%llu standby timeout\n", stream, request->id);
@@ -372,7 +371,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
 
     // Only ACTIVE gets an encoder and headers. A held GET still means an
     // ACTIVE request waiting for PCM while LMS is paused, never a standby.
-    bool waitForResumeAudio = sonos_lms_is_paused() || request->heldResume;
+    bool waitForResumeAudio = yeney_is_paused() || request->heldResume;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(SBSTREAMER_RESUME_TIMEOUT);
     auto waitingForAudio = [&] {
         return !enc->hasAudio() || (request->heldResume && !request->resumeAcknowledged);

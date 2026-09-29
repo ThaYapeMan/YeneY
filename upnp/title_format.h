@@ -7,12 +7,12 @@ namespace upnp {
 enum class TitleFormat { ArtistTitle, Title };
 inline TitleFormat titleFormat() {
     static const TitleFormat format = [] {
-        const char* value = std::getenv("SONOS_LMS_TITLE_FORMAT");
+        const char* value = std::getenv("YENEY_TITLE_FORMAT");
         auto selected = TitleFormat::ArtistTitle;
         if (value && !std::strcmp(value, "title")) selected = TitleFormat::Title;
         else if (value && std::strcmp(value, "artist-title"))
-            printf("Warning: invalid SONOS_LMS_TITLE_FORMAT='%s'; using artist-title\n", value);
-        printf("SONOS_LMS_TITLE_FORMAT=%s\n", selected == TitleFormat::Title ? "title" : "artist-title");
+            printf("Warning: invalid YENEY_TITLE_FORMAT='%s'; using artist-title\n", value);
+        printf("YENEY_TITLE_FORMAT=%s\n", selected == TitleFormat::Title ? "title" : "artist-title");
         return selected;
     }();
     return format;

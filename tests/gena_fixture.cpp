@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
         std::cout << "PASS: GENA local-address change resubscribes with the new callback URL\n";
         return 0;
     }
-    if (mode == "events" || mode == "partial") setenv("SONOS_LMS_YENEY_POLL", "events", 1);
+    if (mode == "events" || mode == "partial") setenv("YENEY_POLL", "events", 1);
     std::atomic<unsigned> events{0};
     OwnSpeakerControl control([] { return 1450u; }, port, {}, [&] { ++events; });
     assert(control.discover("Study", "127.0.0.1"));

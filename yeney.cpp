@@ -1,8 +1,8 @@
-// sonos-lms.cpp -- bridges a Sonos zone player into an LMS/squeezelite session
+// yeney.cpp -- bridges a Sonos zone player into an LMS/squeezelite session
 //
 // Copyright (c) 2026 Jaap van Vliet
 //
-// Original implementation for the sonos-lms project.
+// Original implementation for the YeneY project.
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Licensed under the PolyForm Noncommercial License 1.0.0. See LICENSE.
 //
@@ -10,6 +10,7 @@
 // IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
+#include "legacy_environment.h"
 #include "upnp/own_speaker_control.h"
 #include "upnp/backend.h"
 #include "upnp/title_format.h"
@@ -75,7 +76,7 @@ static std::atomic<bool> lmsPaused(false);
 static std::atomic<bool> ourStreamStarted(false);
 static std::mutex resumeMutex;
 static ResumeState resumeState;
-extern "C" int sonos_lms_is_paused(void) { return lmsPaused.load(); }
+extern "C" int yeney_is_paused(void) { return lmsPaused.load(); }
 static std::mutex transportMutex;
 static std::mutex intentMutex;
 static TransportIntent transportIntent;
@@ -194,7 +195,7 @@ static void dispatchTransportIntent()
     }
 }
 
-extern "C" void sonos_lms_transport(char command)
+extern "C" void yeney_transport(char command)
 {
     if (command == 's' || command == 'p' || command == 'u') {
         std::lock_guard<std::mutex> lock(stopMutex);
@@ -761,7 +762,7 @@ static std::string discoverLmsServer(unsigned timeoutMs = 3000, bool quiet = fal
     return host;
 }
 
-static std::string readLmsServerFromConfig(const char* path = "/etc/sonos-lms/config")
+static std::string readLmsServerFromConfig(const char* path = "/etc/yeney/config")
 {
     std::ifstream config(path);
     std::string line;
@@ -819,6 +820,7 @@ static int listRoomsCommand(const std::string& ip, bool details)
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    warnLegacyEnvironment();
     if (findOption(argc, argv, "--file") || findFlag(argc, argv, "--file")) {
         fprintf(stderr, "--file is no longer supported\n");
         return EXIT_FAILURE;
@@ -844,14 +846,12 @@ int main(int argc, char** argv)
     const char* room = findOption(argc, argv, "--room");
     const char* server = findOption(argc, argv, "--server");
 
-    printf("\n\n| sonos-lms -- bridges a Sonos zone player into an LMS/squeezelite session\n\n\n");
+    printf("\n\n| YeneY -- bridges a Sonos zone player into an LMS/squeezelite session\n\n\n");
 
     configure_squeezebox_close_logging(true);
     {
         auto serverBackend = std::make_shared<upnp::HttpServer>();
         gStreamServer = serverBackend;
-        if (std::getenv("SONOS_LMS_EVENT_PORT"))
-            printf("yeney: SONOS_LMS_EVENT_PORT removed; events share HTTP port %u\n", serverBackend->port());
         printf("yeney: HTTP port=%u max_connections=16\n", serverBackend->port());
         gPlayer = std::make_shared<upnp::OwnSpeakerControl>([] { return gStreamServer->port(); }, 1400, [] {
             const auto id = streamId.load();
@@ -883,7 +883,7 @@ int main(int argc, char** argv)
     } else {
         gServer = readLmsServerFromConfig();
         if (!gServer.empty())
-            printf("LMS server from /etc/sonos-lms/config: %s\n", gServer.c_str());
+            printf("LMS server from /etc/yeney/config: %s\n", gServer.c_str());
         else
             gServer = discoverLmsServer();
     }

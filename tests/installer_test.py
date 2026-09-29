@@ -31,11 +31,11 @@ class Commands:
 
     def __call__(self, args, **kwargs):
         self.calls.append(args)
-        if args == ['./sonos-lms', '--list-rooms', '--details']:
+        if args == ['./yeney', '--list-rooms', '--details']:
             assert kwargs['cwd'] == ROOT
             return subprocess.CompletedProcess(args, self.discovery_status, self.details if self.details is not None else ''.join(name + '\t-\t-\t-\t-\n' for name in self.rooms.splitlines()),
                                                'No Sonos rooms found.' if self.discovery_status else '')
-        if args == ['./sonos-lms', '--find-server']:
+        if args == ['./yeney', '--find-server']:
             return subprocess.CompletedProcess(args, 0 if self.server else 2, self.server, '')
         if args[0] == 'git':
             value = '' if args[1] == 'status' else self.build
@@ -79,7 +79,7 @@ class InstallerTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='sonos-installer-')
         self.addCleanup(self.temp.cleanup)
-        self.config_dir = Path(self.temp.name) / 'etc/sonos-lms'
+        self.config_dir = Path(self.temp.name) / 'etc/yeney'
         self.config_dir.mkdir(parents=True)
         self.unit_dir = Path(self.temp.name) / 'etc/systemd/system'
         self.config = self.config_dir / 'config'
@@ -126,13 +126,13 @@ class InstallerTests(unittest.TestCase):
     def test_active_not_enabled_and_inactive_enabled(self):
         self.config.write_text('room.Study=yes\nroom.Sonos Port=on\n')
         runner = Commands('Study\nSonos Port\n')
-        runner.active.add('sonos-lms@Study.service')
-        runner.enabled.add(r'sonos-lms@Sonos\x20Port.service')
+        runner.active.add('yeney@Study.service')
+        runner.enabled.add(r'yeney@Sonos\x20Port.service')
         self.run_install(runner)
         self.assertEqual(runner.actions(), [
-            ['systemctl', 'enable', 'sonos-lms@Study.service'],
-            ['systemctl', 'enable', '--now', r'sonos-lms@Sonos\x20Port.service'],
-            ['systemctl', 'restart', 'sonos-lms@Study.service'],
+            ['systemctl', 'enable', 'yeney@Study.service'],
+            ['systemctl', 'enable', '--now', r'yeney@Sonos\x20Port.service'],
+            ['systemctl', 'restart', 'yeney@Study.service'],
         ])
 
     def test_migration_new_rooms_and_apply_plan(self):
@@ -140,16 +140,16 @@ class InstallerTests(unittest.TestCase):
         legacy = self.config_dir / 'rooms'
         legacy.write_text('Study\nSonos Port\n')
         runner = Commands()
-        runner.active.add('sonos-lms@Study.service')
-        runner.enabled.add('sonos-lms@Study.service')
+        runner.active.add('yeney@Study.service')
+        runner.enabled.add('yeney@Study.service')
         self.run_install(runner)
         self.assertEqual(self.config.read_text(), '# Existing settings\nLMS_SERVER=lms.example\n' + installer.ROOM_HEADER
                          + 'room.Kitchen=no\nroom.Sonos Port=yes\nroom.Study=yes\n')
         self.assertFalse(legacy.exists())
         self.assertEqual((self.config_dir / 'rooms.migrated').read_text(), 'Study\nSonos Port\n')
         self.assertEqual(runner.actions(), [
-            ['systemctl', 'enable', '--now', r'sonos-lms@Sonos\x20Port.service'],
-            ['systemctl', 'restart', 'sonos-lms@Study.service'],
+            ['systemctl', 'enable', '--now', r'yeney@Sonos\x20Port.service'],
+            ['systemctl', 'restart', 'yeney@Study.service'],
         ])
         self.assertRegex(self.out.getvalue(), r'Study +running +LMS player')
         self.assertRegex(self.out.getvalue(), r'Sonos Port +running +LMS player')
@@ -174,11 +174,11 @@ class InstallerTests(unittest.TestCase):
         self.config.chmod(0o640)
         inode = self.config.stat().st_ino
         runner = Commands('Spurious partial room\n', 2)
-        runner.missing.add('sonos-lms@Kitchen.service')
+        runner.missing.add('yeney@Kitchen.service')
         self.run_install(runner)
         self.assertEqual(self.config.read_bytes(), original.encode())
         self.assertEqual(self.config.stat().st_ino, inode)
-        self.assertEqual(runner.actions(), [['systemctl', 'enable', '--now', 'sonos-lms@Offline.service']])
+        self.assertEqual(runner.actions(), [['systemctl', 'enable', '--now', 'yeney@Offline.service']])
         self.assertIn('Room discovery failed', self.err.getvalue())
         self.assertNotIn('Spurious', self.config.read_text())
         self.assertRegex(self.out.getvalue(), r'Kitchen +disabled')
@@ -197,7 +197,7 @@ class InstallerTests(unittest.TestCase):
     def test_disabled_unknown_values_and_unrelated_units(self):
         self.config.write_text('room.Study=oops\nroom.Kitchen=OFF\n')
         runner = Commands('Study\nKitchen\n')
-        runner.active = {'sonos-lms@Study.service', 'unrelated.service'}
+        runner.active = {'yeney@Study.service', 'unrelated.service'}
         runner.enabled = set(runner.active)
         self.run_install(runner)
         self.assertEqual(runner.active, {'unrelated.service'})
@@ -237,7 +237,7 @@ class InstallerTests(unittest.TestCase):
         runner = Commands('Bad=Name\nStudy\n')
         self.run_install(runner, ('Room $(literal)',))
         self.assertIn('room.Room $(literal)=yes', self.config.read_text())
-        self.assertIn(['systemd-escape', '--template=sonos-lms@.service', '--', 'Room $(literal)'], runner.calls)
+        self.assertIn(['systemd-escape', '--template=yeney@.service', '--', 'Room $(literal)'], runner.calls)
         self.assertNotIn('room.Bad', self.config.read_text())
         self.assertIn('Cannot represent discovered room', self.err.getvalue())
 
@@ -290,7 +290,7 @@ class InstallerTests(unittest.TestCase):
             self.config.write_text(f'LMS_SERVER={host}\n')
             runner = self.run_install()
             self.assertTrue(self.config.read_text().startswith(f'LMS_SERVER={host}\n'))
-            self.assertIn(['./sonos-lms', '--find-server'], runner.calls)
+            self.assertIn(['./yeney', '--find-server'], runner.calls)
         self.run_install(args=('--server=override',))
         self.assertIn('LMS_SERVER=override', self.config.read_text())
 
@@ -574,7 +574,7 @@ class InstallerTests(unittest.TestCase):
 
 def dry_run_report():
     with tempfile.TemporaryDirectory(prefix='sonos-installer-dry-run-') as temp:
-        config_dir = Path(temp) / 'etc/sonos-lms'
+        config_dir = Path(temp) / 'etc/yeney'
         config_dir.mkdir(parents=True)
         (config_dir / 'config').write_text('LMS_SERVER=lms.example\n')
         (config_dir / 'rooms').write_text('Study\nSonos Port\n')
@@ -592,7 +592,7 @@ def dry_run_report():
 if __name__ == '__main__':
     if len(sys.argv) > 1 and sys.argv[1] == '--pty-child':
         base, case = Path(sys.argv[2]), sys.argv[3]
-        config_dir, unit_dir = base / 'etc/sonos-lms', base / 'etc/systemd/system'
+        config_dir, unit_dir = base / 'etc/yeney', base / 'etc/systemd/system'
         runner = Commands(); runner.server = 'lms.example'
         if case != 'first':
             config_dir.mkdir(parents=True)
@@ -600,8 +600,8 @@ if __name__ == '__main__':
                                              'room.Kitchen=no\nroom.Sonos Port=yes\nroom.Study=yes\n')
             (config_dir / 'installed-build').write_text(installer.build_identity(ROOT, runner)[1])
             unit_dir.mkdir(parents=True)
-            (unit_dir / 'sonos-lms@.service').write_text((ROOT / 'packaging/sonos-lms@.service').read_text())
-            runner.active = {r'sonos-lms@Sonos\x20Port.service', 'sonos-lms@Study.service'}
+            (unit_dir / 'yeney@.service').write_text((ROOT / 'packaging/yeney@.service').read_text())
+            runner.active = {r'yeney@Sonos\x20Port.service', 'yeney@Study.service'}
             runner.enabled = set(runner.active)
         if case in ('new', 'yes'):
             runner.build = 'build-b'
@@ -617,7 +617,7 @@ if __name__ == '__main__':
         if case in ('new', 'yes'):
             assert len([a for a in runner.actions() if a[1] == 'restart']) == 2
         print('Resulting config:')
-        print((base / 'etc/sonos-lms/config').read_text(), end='')
+        print((base / 'etc/yeney/config').read_text(), end='')
         raise SystemExit(0)
     suite = unittest.defaultTestLoader.loadTestsFromTestCase(InstallerTests)
     result = unittest.TextTestRunner(verbosity=2).run(suite)

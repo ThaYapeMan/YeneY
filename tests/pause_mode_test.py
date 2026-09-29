@@ -14,16 +14,16 @@ with tempfile.TemporaryDirectory(prefix="sonos-pause-mode-") as tmp:
 int main(int argc, char** argv) {
     const bool stop = argv[1][0] == '1';
     assert((pauseMode() == PauseMode::Stop) == stop);
-    setenv("SONOS_LMS_PAUSE", stop ? "pause" : "stop", 1);
+    setenv("YENEY_PAUSE", stop ? "pause" : "stop", 1);
     assert((pauseMode() == PauseMode::Stop) == stop);
 }
 ''')
     subprocess.run(["g++", "-Wall", "-I", str(root), str(source), "-o", str(exe)], check=True)
     for value in (None, "pause", "stop", "invalid", ""):
         env = dict(os.environ)
-        env.pop("SONOS_LMS_PAUSE", None)
+        env.pop("YENEY_PAUSE", None)
         if value is not None:
-            env["SONOS_LMS_PAUSE"] = value
+            env["YENEY_PAUSE"] = value
         result = subprocess.run([str(exe), str(int(value != "pause"))], env=env,
                                 check=True, capture_output=True, text=True)
         assert result.stdout.count("Warning:") == (1 if value in ("invalid", "") else 0)
