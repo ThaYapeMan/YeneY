@@ -277,11 +277,16 @@ now_playing() {
 # 0 when the speaker plays the bridge's newest stream AND that stream is the
 # song LMS reports as current. Empty journal data counts as "cannot check".
 speaker_on_current_song() {
-    local bs ss lms_title
+    local bs ss reply lms_title lms_artist song
     bs=$(bridge_stream); ss=$(speaker_stream)
     [[ -z $bs || -z $ss ]] && { [[ $AUTO != 1 ]]; return; }
-    lms_title=$(field "$(cli_raw "$PLAYER status - 1 tags:a")" title 2>/dev/null)
-    [[ $ss == "$bs" && ( ( -z $lms_title && $AUTO != 1 ) || ( -n $lms_title && $(stream_song "$ss") == "$lms_title" ) ) ]]
+    reply=$(cli_raw "$PLAYER status - 1 tags:a")
+    lms_title=$(field "$reply" title 2>/dev/null)
+    lms_artist=$(field "$reply" artist 2>/dev/null)
+    [[ $ss == "$bs" ]] || return 1
+    [[ -z $lms_title ]] && { [[ $AUTO != 1 ]]; return; }
+    song=$(stream_song "$ss")
+    [[ $song == "$lms_title" || ( -n $lms_artist && $song == "$lms_artist - $lms_title" ) ]]
 }
 # Automatic check after a track change: mark OK or MISMATCH with song names.
 check_song() {

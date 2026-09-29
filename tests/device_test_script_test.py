@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
 script = (ROOT / "scripts/device-test.sh").read_text()
@@ -93,6 +94,40 @@ with tempfile.TemporaryDirectory(prefix='sonos-auto-fixture-') as directory:
                        JOURNAL='| Title  squeezebox.flac?session=abc&stream=99 |\n')
     assert result.stdout.strip() == ''
     print('PASS: device-test speaker URI parser uses real-title journal, clears external/stale/restarted streams')
+
+    title = 'Just A Little Bit More (Extended)'
+    for label, artist, song, expected in (
+        ('title only', 'Mau P', title, 0),
+        ('artist-title', 'Mau P', 'Mau P - ' + title, 0),
+        ('empty artist', '', title, 0),
+        ('empty artist with separator', '', ' - ' + title, 1),
+        ('different song', 'Mau P', 'Mau P - False Need', 1),
+        ('title substring', 'Mau P', 'Mau P - ' + title + ' Remix', 1),
+        ('different case', 'Mau P', 'mau p - ' + title, 1),
+        ('different artist', 'Mau P', 'Other artist - ' + title, 1),
+    ):
+        calls = Path(directory, 'title-status-calls')
+        calls.write_text('')
+        reply = f'fixture status - 1 tags%3Aa title%3A{quote(title, safe="")} artist%3A{quote(artist, safe="")}'
+        result = run_shell(r'''
+PLAYER=fixture
+cli_raw() {
+    [[ $* == "$PLAYER status - 1 tags:a" ]] || exit 97
+    printf 'status\n' >> "$CALLS"
+    printf '%s' "$REPLY"
+}
+journal_tail() {
+    printf "Stream session: fixture\nCreating new stream (21)\nPlaySqueezeBox: title='%s' art=''\nspeaker URI: stream=21 session=fixture\n" "$SONG"
+}
+speaker_on_current_song
+matched=$?
+[[ $(wc -l < "$CALLS") == 1 ]] || exit 98
+now_playing
+exit "$matched"
+''', CALLS=str(calls), REPLY=reply, SONG=song)
+        assert result.returncode == expected, (label, result)
+        assert result.stdout == f'LMS: "{title}" | bridge newest stream 21: "{song}" | speaker on stream 21: "{song}"', (label, result.stdout)
+        print(f'PASS: device-test title match {label}; one shared status reply and unchanged now_playing output')
 
     for mode, quick, expected in [('0', '0', '1 2 3 4 5 6 7|3|120'), ('1', '0', '1 2 5 6 7|1|30'), ('0', '1', '1 2 5 6 7|1|30')]:
         result = run_shell('printf "%s|%s|%s" "$SCENARIOS" "$S2_ROUNDS" "$LONG_PAUSE"', AUTO=mode, QUICK=quick)
