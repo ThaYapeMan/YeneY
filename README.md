@@ -229,7 +229,15 @@ cd /opt/yeney
 journalctl -u 'yeney@*' -f
 ```
 
-The script records and stops every enabled `sonos-lms@<room>` service, moves
+The script finds enabled `sonos-lms@<room>` services in
+`/etc/systemd/system/*.wants/` and also includes currently active instances.
+It prints each room's source before changing anything. If the old checkout exists
+but no rooms are found, it stops with an error. To include rooms explicitly by
+display name, run `sudo scripts/migrate-from-sonos-lms.sh --rooms "Study,Sonos Port,MBR"`.
+These names are added to any discovered rooms; an interrupted migration resumes
+its recorded room list.
+
+The script records and stops the selected services, moves
 `/opt/sonos-lms` and `/etc/sonos-lms` to `/opt/yeney` and `/etc/yeney`, and moves
 the room drop-ins (including names with spaces). It renames their settings,
 removes `SONOS_LMS_EVENT_PORT` lines, updates the Git remote, removes the old

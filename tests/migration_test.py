@@ -24,9 +24,17 @@ root = pathlib.Path(os.environ['TEST_ROOT'])
 command = [pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]
 with (root / 'calls').open('a') as f: f.write(json.dumps(command) + '\\n')
 if command[0] == 'systemctl' and command[1] == 'list-unit-files':
-    print((root / 'enabled').read_text(), end='')
+    sys.exit(1)
+if command[0] == 'systemctl' and command[1] == 'list-units':
+    print((root / 'active').read_text(), end='')
+    if (root / 'list-error').exists():
+        sys.stderr.write((root / 'list-stderr').read_text() if (root / 'list-stderr').exists() else '')
+        sys.exit(int((root / 'list-error').read_text()))
 if command[0] == 'systemctl' and command[1] == 'disable':
-    p = root / 'enabled'
+    for p in (root / 'etc/systemd/system').glob('*.wants/' + command[2]):
+        p.unlink()
+if command[0] == 'systemctl' and command[1] == 'stop':
+    p = root / 'active'
     p.write_text(''.join(line for line in p.read_text().splitlines(True) if line.split()[0] != command[2]))
 if command[0] == 'make':
     if (root / 'fail-build').exists(): sys.exit(7)
@@ -44,8 +52,10 @@ if command[0] == 'install-devices.sh':
         p = tools / name
         p.write_text(stub)
         p.chmod(0o755)
-    for interrupt in (False, True):
-        root = base / ('interrupted' if interrupt else 'normal')
+    for scenario in ('normal', 'interrupted', 'active', 'empty-exit-one', 'no-rooms', 'explicit',
+                     'list-failure', 'list-one-output', 'list-one-stderr', 'invalid-rooms', 'unescape-failure', 'empty-journal'):
+        interrupt = scenario == 'interrupted'
+        root = base / scenario
         repo, conf, units = root / 'opt/sonos-lms', root / 'etc/sonos-lms', root / 'etc/systemd/system'
         (repo / 'scripts').mkdir(parents=True)
         (repo / 'sonos-lms').write_text('old binary')
@@ -62,9 +72,52 @@ if command[0] == 'install-devices.sh':
         dropin.mkdir()
         (dropin / 'override.conf').write_text('[Service]\n' + ''.join(f'Environment="{key}=value"\n' for key in settings) +
                                             'Environment=SONOS_LMS_EVENT_PORT=1401\nEnvironment=KEEP_ME=yes\n')
-        (root / 'enabled').write_text(''.join(unit + ' enabled\n' for unit in old_units))
+        wants = units / 'multi-user.target.wants'
+        wants.mkdir()
+        enabled_units = old_units if scenario not in ('no-rooms', 'explicit', 'empty-journal') else []
+        if scenario == 'active':
+            enabled_units = old_units[:2]
+        for unit in enabled_units:
+            (wants / unit).symlink_to('../sonos-lms@.service')
+        # Duplicate names, regular files, and dangling symlinks all count.
+        if enabled_units:
+            other = units / 'other.target.wants'
+            other.mkdir()
+            (other / old_units[0]).write_text('')
+            (other / old_units[1]).symlink_to('../missing-template.service')
+        active = ''.join(unit + ' loaded active running Room bridge\n' for unit in old_units) if scenario == 'active' else ''
+        active += 'sonos-lms@Offline.service loaded inactive dead Offline room\n' if scenario in ('normal', 'no-rooms') else ''
+        (root / 'active').write_text(active)
+        if scenario in ('empty-exit-one', 'list-failure', 'list-one-output', 'list-one-stderr'):
+            (root / 'list-error').write_text('2' if scenario == 'list-failure' else '1')
+        if scenario == 'list-one-output':
+            (root / 'active').write_text('sonos-lms@MBR.service loaded active running Room bridge\n')
+        if scenario == 'list-one-stderr':
+            (root / 'list-stderr').write_text('Failed to connect to bus\n')
+        if scenario == 'unescape-failure':
+            (wants / r'sonos-lms@bad\xZZ.service').symlink_to('../sonos-lms@.service')
+        if scenario == 'empty-journal':
+            (root / 'etc/yeney-migration.json').write_text(json.dumps({'instances': [], 'stopped': True}) + '\n')
         env = dict(os.environ, TEST_ROOT=str(root), PATH=str(tools) + os.pathsep + os.environ['PATH'])
         command = ['bash', str(script), '--root', str(root)]
+        if scenario in ('explicit', 'empty-journal'):
+            command += ['--rooms', 'Study,Sonos Port,MBR,Study']
+        if scenario == 'invalid-rooms':
+            command += ['--rooms', 'Study,,MBR']
+        if scenario in ('no-rooms', 'list-failure', 'list-one-output', 'list-one-stderr', 'invalid-rooms', 'unescape-failure'):
+            before_files = {str(p.relative_to(root)): (('link', str(p.readlink())) if p.is_symlink() else ('file', p.read_bytes()))
+                            for p in root.rglob('*') if p.is_symlink() or p.is_file()}
+            failed = subprocess.run(command, env=env, capture_output=True, text=True)
+            assert failed.returncode != 0, failed.stdout
+            if scenario == 'no-rooms':
+                assert 'No enabled sonos-lms rooms found' in failed.stderr, failed.stderr
+            after_files = {str(p.relative_to(root)): (('link', str(p.readlink())) if p.is_symlink() else ('file', p.read_bytes()))
+                           for p in root.rglob('*') if (p.is_symlink() or p.is_file()) and p.name != 'calls'}
+            assert before_files == after_files, scenario
+            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+            assert all(call[:2] == ['systemctl', 'list-units'] for call in calls), calls
+            print(f'PASS: migration {scenario} fails before any file or service changes')
+            continue
         if interrupt:
             (root / 'fail-build').touch()
             failed = subprocess.run(command, env=env, capture_output=True, text=True)
@@ -74,6 +127,16 @@ if command[0] == 'install-devices.sh':
             (root / 'fail-build').unlink()
         result = subprocess.run(command, env=env, capture_output=True, text=True)
         assert result.returncode == 0, (result.stdout, result.stderr)
+        if not interrupt:
+            assert 'Recorded 3 room(s): MBR, Sonos Port, Study' in result.stdout, result.stdout
+            if scenario == 'active':
+                assert 'MBR: active' in result.stdout
+                assert 'Sonos Port: active, enabled' in result.stdout
+                assert 'Study: active, enabled' in result.stdout
+            elif scenario in ('explicit', 'empty-journal'):
+                assert all(f'{room}: --rooms' in result.stdout for room in ('Study', 'Sonos Port', 'MBR'))
+            else:
+                assert all(f'{room}: enabled' in result.stdout for room in ('Study', 'Sonos Port', 'MBR'))
         assert not repo.exists() and not conf.exists()
         assert not (root / 'opt/yeney/sonos-lms').exists()
         assert not (root / 'opt/yeney/sonos-lms.o').exists()
@@ -93,11 +156,11 @@ if command[0] == 'install-devices.sh':
         assert calls.index(['systemctl', 'daemon-reload']) < calls.index(['make'])
         assert "journalctl -u 'yeney@*' -f" in result.stdout
         before = len(calls)
-        again = subprocess.run(command, env=env, capture_output=True, text=True, check=True)
+        again = subprocess.run(command[:4], env=env, capture_output=True, text=True, check=True)
         assert 'Nothing to do' in again.stdout
         extra = [json.loads(line) for line in (root / 'calls').read_text().splitlines()][before:]
-        assert len(extra) == 1 and extra[0][:2] == ['systemctl', 'list-unit-files'], extra
-        print(f'PASS: migration preserves three rooms including Sonos Port, settings, order and repeat-run safety (interrupted={interrupt})')
+        assert len(extra) == 1 and extra[0][:2] == ['systemctl', 'list-units'], extra
+        print(f'PASS: migration preserves three rooms including Sonos Port, settings, order and repeat-run safety (scenario={scenario})')
 
 # Migration diagnostics: old settings must warn, never configure the new binary.
 root = Path(__file__).resolve().parents[1]

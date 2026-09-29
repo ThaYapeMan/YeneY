@@ -12,6 +12,7 @@ import sys
 
 parser = argparse.ArgumentParser(description='Migrate sonos-lms rooms to YeneY')
 parser.add_argument('--root', type=Path, default=Path('/'))
+parser.add_argument('--rooms', help='Comma-separated room display names to include')
 args = parser.parse_args()
 root = args.root.resolve()
 if root == Path('/') and os.geteuid() != 0:
@@ -41,23 +42,49 @@ try:
     for old, new in ((old_repo, repo), (old_config, config)):
         if old.exists() and new.exists():
             raise ValueError(f'Both {old} and {new} exist; resolve the conflict first')
-    if journal.exists():
-        state = json.loads(journal.read_text())
+    state = json.loads(journal.read_text()) if journal.exists() else None
+    if state and state['instances']:
         instances = state["instances"]
+        sources = state.get('sources', {unit: ['migration journal'] for unit in instances})
     else:
-        listing = run('systemctl', 'list-unit-files', '--state=enabled,enabled-runtime',
-                      '--no-legend', '--no-pager', 'sonos-lms@*.service')
-        instances = sorted({line.split()[0] for line in listing.splitlines()
-                            if line.startswith('sonos-lms@') and line.split()[0].endswith('.service')})
+        sources = {}
+        for path in units.glob('*.wants/sonos-lms@*.service'):
+            if path.name != 'sonos-lms@.service' and (path.is_symlink() or path.is_file()):
+                sources.setdefault(path.name, set()).add('enabled')
+        command = ('systemctl', 'list-units', '--all', '--plain', '--no-legend',
+                   '--no-pager', 'sonos-lms@*.service')
+        result = subprocess.run(command, text=True, capture_output=True)
+        if result.returncode and not (result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip()):
+            raise ValueError(f'Active room discovery failed ({result.returncode}): ' +
+                             (result.stderr.strip() or result.stdout.strip()))
+        for line in result.stdout.splitlines():
+            fields = line.split()
+            if (len(fields) >= 4 and fields[0].startswith('sonos-lms@')
+                    and fields[0].endswith('.service') and fields[0] != 'sonos-lms@.service'
+                    and fields[2] == 'active'):
+                sources.setdefault(fields[0], set()).add('active')
+        if args.rooms is not None:
+            explicit_rooms = [room.strip() for room in args.rooms.split(',')]
+            if not all(explicit_rooms):
+                raise ValueError('--rooms requires non-empty comma-separated room names')
+            for room in explicit_rooms:
+                unit = run('systemd-escape', '--template=sonos-lms@.service', '--', room)
+                sources.setdefault(unit, set()).add('--rooms')
+        sources = {unit: sorted(origins) for unit, origins in sources.items()}
+        instances = sorted(sources)
+        if not instances and old_repo.exists():
+            raise ValueError('No enabled sonos-lms rooms found; supply --rooms "Study,Sonos Port,MBR"')
         if not instances and not old_repo.exists() and not old_config.exists() and not (units / 'sonos-lms@.service').exists() and not list(units.glob('sonos-lms@*.service.d')):
             step('Nothing to do; YeneY migration is already complete.')
             sys.exit(0)
         if not (old_repo if old_repo.exists() else repo).is_dir():
             raise ValueError('No checkout found in /opt/sonos-lms or /opt/yeney')
-        state = {'instances': instances, 'stopped': False}
-        journal.write_text(json.dumps(state) + '\n')
+        state = {'instances': instances, 'sources': sources, 'stopped': False}
     rooms = [run('systemd-escape', '--unescape', '--instance', unit) for unit in instances]
-    step(f'1. Recorded {len(instances)} enabled room(s): ' + ', '.join(rooms))
+    step(f'1. Recorded {len(instances)} room(s): ' + ', '.join(rooms))
+    for unit, room in zip(instances, rooms):
+        step(f'1. {room}: ' + ', '.join(sources[unit]))
+    journal.write_text(json.dumps(state) + '\n')
     if not state['stopped']:
         for unit in instances:
             run('systemctl', 'stop', unit)
