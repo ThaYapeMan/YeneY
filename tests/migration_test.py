@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 script = Path(__file__).resolve().parents[1] / 'scripts/migrate-from-sonos-lms.sh'
@@ -18,6 +19,8 @@ with tempfile.TemporaryDirectory(prefix='yeney-migration-') as tmp:
     base = Path(tmp)
     tools = base / 'bin'
     tools.mkdir()
+    # The migration shell script and stub shebangs must use this test's Python too.
+    (tools / 'python3').symlink_to(sys.executable)
     stub = '''#!/usr/bin/env python3
 import json, os, pathlib, sys
 root = pathlib.Path(os.environ['TEST_ROOT'])
@@ -31,8 +34,12 @@ if command[0] == 'systemctl' and command[1] == 'list-units':
         sys.stderr.write((root / 'list-stderr').read_text() if (root / 'list-stderr').exists() else '')
         sys.exit(int((root / 'list-error').read_text()))
 if command[0] == 'systemctl' and command[1] == 'disable':
-    for p in (root / 'etc/systemd/system').glob('*.wants/' + command[2]):
-        p.unlink()
+    for directory in (root / 'etc/systemd/system').glob('*.wants'):
+        if directory.is_dir():
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    if entry.name == command[2]:
+                        os.unlink(entry.path)
 if command[0] == 'systemctl' and command[1] == 'stop':
     p = root / 'active'
     p.write_text(''.join(line for line in p.read_text().splitlines(True) if line.split()[0] != command[2]))
@@ -53,7 +60,8 @@ if command[0] == 'install-devices.sh':
         p.write_text(stub)
         p.chmod(0o755)
     for scenario in ('normal', 'interrupted', 'active', 'empty-exit-one', 'no-rooms', 'explicit',
-                     'list-failure', 'list-one-output', 'list-one-stderr', 'invalid-rooms', 'unescape-failure', 'empty-journal'):
+                     'list-failure', 'list-one-output', 'list-one-stderr', 'invalid-rooms', 'unescape-failure', 'empty-journal',
+                     'dangling-repo-target', 'dangling-config-target', 'dangling-journal'):
         interrupt = scenario == 'interrupted'
         root = base / scenario
         repo, conf, units = root / 'opt/sonos-lms', root / 'etc/sonos-lms', root / 'etc/systemd/system'
@@ -98,13 +106,18 @@ if command[0] == 'install-devices.sh':
             (wants / r'sonos-lms@bad\xZZ.service').symlink_to('../sonos-lms@.service')
         if scenario == 'empty-journal':
             (root / 'etc/yeney-migration.json').write_text(json.dumps({'instances': [], 'stopped': True}) + '\n')
+        dangling_targets = {'dangling-repo-target': root / 'opt/yeney',
+                            'dangling-config-target': root / 'etc/yeney',
+                            'dangling-journal': root / 'etc/yeney-migration.json'}
+        if scenario in dangling_targets:
+            dangling_targets[scenario].symlink_to('missing-target')
         env = dict(os.environ, TEST_ROOT=str(root), PATH=str(tools) + os.pathsep + os.environ['PATH'])
         command = ['bash', str(script), '--root', str(root)]
         if scenario in ('explicit', 'empty-journal'):
             command += ['--rooms', 'Study,Sonos Port,MBR,Study']
         if scenario == 'invalid-rooms':
             command += ['--rooms', 'Study,,MBR']
-        if scenario in ('no-rooms', 'list-failure', 'list-one-output', 'list-one-stderr', 'invalid-rooms', 'unescape-failure'):
+        if scenario in ('no-rooms', 'list-failure', 'list-one-output', 'list-one-stderr', 'invalid-rooms', 'unescape-failure') or scenario in dangling_targets:
             before_files = {str(p.relative_to(root)): (('link', str(p.readlink())) if p.is_symlink() else ('file', p.read_bytes()))
                             for p in root.rglob('*') if p.is_symlink() or p.is_file()}
             failed = subprocess.run(command, env=env, capture_output=True, text=True)
@@ -114,7 +127,7 @@ if command[0] == 'install-devices.sh':
             after_files = {str(p.relative_to(root)): (('link', str(p.readlink())) if p.is_symlink() else ('file', p.read_bytes()))
                            for p in root.rglob('*') if (p.is_symlink() or p.is_file()) and p.name != 'calls'}
             assert before_files == after_files, scenario
-            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
+            calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()] if (root / 'calls').exists() else []
             assert all(call[:2] == ['systemctl', 'list-units'] for call in calls), calls
             print(f'PASS: migration {scenario} fails before any file or service changes')
             continue
@@ -137,16 +150,17 @@ if command[0] == 'install-devices.sh':
                 assert all(f'{room}: --rooms' in result.stdout for room in ('Study', 'Sonos Port', 'MBR'))
             else:
                 assert all(f'{room}: enabled' in result.stdout for room in ('Study', 'Sonos Port', 'MBR'))
-        assert not repo.exists() and not conf.exists()
-        assert not (root / 'opt/yeney/sonos-lms').exists()
-        assert not (root / 'opt/yeney/sonos-lms.o').exists()
+        for removed in (repo, conf, root / 'opt/yeney/sonos-lms', root / 'opt/yeney/sonos-lms.o',
+                        units / 'sonos-lms@.service', root / 'etc/yeney-migration.json'):
+            assert not (removed.is_symlink() or removed.exists()), removed
+        for directory in units.glob('*.wants'):
+            with os.scandir(directory) as entries:
+                assert not any(entry.name in old_units for entry in entries), directory
         assert (root / 'etc/yeney/rooms').read_text() == 'Study\nSonos Port\nMBR\n'
         assert (root / 'etc/yeney/config').read_text() == 'LMS_SERVER=192.0.2.23\nroom.Sonos Port=yes\n'
         renamed = units / r'yeney@Sonos\x20Port.service.d/override.conf'
         expected = '[Service]\n' + ''.join(f'Environment="{value}=value"\n' for value in settings.values()) + 'Environment=KEEP_ME=yes\n'
         assert renamed.read_text() == expected, renamed.read_text()
-        assert not (units / 'sonos-lms@.service').exists()
-        assert not (root / 'etc/yeney-migration.json').exists()
         calls = [json.loads(line) for line in (root / 'calls').read_text().splitlines()]
         for unit in old_units:
             assert calls.count(['systemctl', 'stop', unit]) == 1

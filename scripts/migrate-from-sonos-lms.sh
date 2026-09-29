@@ -24,6 +24,9 @@ def run(*command, cwd=None):
 def step(message):
     print(message, flush=True)
 
+def present(path):
+    return path.is_symlink() or path.exists()
+
 old_repo, repo = root / 'opt/sonos-lms', root / 'opt/yeney'
 old_config, config = root / 'etc/sonos-lms', root / 'etc/yeney'
 units = root / 'etc/systemd/system'
@@ -40,9 +43,9 @@ names = {
 try:
     # Refuse collisions before stopping any room; never merge or overwrite directories.
     for old, new in ((old_repo, repo), (old_config, config)):
-        if old.exists() and new.exists():
+        if present(old) and present(new):
             raise ValueError(f'Both {old} and {new} exist; resolve the conflict first')
-    state = json.loads(journal.read_text()) if journal.exists() else None
+    state = json.loads(journal.read_text()) if present(journal) else None
     if state and state['instances']:
         instances = state["instances"]
         sources = state.get('sources', {unit: ['migration journal'] for unit in instances})
@@ -72,12 +75,12 @@ try:
                 sources.setdefault(unit, set()).add('--rooms')
         sources = {unit: sorted(origins) for unit, origins in sources.items()}
         instances = sorted(sources)
-        if not instances and old_repo.exists():
+        if not instances and present(old_repo):
             raise ValueError('No enabled sonos-lms rooms found; supply --rooms "Study,Sonos Port,MBR"')
-        if not instances and not old_repo.exists() and not old_config.exists() and not (units / 'sonos-lms@.service').exists() and not list(units.glob('sonos-lms@*.service.d')):
+        if not instances and not present(old_repo) and not present(old_config) and not present(units / 'sonos-lms@.service') and not list(units.glob('sonos-lms@*.service.d')):
             step('Nothing to do; YeneY migration is already complete.')
             sys.exit(0)
-        if not (old_repo if old_repo.exists() else repo).is_dir():
+        if not (old_repo if present(old_repo) else repo).is_dir():
             raise ValueError('No checkout found in /opt/sonos-lms or /opt/yeney')
         state = {'instances': instances, 'sources': sources, 'stopped': False}
     rooms = [run('systemd-escape', '--unescape', '--instance', unit) for unit in instances]
@@ -93,14 +96,14 @@ try:
         state['stopped'] = True
         journal.write_text(json.dumps(state) + '\n')
     for old, new in ((old_repo, repo), (old_config, config)):
-        if old.exists():
+        if present(old):
             old.rename(new)
             step(f'2. Moved {old} -> {new}')
     for old in sorted(units.glob('sonos-lms@*.service.d')):
         room = run('systemd-escape', '--unescape', '--instance', old.name[:-2])
         new_unit = run('systemd-escape', '--template=yeney@.service', '--', room)
         new = units / (new_unit + '.d')
-        if new.exists():
+        if present(new):
             raise ValueError(f'{new} already exists; refusing to overwrite it')
         old.rename(new)
         step(f'3. Moved {old.name} -> {new.name}')
