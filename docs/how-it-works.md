@@ -493,12 +493,17 @@ to the owner.
   lets existing standalone squeezelite output fixtures retain their linkage.
 - Core uses yeney-core's default decoder selection, including minimp3 for MP3;
   no host decoder factory or libmad compatibility adapter is installed.
+  MP3 float synthesis is scaled by 2^31, rounded to nearest (ties away from
+  zero) and saturated into int32 frames; there is no intermediate int16
+  quantisation. The 24-bit Sonos path retains this additional precision.
 
 The A/B MP3 fixtures use genuine LAME gapless tags and verify exactly 70,130
 and 80,060 frames with a following PCM marker, which releases the final partial
 FLAC block and checks the boundary without waveform alignment. Both measured
-88.03 dB SNR against squeezelite's dynamically loaded libmad; the test requires
-at least 80 dB SNR and 0.9999 correlation. FLAC and PCM remain bit-identical.
+126.86/126.72 dB SNR against squeezelite's dynamically loaded libmad, up from
+88.03 dB with int16 decoding. Correlations were 0.999999999999924 and
+0.999999999999920. The test requires at least 120 dB SNR and
+0.999999999999 correlation. FLAC and PCM remain bit-identical.
 For ALAC, core receives the native fixture and the unchanged squeezelite build
 receives its reference PCM, modelling LMS's lossless conversion. Core's existing
 Lavc-tagged fixtures have different trimming from squeezelite's LAME-only parser;

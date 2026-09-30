@@ -35,8 +35,8 @@ squeezelite.o: squeezelite.cpp
 CORE_LIB = third_party/yeney-core/libyeneycore.a
 .PHONY: core-library
 core-library:
-	$(MAKE) -C third_party/yeney-core libyeneycore.a
 $(CORE_LIB): core-library
+	$(MAKE) -C third_party/yeney-core libyeneycore.a
 
 core_sonos.o: core_sonos.h audio_mode.h sonos-position.h third_party/yeney-core/core/player.h third_party/yeney-core/core/sink.h
 yeney.o: player_mode.h

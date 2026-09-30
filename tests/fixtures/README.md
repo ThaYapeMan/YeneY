@@ -24,7 +24,8 @@ counts between these engines. These fixtures exercise the shared LAME contract
 without changing either decoder, rewriting metadata, or cropping/alignment of
 output samples. General Lavc-tagged MP3 trimming remains different.
 
-Both fixtures measured 88.03 dB minimp3-versus-libmad SNR and 0.999999999
-correlation. Acceptance requires 80 dB SNR and 0.9999 correlation. A prefetched
-PCM marker releases the streaming FLAC encoder's partial block; its exact
+With float minimp3 output the fixtures measured 126.86/126.72 dB SNR against
+libmad (previously 88.03 dB with int16 output), with correlations
+0.999999999999924/0.999999999999920. Acceptance requires 120 dB SNR and
+0.999999999999 correlation. A prefetched PCM marker releases the streaming FLAC encoder's partial block; its exact
 boundary verifies the declared MP3 frame count before loudness comparison.

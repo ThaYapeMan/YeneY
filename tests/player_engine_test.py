@@ -15,8 +15,9 @@ from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 import http.client
 
-# Both committed LAME fixtures measured 88.03 dB; allow 8 dB of platform margin.
-MP3_MIN_SNR_DB = 80.0
+# Float decoding measured 126.86/126.72 dB; retain at least 6.7 dB margin.
+MP3_MIN_SNR_DB = 120.0
+MP3_MIN_CORRELATION = .999999999999
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'third_party/yeney-core/tests'))
 from fake_lms import LMS, HTTP, pcm
@@ -262,8 +263,8 @@ with tempfile.TemporaryDirectory(prefix='yeney-engine-ab-') as tmp:
         am,bm = sum(a)/len(a),sum(b)/len(b)
         corr = sum((x-am)*(y-bm) for x,y in zip(a,b))/math.sqrt(
             sum((x-am)**2 for x in a)*sum((y-bm)**2 for y in b))
-        assert corr >= .9999 and snr >= MP3_MIN_SNR_DB, (corr,snr)
-        print(f'PASS: MP3 {frames} frames (exact gapless boundary): correlation={corr:.9f} >= 0.9999; SNR={snr:.2f} dB >= {MP3_MIN_SNR_DB:.0f} dB', flush=True)
+        assert corr >= MP3_MIN_CORRELATION and snr >= MP3_MIN_SNR_DB, (corr,snr)
+        print(f'PASS: MP3 {frames} frames (exact gapless boundary): correlation={corr:.15f} >= {MP3_MIN_CORRELATION}; SNR={snr:.2f} dB >= {MP3_MIN_SNR_DB:.0f} dB', flush=True)
 
     # Pausing closes this response at a scheduling-dependent byte boundary.
     # Compare every sample received by both runs before that interruption.

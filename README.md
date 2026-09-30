@@ -412,9 +412,10 @@ For ReplayGain, run `sudo env SCENARIOS="9" REQUIRE_PLAYER=core scripts/device-t
 S9 is expected to measure about **-7.99 dB** with the owner's default tagged track
 in both modes. Core uses only yeney-core's decoders: libFLAC (BSD-3-Clause), minimp3
 (CC0) and Apple ALAC (Apache-2.0), plus its PCM reader. LMS converts OGG, AAC
-and other formats to FLAC/PCM. Automated tests compare lossless output bit for
-bit and LAME-tagged MP3 fixtures by exact gapless frame counts, correlation and
-signal-to-noise ratio. Physical device checks and deployment on LXC 113 are left
+and other formats to FLAC/PCM. MP3 float synthesis is retained in normalised
+int32 frames without intermediate int16 quantisation. Automated tests compare
+lossless output bit for bit. LAME-tagged MP3 fixtures must retain exact gapless
+frame counts, with at least 120 dB SNR and 0.999999999999 correlation. Physical device checks and deployment on LXC 113 are left
 to the owner.
 
 
