@@ -2,6 +2,7 @@
 """SOAP/CLI checks for device-test.sh; standard library only, no bridge state."""
 import argparse
 import json
+import re
 from pathlib import Path
 import socket
 import time
@@ -179,24 +180,39 @@ def check_status_log(text):
     if errors:
         raise RuntimeError('; '.join(errors))
     summary = f'{len(text.splitlines())} GetTransportInfo samples: status OK'
+    modes = {json.loads(line).get('player_engine') for line in text.splitlines()} - {None, 'unknown'}
+    if modes:
+        summary += '; player engine: ' + ', '.join(sorted(modes))
     if tolerated:
         summary += (f'; {tolerated} SOAP timeout{"s" if tolerated != 1 else ""} tolerated '
                     '(speaker busy on stream request)')
     return summary
 
 
+def player_engine(journal, required=None):
+    modes = re.findall(r'^YENEY_PLAYER=(core|squeezelite)$', journal, re.MULTILINE)
+    mode = modes[-1] if modes else 'unknown'
+    if required and required != mode:
+        raise RuntimeError(f'required player engine {required}; startup journal reports {mode}')
+    return mode
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('operation', choices=['coordinator', 'command', 'progress', 'monitor', 'state', 'sample', 'status-log'])
+    parser.add_argument('operation', choices=['coordinator', 'command', 'progress', 'monitor', 'state', 'sample', 'status-log', 'player-engine'])
     parser.add_argument('--host')
+    parser.add_argument('--engine', default='unknown')
     parser.add_argument('--file')
     parser.add_argument('--room')
     parser.add_argument('--action', choices=['Pause', 'Play'])
     parser.add_argument('--lms')
     parser.add_argument('--port', type=int, default=9090)
     parser.add_argument('--player')
+    parser.add_argument('--require-player', choices=['core', 'squeezelite'])
     args = parser.parse_args()
-    if args.operation == 'coordinator':
+    if args.operation == 'player-engine':
+        print(player_engine(Path(args.file).read_text(), args.require_player))
+    elif args.operation == 'coordinator':
         import sys
         print(coordinator(sys.stdin.read(), args.room))
     elif args.operation == 'command':
@@ -207,14 +223,14 @@ def main():
             raise RuntimeError(f'CurrentTransportStatus={fields.get("CurrentTransportStatus", "missing")}')
         print(fields['CurrentTransportState'])
     elif args.operation == 'sample':
-        print(json.dumps(status_sample(args.host, soap)), flush=True)
+        print(json.dumps({**status_sample(args.host, soap), 'player_engine': args.engine}), flush=True)
     elif args.operation == 'status-log':
         print(check_status_log(Path(args.file).read_text()))
     elif args.operation == 'progress':
         print(progress(args.host, args.lms, args.port, args.player))
     else:
         while True:
-            print(json.dumps(status_sample(args.host, soap)), flush=True)
+            print(json.dumps({**status_sample(args.host, soap), 'player_engine': args.engine}), flush=True)
             time.sleep(.5)
 
 

@@ -3,7 +3,7 @@ FLAGS_SL = -g -O3 -Wall -fno-common -Isqueezelite -Wno-error=incompatible-pointe
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
-OBJS = audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
+OBJS = compatibility_decoder.o core_sonos.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
 OBJS_SL = squeezelite.o \
 	output_sonos.o \
@@ -32,9 +32,21 @@ all: yeney
 squeezelite.o: squeezelite.cpp
 	g++ $(FLAGS_SL) -c -o $@ $<
 
-yeney: $(OBJS) $(OBJS_SL)
+CORE_LIB = third_party/yeney-core/libyeneycore.a
+.PHONY: core-library
+core-library:
+	$(MAKE) -C third_party/yeney-core libyeneycore.a
+$(CORE_LIB): core-library
+
+compatibility_decoder.o: compatibility_decoder.h third_party/yeney-core/core/decoder.h
+core_sonos.o: compatibility_decoder.h core_sonos.h audio_mode.h sonos-position.h third_party/yeney-core/core/player.h third_party/yeney-core/core/sink.h
+yeney.o: player_mode.h
+core_sonos.o compatibility_decoder.o: %.o: %.cpp
+	g++ -std=c++17 -g -O3 -Wall -Wextra -c -o $@ $<
+
+yeney: $(OBJS) $(OBJS_SL) $(CORE_LIB)
 	g++ -g -o $@ $^ \
-		-lFLAC++ -lFLAC -lcrypto \
+		-lFLAC++ -lFLAC -lcrypto -lmad \
 		-lpthread -lm -lrt -ldl -lasound
 
 clean:
@@ -82,6 +94,9 @@ test: encoded-buffer-test stream-content-test http-server-test speaker-state-tes
 	python3 tests/pause_mode_test.py
 	python3 tests/audio_mode_test.py
 	python3 tests/audio_output_test.py
+	python3 tests/player_mode_test.py
+	python3 tests/core_sonos_test.py
+	python3 tests/player_engine_test.py
 
 sbstreamer.o sbencoder.o: sbencoder.h
 

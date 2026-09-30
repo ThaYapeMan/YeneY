@@ -768,3 +768,33 @@ exit 0
         assert result.returncode == 1 and message in result.stderr, result
         assert 'playerpref' not in (out/'cli-calls').read_text()
     print('PASS: S9 rejects missing flac, NO_PCAP and invalid RG_SECS before changing the player preference')
+
+# Engine provenance must come from the current service invocation, not this shell.
+with tempfile.TemporaryDirectory(prefix='yeney-player-report-') as directory:
+    for actual, required, code in [('core', 'core', 0), ('squeezelite', 'core', 1),
+                                   ('unknown', 'squeezelite', 1), ('squeezelite', '', 0)]:
+        result = subprocess.run(['bash', '-c', prefix + r'''
+UNIT=fixture
+systemctl() { printf '0123456789abcdef0123456789abcdef\n'; }
+journalctl() {
+    [[ $* == *'_SYSTEMD_INVOCATION_ID=0123456789abcdef0123456789abcdef'* ]] || exit 95
+    printf 'YENEY_PLAYER=%s\n' "$ACTUAL"
+}
+bridge_layer
+auto_summary
+exit "$AUTO_FAILED"
+'''], env={**os.environ, 'OUT': directory, 'ACTUAL': actual, 'REQUIRE_PLAYER': required,
+           'YENEY_PLAYER': 'not-the-service'}, capture_output=True, text=True)
+        assert result.returncode == code, result
+        assert f'player engine: {actual}' in result.stdout, result
+        assert ('engine | FAIL |' in result.stdout) == bool(code)
+    assert 'player_engine=$PLAYER_ENGINE' in script
+    assert auto.player_engine('YENEY_PLAYER=squeezelite\nYENEY_PLAYER=core\n', 'core') == 'core'
+    try:
+        auto.player_engine('YENEY_PLAYER=squeezelite\n', 'core')
+        raise AssertionError('mismatch accepted')
+    except RuntimeError:
+        pass
+print('PASS: player engine journal provenance, required-mode mismatch, report and summary')
+
+assert 'player engine: core' in auto.check_status_log(json.dumps({**ok_sample(1), 'player_engine': 'core'}))

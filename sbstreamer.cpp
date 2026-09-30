@@ -187,12 +187,13 @@ void invalidate_squeezebox_held_get(unsigned stream)
     }
 }
 
-void encode_squeezebox_audio(const char* data, int len, uint64_t firstFrame)
+int encode_squeezebox_audio_cancellable(const char* data, int len, uint64_t firstFrame, int (*cancel)(void*), void* context)
 {
+    auto cancelled = [=] { return cancel && cancel(context); };
     unsigned stream = get_squeezebox_stream_id();
     unsigned serial = get_lms_stream_serial();
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (sonos_output_running() && stream == get_squeezebox_stream_id() && serial == get_lms_stream_serial()) {
+    while (!cancelled() && sonos_output_running() && stream == get_squeezebox_stream_id() && serial == get_lms_stream_serial()) {
         std::shared_ptr<SBEncoder> enc;
         uint64_t requestId = 0;
         {
@@ -203,24 +204,30 @@ void encode_squeezebox_audio(const char* data, int len, uint64_t firstFrame)
         if (enc && enc->streamId() == stream && !enc->cancelled() && !enc->responseEnded() && !enc->producerRetired()) {
             int written = enc->write(data, len, SBSTREAMER_TIMEOUT, [=] {
                 sonos_position_pcm(stream, requestId, firstFrame);
-            }, [] { return !sonos_output_running(); });
-            if (written == len || !sonos_output_running()) return;
+            }, [=] { return cancelled() || !sonos_output_running(); });
+            if (written == len) return 1;
+            if (cancelled() || !sonos_output_running()) return 0;
             // Active-request termination or resume may replace the encoder
             // while write waits. Retry the SAME PCM block on the new encoder.
             if (!enc->cancelled() && !enc->responseEnded() && !enc->producerRetired()) {
                 printf("encode_squeezebox_audio: write() failed %d != %d\n", written, len);
-                return;
+                return 0;
             }
         }
         if (yeney_is_paused())
             deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
         if (std::chrono::steady_clock::now() >= deadline) {
             printf("encode_squeezebox_audio: timeout waiting for stream request\n");
-            return;
+            return 0;
         }
         usleep(1000);
     }
+    return 0;
 }
+void encode_squeezebox_audio(const char* data, int len, uint64_t firstFrame) {
+    encode_squeezebox_audio_cancellable(data, len, firstFrame, nullptr, nullptr);
+}
+
 } // extern "C"
 
 void SBStreamer::registerWith(upnp::StreamServer& server)

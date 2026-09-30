@@ -26,6 +26,8 @@
 #include "stop_debounce.h"
 #include "stream_session.h"
 #include "audio_mode.h"
+#include "player_mode.h"
+void runCoreClient(const char*, const uint8_t*, const char*);
 
 extern "C" {
 unsigned get_squeezebox_stream_id(void);
@@ -259,7 +261,7 @@ extern "C" void yeney_transport(char command)
         printf("strm q: deferring %s for 400 ms\n", pauseMode() == PauseMode::Stop ? "Stop" : "Pause");
         return; // receive the next strm s without waiting on UPnP
     }
-    dispatchTransportIntent();
+    if (playerMode() == PlayerMode::Squeezelite) dispatchTransportIntent();
     {
         std::lock_guard<std::mutex> lock(intentMutex);
         if (transportIntent.revision == revision && transportIntent.pending) {
@@ -486,12 +488,13 @@ static bool sendLmsCommand(const std::string& server, const uint8_t* mac, const 
     return ok;
 }
 
-// Runs squeezelite's own client loop on a dedicated thread; returns when the
+// Runs the selected player engine on a dedicated thread; returns when the
 // LMS connection is torn down (e.g. process shutdown).
-static void runSqueezeliteClient(const char* server, std::string playerName)
+static void runPlayerClient(const char* server, std::string playerName)
 {
-    squeezelite(server, gMac, playerName.c_str());
-    printf("squeezelite client thread stopped\n");
+    if (playerMode() == PlayerMode::Core) runCoreClient(server, gMac, playerName.c_str());
+    else squeezelite(server, gMac, playerName.c_str());
+    printf("player client thread stopped\n");
 }
 
 // Shared by SetAVTransportURI and HTTP redirects, including resource parameters.
@@ -832,6 +835,7 @@ int main(int argc, char** argv)
     }
     (void)pauseMode();
     (void)audioMode();
+    (void)playerMode();
     (void)upnp::streamContentMode();
     (void)upnp::titleFormat();
     (void)upnp::backend();
@@ -895,11 +899,11 @@ int main(int argc, char** argv)
     }
 
     static StopTimer stopTimer;
-    std::thread squeezeliteThread(runSqueezeliteClient, gServer.empty() ? nullptr : gServer.c_str(), std::string(room) + " (Sonos)");
+    std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(), std::string(room) + " (Sonos)");
 
     runBridgeLoop(status);
 
-    squeezeliteThread.join();
+    playerThread.join();
     return 0;
 }
 

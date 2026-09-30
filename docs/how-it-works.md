@@ -101,6 +101,7 @@ Status:
 
 | Setting | Values | Default |
 |---|---|---|
+| `YENEY_PLAYER` | `squeezelite`: existing engine; `core`: yeney-core for A/B testing | `squeezelite` |
 | `YENEY_AUDIO` | `24/48`: 24-bit FLAC at the source's 44.1/48 kHz rate; `16/44`: legacy 16-bit/44.1 kHz | `24/48` |
 
 The setting is read once at startup and logged. Invalid values warn and use
@@ -439,3 +440,56 @@ checks output within 0.5 dB of the sent gain, and reports correlation and peak
 dBFS. Missing tags or unreliable alignment are INVALID. The tarball retains the
 two full pcaps, FLAC/WAV files and `s9-report.txt`. This measures the digital stream,
 not acoustic output. See [S9 verification details](../DEVICE-VERIFICATION.md#s9--measure-replaygain-in-the-streamed-audio).
+
+### Comparing the player engines
+
+Both engines are linked into the same binary. The default remains squeezelite.
+To switch only Study, run `sudo systemctl edit yeney@Study.service` and set:
+
+```ini
+[Service]
+Environment=YENEY_PLAYER=core
+```
+
+Then run `sudo systemctl daemon-reload && sudo systemctl restart yeney@Study.service`.
+Use `Environment=YENEY_PLAYER=squeezelite` and restart again for the other half of
+the comparison. Both modes register the same player name and MAC, retaining LMS
+player preferences. Invalid settings warn and select squeezelite. The startup
+journal logs the selected engine once as `YENEY_PLAYER=core` or `squeezelite`.
+
+Run the existing device scenarios with `REQUIRE_PLAYER=core` (or `squeezelite`)
+to reject an accidental test of the wrong engine. Reports record the mode from
+the room service's current startup journal, rather than the test shell's settings.
+For ReplayGain, run `sudo env SCENARIOS="9" REQUIRE_PLAYER=core scripts/device-test.sh`.
+S9 is expected to measure about **-7.99 dB** with the owner's default tagged track
+in both modes. Core decodes FLAC, MP3, ALAC and PCM; LMS converts OGG, AAC and other
+formats to FLAC/PCM. Agents do not run these checks or deploy on LXC 113.
+
+### Core host integration decisions
+
+- A pre-command observer receives the letter, unsigned offset-18 field and
+  pre-command running/submitted flag. Transport exceptions match squeezelite.
+- A 48,000-frame staging queue plus one feeder batch (normally at most 256
+  frames) bounds the output hand-off. The core loop never waits for an encoder.
+- The feeder applies boundaries in FIFO order. Same-rate modern continuation
+  retains its stream; rate changes and all legacy boundaries create a new ID.
+- Audible frames are the stream's cumulative base plus the Sonos audible
+  position, clamped to frames handed to the encoder and a monotonic floor.
+  Pausing freezes this clock. Stop/flush retain the floor and cancel queued PCM.
+- The pinned squeezelite `slimproto.c` sends STMu when output is running, its
+  PCM queue is empty, input is disconnected and decoding is stopped; it does
+  not compare audible frames. Core's optional `Sink::drained` therefore uses
+  feeder completion. Whole-second Sonos reports cannot prevent playlist end.
+  STMd remains decoder completion. `startOnSubmit` uses the feeder's
+  `startedFrames()` coordinate to match the output-boundary
+  STMs signal while STAT elapsed remains exclusively the Sonos clock.
+- Core transport dispatch runs on StopTimer; squeezelite retains inline
+  dispatch. Encoder cancellation checks a generation token and shutdown flag.
+- Both libraries link without symbol collisions. A weak core-running probe
+  lets existing standalone squeezelite output fixtures retain their linkage.
+- Native MP3 bit identity needs the same codec: YeneY supplies an original
+  libmad adapter through core's optional decoder factory. Its bounded worker
+  queues are 65,536 input bytes and 8,192 output frames. Standalone yeney-core
+  and LampaStream retain minimp3. This additional GPL dependency must also be
+  addressed in a future removal/licensing round. No squeezelite code is copied
+  into either implementation.

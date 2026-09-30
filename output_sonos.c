@@ -126,8 +126,10 @@ uint64_t get_sb_time_ms(void)
     return (uint64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
 
+extern int core_output_running(void) __attribute__((weak));
 int sonos_output_running(void)
 {
+    if (core_output_running && core_output_running()) return 1;
     return atomic_load(&pump_running);
 }
 

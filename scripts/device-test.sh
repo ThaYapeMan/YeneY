@@ -27,6 +27,7 @@
 #   SCENARIOS   which scenarios to run                   (default: 1 2 3 4 5 6 7)
 #   IDLE_SECS   idle wait after LMS stop in S8           (default: 120)
 #   RG_TRACK    S9 title or id:<n> (default: id:47145, owner's LMS library)
+#   REQUIRE_PLAYER optional core|squeezelite; fail on startup-journal mismatch
 #   RG_SECS     seconds per S9 capture (default: 25)
 #   SONOS_IP    capture peer (default: discovered room coordinator)
 #   LONG_PAUSE  seconds paused in scenario 6             (default: 120)
@@ -56,6 +57,8 @@ IDLE_SECS=${IDLE_SECS:-120}
 RG_TRACK=${RG_TRACK:-id:47145}
 RG_SECS=${RG_SECS:-25}
 BRIDGE_LAYER=unknown
+PLAYER_ENGINE=unknown
+REQUIRE_PLAYER=${REQUIRE_PLAYER:-}
 S2_ROUNDS=${S2_ROUNDS:-3}
 LMS_SSH=${LMS_SSH:-}
 LMS_LOG=${LMS_LOG:-/var/log/squeezeboxserver/server.log}
@@ -439,15 +442,17 @@ finish() {
     { echo "room=$ROOM unit=$UNIT player=$PLAYER lms=$LMS"
       echo "track_a=$TRACK_A_ID track_b=$TRACK_B_ID scenarios=$SCENARIOS long_pause=$LONG_PAUSE"
       echo "bridge_upnp_layer=$BRIDGE_LAYER sonos_ip=${SONOS_IP:-unknown} idle_secs=$IDLE_SECS"
+      echo "player_engine=$PLAYER_ENGINE require_player=$REQUIRE_PLAYER"
       echo "rg_track=$RG_TRACK rg_secs=$RG_SECS"
       echo "started=$START_TIME finished=$(date '+%Y-%m-%d %H:%M:%S')"
       [[ -d /opt/yeney/.git ]] && echo "bridge=$(git -C /opt/yeney rev-parse --short HEAD)"
     } > "$OUT/run-info.txt"
+    auto_summary > "$OUT/auto-summary.txt"
     tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
     say ""
     say "Done. Send this file:"
     say "  $OUT.tar.gz"
-    if [[ $AUTO == 1 || -n $RG_REPORT ]]; then auto_summary; fi
+    if [[ $AUTO == 1 || -n $RG_REPORT || -n $REQUIRE_PLAYER ]]; then auto_summary; fi
     exit "$result"
 }
 
@@ -898,14 +903,22 @@ discover_coordinator() {
 }
 
 bridge_layer() {
-    local invocation layer
+    local invocation layer startup
     invocation=$(systemctl show "$UNIT" -p InvocationID --value 2>/dev/null) || invocation=''
     if [[ $invocation =~ ^[[:xdigit:]]{32}$ ]]; then
-        layer=$(journalctl -u "$UNIT" "_SYSTEMD_INVOCATION_ID=$invocation" -o cat --no-pager 2>/dev/null |
+        startup=$(journalctl -u "$UNIT" "_SYSTEMD_INVOCATION_ID=$invocation" -o cat --no-pager 2>/dev/null)
+        PLAYER_ENGINE=$(printf '%s\n' "$startup" | sed -nE 's/^YENEY_PLAYER=(core|squeezelite)$/\1/p' | tail -n1)
+        PLAYER_ENGINE=${PLAYER_ENGINE:-unknown}
+        layer=$(printf '%s\n' "$startup" |
             sed -nE 's/^UPnP layer: (yeney).*/\1/p' | tail -n1)
     fi
     BRIDGE_LAYER=${layer:-unknown}
     say "Bridge UPnP layer: $BRIDGE_LAYER"
+    say "Player engine: $PLAYER_ENGINE"
+    if [[ -n $REQUIRE_PLAYER && ($REQUIRE_PLAYER != core && $REQUIRE_PLAYER != squeezelite || $REQUIRE_PLAYER != "$PLAYER_ENGINE") ]]; then
+        SUMMARY+=("engine | FAIL | required $REQUIRE_PLAYER; startup journal reports $PLAYER_ENGINE")
+        AUTO_FAILED=1
+    fi
 }
 
 # AUTO failures accumulate; recovery can never erase a failed check.
@@ -924,7 +937,7 @@ auto_begin() {
     AUTO_MEASUREMENTS=()
     AUTO_SINCE=$(date '+%Y-%m-%d %H:%M:%S.%6N')
     AUTO_STATUS_FILE="$OUT/auto-status-$1.log"
-    python3 "$AUTO_HELPER" monitor --host "$COORDINATOR_IP" > "$AUTO_STATUS_FILE" 2>&1 &
+    python3 "$AUTO_HELPER" monitor --host "$COORDINATOR_IP" --engine "$PLAYER_ENGINE" > "$AUTO_STATUS_FILE" 2>&1 &
     AUTO_MONITOR_PID=$!
 }
 auto_end() {
@@ -933,7 +946,7 @@ auto_end() {
     AUTO_MONITOR_PID=''
     [[ -s $AUTO_STATUS_FILE ]] || auto_fail "cannot check: empty GetTransportInfo sample log ($AUTO_STATUS_FILE)"
     # Retain the final read too, without hiding a monitor that produced no samples.
-    python3 "$AUTO_HELPER" sample --host "$COORDINATOR_IP" >> "$AUTO_STATUS_FILE" 2>&1
+    python3 "$AUTO_HELPER" sample --host "$COORDINATOR_IP" --engine "$PLAYER_ENGINE" >> "$AUTO_STATUS_FILE" 2>&1
     if errors=$(python3 "$AUTO_HELPER" status-log --file "$AUTO_STATUS_FILE" 2>&1); then
         mark "AUTO $errors"
         AUTO_MEASUREMENTS+=("$errors")
@@ -961,6 +974,7 @@ auto_record() {
     fi
 }
 auto_summary() {
+    printf 'player engine: %s\n' "$PLAYER_ENGINE"
     printf 'scenario | PASS/FAIL | reason\n'
     printf '%s\n' "${SUMMARY[@]}"
 }
@@ -1030,6 +1044,7 @@ fi
 
 trap finish EXIT
 trap 'exit 130' INT TERM
+if [[ -n $REQUIRE_PLAYER && $AUTO_FAILED != 0 ]]; then exit 1; fi
 start_capture
 mark "RUN START room=$ROOM player=$PLAYER track_a=$TRACK_A_ID track_b=$TRACK_B_ID"
 JOURNAL_SINCE="-5min" snapshot
@@ -1053,4 +1068,4 @@ done
 mark "RUN END (LMS pause)"
 lms pause 1
 
-if [[ $AUTO == 1 || $HAS_S9 == 1 ]]; then auto_summary > "$OUT/auto-summary.txt"; exit "$AUTO_FAILED"; fi
+if [[ $AUTO == 1 || $HAS_S9 == 1 || -n $REQUIRE_PLAYER ]]; then auto_summary > "$OUT/auto-summary.txt"; exit "$AUTO_FAILED"; fi
