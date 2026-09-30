@@ -183,9 +183,21 @@ sudo env SCENARIOS="9" scripts/device-test.sh
 sudo env AUTO=1 SCENARIOS="9" RG_TRACK="id:123" RG_SECS=25 scripts/device-test.sh
 ```
 
-`RG_TRACK` defaults to `The Lady Is A Tramp`. It accepts a title search (first LMS
-hit) or `id:<n>`, just like `TRACK_A`. The track needs a track ReplayGain tag in
-LMS's library; missing metadata gives **INVALID**. S9 uses `songinfo ... tags:Y`
+`RG_TRACK` defaults to `id:47145` (Tony Bennett ft. Lady Gaga, “The Lady Is A
+Tramp”, *Duets II*). Like the `TRACK_A`/`TRACK_B` defaults, this is specific to the
+owner's LMS library; use an ID from your own library. To find one, send this to
+the LMS CLI on port 9090 (the `Y` tag requests track ReplayGain):
+
+```text
+titles 0 20 search:The%20Lady%20Is%20A%20Tramp tags:alY
+```
+
+Set `RG_TRACK="id:<n>"` to use the returned ID as-is, or
+`RG_TRACK="The Lady Is A Tramp"` to search up to 20 matches. S9 records every
+match's ID, title, artist, album and ReplayGain (or `none`) in `s9-matches.txt`,
+chooses the first match with ReplayGain, and logs why it was chosen. If none has
+ReplayGain, S9 is **INVALID** and lists all matches. Explicit IDs also need a
+track ReplayGain tag in LMS's library; missing metadata gives **INVALID**. S9 uses `songinfo ... tags:Y`
 (`Y` is track `replay_gain`, `X` is album gain in
 [LMS Queries.pm](https://github.com/LMS-Community/slimserver/blob/public/9.0/Slim/Control/Queries.pm#L5162)).
 Install `tcpdump`, Python 3 and the FLAC command-line tool (`apt-get install -y flac`).
@@ -228,7 +240,7 @@ fades or clipping can affect the comparison; the captured evidence helps explain
 such differences.
 
 The tarball keeps `s9-track.pcap`, `s9-off.pcap`, extracted `.flac`, decoded `.wav`,
-decoder logs, CLI replies and `s9-report.txt`. Repeated S9 runs use separate
+decoder logs, CLI replies, `s9-report.txt` and `s9-matches.txt` for title searches. Repeated S9 runs use separate
 `s9#1`, `s9#2`, … directories. Local `make test` covers packet reconstruction,
 16/24-bit WAV parsing, known-gain alignment, restoration and a real-FLAC round
 trip when `flac` is installed; without it that fixture prints an explicit SKIP.

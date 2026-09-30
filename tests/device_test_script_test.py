@@ -601,16 +601,22 @@ cli_raw() {
     printf '%s\n' "$*" >> "$OUT/cli-calls"
     case "$*" in
         'version ?') printf 'version 9.0';;
-        'titles 0 5 search:'*) printf 'id:123 title:The%%20Lady%%20Is%%20A%%20Tramp artist:Frank';;
-        'songinfo 0 100 track_id:123 tags:Y')
+        'titles 0 20 search:'*' tags:alY')
+            printf 'titles 0 20 search:The%%20Lady%%20Is%%20A%%20Tramp tags:alY id:41603 title:The%%20Lady%%20Is%%20A%%20Tramp artist:Ella%%20Fitzgerald album:Ella '
+            printf 'id:47145 title:The%%20Lady%%20Is%%20A%%20Tramp artist:Tony%%20Bennett%%20ft.%%20Lady%%20Gaga album:Duets%%20II '
+            [[ $S9_CASE == title-missing ]] || printf 'replay_gain:-8.01 '
+            printf 'id:999 title:The%%20Lady%%20Is%%20A%%20Tramp artist:Another album:Third '
+            [[ $S9_CASE == title-missing ]] || printf 'replay_gain:0 '
+            printf 'count:3';;
+        'songinfo 0 100 track_id:123 tags:Y'|'songinfo 0 100 track_id:47145 tags:Y')
             [[ $S9_CASE != missing ]] && printf 'replay_gain:-8.01' || printf 'title:Untagged';;
         'fixture playerpref replayGainMode ?') printf 'fixture playerpref replayGainMode %s' "$(cat "$OUT/pref")";;
         'fixture playerpref replayGainMode '*)
             printf '%s' "${1##* }" > "$OUT/pref"; printf '%s' "$1";;
-        'fixture playlistcontrol cmd:load track_id:123')
+        'fixture playlistcontrol cmd:load track_id:123'|'fixture playlistcontrol cmd:load track_id:47145')
             [[ $S9_CASE != load-failure ]] || return 1
             printf '%s' "$1";;
-        'fixture status 0 1 tags:') printf 'mode:play id:123 replay_gain:-8.01 time:25';;
+        'fixture status 0 1 tags:') printf 'mode:play id:%s replay_gain:-8.01 time:25' "$RG_TRACK_ID";;
         'fixture stop'|'fixture pause 1') printf '%s' "$1";;
         *) printf 'Unexpected CLI: %s\n' "$*" >&2; return 1;;
     esac
@@ -653,7 +659,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-s9-script-') as directory:
             assert f'S9 | {expected} |' in result.stdout, (case, result)
             assert 'Press Enter' not in result.stderr and 'PROMPT' not in result.stderr
             calls = (out/'cli-calls').read_text()
-            assert 'search:The%20Lady%20Is%20A%20Tramp' in calls
+            assert 'titles ' not in calls and 'songinfo 0 100 track_id:47145 tags:Y' in calls
             assert 'Just' not in calls and 'False' not in calls
             if case == 'missing':
                 assert 'No ReplayGain on track' in report and 'playerpref' not in calls
@@ -677,10 +683,41 @@ with tempfile.TemporaryDirectory(prefix='yeney-s9-script-') as directory:
     assert result.returncode == 0, result
     assert 'titles ' not in (out/'cli-calls').read_text()
     assert (out/'pref').read_text() == '3'
+    assert 'playlistcontrol cmd:load track_id:123' in (out/'cli-calls').read_text()
+    for case, code in [('success', 0), ('title-missing', 1)]:
+        out = Path(directory)/f'title-{case}'; out.mkdir(); (out/'pref').write_text('2')
+        result = subprocess.run(['bash', '-c', prefix + s9_stubs + main],
+            env={**os.environ, 'OUT': str(out), 'AUTO': '1', 'SCENARIOS': '9', 'PLAYER': 'fixture',
+                 'RG_TRACK': 'The Lady Is A Tramp', 'S9_CASE': case, 'RG_SECS': '25'},
+            capture_output=True, text=True, timeout=20)
+        assert result.returncode == code, result
+        calls = (out/'cli-calls').read_text()
+        assert 'titles 0 20 search:The%20Lady%20Is%20A%20Tramp tags:alY' in calls
+        matches = (out/'s9-matches.txt').read_text()
+        rows = matches.splitlines()
+        assert len(rows) == 3 and rows[0] == 'id=41603 | title=The Lady Is A Tramp | artist=Ella Fitzgerald | album=Ella | replay_gain=none', matches
+        assert 'artist=Tony Bennett ft. Lady Gaga | album=Duets II' in rows[1], matches
+        assert 'id=999' in rows[2], matches
+        report = (out/'s9-report.txt').read_text()
+        if case == 'success':
+            assert 'playlistcontrol cmd:load track_id:47145' in calls
+            assert 'track_id:41603' not in calls and 'track_id:999' not in calls
+            assert 'chosen id=47145' in report and 'first title match with ReplayGain (-8.01)' in report
+            assert rows[1].endswith('replay_gain=-8.01') and rows[2].endswith('replay_gain=0')
+        else:
+            assert 'S9 | INVALID | No title match with ReplayGain' in result.stdout
+            assert all(row in report and row in result.stderr for row in rows), result
+            assert all(row.endswith('replay_gain=none') for row in rows)
+            assert 'playerpref' not in calls and 'playlistcontrol' not in calls
+        assert (out/'pref').read_text() == '2'
+        with tarfile.open(str(out)+'.tar.gz') as archive:
+            member = next(m for m in archive.getmembers() if m.name.endswith('/s9-matches.txt'))
+            assert archive.extractfile(member).read().decode() == matches
+    print('PASS: S9 default id:47145 and explicit id bypass search; title selects first tagged match; untagged matches listed INVALID; all matches archived')
     defaults = subprocess.run(['bash', '-c', prefix + 'printf "%s|%s" "$RG_TRACK" "$RG_SECS"'],
         env={k: v for k, v in {**os.environ, 'OUT': str(out)}.items() if k not in ('RG_TRACK', 'RG_SECS')},
         capture_output=True, text=True)
-    assert defaults.stdout == 'The Lady Is A Tramp|25', defaults
+    assert defaults.stdout == 'id:47145|25', defaults
     assert 'tcpdump -i any -s 0 -U' in script
     assert '(host $RG_LMS_IP and tcp port 3483) or (dst host $COORDINATOR_IP and tcp src portrange 1400-1409)' in script
     assert 'S9 requires flac: apt-get install -y flac' in script

@@ -26,7 +26,7 @@
 #   TRACK_B     search text, or id:<n> for track B       (default: False Need)
 #   SCENARIOS   which scenarios to run                   (default: 1 2 3 4 5 6 7)
 #   IDLE_SECS   idle wait after LMS stop in S8           (default: 120)
-#   RG_TRACK    S9 title or id:<n> (default: The Lady Is A Tramp)
+#   RG_TRACK    S9 title or id:<n> (default: id:47145, owner's LMS library)
 #   RG_SECS     seconds per S9 capture (default: 25)
 #   SONOS_IP    capture peer (default: discovered room coordinator)
 #   LONG_PAUSE  seconds paused in scenario 6             (default: 120)
@@ -53,7 +53,7 @@ fi
 SCENARIOS=${SCENARIOS:-1 2 3 4 5 6 7}
 LONG_PAUSE=${LONG_PAUSE:-120}
 IDLE_SECS=${IDLE_SECS:-120}
-RG_TRACK=${RG_TRACK:-The Lady Is A Tramp}
+RG_TRACK=${RG_TRACK:-id:47145}
 RG_SECS=${RG_SECS:-25}
 BRIDGE_LAYER=unknown
 S2_ROUNDS=${S2_ROUNDS:-3}
@@ -772,6 +772,40 @@ s9_runs() {
     # The helper's 1/2 mean FAIL/INVALID, not a failed shell setup.
     [[ $RG_ANALYSIS_STATUS -le 2 ]]
 }
+s9_match() {
+    [[ -n $1 ]] || return 0
+    printf 'id=%s | title=%s | artist=%s | album=%s | replay_gain=%s\n' \
+        "$1" "$2" "$3" "$4" "${5:-none}" >> "$RG_DIR/s9-matches.txt"
+    if [[ -z $RG_TRACK_ID && -n $5 ]]; then
+        RG_TRACK_ID=$1
+        s9_note "chosen id=$1: $2 / $3 / $4; first title match with ReplayGain ($5)"
+    fi
+}
+s9_select_track() {
+    local reply tok id='' title='' artist='' album='' gain=''
+    RG_TRACK_ID=''
+    if [[ $RG_TRACK == id:* ]]; then RG_TRACK_ID=${RG_TRACK#id:}; return 0; fi
+    : > "$RG_DIR/s9-matches.txt"
+    reply=$(cli_raw "titles 0 20 search:$(urlenc "$RG_TRACK") tags:alY") || return 1
+    # Split the encoded CLI tokens first: decoded titles/artists may contain spaces.
+    for tok in $reply id:; do
+        tok=$(urldec "$tok")
+        case $tok in
+            id:*)
+                s9_match "$id" "$title" "$artist" "$album" "$gain"
+                id=${tok#id:}; title=''; artist=''; album=''; gain='' ;;
+            title:*) title=${tok#title:} ;;
+            artist:*) artist=${tok#artist:} ;;
+            album:*) album=${tok#album:} ;;
+            replay_gain:*) gain=${tok#replay_gain:} ;;
+        esac
+    done
+    if [[ -z $RG_TRACK_ID ]]; then
+        s9_note "Title matches for $RG_TRACK (up to 20):"
+        s9_note "$(cat "$RG_DIR/s9-matches.txt")"
+        return 1
+    fi
+}
 scenario_9() {
     local reply analysis last status reason
     RG_DIR="$OUT"
@@ -780,7 +814,7 @@ scenario_9() {
     RG_REPORT="$RG_DIR/s9-report.txt"
     : > "$RG_REPORT"
     RG_ACTIVE=1
-    RG_TRACK_ID=$(resolve_track "$RG_TRACK") || { s9_result INVALID "track not found: $RG_TRACK"; return; }
+    s9_select_track || { s9_result INVALID "No title match with ReplayGain: $RG_TRACK; see s9-matches.txt (up to 20 matches)"; return; }
     # Y = track replay_gain; X is album gain. Verified in LMS-Community/slimserver
     # Slim/Control/Queries.pm (%tagMap and %colMap), public/9.0 and public/9.2.
     reply=$(cli_raw "songinfo 0 100 track_id:$RG_TRACK_ID tags:Y") || reply=''

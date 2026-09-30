@@ -368,7 +368,13 @@ The opt-in ReplayGain measurement runs with `SCENARIOS="9"` (also with `AUTO=1`)
 without app prompts. It needs a ReplayGain-tagged track and the `flac` tool
 (`apt-get install -y flac`). S9 measures the gain sent by LMS and the level change
 in YeneY's streamed FLAC, temporarily changes the player's ReplayGain preference,
-then restores it. See the linked testing guide for `RG_TRACK` and `RG_SECS`.
+then restores it. `RG_TRACK` defaults to `id:47145` (Tony Bennett ft. Lady Gaga,
+“The Lady Is A Tramp”, *Duets II*), specific to the owner's LMS library like the
+`TRACK_A`/`TRACK_B` defaults. Find your own ID using the LMS CLI on port 9090:
+`titles 0 20 search:The%20Lady%20Is%20A%20Tramp tags:alY`, then set
+`RG_TRACK="id:<n>"`. A title instead selects the first of up to 20 matches with
+ReplayGain and archives all matches in `s9-matches.txt`; none tagged means
+INVALID with the matches listed. See the linked testing guide for `RG_SECS`.
 
 Forgot `--recursive` when cloning? `git submodule update --init --recursive` fixes
 it after the fact. Existing checkouts upgrading past the removal of the noson

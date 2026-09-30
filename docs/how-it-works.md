@@ -418,9 +418,16 @@ coordinator (`SONOS_IP` overrides it), including stream and GENA ports, with a
 Agents never SSH to or deploy on LXC 113; the owner runs physical tests there.
 
 For an objective ReplayGain check, run
-`sudo env SCENARIOS="9" RG_TRACK="The Lady Is A Tramp" RG_SECS=25 scripts/device-test.sh`
+`sudo env SCENARIOS="9" RG_SECS=25 scripts/device-test.sh`
 (or add `AUTO=1`). S9 is excluded from all default lists and needs no app prompts.
-`RG_TRACK` accepts a title or `id:<n>` and must have a track ReplayGain tag in LMS.
+`RG_TRACK` defaults to `id:47145` (Tony Bennett ft. Lady Gaga, “The Lady Is A
+Tramp”, *Duets II*). Like `TRACK_A`/`TRACK_B`, this default is specific to the
+owner's LMS library. Find an ID with the LMS CLI command
+`titles 0 20 search:The%20Lady%20Is%20A%20Tramp tags:alY` on port 9090, then set
+`RG_TRACK="id:<n>"`. IDs are used as-is. A title searches up to 20 matches and
+selects the first with ReplayGain; every match is recorded in `s9-matches.txt`
+in the tarball. If none has ReplayGain, S9 is INVALID and lists the matches.
+The selected track must have a track ReplayGain tag in LMS.
 Install the FLAC tool with `apt-get install -y flac`; Python 3 and tcpdump are also
 required. S9 changes the player's `replayGainMode` to track gain then off, and
 restores the saved preference on completion, failure or interrupt.
