@@ -82,6 +82,10 @@ bool CoreSonosSink::drained(uint64_t) const {
     std::lock_guard<std::mutex> lock(mutex);
     return queue.empty() && !inflight;
 }
+bool CoreSonosSink::outputEmpty(uint64_t submitted) const {
+    // The feeder may be empty while encoded HTTP/Sonos audio still plays.
+    return audibleFrames() >= submitted && drained(submitted);
+}
 void CoreSonosSink::feed() {
     while (running.load()) {
         Batch b;

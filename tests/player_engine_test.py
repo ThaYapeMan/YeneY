@@ -37,6 +37,7 @@ class WireLMS(LMS):
             p.update(event=body[:4].decode(), elapsed=struct.unpack_from('!I', body, 43)[0],
                      stamp=struct.unpack_from('!I', body, 47)[0])
         self.packets.append(p)
+        self.react(p)
         return p
 
 class Device(Speaker):
@@ -272,6 +273,29 @@ with tempfile.TemporaryDirectory(prefix='yeney-engine-ab-') as tmp:
     assert shared > 0 and runs[0][3][:shared] == runs[1][3][:shared]
     print('PASS: squeezelite dynamically loads libmad for MP3; core has no libmad mapping')
     print('PASS: engine A/B identical identity, transport decisions/stream IDs and bit-identical FLAC/PCM/ALAC; MP3 within tolerance')
+
+    for mode in ('squeezelite', 'core'):
+        parent = directory/f'manual-{mode}'; parent.mkdir()
+        run = Run(mode, parent)
+        try:
+            run.lms.rebuffer_delay = .4
+            for track in range(4):
+                if track:
+                    for _ in range(2):
+                        run.lms.strm('q'); run.lms.wait('STMf')
+                before_stop = run.device.counts.get('Stop', 0)
+                before_play = run.device.counts.get('Play', 0)
+                run.start(flac.read_bytes())
+                run.until(lambda: run.device.counts.get('Play', 0) == before_play + 1)
+                time.sleep(.5)
+                run.lms.timer()
+                assert run.device.counts.get('Stop', 0) == before_stop, run.device.counts
+                assert run.device.counts.get('Play', 0) == before_play + 1, run.device.counts
+                assert not run.lms.rebuffer_commands, run.lms.rebuffer_commands
+            assert not any(p.get('event') == 'STMo' for p in run.lms.packets)
+            print(f'PASS: {mode} repeated q/q/s and normal starts: no STMo, rebuffer p/u or extra UPnP Stop/PlayStream')
+        finally:
+            run.close()
 
     for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGHUP):
         parent = directory/f'signal-{sig}'; parent.mkdir()

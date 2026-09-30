@@ -45,6 +45,7 @@ public:
     uint64_t audibleFrames() const override;
     uint64_t startedFrames() const override;
     bool drained(uint64_t) const override;
+    bool outputEmpty(uint64_t) const override;
     void volume(uint32_t, uint32_t) override {}
     void power(bool) override {}
     bool paced() const override { return false; }

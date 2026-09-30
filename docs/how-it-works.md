@@ -487,6 +487,24 @@ to the owner.
   STMd remains decoder completion. `startOnSubmit` uses the feeder's
   `startedFrames()` coordinate to match the output-boundary
   STMs signal while STAT elapsed remains exclusively the Sonos clock.
+- STMo means running output has genuinely run dry while HTTP streaming is
+  incomplete. The pinned squeezelite fork (`0e1667e`, `slimproto.c:725–728`)
+  checks running state, empty output ring, active HTTP streaming and its report
+  latch. Core additionally requires STMs and submitted frames, no pause/timed
+  start, an empty core queue and `Sink::outputEmpty(submitted)`. Sonos reports
+  emptiness only after both feeder drain and audible progress through submitted
+  frames; an empty staging queue alone says nothing about buffered HTTP/device
+  audio. Successful writes clear core's latch for a later underrun. The coarse
+  Sonos clock may delay or suppress a fractional-second genuine underrun
+  report, avoiding false rebuffer interruptions.
+- STMd remains decoder completion; STMl remains pre-start readiness; STMu
+  retains feeder completion for playlist end. STAT fullness remains the core
+  and decoder queues, matching squeezelite's ring accounting rather than its
+  separate device frames. Zero fullness alone must not trigger rebuffering.
+- The localhost fake LMS responds to STMo with zero-interval `p` followed by
+  `u` after a controlled refill interval. Both engines' repeated manual
+  `q, q, s` tests assert no reports, rebuffer commands or extra UPnP Stop/Play.
+  Squeezelite remains the default and its source and pin are unchanged.
 - Core transport dispatch runs on StopTimer; squeezelite retains inline
   dispatch. Encoder cancellation checks a generation token and shutdown flag.
 - Both libraries link without symbol collisions. A weak core-running probe
