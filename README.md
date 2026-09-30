@@ -410,8 +410,12 @@ to reject an accidental test of the wrong engine. Reports record the mode from
 the room service's current startup journal, rather than the test shell's settings.
 For ReplayGain, run `sudo env SCENARIOS="9" REQUIRE_PLAYER=core scripts/device-test.sh`.
 S9 is expected to measure about **-7.99 dB** with the owner's default tagged track
-in both modes. Core decodes FLAC, MP3, ALAC and PCM; LMS converts OGG, AAC and other
-formats to FLAC/PCM. Agents do not run these checks or deploy on LXC 113.
+in both modes. Core uses only yeney-core's decoders: libFLAC (BSD-3-Clause), minimp3
+(CC0) and Apple ALAC (Apache-2.0), plus its PCM reader. LMS converts OGG, AAC
+and other formats to FLAC/PCM. Automated tests compare lossless output bit for
+bit and LAME-tagged MP3 fixtures by exact gapless frame counts, correlation and
+signal-to-noise ratio. Physical device checks and deployment on LXC 113 are left
+to the owner.
 
 
 ### Source layout

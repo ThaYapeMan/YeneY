@@ -462,8 +462,12 @@ to reject an accidental test of the wrong engine. Reports record the mode from
 the room service's current startup journal, rather than the test shell's settings.
 For ReplayGain, run `sudo env SCENARIOS="9" REQUIRE_PLAYER=core scripts/device-test.sh`.
 S9 is expected to measure about **-7.99 dB** with the owner's default tagged track
-in both modes. Core decodes FLAC, MP3, ALAC and PCM; LMS converts OGG, AAC and other
-formats to FLAC/PCM. Agents do not run these checks or deploy on LXC 113.
+in both modes. Core uses only yeney-core's decoders: libFLAC (BSD-3-Clause), minimp3
+(CC0) and Apple ALAC (Apache-2.0), plus its PCM reader. LMS converts OGG, AAC
+and other formats to FLAC/PCM. Automated tests compare lossless output bit for
+bit and LAME-tagged MP3 fixtures by exact gapless frame counts, correlation and
+signal-to-noise ratio. Physical device checks and deployment on LXC 113 are left
+to the owner.
 
 ### Core host integration decisions
 
@@ -487,9 +491,15 @@ formats to FLAC/PCM. Agents do not run these checks or deploy on LXC 113.
   dispatch. Encoder cancellation checks a generation token and shutdown flag.
 - Both libraries link without symbol collisions. A weak core-running probe
   lets existing standalone squeezelite output fixtures retain their linkage.
-- Native MP3 bit identity needs the same codec: YeneY supplies an original
-  libmad adapter through core's optional decoder factory. Its bounded worker
-  queues are 65,536 input bytes and 8,192 output frames. Standalone yeney-core
-  and LampaStream retain minimp3. This additional GPL dependency must also be
-  addressed in a future removal/licensing round. No squeezelite code is copied
-  into either implementation.
+- Core uses yeney-core's default decoder selection, including minimp3 for MP3;
+  no host decoder factory or libmad compatibility adapter is installed.
+
+The A/B MP3 fixtures use genuine LAME gapless tags and verify exactly 70,130
+and 80,060 frames with a following PCM marker, which releases the final partial
+FLAC block and checks the boundary without waveform alignment. Both measured
+88.03 dB SNR against squeezelite's dynamically loaded libmad; the test requires
+at least 80 dB SNR and 0.9999 correlation. FLAC and PCM remain bit-identical.
+For ALAC, core receives the native fixture and the unchanged squeezelite build
+receives its reference PCM, modelling LMS's lossless conversion. Core's existing
+Lavc-tagged fixtures have different trimming from squeezelite's LAME-only parser;
+this round does not change either submodule's metadata handling.

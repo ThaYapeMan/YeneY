@@ -64,8 +64,8 @@ int main() {
 '''
 with tempfile.TemporaryDirectory(prefix='yeney-core-sink-') as tmp:
     cpp=Path(tmp)/'sink.cpp'; exe=Path(tmp)/'sink'; cpp.write_text(source)
-    subprocess.run(['g++','-std=c++17','-O2','-Wall','-I.',str(cpp),'core_sonos.cpp','compatibility_decoder.cpp',
-                    'third_party/yeney-core/libyeneycore.a','-lFLAC','-lmad','-pthread','-o',str(exe)],cwd=root,check=True)
+    subprocess.run(['g++','-std=c++17','-O2','-Wall','-I.',str(cpp),'core_sonos.cpp',
+                    'third_party/yeney-core/libyeneycore.a','-lFLAC','-pthread','-o',str(exe)],cwd=root,check=True)
     import os
     for mode in ('24/48','16/44'):
         env={**os.environ}; env.pop('YENEY_AUDIO',None)

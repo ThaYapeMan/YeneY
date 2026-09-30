@@ -16,8 +16,6 @@ licence text in the [pinned core notices](third_party/yeney-core/THIRD_PARTY_NOT
 See also [squeezelite's licence](squeezelite/LICENSE.txt) and the retained
 [core ALAC distribution notice](third_party/yeney-core/third_party/ALAC_NOTICE).
 
-For this A/B round, YeneY's core host supplies a native MP3 compatibility decoder
-using system libmad (GPL-2.0-or-later), with the same precision and LAME handling
-as the installed squeezelite mode. This is additional GPL-covered linked code;
-the standalone core still defaults to minimp3. On Debian the full libmad licence
-and copyright notices are installed at `/usr/share/doc/libmad0/copyright`.
+Core mode uses only yeney-core's decoders: libFLAC (BSD-3-Clause), minimp3
+(CC0) and Apple ALAC (Apache-2.0), plus its PCM reader. Squeezelite continues
+to load its own codec libraries dynamically; its GPL licensing remains applicable.

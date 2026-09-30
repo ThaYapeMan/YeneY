@@ -1,5 +1,7 @@
 """Real YeneY, loopback Sonos SOAP/HTTP and yeney-core's fake LMS wire driver."""
 import os
+import math
+import zlib
 from pathlib import Path
 import re
 import signal
@@ -13,6 +15,8 @@ from http.server import ThreadingHTTPServer
 from urllib.parse import urlsplit
 import http.client
 
+# Both committed LAME fixtures measured 88.03 dB; allow 8 dB of platform margin.
+MP3_MIN_SNR_DB = 80.0
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT/'third_party/yeney-core/tests'))
 from fake_lms import LMS, HTTP, pcm
@@ -73,6 +77,8 @@ class Run:
                 stdout=self.log, stderr=self.log, env={**os.environ, 'YENEY_PLAYER': mode, 'YENEY_POLL': 'legacy'})
         hello = self.lms.accept(); assert hello['op'] == 'HELO', hello
         self.mac = hello['body'][2:8]
+        maps = Path(f'/proc/{self.proc.pid}/maps').read_text()
+        assert ('libmad.so' in maps) == (mode == 'squeezelite'), mode
         self.lms.send('setd', bytes([0]))
         assert self.lms.wait('SETD')['body'] == b'\0Study (Sonos)\0'
     def read_audio(self):
@@ -92,16 +98,22 @@ class Run:
             except (OSError, http.client.HTTPException): pass
             finally: conn.close()
         threading.Thread(target=read, daemon=True).start()
-    def start(self, body, fmt='f', rate=44100, bits=16):
+    def start(self, body, fmt='f', rate=44100, bits=16, continuation=None):
         source = HTTP(body); self.sources.append(source)
         self.start_packet = len(self.lms.packets)
         self.lms.strm('s', source, fmt=fmt, rate=rate, bits=bits)
         self.lms.wait('STMs', 10)
+        if continuation is not None:
+            self.decoded_track()
+            self.start(continuation, fmt='p')
         elapsed = [self.lms.timer(stamp)['elapsed'] for stamp in (41, 42, 43)]
         assert elapsed == sorted(elapsed) and elapsed[0] == 0, elapsed
     def decoded_track(self):
         if not any(p.get('event') == 'STMd' for p in self.lms.packets[self.start_packet:]):
             self.lms.wait('STMd')
+    def completed(self):
+        if not any(p.get('event') == 'STMu' for p in self.lms.packets[self.start_packet:]):
+            self.lms.wait('STMu', 12)
     def until(self, predicate, timeout=8):
         end = time.monotonic() + timeout
         while not predicate():
@@ -143,6 +155,9 @@ with tempfile.TemporaryDirectory(prefix='yeney-engine-ab-') as tmp:
     flac48 = directory/'audio48.flac'
     subprocess.run(['flac', '-s', '--force-raw-format', '--endian=little', '--sign=signed', '--channels=2',
                     '--bps=24', '--sample-rate=48000', '-o', str(flac48), str(directory/'audio48.raw')], check=True)
+    marker, _ = pcm(seconds=1)
+    marker = marker[:4096*4]
+    marker24 = b''.join(b'\0'+marker[i:i+2] for i in range(0,len(marker),2))
     runs = []
     for mode in ('squeezelite', 'core'):
         run = Run(mode, directory)
@@ -180,8 +195,27 @@ with tempfile.TemporaryDirectory(prefix='yeney-engine-ab-') as tmp:
 
             # Replay a compressed fixture through the same real output path.
             run.lms.strm('q'); run.lms.wait('STMf')
-            run.start((ROOT/'third_party/yeney-core/tests/fixtures/gapless-0.mp3').read_bytes(), fmt='m')
-            run.lms.wait('STMu', 12)
+            run.start((ROOT/'tests/fixtures/lame-0.mp3').read_bytes(), fmt='m', continuation=marker)
+            run.completed()
+            time.sleep(.3)
+            # A second independently tagged MP3 checks exact gapless lengths.
+            run.lms.strm('q'); run.lms.wait('STMf')
+            run.start((ROOT/'tests/fixtures/lame-70130.mp3').read_bytes(), fmt='m', continuation=marker)
+            run.completed()
+            time.sleep(.3)
+            run.lms.strm('q'); run.lms.wait('STMf')
+            run.start(raw, fmt='p')
+            run.completed()
+            time.sleep(.3)
+            # This unchanged squeezelite build does not advertise native ALAC.
+            # Model LMS's lossless PCM conversion for it; core receives ALAC.
+            alac = ROOT/'third_party/yeney-core/tests/fixtures/alac-16-2.m4a'
+            reference = zlib.decompress(alac.with_suffix('.reference.zlib').read_bytes())
+            alac_pcm = b''.join(reference[i+2:i+4] for i in range(0,len(reference),4))
+            run.lms.strm('q'); run.lms.wait('STMf')
+            run.start(alac.read_bytes() if mode == 'core' else alac_pcm,
+                      fmt='l' if mode == 'core' else 'p')
+            run.completed()
             time.sleep(.3)
             if mode == 'core':
                 run.device.delay = 2
@@ -204,17 +238,39 @@ with tempfile.TemporaryDirectory(prefix='yeney-engine-ab-') as tmp:
         # The additional core-only nonblocking probe ends with p.
         if mode == 'core': decisions.pop()
         streams = re.findall(r'^stream (\d+): FLAC (\d+)-bit (\d+) Hz', log, re.MULTILINE)
-        assert streams == [('1','24','44100'),('2','24','44100'),('3','24','48000'),('4','24','44100')], streams
+        assert streams == [('1','24','44100'),('2','24','44100'),('3','24','48000'),('4','24','44100'),('5','24','44100'),('6','24','44100'),('7','24','44100')], streams
         runs.append((run.mac, run.decoded(), decisions, run.initial_pcm))
         print(f'PASS: {mode} real binary FLAC/MP3, pause/resume, paused seek, continuous/rate-change IDs, sync delay, audible clock and playlist completion within 3 s')
     assert runs[0][0] == runs[1][0], 'player identities differ'
     assert runs[0][2] == runs[1][2], [r[2] for r in runs]
-    assert runs[0][1] == runs[1][1], [(list(map(len, r[1]))) for r in runs]
+    assert len(runs[0][1]) == len(runs[1][1]) == 6
+    for index in (0, 1, 4, 5):
+        assert runs[0][1][index] == runs[1][1][index], ('lossless mismatch', index)
+    for index, frames in ((2,70130),(3,80060)):
+        a,b = (r[1][index] for r in runs)
+        assert len(a) == len(b) and len(a) > frames*6, (index,len(a)//6,len(b)//6,frames)
+        # The exact marker boundary proves the MP3 frame count, including
+        # gapless trimming. It also releases the encoder's partial FLAC block.
+        for data in (a,b):
+            assert data[frames*6:] == marker24[:len(data)-frames*6], ('gapless boundary',index)
+        a,b = a[:frames*6],b[:frames*6]
+        a,b = ([int.from_bytes(data[i:i+3], 'little', signed=True)
+                for i in range(0,len(data),3)] for data in (a,b))
+        energy = sum(x*x for x in a)
+        error = sum((x-y)**2 for x,y in zip(a,b))
+        snr = 10*math.log10(energy/error) if error else math.inf
+        am,bm = sum(a)/len(a),sum(b)/len(b)
+        corr = sum((x-am)*(y-bm) for x,y in zip(a,b))/math.sqrt(
+            sum((x-am)**2 for x in a)*sum((y-bm)**2 for y in b))
+        assert corr >= .9999 and snr >= MP3_MIN_SNR_DB, (corr,snr)
+        print(f'PASS: MP3 {frames} frames (exact gapless boundary): correlation={corr:.9f} >= 0.9999; SNR={snr:.2f} dB >= {MP3_MIN_SNR_DB:.0f} dB', flush=True)
+
     # Pausing closes this response at a scheduling-dependent byte boundary.
     # Compare every sample received by both runs before that interruption.
     shared = min(len(r[3]) for r in runs)
     assert shared > 0 and runs[0][3][:shared] == runs[1][3][:shared]
-    print('PASS: engine A/B identical identity, transport decisions/stream IDs and decoded 16/24-bit FLAC and MP3 PCM')
+    print('PASS: squeezelite dynamically loads libmad for MP3; core has no libmad mapping')
+    print('PASS: engine A/B identical identity, transport decisions/stream IDs and bit-identical FLAC/PCM/ALAC; MP3 within tolerance')
 
     for sig in (signal.SIGINT, signal.SIGQUIT, signal.SIGHUP):
         parent = directory/f'signal-{sig}'; parent.mkdir()

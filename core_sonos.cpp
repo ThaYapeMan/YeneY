@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_sonos.h"
-#include "compatibility_decoder.h"
 #include "audio_mode.h"
 #include "sonos-position.h"
 #include <algorithm>
@@ -132,7 +131,6 @@ void runCoreClient(const char* server, const uint8_t* mac, const char* name) {
         config.log = [](const std::string& line) { printf("core: %s\n", line.c_str()); };
         config.observeCommand = [&](const yeney::Command& c) { sink.command(c); };
         config.startOnSubmit = true;
-        config.decoderFactory = makeCompatibilityDecoder;
         yeney::Player player(config, sink);
         player.run(coreStop);
     } catch (const std::exception& error) {
