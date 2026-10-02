@@ -13,6 +13,7 @@
 #include <thread>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <netinet/tcp.h>
 #include <unistd.h>
 
 namespace upnp {
@@ -95,6 +96,8 @@ struct Request : StreamRequest {
     Method method() const override { return verb == "GET" ? Method::Get : verb == "HEAD" ? Method::Head : Method::Other; }
     std::string parameter(const std::string& key) const override { auto i=params.find(key); return i == params.end() ? "" : i->second; }
     RequestHeaders headers() const override { return fields; }
+    uint64_t connectionSentBytes() const override { return io.sentBytes ? io.sentBytes() : UINT64_MAX; }
+    std::string connectionDiagnostics() const override { return io.diagnostics ? io.diagnostics() : StreamRequest::connectionDiagnostics(); }
     bool send(const char* data, size_t n) override { return io.send(data,n); }
     bool peerClosed() override { return io.peerClosed(); }
     void sendTimeout(unsigned ms) override { io.sendTimeout(ms); }
@@ -107,10 +110,21 @@ struct Request : StreamRequest {
 };
 struct Socket {
     const int fd;
+    std::atomic<uint64_t> sentBytes{0};
+    std::atomic<int> ended{0}; // 1 FIN, 2 RST/EPIPE, 3 local close
+    std::string diagnostics() const {
+        tcp_info info{}; socklen_t size = sizeof(info);
+        std::string result = "tcp=unavailable";
+        if (!getsockopt(fd, IPPROTO_TCP, TCP_INFO, &info, &size))
+            result = "rtt_us=" + std::to_string(info.tcpi_rtt) + " rttvar_us=" + std::to_string(info.tcpi_rttvar)
+                + " snd_cwnd=" + std::to_string(info.tcpi_snd_cwnd) + " unacked=" + std::to_string(info.tcpi_unacked)
+                + " retransmits=" + std::to_string(info.tcpi_retransmits) + " total_retrans=" + std::to_string(info.tcpi_total_retrans);
+        return result + " end=" + (ended == 1 ? "peer_FIN" : ended == 2 ? "RST/EPIPE" : ended == 3 ? "our_close" : "open");
+    }
     explicit Socket(int descriptor) : fd(descriptor) { if (fd < 0) throw std::runtime_error(strerror(errno)); }
     ~Socket() { close(fd); }
     Socket(const Socket&) = delete;
-    void disconnect() { shutdown(fd, SHUT_RDWR); }
+    void disconnect() { int expected = 0; ended.compare_exchange_strong(expected, 3); shutdown(fd, SHUT_RDWR); }
     void timeout(unsigned ms) {
         timeval t{time_t(ms/1000), suseconds_t(ms%1000*1000)};
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &t, sizeof(t));
@@ -119,13 +133,15 @@ struct Socket {
         while (size) {
             const auto n = ::send(fd, bytes, size, MSG_NOSIGNAL);
             if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) return false;
-            bytes += n; size -= n;
+            if (n <= 0) { if (errno == EPIPE || errno == ECONNRESET) ended = 2; return false; }
+            sentBytes += n; bytes += n; size -= n;
         }
         return true;
     }
     bool closed() {
         char byte; const auto n = recv(fd, &byte, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (n == 0) { int expected = 0; ended.compare_exchange_strong(expected, 1); }
+        else if (n < 0 && (errno == ECONNRESET || errno == EPIPE)) ended = 2;
         return n == 0 || (n < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK);
     }
 };
@@ -211,7 +227,7 @@ struct HttpServer::Impl {
         HttpRequestIO io{
             [client](const char* p,size_t n) { return client->send(p,n); },
             [client] { return client->closed(); }, [this] { return stopping.load(); },
-            [client](unsigned ms) { client->timeout(ms); }, [client] { client->disconnect(); }};
+            [client](unsigned ms) { client->timeout(ms); }, [client] { client->disconnect(); }, [client] { return client->diagnostics(); }, [client] { return client->sentBytes.load(); }};
         auto request = httpRequestFromHeaders(wire, std::move(io));
         if (error || !request) {
             const auto reply = response(error ? error : wire.compare(0, 7, "NOTIFY ") == 0 ? 412 : 400) + "\r\n"; client->send(reply.data(),reply.size()); return;

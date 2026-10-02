@@ -5,9 +5,13 @@
 #include <sys/socket.h>
 #include <stdint.h>
 static ssize_t sonos_slimproto_send(int fd, uint8_t *packet, size_t len, int flags);
+extern void sonos_output_status(void);
+extern int sonos_output_drained(void);
+#define SONOS_STATUS() sonos_output_status()
+#define SONOS_DRAINED() sonos_output_drained()
 #define send sonos_slimproto_send
 #define slimproto slimproto_original
-#include "squeezelite/slimproto.c"
+#include "slimproto_sonos_impl.h"
 #undef slimproto
 #undef send
 

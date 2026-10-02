@@ -1,5 +1,6 @@
 #pragma once
 #include <functional>
+#include <cstdint>
 #include <string>
 #include <vector>
 #include <utility>
@@ -39,6 +40,8 @@ public:
         }
         return {};
     }
+    virtual uint64_t connectionSentBytes() const { return UINT64_MAX; }
+    virtual std::string connectionDiagnostics() const { return "tcp=unavailable end=unknown"; }
     virtual bool send(const char* data, size_t size) = 0;
     virtual bool peerClosed() = 0;
     virtual void sendTimeout(unsigned milliseconds) = 0;

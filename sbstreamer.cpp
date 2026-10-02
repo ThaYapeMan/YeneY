@@ -18,6 +18,7 @@
 #include "stream_close_log.h"
 
 #include "sbencoder.h"
+#include "stream_debug.h"
 #include "audio_mode.h"
 #include <map>
 #include "sonos-position.h"
@@ -286,6 +287,8 @@ bool SBStreamer::HandleRequest(upnp::StreamRequest* handle)
 
 void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsigned long long requestId)
 {
+    StreamDebugRequest diagnostics(*handle);
+    handle = &diagnostics;
     printf("Sonos requested stream %d\n", stream);
     // Bound a stalled peer as well as a stalled PCM producer. Sending uses
     // the socket directly, so a receive timeout alone is insufficient.
@@ -381,6 +384,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
             }
         }
         if (superseded) { restart("superseded history"); return; }
+        diagnostics.encoder([canonical] { return canonical->encodedAudioMs(); }, true);
         const auto bounds = canonical->history.bounds();
         printf("stream %d: Range resume from %llu (history %llu–%llu) → continued\n", stream,
             (unsigned long long)offset, (unsigned long long)bounds.first, (unsigned long long)bounds.second);
@@ -544,6 +548,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
         request->serving = true;
         if (heldResume) printf("held resume GET #%llu fed\n", request->id);
         printf("stream %d: serving current generation with fresh FLAC header\n", stream);
+        diagnostics.encoder([enc] { return enc->encodedAudioMs(); });
         const auto responseStarted = std::chrono::steady_clock::now();
         size_t sent = 0;
         bool sendFailed = false;

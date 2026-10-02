@@ -14,6 +14,7 @@
 #include "output_sonos.h"
 #include "sonos-position.h"
 #include "audio_mode.h"
+#include "start_lead.h"
 #include <stdatomic.h>
 
 #if BYTES_PER_FRAME != 8
@@ -50,6 +51,37 @@ static atomic_bool next_track_continuous = false;
 static bool boundary_continuous = false;
 static unsigned stream_sample_rate;
 static uint64_t stream_frames, track_stream_offset;
+static bool position_fix_disabled = false;
+static bool reserve_reporting(void) { return !position_fix_disabled && yeney_start_lead_ms() != 0; }
+// Reporting boundaries are separate from the PCM/encoder cursor. A bounded
+// queue covers prebuffered short tracks; backpressure stops at a full queue.
+static uint64_t report_offsets[64], report_offset;
+static unsigned report_head, report_count;
+static bool report_initial = true, report_ready;
+static u32_t report_time;
+static unsigned report_stream;
+void sonos_output_status(void) {
+    if (!reserve_reporting()) return;
+    uint64_t heard = get_sonos_audible_frames(output.current_sample_rate);
+    if (report_ready && !output.track_started) report_ready = false;
+    if (!report_ready && report_count && (report_initial || heard > report_offsets[report_head])) {
+        report_offset = report_offsets[report_head];
+        report_head = (report_head + 1) % 64; --report_count;
+        report_ready = true;
+        report_time = gettime_ms();
+        report_initial = false;
+    }
+    output.track_started = report_ready;
+    if (report_ready) output.track_start_time = report_time;
+    output.frames_played_dmp = stream_frames > report_offset ? stream_frames - report_offset : 0;
+    uint64_t audible = heard > report_offset ? heard - report_offset : 0;
+    output.device_frames = output.frames_played_dmp > audible ? output.frames_played_dmp - audible : 0;
+}
+int sonos_output_drained(void) {
+    return !reserve_reporting() || (report_count == 0 &&
+        get_sonos_audible_frames(output.current_sample_rate) >= stream_frames);
+}
+
 void sonos_output_new_track(int continuous) {
     atomic_store(&next_track_continuous, continuous != 0);
 }
@@ -58,7 +90,7 @@ void sonos_output_new_track(int continuous) {
 // unit to fall back to device_frames == 0 without rebuilding, in case the
 // Sonos-position-derived value below ever needs to be ruled out as a cause
 // of a playback-position report. No code path relies on this being unset.
-static bool position_fix_disabled = false;
+
 
 // new_squeezebox_stream_id() / get_squeezebox_stream_id() are defined in
 // yeney.cpp, which owns the shared stream-id counter the encoder
@@ -95,6 +127,15 @@ static int _sonos_write_frames(frames_t out_frames, bool silence, s32_t gainL, s
                    sonos_audio_legacy() ? 16u : 24u, rate);
         } else {
             track_stream_offset = stream_frames;
+        }
+        if (reserve_reporting()) {
+            unsigned current = get_squeezebox_stream_id();
+            if (report_stream != current) {
+                report_stream = current; report_head = report_count = 0;
+                report_offset = 0; report_initial = true; report_ready = false; output.track_started = false;
+            }
+            report_offsets[(report_head + report_count) % 64] = track_stream_offset;
+            ++report_count;
         }
         stream_boundary_pending = false;
     }
@@ -162,7 +203,7 @@ static void pump_once(void)
     // A transport pause holds the encoder and whatever is already
     // staged, ready for a later unpause, instead of decoding further.
     u8_t* track_start_before = output.track_start;
-    if (output.state != OUTPUT_STOPPED)
+    if (output.state != OUTPUT_STOPPED && (!reserve_reporting() || report_count < 64))
         _output_frames(FRAME_BLOCK);
 
     // squeezelite clears track_start at a decoded-track boundary; a
@@ -170,12 +211,14 @@ static void pump_once(void)
     // clear it, so this only fires on an actual new track, which is
     // when the next PCM batch decides whether the format needs a new stream.
     if (track_start_before && !output.track_start) {
+        if (reserve_reporting()) output.track_started = report_ready;
         stream_boundary_pending = true;
         boundary_continuous = atomic_exchange(&next_track_continuous, false);
         if (!sonos_audio_legacy()) output.frames_played_dmp = 0;
     }
 
-    update_device_frames_from_sonos_position();
+    if (reserve_reporting()) sonos_output_status();
+    else update_device_frames_from_sonos_position();
 
     UNLOCK;
 

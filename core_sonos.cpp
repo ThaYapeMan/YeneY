@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_sonos.h"
 #include "audio_mode.h"
+#include "start_lead.h"
 #include "sonos-position.h"
 #include <algorithm>
 #include <csignal>
@@ -76,11 +77,16 @@ uint64_t CoreSonosSink::audibleFrames() const {
     return audible;
 }
 uint64_t CoreSonosSink::startedFrames() const {
-    std::lock_guard<std::mutex> lock(mutex); return started;
+    if (!yeney_start_lead_ms()) { std::lock_guard<std::mutex> lock(mutex); return started; }
+    const auto position = audibleFrames();
+    std::lock_guard<std::mutex> lock(mutex);
+    // Initial STMs starts the LMS session; later boundaries must be audible.
+    return std::min(started, std::max<uint64_t>(position, started > streamBase ? streamBase + 1 : position));
 }
 bool CoreSonosSink::drained(uint64_t) const {
+    if (yeney_start_lead_ms()) audibleFrames();
     std::lock_guard<std::mutex> lock(mutex);
-    return queue.empty() && !inflight;
+    return queue.empty() && !inflight && (!yeney_start_lead_ms() || audible >= handed);
 }
 bool CoreSonosSink::outputEmpty(uint64_t submitted) const {
     // The feeder may be empty while encoded HTTP/Sonos audio still plays.

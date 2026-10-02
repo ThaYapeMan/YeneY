@@ -26,3 +26,6 @@ speaker-state-test
 
 /range-test
 /range-history-test
+
+lead-test
+slimproto_sonos_impl.h

@@ -49,9 +49,12 @@ yeney: $(OBJS) $(OBJS_SL) $(CORE_LIB)
 		-lpthread -lm -lrt -ldl -lasound
 
 clean:
-	rm -f range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f slimproto_sonos_impl.h lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
-slimproto_sonos.o: slimproto_sonos.c squeezelite/slimproto.c squeezelite/squeezelite.h
+slimproto_sonos_impl.h: scripts/prepare-sonos-slimproto.py squeezelite/slimproto.c
+	python3 scripts/prepare-sonos-slimproto.py
+
+slimproto_sonos.o: slimproto_sonos.c slimproto_sonos_impl.h squeezelite/squeezelite.h
 
 .PHONY: test install
 install: yeney
@@ -59,7 +62,15 @@ install: yeney
 encoder-test: tests/audio_pack_fixture.o squeezelite/output_pack.o upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.o squeezelite/output_pack.o sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
-test: range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+test: export YENEY_START_LEAD_MS = 0
+test: lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	python3 tests/stream_debug_test.py
+	python3 tests/lead_setting_test.py
+	YENEY_START_LEAD_MS=2000 ./lead-test
+	YENEY_START_LEAD_MS=0 ./lead-test
+	YENEY_START_LEAD_MS=2000 YENEY_PLAYER=core ./range-test
+	YENEY_START_LEAD_MS=2000 YENEY_PLAYER=squeezelite ./range-test
+	python3 tests/start_lead_test.py
 	./range-history-test
 	YENEY_PLAYER=core ./range-test
 	YENEY_PLAYER=squeezelite ./range-test
@@ -162,9 +173,18 @@ upnp/http_server.o streamer-test own-control-test: upnp/icon.h
 
 yeney.o sbstreamer.o streamer-test: source_ownership.h speaker_uri.h
 
-sbencoder.o sbstreamer.o encoder-test streamer-test: encoded_history.h
+sbencoder.o sbstreamer.o encoder-test streamer-test: encoded_history.h sbencoder.h start_lead.h stream_debug.h
 
-range-history-test: tests/range_history_test.cpp encoded_history.h
+range-history-test: tests/range_history_test.cpp encoded_history.h sbencoder.h start_lead.h stream_debug.h
 	g++ -std=c++17 -O2 -Wall -I. -o $@ $<
-range-test: tests/range_fixture.cpp sbstreamer.cpp sbencoder.cpp sonos-position.cpp upnp/encoded_buffer.cpp $(wildcard upnp/*.h) encoded_history.h
+range-test: tests/range_fixture.cpp sbstreamer.cpp sbencoder.cpp sonos-position.cpp upnp/encoded_buffer.cpp $(wildcard upnp/*.h) encoded_history.h sbencoder.h start_lead.h stream_debug.h
 	g++ -std=c++17 -O2 -Wall -I. -o $@ $(filter %.cpp,$^) -lFLAC++ -lFLAC -lcrypto -lpthread
+
+lead-test: tests/lead_fixture.cpp sbencoder.cpp sbencoder.h start_lead.h upnp/encoded_buffer.cpp
+	g++ -g -O2 -Wall -I. -o $@ tests/lead_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
+
+sbencoder.o core_sonos.o output_sonos.o: start_lead.h
+sbstreamer.o: stream_debug.h sbencoder.h
+upnp/http_server.o: upnp/http_server.h upnp/stream_server.h
+
+sonos-position.o: position_state.h start_lead.h

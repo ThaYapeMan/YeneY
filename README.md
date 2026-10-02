@@ -477,3 +477,5 @@ affiliated with or endorsed by Sonos, Inc., Logitech or the Lyrion project.
 Copyright (C) 2026 Jaap van Vliet
 
 Grouped HTTP recovery and investigation: [Decisions and findings](docs/grouped-range-recovery.md).
+
+Grouped playback reserve: `YENEY_START_LEAD_MS=1000` (default; valid 0–10000; 0 retains legacy pacing). Set `YENEY_DEBUG_STREAM=1` for per-response lead and TCP diagnostics. See [decisions and device trials](docs/start-lead.md).

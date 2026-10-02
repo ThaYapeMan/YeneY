@@ -77,6 +77,7 @@ public:
     // True once at least one non-empty FLAC frame has actually been written.
     bool hasAudio() const { return m_producedAudio.load(); }
 
+    uint64_t encodedAudioMs() const { return m_encodedFrames.load() * 1000 / m_sampleRate; }
     EncodedHistory history;
     void useHistoryReader() { m_historyReader.store(true); if (m_phase == Phase::Closing) close(); }
     bool historyFinished() const { return m_phase == Phase::Closed; }
@@ -95,6 +96,7 @@ private:
     int acceptEncodedBytes(const char* data, int len);
     int drainEncodedBytes(char* data, int maxlen);
 
+    std::atomic<uint64_t> m_encodedFrames{0};
     std::atomic<Phase> m_phase;
     std::atomic<bool> m_historyReader{false};
     std::atomic<bool> m_cancelled{false};

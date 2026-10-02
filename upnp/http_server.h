@@ -12,6 +12,8 @@ struct HttpRequestIO {
     std::function<bool()> peerClosed, aborted;
     std::function<void(unsigned)> sendTimeout;
     std::function<void()> disconnect;
+    std::function<std::string()> diagnostics = {};
+    std::function<uint64_t()> sentBytes = {};
 };
 std::unique_ptr<StreamRequest> httpRequestFromHeaders(const std::string&, HttpRequestIO);
 class HttpServer : public StreamServer {

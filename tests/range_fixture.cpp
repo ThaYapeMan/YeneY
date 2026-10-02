@@ -1,4 +1,5 @@
 #include "sbstreamer.h"
+#include "start_lead.h"
 #include "stream_session.h"
 #include "source_ownership.h"
 #include <atomic>
@@ -78,7 +79,7 @@ int main() {
     std::vector<char> pcm(8192*6); uint32_t rng=17;
     for(auto& b:pcm) { rng=rng*1664525u+1013904223u; b=rng>>24; }
     auto producer=std::async(std::launch::async,[&]{for(int i=0;i<24;++i) { if(i==12) for(auto& b:pcm) b=~b; encode_squeezebox_audio(pcm.data(),pcm.size(),i*8192); }});
-    std::this_thread::sleep_for(std::chrono::milliseconds(2200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(yeney_start_lead_ms() ? 500 : 2200));
     original.closed=true; first.get();
     auto canonical=original.body;
     assert(canonical.size()>100000 && !memcmp(canonical.data(),"fLaC",4));

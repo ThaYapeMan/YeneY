@@ -11,6 +11,7 @@
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 #include "sbencoder.h"
+#include "start_lead.h"
 #include <set>
 
 #include <chrono>
@@ -26,10 +27,7 @@ constexpr int kSamplesPerChunk = 1024;
 constexpr int kEncodedRingCapacity = 256;
 constexpr int kChannelCount = 2;
 
-// How far, in milliseconds, encoded-but-unsent audio is allowed to run ahead
-// of what Sonos has actually played before write() blocks the decoder. Kept
-// short so a stream resume after a Sonos-side reconnect only has to discard
-// a fraction of a second of audio, not several seconds of stale buffer.
+// Exact legacy pacing window when the configured start lead is zero.
 constexpr uint32_t kMaxEncodeLeadMs = 250;
 
 // Unpacks one little-endian PCM sample at `cursor` (advancing it) into the
@@ -210,6 +208,7 @@ FLAC__StreamEncoderWriteStatus SBEncoder::WriteBridge::write_callback(
     const FLAC__byte buffer[], size_t bytes, unsigned samples, unsigned current_frame)
 {
     (void)current_frame;
+    m_owner->m_encodedFrames.fetch_add(samples);
     int written = m_owner->acceptEncodedBytes((const char*)buffer, (int)bytes);
     if (samples && written == (int)bytes)
         m_owner->m_producedAudio.store(true);
@@ -289,11 +288,10 @@ int SBEncoder::write(const char* data, int len, unsigned timeout, const std::fun
         const uint64_t firstRead = m_firstReadAtMs.load();
         const uint64_t playedMs = firstRead ? get_sb_time_ms() - firstRead : 0;
 
-        // Sonos drops its old HTTP connection on resume, so keep the
-        // encode-ahead window short: reconnect loss should stay under a
-        // second, not the several seconds a fully-buffered decoder would
-        // otherwise let build up.
-        if (!yeney_is_paused() && encodedMs < playedMs + kMaxEncodeLeadMs) {
+        // The same per-encoder clock covers the initial burst and steady
+        // delivery. Checking before accepting a whole batch bounds overshoot
+        // to one producer batch. Gapless writes keep this clock and allowance.
+        if (!yeney_is_paused() && encodedMs < playedMs + (yeney_start_lead_ms() ? yeney_start_lead_ms() : kMaxEncodeLeadMs)) {
             std::lock_guard<std::mutex> lock(m_writeMutex);
             if (cancelled() || responseEnded() || producerRetired() || m_phase != Phase::Encoding)
                 return 0;

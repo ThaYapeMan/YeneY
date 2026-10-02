@@ -22,6 +22,7 @@
 #include "sonos-position.h"
 
 #include "position_state.h"
+#include "start_lead.h"
 #include <chrono>
 #include <mutex>
 
@@ -41,7 +42,7 @@ void sonos_position_connection(unsigned stream, uint64_t request) {
 }
 void sonos_position_pcm(unsigned stream, uint64_t request, uint64_t firstFrame) {
     std::lock_guard<std::mutex> lock(positionMutex);
-    position.pcm(stream, request, firstFrame, positionNow());
+    position.pcm(stream, request, firstFrame, positionNow(), yeney_start_lead_ms() != 0);
 }
 uint64_t sonos_position_poll_token(void) {
     std::lock_guard<std::mutex> lock(positionMutex);

@@ -8,7 +8,7 @@ class ConnectionPosition {
 public:
     void reset(unsigned id) {
         stream = id; request = 0; base = relative = lastFrames = 0;
-        anchored = hadAudio = heardPosition = false;
+        anchored = hadAudio = heardPosition = pendingAudibleBase = false;
         audibleBase = lastAudible = 0; ++generation;
     }
     void connection(unsigned id, uint64_t req, uint64_t now) {
@@ -17,15 +17,16 @@ public:
         // Hold the last reported position until the first PCM offset is known.
         base = lastFrames;
         audibleBase = lastAudible;
-        relative = 0; anchored = false; started = now; ++generation;
+        relative = 0; anchored = false; pendingAudibleBase = false; started = now; ++generation;
         if (!hadAudio) base = 0;
     }
-    void pcm(unsigned id, uint64_t req, uint64_t firstFrame, uint64_t now) {
+    void pcm(unsigned id, uint64_t req, uint64_t firstFrame, uint64_t now, bool deferAudible = false) {
         if (id != stream || req != request || anchored) return;
         base = hadAudio ? firstFrame : 0;
         // S7#2 (27 Sep): the first GET closed after 1.25 s, before
         // any positive RelTime. Its queued PCM is not an audible offset.
-        audibleBase = heardPosition ? base : 0;
+        pendingAudibleBase = deferAudible && heardPosition;
+        audibleBase = heardPosition ? (deferAudible ? lastAudible : base) : 0;
         relative = 0; anchored = hadAudio = true;
         started = now; ++generation;
     }
@@ -37,6 +38,7 @@ public:
         // Position reads are cached for one second. Ignore that cache after
         // a handoff, and reject an old RelTime larger than this GET's lifetime.
         if (now - started < 1100 || ms > now - started + 1000) return;
+        if (pendingAudibleBase) { audibleBase = base; pendingAudibleBase = false; }
         relative = ms;
         heardPosition = true;
     }
@@ -55,6 +57,6 @@ private:
     uint64_t request = 0, generation = 0, base = 0, started = 0, lastFrames = 0;
     uint32_t relative = 0;
     uint64_t audibleBase = 0, lastAudible = 0;
-    bool anchored = false, hadAudio = false, heardPosition = false;
+    bool anchored = false, hadAudio = false, heardPosition = false, pendingAudibleBase = false;
 };
 #endif
