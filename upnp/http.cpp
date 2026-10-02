@@ -1,4 +1,5 @@
 #include "http.h"
+#include "../timing_probe_runtime.h"
 #include <algorithm>
 #include <arpa/inet.h>
 #include <cerrno>
@@ -97,6 +98,7 @@ HttpResponse httpRequest(const std::string& method, const HttpUrl& url, const st
         size_t offset = 0;
         while (offset < request.size()) {
             waitSocket(socket.fd, POLLOUT, deadline);
+            if (probeHttpTiming && offset == 0) probeHttpTiming->sent = timing_probe::clockSeconds();
             ssize_t n = send(socket.fd, request.data() + offset, request.size() - offset, MSG_NOSIGNAL);
             if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
             if (n <= 0) throw std::runtime_error(n ? strerror(errno) : "short send");
@@ -110,6 +112,7 @@ HttpResponse httpRequest(const std::string& method, const HttpUrl& url, const st
             if (n < 0 && (errno == EAGAIN || errno == EINTR)) return true;
             if (n < 0) throw std::runtime_error(strerror(errno));
             if (wire.size() + static_cast<size_t>(n) > limit) throw std::runtime_error("response too large");
+            if (probeHttpTiming && n > 0) probeHttpTiming->received = timing_probe::clockSeconds();
             wire.append(buffer, n); return n != 0;
         };
         size_t split;

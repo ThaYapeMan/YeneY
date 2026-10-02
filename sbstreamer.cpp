@@ -13,6 +13,7 @@
 
 #include "upnp/stale_stream.h"
 #include "sbstreamer.h"
+#include "timing_probe_runtime.h"
 #include "stream_session.h"
 #include "upnp/timing.h"
 #include "stream_close_log.h"
@@ -214,7 +215,10 @@ int encode_squeezebox_audio_cancellable(const char* data, int len, uint64_t firs
             int written = enc->write(data, len, SBSTREAMER_TIMEOUT, [=] {
                 sonos_position_pcm(stream, requestId, firstFrame);
             }, [=] { return cancelled() || !sonos_output_running(); });
-            if (written == len) return 1;
+            if (written == len) {
+                if (timing_probe::enabled()) timing_probe::diagnostics().handed(stream, firstFrame, enc->sampleRate());
+                return 1;
+            }
             if (cancelled() || !sonos_output_running()) return 0;
             // Active-request termination or resume may replace the encoder
             // while write waits. Retry the SAME PCM block on the new encoder.

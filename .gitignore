@@ -28,3 +28,7 @@ speaker-state-test
 /range-history-test
 
 lead-test
+
+/timing-probe-test
+/timing-probe-resets-test
+/timing-probe-http-test

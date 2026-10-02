@@ -903,7 +903,7 @@ int main(int argc, char** argv)
         printf("yeney: HTTP port=%u max_connections=16\n", serverBackend->port());
         gPlayer = std::make_shared<upnp::OwnSpeakerControl>([] { return gStreamServer->port(); }, 1400, [] {
             const auto id = streamId.load();
-            return upnp::StreamActivity{bool(squeezebox_response_streaming(id)), bool(squeezebox_request_open(id))};
+            return upnp::StreamActivity{bool(squeezebox_response_streaming(id)), bool(squeezebox_request_open(id)), !lmsPaused.load() && !speakerRelinquished.load()};
         }, [] { onSonosEvent(nullptr); }, serverBackend);
         // Core's clean signal path calls exit(), which skips main's
         // automatic Status (and its shared player reference) destructor.

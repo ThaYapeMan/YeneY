@@ -22,6 +22,7 @@
 #include "sonos-position.h"
 
 #include "position_state.h"
+#include "timing_probe_runtime.h"
 #include "start_lead.h"
 #include <chrono>
 #include <mutex>
@@ -35,14 +36,18 @@ static uint64_t positionNow() {
 void reset_sonos_position(unsigned stream) {
     std::lock_guard<std::mutex> lock(positionMutex);
     position.reset(stream);
+    if (timing_probe::enabled()) timing_probe::diagnostics().reset("stream-reset",true);
 }
 void sonos_position_connection(unsigned stream, uint64_t request) {
     std::lock_guard<std::mutex> lock(positionMutex);
     position.connection(stream, request, positionNow());
+    if (timing_probe::enabled()) timing_probe::diagnostics().reset("reconnect",true);
 }
 void sonos_position_pcm(unsigned stream, uint64_t request, uint64_t firstFrame) {
     std::lock_guard<std::mutex> lock(positionMutex);
+    const auto token=position.token();
     position.pcm(stream, request, firstFrame, positionNow(), yeney_start_lead_ms() != 0);
+    if (token!=position.token() && timing_probe::enabled()) timing_probe::diagnostics().anchor(stream,position.measurementBase());
 }
 uint64_t sonos_position_poll_token(void) {
     std::lock_guard<std::mutex> lock(positionMutex);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_sonos.h"
+#include "timing_probe_runtime.h"
 #include "audio_mode.h"
 #include "pcm_pack.h"
 #include "start_lead.h"
@@ -64,10 +65,11 @@ size_t CoreSonosSink::write(const yeney::Frame* frames, size_t count) {
     changed.notify_one();
     return count;
 }
-void CoreSonosSink::pause() { std::lock_guard<std::mutex> lock(mutex); paused = true; }
+void CoreSonosSink::pause() { if (timing_probe::enabled()) timing_probe::diagnostics().reset("pause",false,true); std::lock_guard<std::mutex> lock(mutex); paused = true; }
 void CoreSonosSink::resume() { std::lock_guard<std::mutex> lock(mutex); paused = false; changed.notify_one(); }
 void CoreSonosSink::stop() { pause(); flush(); }
 void CoreSonosSink::flush() {
+    if (timing_probe::enabled()) timing_probe::diagnostics().reset("flush",false,true);
     const auto position = audibleFrames();
     std::lock_guard<std::mutex> lock(mutex);
     ++generation;

@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney
@@ -31,7 +31,11 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
 test: export YENEY_START_LEAD_MS = 0
-test: lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+test: export YENEY_TIMING_PROBE = 0
+test: timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	./timing-probe-test
+	./timing-probe-resets-test
+	python3 tests/timing_probe_http_test.py
 	python3 tests/stream_debug_test.py
 	python3 tests/lead_setting_test.py
 	YENEY_START_LEAD_MS=2000 ./lead-test
@@ -155,3 +159,12 @@ upnp/http_server.o: upnp/http_server.h upnp/stream_server.h
 sonos-position.o: position_state.h start_lead.h
 
 core_sonos.o encoder-test: pcm_pack.h
+
+# Measurement-only timing probe fixtures.
+timing-probe-test: tests/timing_probe_test.cpp timing_probe.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
+timing-probe-resets-test: tests/timing_probe_resets_test.cpp sonos-position.cpp timing_probe.h timing_probe_runtime.h position_state.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^) -lpthread
+timing-probe-http-test: tests/timing_probe_http_fixture.cpp $(OWN_UPNP_SOURCES) timing_probe.h timing_probe_runtime.h $(wildcard upnp/*.h)
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^) -lpthread
+core_sonos.o sonos-position.o sbstreamer.o upnp/own_speaker_control.o upnp/http.o: timing_probe.h timing_probe_runtime.h

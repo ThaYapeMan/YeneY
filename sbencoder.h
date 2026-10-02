@@ -77,6 +77,7 @@ public:
     // True once at least one non-empty FLAC frame has actually been written.
     bool hasAudio() const { return m_producedAudio.load(); }
 
+    unsigned sampleRate() const { return m_sampleRate; }
     uint64_t encodedAudioMs() const { return m_encodedFrames.load() * 1000 / m_sampleRate; }
     EncodedHistory history;
     void useHistoryReader() { m_historyReader.store(true); if (m_phase == Phase::Closing) close(); }

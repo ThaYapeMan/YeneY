@@ -10,8 +10,10 @@
 #include <chrono>
 #include <functional>
 #include <mutex>
+#include <thread>
+#include <atomic>
 namespace upnp {
-struct StreamActivity { bool streaming = false, requestOpen = false; };
+struct StreamActivity { bool streaming = false, requestOpen = false, timingAllowed = false; };
 class OwnSpeakerControl : public SpeakerControl {
 public:
     explicit OwnSpeakerControl(std::function<unsigned()> streamPort, unsigned speakerPort = 1400,
@@ -53,6 +55,9 @@ private:
     std::function<void()> eventCallback;
     std::shared_ptr<HttpServer> eventServer;
     std::unique_ptr<Subscriptions> subscriptions;
+    std::atomic<bool> timingStop{false};
+    std::thread timingThread;
+    void timingLoop();
     void startEvents();
     bool receiveEvent(const GenaEvent&);
     void apply(StateUpdate);

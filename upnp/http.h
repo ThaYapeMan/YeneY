@@ -2,6 +2,9 @@
 #include <map>
 #include <string>
 namespace upnp {
+struct ProbeHttpTiming { double sent=0, received=0; };
+// Thread-local capture is null for all ordinary HTTP consumers.
+inline thread_local ProbeHttpTiming* probeHttpTiming = nullptr;
 struct HttpUrl { std::string host, path; unsigned port = 0; };
 bool parseHttpUrl(const std::string&, HttpUrl&);
 struct HttpResponse { unsigned status = 0; std::string body, localAddress, error; std::map<std::string, std::string> headers{}; };

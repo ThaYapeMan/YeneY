@@ -30,6 +30,7 @@ public:
         relative = 0; anchored = hadAudio = true;
         started = now; ++generation;
     }
+    uint64_t measurementBase() const { return base; }
     uint64_t token() const { return generation; }
     void poll(uint64_t token, uint32_t ms, uint64_t now) {
         if (token != generation || !anchored || ms == 0) return;
