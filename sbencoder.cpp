@@ -186,7 +186,8 @@ int SBEncoder::drainEncodedBytes(char* data, int maxlen)
 
 int SBEncoder::acceptEncodedBytes(const char* data, int len)
 {
-    return m_encodedRing->write(data, len);
+    history.append(data, len);
+    return m_historyReader.load() ? len : m_encodedRing->write(data, len);
 }
 
 int SBEncoder::encodePcm(const char* data, int len)
@@ -280,6 +281,7 @@ int SBEncoder::write(const char* data, int len, unsigned timeout, const std::fun
         if (len == 0) {
             printf("Reached end of stream\n");
             m_phase = Phase::Closing;
+            if (m_historyReader.load()) close();
             return 0;
         }
 

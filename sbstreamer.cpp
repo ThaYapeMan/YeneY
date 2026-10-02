@@ -62,7 +62,9 @@ struct StreamRequest {
     std::chrono::steady_clock::time_point arrived = std::chrono::steady_clock::now();
     unsigned long long id;
     unsigned stream;
+    std::string restartTag;
     std::shared_ptr<SBEncoder> encoder;
+    std::atomic<bool> replaced{false};
     bool opened = false;
     bool pauseEnded = false;
     std::chrono::steady_clock::time_point expectedCloseAt{};
@@ -76,12 +78,15 @@ extern "C" void configure_squeezebox_close_logging(bool own) { deferCloseLog = o
 static unsigned long long nextRequestId = 0;
 static unsigned ownershipStream = 0;
 static std::shared_ptr<StreamRequest> activeRequest;
+static std::shared_ptr<SBEncoder> canonicalEncoder;
+static std::string canonicalRestartTag;
 static std::vector<std::shared_ptr<StreamRequest>> standbyRequests;
 
 // Caller holds g_enc_mutex, including when promoting a standby. Publish the
 // fresh encoder and its owner together so PCM always goes to the ACTIVE request.
 static void activateRequest(const std::shared_ptr<StreamRequest>& request, bool promoted)
 {
+    if (g_enc) g_enc->retireProducer();
     request->encoder = std::make_shared<SBEncoder>(request->stream);
     const auto rate = streamRates.find(request->stream);
     request->opened = request->encoder->open(audioMode() == AudioMode::Legacy ? 16 : 24,
@@ -89,6 +94,8 @@ static void activateRequest(const std::shared_ptr<StreamRequest>& request, bool 
     sonos_position_connection(request->stream, request->id);
     activeRequest = request;
     g_enc = request->encoder;
+    canonicalEncoder = g_enc;
+    canonicalRestartTag = request->restartTag;
     if (promoted && deferCloseLog) closeLog.observe(request->stream);
     if (promoted) request->expectedCloseAt = std::chrono::steady_clock::now();
     if (promoted)
@@ -161,7 +168,7 @@ int squeezebox_request_open(unsigned stream)
 int squeezebox_response_open(unsigned stream)
 {
     std::lock_guard<std::mutex> lock(g_enc_mutex);
-    return g_enc && g_enc->streamId() == stream && !g_enc->cancelled()
+    return activeRequest && activeRequest->stream == stream && g_enc && g_enc->streamId() == stream && !g_enc->cancelled()
         && !g_enc->responseEnded();
 }
 
@@ -283,14 +290,14 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
     // Bound a stalled peer as well as a stalled PCM producer. Sending uses
     // the socket directly, so a receive timeout alone is insufficient.
     handle->sendTimeout(500);
-    auto peerClosed = [handle] { return handle->peerClosed(); };
-
     auto request = std::make_shared<StreamRequest>();
     {
         std::lock_guard<std::mutex> lock(g_enc_mutex);
         request->id = requestId;
         request->stream = stream;
+        request->restartTag = handle->parameter("restart");
     }
+    auto peerClosed = [handle, request] { return request->replaced.load() || handle->peerClosed(); };
     unsigned current = get_squeezebox_stream_id();
     if (stream <= 0 || (unsigned)stream > current) {
         handle->reply(400);
@@ -298,6 +305,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
     }
     auto redirect = [&] {
         std::string url = SqueezeBoxURL(get_squeezebox_stream_id());
+        if (!handle->header("Range").empty()) url += "&restart=" + std::to_string(requestId);
         std::string response = "HTTP/1.1 302 Found\r\nLocation: " + url
             + "\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
         printf("stream %d: HTTP 302 -> %s\n", stream, url.c_str());
@@ -314,6 +322,111 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
         const std::string paused = "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         handle->send(paused.c_str(), paused.size());
         return;
+    }
+
+    const auto range = handle->header("Range");
+    bool forceRestart;
+    {
+        std::lock_guard<std::mutex> lock(g_enc_mutex);
+        forceRestart = !request->restartTag.empty() && request->restartTag != canonicalRestartTag;
+        if (forceRestart && activeRequest) { activeRequest->replaced = true; activeRequest.reset(); }
+    }
+    if (!range.empty() && !forceRestart) {
+        uint64_t offset = 0;
+        std::shared_ptr<SBEncoder> canonical;
+        {
+            std::lock_guard<std::mutex> lock(g_enc_mutex);
+            canonical = canonicalEncoder;
+        }
+        auto restart = [&](const char* reason) {
+            static std::mutex failureMutex;
+            static auto last = std::chrono::steady_clock::time_point{};
+            {
+                std::lock_guard<std::mutex> lock(failureMutex);
+                auto now = std::chrono::steady_clock::now();
+                if (now - last >= std::chrono::seconds(5)) {
+                    printf("stream %d: Range unavailable (%s) → restart\n", stream, reason); last = now;
+                }
+            }
+            const auto url = SqueezeBoxURL(get_squeezebox_stream_id()) + "&restart=" + std::to_string(requestId);
+            const auto response = "HTTP/1.1 302 Found\r\nLocation: " + url
+                + "\r\nContent-Length: 0\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+            handle->send(response.data(), response.size());
+        };
+        if (!openByteRange(range, offset) || !canonical || canonical->streamId() != (unsigned)stream
+            || canonical->cancelled() || canonical->responseEnded() || canonical->producerRetired()) {
+            restart("invalid range or inactive history"); return;
+        }
+        char bytes[SBSTREAMER_CHUNK];
+        auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+        int count;
+        while ((count = canonical->history.read(offset, bytes, sizeof(bytes))) == 0
+               && !peerClosed() && !handle->aborted() && !IsAborted()
+               && !canonical->historyFinished() && !canonical->responseEnded()
+               && (unsigned)stream == get_squeezebox_stream_id()
+               && std::chrono::steady_clock::now() < deadline) usleep(1000);
+        if (peerClosed() || handle->aborted() || IsAborted()) return;
+        if (count <= 0 || (unsigned)stream != get_squeezebox_stream_id()) {
+            restart(count < 0 ? "evicted offset" : "offset not produced within 500 ms"); return;
+        }
+        bool superseded;
+        {
+            std::lock_guard<std::mutex> lock(g_enc_mutex);
+            superseded = canonical != canonicalEncoder || canonical->responseEnded() || canonical->cancelled()
+                || (unsigned)stream != get_squeezebox_stream_id();
+            if (!superseded) {
+                if (activeRequest) activeRequest->replaced = true;
+                request->encoder = canonical; request->opened = true; request->serving = true;
+                activeRequest = request; g_enc = canonical; canonical->useHistoryReader();
+            }
+        }
+        if (superseded) { restart("superseded history"); return; }
+        const auto bounds = canonical->history.bounds();
+        printf("stream %d: Range resume from %llu (history %llu–%llu) → continued\n", stream,
+            (unsigned long long)offset, (unsigned long long)bounds.first, (unsigned long long)bounds.second);
+        // Finite partial response, unknown total entity length. Never advertise
+        // an open last-byte position or append bytes beyond the stated range.
+        const uint64_t rangeEnd = bounds.second;
+        const std::string headers = "HTTP/1.1 206 Partial Content\r\nContent-Type: audio/flac\r\n"
+            "Accept-Ranges: bytes\r\nContent-Range: bytes " + std::to_string(offset) + "-"
+            + std::to_string(rangeEnd - 1) + "/*\r\nContent-Length: " + std::to_string(rangeEnd - offset)
+            + "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+        bool sent = handle->send(headers.data(), headers.size());
+        while (sent && offset < rangeEnd && !peerClosed() && !handle->aborted() && !IsAborted()
+               && !canonical->cancelled() && !canonical->responseEnded() && !canonical->producerRetired()
+               && (unsigned)stream == get_squeezebox_stream_id()) {
+            count = canonical->history.read(offset, bytes, std::min<uint64_t>(sizeof(bytes), rangeEnd-offset));
+            if (count <= 0) break; // slow receiver fell out of the bounded window
+            sent = handle->send(bytes, count); offset += count;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_enc_mutex);
+            if (activeRequest == request) {
+                activeRequest.reset();
+                if (!yeney_is_paused() && (unsigned)stream == get_squeezebox_stream_id() && !standbyRequests.empty()) {
+                    auto newest = std::max_element(standbyRequests.begin(), standbyRequests.end(),
+                        [](const auto& a, const auto& b) { return a->id < b->id; });
+                    auto promoted = *newest; standbyRequests.erase(newest); activateRequest(promoted, true);
+                }
+            }
+        }
+        handle->disconnect(); return;
+    }
+    // Recovery GET+Range pairs on firmware 86.10 send Connection: close.
+    // Give that plain probe 100 ms to close before committing a new encoder.
+    bool recoveryProbe = false;
+    {
+        std::lock_guard<std::mutex> lock(g_enc_mutex);
+        recoveryProbe = canonicalEncoder && canonicalEncoder->hasAudio()
+            && !canonicalEncoder->responseEnded() && !canonicalEncoder->cancelled()
+            && canonicalEncoder->streamId() == (unsigned)stream && !yeney_is_paused()
+            && handle->header("Connection") == "close";
+    }
+    if (recoveryProbe) {
+        auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        while (!peerClosed() && !handle->aborted() && !IsAborted()
+               && std::chrono::steady_clock::now() < until) usleep(1000);
+        if (peerClosed() || handle->aborted() || IsAborted()) return;
     }
 
     unsigned long long pairActive = 0;
@@ -481,11 +594,13 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
     {
         std::lock_guard<std::mutex> lock(g_enc_mutex);
         const bool pauseEnded = enc->responseEnded();
-        if (!pauseEnded) enc->cancel();
+        const bool retain = enc == canonicalEncoder && enc->hasAudio() && !yeney_is_paused()
+            && !enc->producerRetired() && (unsigned)stream == get_squeezebox_stream_id();
+        if (!pauseEnded && !retain) enc->cancel();
         if (activeRequest == request) {
             activeRequest.reset();
             if (!pauseEnded) {
-                if (g_enc == enc) g_enc.reset();
+                if (g_enc == enc && !retain) g_enc.reset();
                 if ((unsigned)stream == get_squeezebox_stream_id() && !standbyRequests.empty()) {
                     auto newest = std::max_element(standbyRequests.begin(), standbyRequests.end(),
                         [](const std::shared_ptr<StreamRequest>& a, const std::shared_ptr<StreamRequest>& b) {
@@ -500,7 +615,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
     }
     // Preserve paused encoders and send EOF before disconnecting.
     handle->disconnect();
-    if (!enc->responseEnded()) enc->close();
+    if (enc->cancelled() && !enc->responseEnded()) enc->close();
     printf("stream %d: done\n", stream);
 
     printf("Done serving stream %d to Sonos\n", stream);

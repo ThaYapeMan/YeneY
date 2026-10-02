@@ -240,6 +240,7 @@ and uses the default.
 | `YENEY_TITLE_FORMAT` | `artist-title`: "artist - title" · `title`: title only | `artist-title` |
 | `YENEY_STREAM_CONTENT` | `structured`, `plain` or `off`: the radio-text field for other controllers | `structured` |
 | `YENEY_PAUSE` | `stop`: the Sonos-safe pause · `pause`: plain UPnP Pause (fallback) | `stop` |
+| `YENEY_DEBUG_EVENTS` | `1`: log every received GENA service/state/sequence; other values: off | off |
 | `YENEY_POLL` | `events`: event-driven · `legacy`: the older polling schedule, for A/B tests | `events` |
 | `YENEY_STOPPED_MEDIAINFO` | `0` or `1`: poll media info while stopped | `0` |
 
@@ -474,3 +475,5 @@ Sonos is a trademark of Sonos, Inc. YeneY is an independent project and is not
 affiliated with or endorsed by Sonos, Inc., Logitech or the Lyrion project.
 
 Copyright (C) 2026 Jaap van Vliet
+
+Grouped HTTP recovery and investigation: [Decisions and findings](docs/grouped-range-recovery.md).

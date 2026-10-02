@@ -23,3 +23,6 @@ speaker-state-test
 /stream-content-test
 
 /encoded-buffer-test
+
+/range-test
+/range-history-test

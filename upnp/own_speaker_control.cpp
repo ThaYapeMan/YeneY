@@ -63,6 +63,11 @@ bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
         if (!topologyUpdate(event.topology, room, previous.room.uuid, update)) return false;
     }
     apply(update);
+    static const bool debugEvents = [] {
+        const char* value = std::getenv("YENEY_DEBUG_EVENTS"); return value && std::string(value) == "1";
+    }();
+    if (debugEvents) printf("yeney: event service=%s TransportState=%s seq=%u\n",
+        serviceName(event.service), logValue(state.snapshot().transport.state).c_str(), event.sequence);
     if (eventCallback) eventCallback();
     return true;
 }

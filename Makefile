@@ -49,7 +49,7 @@ yeney: $(OBJS) $(OBJS_SL) $(CORE_LIB)
 		-lpthread -lm -lrt -ldl -lasound
 
 clean:
-	rm -f encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 slimproto_sonos.o: slimproto_sonos.c squeezelite/slimproto.c squeezelite/squeezelite.h
 
@@ -59,7 +59,10 @@ install: yeney
 encoder-test: tests/audio_pack_fixture.o squeezelite/output_pack.o upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.o squeezelite/output_pack.o sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
-test: encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+test: range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	./range-history-test
+	YENEY_PLAYER=core ./range-test
+	YENEY_PLAYER=squeezelite ./range-test
 	./encoded-buffer-test
 	python3 tests/encoded_overwrite_test.py
 	python3 tests/http_server_test.py
@@ -158,3 +161,10 @@ encoded-buffer-test: tests/encoded_buffer_test.cpp upnp/encoded_buffer.cpp upnp/
 upnp/http_server.o streamer-test own-control-test: upnp/icon.h
 
 yeney.o sbstreamer.o streamer-test: source_ownership.h speaker_uri.h
+
+sbencoder.o sbstreamer.o encoder-test streamer-test: encoded_history.h
+
+range-history-test: tests/range_history_test.cpp encoded_history.h
+	g++ -std=c++17 -O2 -Wall -I. -o $@ $<
+range-test: tests/range_fixture.cpp sbstreamer.cpp sbencoder.cpp sonos-position.cpp upnp/encoded_buffer.cpp $(wildcard upnp/*.h) encoded_history.h
+	g++ -std=c++17 -O2 -Wall -I. -o $@ $(filter %.cpp,$^) -lFLAC++ -lFLAC -lcrypto -lpthread

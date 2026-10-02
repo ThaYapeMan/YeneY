@@ -312,9 +312,14 @@ def event_run(mode, command):
     threads = [threading.Thread(target=s.serve_forever) for s in (server, peer)]
     for thread in threads: thread.start()
     try:
+        event_env = {**os.environ, "YENEY_POLL": "legacy"}
+        event_env.pop("YENEY_DEBUG_EVENTS", None)
+        if mode == 'events': event_env['YENEY_DEBUG_EVENTS'] = '1'
+        if mode == 'partial': event_env['YENEY_DEBUG_EVENTS'] = 'true'
         result = subprocess.run([*command, mode, str(server.server_port)], cwd=ROOT,
-                                check=True, capture_output=True, text=True, timeout=20, env={**os.environ, "YENEY_POLL": "legacy"})
+                                check=True, capture_output=True, text=True, timeout=20, env=event_env)
         print(result.stdout, end='')
+        assert ('yeney: event service=' in result.stdout) == (mode == 'events')
         assert not server.errors, server.errors
         avt = '/MediaRenderer/AVTransport/Event'
         if mode == 'fallback':

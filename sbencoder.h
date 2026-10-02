@@ -14,6 +14,7 @@
 #define FLACENCODER_H
 
 #include "upnp/encoded_buffer.h"
+#include "encoded_history.h"
 
 #include <atomic>
 #include <functional>
@@ -76,6 +77,9 @@ public:
     // True once at least one non-empty FLAC frame has actually been written.
     bool hasAudio() const { return m_producedAudio.load(); }
 
+    EncodedHistory history;
+    void useHistoryReader() { m_historyReader.store(true); if (m_phase == Phase::Closing) close(); }
+    bool historyFinished() const { return m_phase == Phase::Closed; }
     unsigned streamId() const { return m_streamId; }
 
 private:
@@ -92,6 +96,7 @@ private:
     int drainEncodedBytes(char* data, int maxlen);
 
     std::atomic<Phase> m_phase;
+    std::atomic<bool> m_historyReader{false};
     std::atomic<bool> m_cancelled{false};
     std::atomic<bool> m_responseEnded{false};
     std::atomic<bool> m_producerRetired{false};
