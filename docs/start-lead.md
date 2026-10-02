@@ -59,16 +59,14 @@ FIN is the observed TCP read-side EOF, not proof of the speaker's application in
    retained exactly for zero. Gate before accepting a whole PCM producer batch;
    overshoot is at most that batch, including libFLAC's partial-frame storage.
    No artificial delay is inserted before headers or first audio delivery.
-5. Put the pacing change in the shared encoder, so both engines use the same
+5. Put the pacing change in the shared encoder, so the core bridge use the same
    monotonic first-read clock. Every fresh encoder/entity gets a fresh clock:
    initial track, explicit q/s seek/new generation, pause=stop/u new response,
    genuine same-ID reconnect and Range-restart. Gapless PCM in the same encoder
    and ordinary byte-identical Range continuation retain the clock and lead.
 6. Core already has an unpaced Sink, a bounded 48000-frame staging queue and a
    cancellable feeder; decoding can refill it while the feeder is gated at the
-   encoder. Squeezelite already drains its decoded output buffer via the 2048-frame
-   pump, blocking outside its output lock in the same encoder. Both can build the
-   reserve without enlarging their PCM queues or adding a second pacing loop.
+   encoder. No larger PCM queue or second pacing loop is needed.
 7. Keep the 32 MiB canonical history and 256-packet encoded ring. At supported
    44.1/48 kHz with default 4096-frame FLAC blocks, a 10-second reserve is about
    108/118 frames plus metadata and at most one producer batch. Dense 24-bit
@@ -81,18 +79,10 @@ FIN is the observed TCP read-side EOF, not proof of the speaker's application in
    audible progress. This initial notification is required to establish the LMS
    session; it does not report the reserve as played time. Core completion waits
    for feeder drain and the audible coordinate when lead is positive.
-9. For positive lead, squeezelite tracks separate submitted and audible track
-   offsets in a bounded 64-entry boundary queue. The output lock protects it.
-   Full queue applies backpressure rather than overwriting boundaries. Initial
-   STMs starts the session; gapless STMs/epoch changes wait for Sonos to cross
-   the boundary. Snapshot frame/device-buffer counts remain relative to the
-   audible track. Underrun/completion require audible drain, preventing an empty
-   local output buffer from falsely reporting a burst's buffered audio as ended.
-   Generate three checked reporting hooks from the pinned upstream slimproto
-   into an ignored build header; fail the build if those anchors change. Keep
-   the squeezelite submodule source and revision unchanged. Preserve the
-   DISABLE_SONOS_POSITION_FIX escape hatch by using legacy reporting when set.
-10. STMd remains decode-complete in both engines, intentionally distinct from
+9. Core reports queued boundaries from the audible coordinate. The obsolete
+   alternate output backend, reporting adapters and position escape hatch have
+   been removed; there is no alternate playback clock.
+10. STMd remains decode-complete in the core bridge, intentionally distinct from
     playback-complete: LMS needs it early to fetch gapless successor tracks.
     Do not defer it to the speaker or mislabel its earlier arrival as elapsed
     playback. STMo remains a true downstream-empty condition. Existing coarse
@@ -108,10 +98,10 @@ FIN is the observed TCP read-side EOF, not proof of the speaker's application in
     or reset evidence instead of overwriting it with our shutdown.
 12. Run all previous fixture assertions unchanged with explicit lead 0 in make
     test, to retain their historical timing baseline. Add separate dense 24-bit
-    lead fixtures and real-binary engine A/B tests at 2000 ms. The Range fixture
+    lead fixtures and real-binary core tests at 2000 ms. The Range fixture
     retains its assertions but closes its initial response sooner for a positive
     lead so its future-offset test still has live production ahead of it. Run it
-    for both engines with lead 0 and 2000. This is a justified timing adjustment,
+    for the core bridge with lead 0 and 2000. This is a justified timing adjustment,
     not relaxed byte identity or HTTP assertions.
 13. Verify real HTTP burst delivery, then steady pacing and one-batch bounds;
     actual Slimproto elapsed/STMt, delayed gapless STMs, no early STMu/STMo,

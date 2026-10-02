@@ -26,9 +26,9 @@
 namespace bridge {
 
 
-// Bridges squeezelite's decoded PCM (pushed via write()) to the HTTP
-// streamer's FLAC output (pulled via read()), pacing writes against actual
-// Sonos playback progress and pausing cleanly instead of buffering ahead.
+// Bridges the core feeder's decoded PCM (pushed via write()) to the HTTP
+// streamer's FLAC output (pulled via read()), with bounded pacing against
+// monotonic response time and a clean hold while paused.
 class SBEncoder {
     friend class WriteBridge;
 #ifdef SBENCODER_TEST

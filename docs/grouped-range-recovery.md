@@ -69,12 +69,11 @@ bytes. This is a confirmed server defect, separate from the initial drop.
    all failed requests still get an explicit restart response. Existing socket
    diagnostics remain for ordinary connections; Range disconnects do not
    masquerade as LMS/device transport changes.
-9. Keep recovery in shared sbstreamer/sbencoder code for both engines. Preserve
+9. Keep recovery in shared sbstreamer/sbencoder code for the core feeder. Preserve
    all old fixture assertions. Add history boundary/wrap/eviction/parser tests
    and real libFLAC replay fixtures for repeated probes and ranges, the produced
    edge, future offsets, stale IDs and changed PCM across a same-ID boundary.
-   Execute the shared fixture with both YENEY_PLAYER settings, plus the existing
-   real-binary engine A/B integration suite. These tests do not emulate a
+   Execute the shared fixture and the real-binary core integration suite. These tests do not emulate a
    physical Sonos group or establish its undocumented status-code preference.
 10. Restore event service/state/sequence diagnostics only for exact
     `YENEY_DEBUG_EVENTS=1`, read once at the first received event. Default off; test exact 1, absent/default, and invalid true in the existing
@@ -106,7 +105,7 @@ Source inspection finds compression level 5, verify enabled, 1024-frame input
 conversion chunks, and default libFLAC frame sizing. The pacing window is 250 ms
 relative to elapsed monotonic time since the first read, checked before accepting
 a whole PCM batch. It is **not** a measurement of coordinator/member buffer depth;
-a batch can overshoot that lead. Squeezelite stages up to 2048 frames. Core stages
+a batch can overshoot that lead. Core stages
 its decoded batches through a bounded feeder. The same encoder and HTTP path
 serve both. Each HTTP chunk is at most 16384 entity bytes. Writes retry partial
 socket sends; SO_SNDTIMEO is 500 ms per syscall, so partial progress can extend

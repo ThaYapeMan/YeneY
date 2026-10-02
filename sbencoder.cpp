@@ -22,7 +22,7 @@
 
 
 namespace {
-// One squeezelite decode batch's worth of interleaved stereo samples.
+// One PCM conversion batch's worth of interleaved stereo samples.
 constexpr int kSamplesPerChunk = 1024;
 constexpr int kEncodedRingCapacity = 256;
 constexpr int kChannelCount = 2;

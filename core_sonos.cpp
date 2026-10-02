@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_sonos.h"
 #include "audio_mode.h"
+#include "pcm_pack.h"
 #include "start_lead.h"
 #include "sonos-position.h"
 #include <algorithm>
@@ -16,7 +17,10 @@ void new_squeezebox_stream_id();
 int encode_squeezebox_audio_cancellable(const char*, int, uint64_t, int (*)(void*), void*);
 }
 static std::atomic<bool> coreRunning{false}, coreStop{false};
-extern "C" int core_output_running() { return coreRunning.load(); }
+extern "C" int sonos_output_running() { return coreRunning.load(); }
+extern "C" uint64_t get_sb_time_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 static void stopCore(int sig) { coreStop.store(true); std::signal(sig, SIG_DFL); }
 CoreSonosSink::CoreSonosSink() {
     coreRunning.store(true);
@@ -50,9 +54,11 @@ size_t CoreSonosSink::write(const yeney::Frame* frames, size_t count) {
     const unsigned bytes = sonos_audio_legacy() ? 2 : 3;
     Batch b{{}, next, generation.load(), count, pending, continuous, rate};
     b.pcm.reserve(count * bytes * 2);
-    for (size_t i = 0; i < count; ++i)
-        for (uint32_t sample : {uint32_t(frames[i].left), uint32_t(frames[i].right)})
-            for (unsigned j = 4 - bytes; j < 4; ++j) b.pcm.push_back(char(sample >> (j * 8)));
+    b.pcm.resize(count * bytes * 2);
+    for (size_t i = 0; i < count; ++i) {
+        packSonosSample(b.pcm.data() + i * bytes * 2, frames[i].left, bytes);
+        packSonosSample(b.pcm.data() + (i * 2 + 1) * bytes, frames[i].right, bytes);
+    }
     queue.push_back(std::move(b));
     staged += count; next += count; pending = false;
     changed.notify_one();
@@ -147,5 +153,5 @@ void runCoreClient(const char* server, const uint8_t* mac, const char* name) {
         printf("core: fatal: %s\n", error.what());
         std::exit(1);
     }
-    std::exit(0); // Same atexit shutdown path as the squeezelite engine.
+    std::exit(0); // Run the registered HTTP/event cleanup.
 }

@@ -18,14 +18,8 @@ python3 tests/fixtures/generate_mp3.py /path/to/libmp3lame.so.0
 
 The test uses these committed files and needs no MP3 encoder installed. The
 existing core fixtures were written by ffmpeg with a Lavc signature: core
-honours their delay/padding fields, whereas the unchanged squeezelite fork
-recognises only LAME. They therefore cannot establish equal gapless frame
-counts between these engines. These fixtures exercise the shared LAME contract
-without changing either decoder, rewriting metadata, or cropping/alignment of
-output samples. General Lavc-tagged MP3 trimming remains different.
+honours their delay/padding fields; core integration checks exact decoded lengths.
 
-With float minimp3 output the fixtures measured 126.86/126.72 dB SNR against
-libmad (previously 88.03 dB with int16 output), with correlations
-0.999999999999924/0.999999999999920. Acceptance requires 120 dB SNR and
-0.999999999999 correlation. A prefetched PCM marker releases the streaming FLAC encoder's partial block; its exact
-boundary verifies the declared MP3 frame count before loudness comparison.
+
+Core integration verifies exact trimming and PCM marker boundaries. The bundled
+core decoder suite checks decoder quality against its independent references.

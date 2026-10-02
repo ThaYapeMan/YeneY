@@ -47,6 +47,4 @@ with tempfile.TemporaryDirectory(prefix="sonos-device-resume-") as directory:
         subprocess.run([str(executable)], check=True,
                        env={**os.environ, "YENEY_PAUSE": mode})
 
-    for engine in ("core", "squeezelite"):
-        subprocess.run([str(executable), "foreign"], check=True,
-                       env={**os.environ, "YENEY_PLAYER": engine})
+    subprocess.run([str(executable), "foreign"], check=True)

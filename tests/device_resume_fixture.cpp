@@ -138,7 +138,14 @@ static int productionPrintf(const char* format, ...) {
     return result;
 }
 #define printf productionPrintf
+#define yeney_transport production_yeney_transport
 #include "production_resume.inc"
+#undef yeney_transport
+// Model one core StopTimer poll after a command, before observing its outcome.
+extern "C" void yeney_transport(char command) {
+    production_yeney_transport(command);
+    dispatchTransportIntent();
+}
 #undef printf
 
 static void paused(const char* status) {

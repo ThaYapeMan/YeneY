@@ -1,59 +1,30 @@
-"""Replay S7#2 through ConnectionPosition, output correction and actual STAT bytes."""
+"""Replay S7#2 through ConnectionPosition and the production core STAT serializer."""
 from pathlib import Path
 import subprocess
 import tempfile
-root = Path(__file__).resolve().parents[1]
-stat = r'''
-#include <stdint.h>
-static uint32_t clock_ms;
-static uint32_t replay_now(void) { return clock_ms; }
-#define gettime_ms replay_now
-#include "slimproto_sonos.c"
-#undef gettime_ms
-#include <assert.h>
-static int peer;
-void report_init(void) {
-    int fds[2]; assert(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
-    sock = fds[0]; peer = fds[1];
-    unsetenv("DISABLE_SONOS_POSITION_FIX");
-}
-u32_t report(u32_t now, u32_t rate, u32_t frames, u32_t device, u32_t epoch) {
-    clock_ms = now;
-    status.current_sample_rate = rate; status.frames_played = frames;
-    status.device_frames = device; status.stream_start = epoch;
-    status.updated = now - 1500; // a blocked producer must not advance the clock
-    sendSTAT("STMt", 0);
-    struct STAT_packet pkt;
-    assert(recv(peer, &pkt, sizeof(pkt), MSG_WAITALL) == sizeof(pkt));
-    assert(!memcmp(pkt.opcode, "STAT", 4));
-    u32_t ms = unpackN(&pkt.elapsed_milliseconds);
-    assert(unpackN(&pkt.elapsed_seconds) == ms / 1000);
-    return ms;
-}
-void report_close(void) { close(sock); close(peer); }
-'''
-output = r'''
-#include "output_sonos.c"
-struct outputstate output;
-int sonos_audio_legacy(void) { return 0; }
-u32_t replay_device(u32_t rate, u32_t decoded) {
-    output.current_sample_rate = rate; output.frames_played_dmp = decoded;
-    update_device_frames_from_sonos_position();
-    return output.device_frames;
-}
-'''
-replay = r'''
+root=Path(__file__).resolve().parents[1]
+replay=r'''
+
 #include "position_state.h"
+#include "third_party/yeney-core/core/protocol.h"
 #include <cassert>
 #include <cstdio>
 #include <initializer_list>
 static ConnectionPosition position;
 extern "C" {
 uint64_t get_sonos_audible_frames(uint32_t rate) { return position.audibleFrames(rate); }
-void report_init();
-void report_close();
-uint32_t replay_device(uint32_t rate, uint32_t decoded);
-uint32_t report(uint32_t now, uint32_t rate, uint32_t decoded, uint32_t device, uint32_t epoch);
+void report_init() {} void report_close() {}
+uint32_t replay_device(uint32_t rate, uint32_t decoded) {
+    auto heard=position.audibleFrames(rate); return decoded > heard ? decoded-heard : 0;
+}
+uint32_t report(uint32_t now,uint32_t rate,uint32_t decoded,uint32_t device,uint32_t) {
+    yeney::Status status; status.jiffies=now; status.elapsed=uint64_t(decoded-device)*1000/rate;
+    auto wire=yeney::statusPacket("STMt",status,0);
+    assert(wire.size()==61);
+    uint32_t ms=0; for(unsigned i=51;i<55;++i) ms=(ms<<8)|wire[i];
+    uint32_t seconds=0; for(unsigned i=45;i<49;++i) seconds=(seconds<<8)|wire[i];
+    assert(seconds==ms/1000); return ms;
+}
 }
 int main() {
     report_init();
@@ -103,18 +74,7 @@ int main() {
 }
 '''
 with tempfile.TemporaryDirectory(prefix='sonos-position-replay-') as tmp:
-    tmp = Path(tmp)
-    objects = []
-    for name, source in [('stat', stat), ('output', output)]:
-        src = tmp / (name + '.c'); src.write_text(source)
-        obj = tmp / (name + '.o'); objects.append(str(obj))
-        subprocess.run(['gcc', '-std=gnu11', '-O2', '-ffunction-sections', '-fdata-sections',
-                        '-I'+str(root), '-I'+str(root/'squeezelite'), '-c', str(src), '-o', str(obj)], check=True)
-    obj = tmp / 'utils.o'; objects.append(str(obj))
-    subprocess.run(['gcc', '-O2', '-ffunction-sections', '-fdata-sections', '-c',
-                    str(root/'squeezelite/utils.c'), '-o', str(obj)], check=True)
-    src = tmp / 'replay.cpp'; src.write_text(replay)
-    exe = tmp / 'replay'
-    subprocess.run(['g++', '-O2', '-I'+str(root), str(src), *objects,
-                    '-Wl,--gc-sections', '-lpthread', '-lm', '-o', str(exe)], check=True)
-    subprocess.run([str(exe)], check=True)
+    src=Path(tmp)/'replay.cpp'; src.write_text(replay)
+    exe=Path(tmp)/'replay'
+    subprocess.run(['g++','-std=c++17','-O2','-I',str(root),str(src),str(root/'third_party/yeney-core/core/protocol.cpp'),'-o',str(exe)],check=True)
+    subprocess.run([str(exe)],check=True)

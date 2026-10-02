@@ -90,6 +90,42 @@ class InstallerTests(unittest.TestCase):
         installer.install(ROOT, self.config_dir, self.unit_dir, args, runner, self.out, self.err, lms_check=mock_lms)
         return runner
 
+    def test_exact_core_override_removed_reload_restart_and_idempotent(self):
+        self.config.write_text('# keep\nLMS_SERVER=host\nroom.Study=yes\n')
+        runner=Commands(rooms='Study\n'); runner.active.add('yeney@Study.service'); runner.enabled.add('yeney@Study.service')
+        self.run_install(runner)
+        original=self.config.read_bytes()
+        directory=self.unit_dir/'yeney@Study.service.d'; directory.mkdir()
+        debug=directory/'debug.conf'; debug.write_text('[Service]\nEnvironment=YENEY_DEBUG_STREAM=1\n')
+        for ending in ('\n',''):
+            override=directory/'player.conf'; override.write_text('[Service]\nEnvironment=YENEY_PLAYER=core'+ending)
+            runner.calls.clear(); self.run_install(runner)
+            self.assertFalse(override.exists())
+            self.assertEqual(self.config.read_bytes(),original)
+            self.assertEqual(debug.read_text(),'[Service]\nEnvironment=YENEY_DEBUG_STREAM=1\n')
+            self.assertIn(['systemctl','daemon-reload'],runner.calls)
+            self.assertIn(['systemctl','restart','yeney@Study.service'],runner.calls)
+        runner.calls.clear(); self.run_install(runner)
+        self.assertFalse(runner.actions())
+        self.assertNotIn(['systemctl','daemon-reload'],runner.calls)
+
+    def test_custom_core_overrides_and_symlinks_are_preserved(self):
+        directory=self.unit_dir/'yeney@Study.service.d'; directory.mkdir(parents=True)
+        path=directory/'player.conf'
+        states={'Study':('yeney@Study.service',True,True)}
+        for text in ('[Service]\nEnvironment=YENEY_PLAYER=core\n# custom\n',
+                     '[Service]\nEnvironment=YENEY_PLAYER=core\nEnvironment=YENEY_DEBUG_STREAM=1\n',
+                     '[Service]\nEnvironment="YENEY_PLAYER=core"\n',
+                     '[Service]\r\nEnvironment=YENEY_PLAYER=core\r\n',
+                     '[Service]\nEnvironment=YENEY_PLAYER=other\n', ''):
+            path.write_bytes(text.encode())
+            self.assertEqual(installer.player_overrides(self.unit_dir,states,self.out),[])
+            self.assertEqual(path.read_bytes(),text.encode())
+        path.unlink(); target=directory/'custom'; target.write_text('[Service]\nEnvironment=YENEY_PLAYER=core\n'); path.symlink_to(target)
+        self.assertEqual(installer.player_overrides(self.unit_dir,states,self.out),[])
+        self.assertTrue(path.is_symlink()); self.assertTrue(target.exists())
+        self.assertIn('Note: leaving',self.out.getvalue())
+
     def test_parsing_exact_names_boolean_aliases_and_comments(self):
         warnings = []
         text = '# room.Comment=yes\n; room.Other=yes\nLMS_SERVER=host\n  room.Sonos Port=YeS\n'

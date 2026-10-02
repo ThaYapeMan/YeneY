@@ -1,6 +1,5 @@
 #ifndef PAUSE_MODE_H
 #define PAUSE_MODE_H
-#include "player_mode.h"
 
 #include <cstdio>
 #include <cstdlib>

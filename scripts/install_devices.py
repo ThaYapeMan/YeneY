@@ -255,6 +255,26 @@ def service_plan(rooms, states, build_changed, build, server_changed, force):
     return plan, '; '.join(reasons)
 
 
+def player_overrides(unit_dir, states, output):
+    removable = []
+    exact = b'[Service]\nEnvironment=YENEY_PLAYER=core'
+    for room, (unit, _, _) in states.items():
+        directory = unit_dir / (unit + '.d')
+        path = directory / 'player.conf'
+        if not path.exists() and not path.is_symlink():
+            continue
+        try:
+            contents = path.read_bytes() if not (directory.is_symlink() or path.is_symlink()) else None
+        except OSError:
+            contents = None
+        if contents in (exact, exact + b'\n'):
+            removable.append((room, path))
+            print(f'Obsolete core selection override: remove {path}', file=output)
+        else:
+            print(f'Note: leaving {path}: content is not the exact single core setting.', file=output)
+    return removable
+
+
 def connected_players(reply):
     """Split wire tokens BEFORE URL decoding; names can contain spaces and colons."""
     connected = set()
@@ -403,6 +423,12 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         build_changed = read_text(stamp) != identity
         server_changed = (lms_value(merged) or '') != (current_server or '')
         plan, reason = service_plan(rooms, states, build_changed, build, server_changed, '--restart' in args)
+        overrides = player_overrides(unit_dir, states, output)
+        for room, _ in overrides:
+            if rooms[room] and states[room][1] and room not in plan['Restart']:
+                plan['Restart'].append(room)
+                if room in plan['Keep']: plan['Keep'].remove(room)
+                reason = reason or 'obsolete core selection override removed'
         print('Config:  ' + ('no changes' if merged == original else '\n' + ''.join(difflib.unified_diff(
             original.splitlines(keepends=True), merged.splitlines(keepends=True),
             fromfile='current config', tofile='proposed config'))), file=output)
@@ -418,7 +444,7 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         if migrate: print('Migration: rooms → rooms.migrated', file=output)
         if build_changed: print('Build record: update installed-build', file=output)
         actions = any(plan[kind] for kind in ('Start', 'Restart', 'Stop', 'Enable'))
-        work = merged != original or actions or template_changed or migrate or build_changed
+        work = merged != original or actions or template_changed or migrate or build_changed or bool(overrides)
         if not work:
             print('Nothing to do.', file=output)
         elif interactive and not keep and not ask_yes('Apply? [Y/n] ', True, input_stream, output):
@@ -434,6 +460,16 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         unit_dir.mkdir(parents=True, exist_ok=True)
         if template_changed:
             atomic_write(target, template)
+        removed = False
+        for room, path in overrides:
+            # Revalidate before unlink; custom edits and symlinks are preserved.
+            if not path.is_symlink() and not path.parent.is_symlink() and path.read_bytes() in (
+                    b'[Service]\nEnvironment=YENEY_PLAYER=core',
+                    b'[Service]\nEnvironment=YENEY_PLAYER=core\n'):
+                path.unlink(); removed = True
+            else:
+                print(f'Note: leaving changed override {path}.', file=output)
+        if template_changed or removed:
             run(['systemctl', 'daemon-reload'], check=True)
         for kind in ('Stop', 'Enable', 'Start', 'Restart'):
             for room in plan[kind]:

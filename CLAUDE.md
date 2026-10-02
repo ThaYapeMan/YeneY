@@ -2,19 +2,18 @@
 
 ## What this is
 
-Registers Sonos speakers as LMS players; synchronised playback with other LMS players is not yet accurate. Not an LMS plugin — a standalone program built on the squeezelite codebase with a Sonos output driver instead of ALSA.
+Registers Sonos speakers as LMS players; synchronised playback with other LMS players is not yet accurate. Not an LMS plugin — a standalone program using yeney-core with a Sonos network sink.
 
 ## Build environment
 
-The WSL2 repository checkout is the development environment. Build locally with `make` and run automated tests with `make test`. The Makefile supplies the compatibility flags for current compilers.
+The WSL2 repository checkout is the development environment. Build locally with `make` and run automated tests with `make test`. The Makefile builds the core and project-owned bridge with current compilers.
 
 LXC 113 (192.168.178.31) is deployment only. Agents must never SSH to it or deploy there. After the agent commits and pushes, the user runs `git pull && git submodule update --init --recursive && make && sudo make install` on the deployment target. The installer restarts the configured room services listed in `/etc/yeney/rooms`.
 
 ## Submodules
 
-- `squeezelite/` is our fork: `ThaYapeMan/squeezelite`. Changes are allowed. Commit them in the fork repository as normal commits on its default branch and push there first; then bump the submodule pin in YeneY in a separate commit.
-- Never rewrite history on a fork's published branch: no rebase, amend, or force-push. `ThaYapeMan/squeezelite` is also pinned by LampaStream in `scripts/build-squeezelite.sh`. The author-identity rewrite on 2026-09-23 (YeneY commit `30c83f5`, squeezelite `9a34622` -> `0e1667e`) orphaned LampaStream's pin and broke its fresh installs. Before any squeezelite pin change, check LampaStream's pin and ensure its pinned commit remains fetchable from the fork.
-- Never leave edits inside a submodule checkout without committing them to the fork. `git submodule update` is not a way to preserve local work; forced updates discard uncommitted changes. Commit and push fork changes before updating pins or checkouts.
+- `third_party/yeney-core` is the player implementation; its recursive Apple ALAC module must be initialized.
+- Never rewrite published history or discard uncommitted submodule work. Commit and push intentional submodule changes before updating their pins.
 
 ## UPnP layer
 

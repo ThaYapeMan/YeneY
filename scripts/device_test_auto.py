@@ -190,7 +190,7 @@ def check_status_log(text):
 
 
 def player_engine(journal, required=None):
-    modes = re.findall(r'^YENEY_PLAYER=(core|squeezelite)$', journal, re.MULTILINE)
+    modes = re.findall(r'^Player engine: yeney-(core)$', journal, re.MULTILINE)
     mode = modes[-1] if modes else 'unknown'
     if required and required != mode:
         raise RuntimeError(f'required player engine {required}; startup journal reports {mode}')
@@ -208,7 +208,7 @@ def main():
     parser.add_argument('--lms')
     parser.add_argument('--port', type=int, default=9090)
     parser.add_argument('--player')
-    parser.add_argument('--require-player', choices=['core', 'squeezelite'])
+    parser.add_argument('--require-player', choices=['core'])
     args = parser.parse_args()
     if args.operation == 'player-engine':
         print(player_engine(Path(args.file).read_text(), args.require_player))

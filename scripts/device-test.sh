@@ -27,7 +27,7 @@
 #   SCENARIOS   which scenarios to run                   (default: 1 2 3 4 5 6 7)
 #   IDLE_SECS   idle wait after LMS stop in S8           (default: 120)
 #   RG_TRACK    S9 title or id:<n> (default: id:47145, owner's LMS library)
-#   REQUIRE_PLAYER optional core|squeezelite; fail on startup-journal mismatch
+#   REQUIRE_PLAYER optional core; fail on startup-journal mismatch
 #   RG_SECS     seconds per S9 capture (default: 25)
 #   SONOS_IP    capture peer (default: discovered room coordinator)
 #   LONG_PAUSE  seconds paused in scenario 6             (default: 120)
@@ -907,7 +907,7 @@ bridge_layer() {
     invocation=$(systemctl show "$UNIT" -p InvocationID --value 2>/dev/null) || invocation=''
     if [[ $invocation =~ ^[[:xdigit:]]{32}$ ]]; then
         startup=$(journalctl -u "$UNIT" "_SYSTEMD_INVOCATION_ID=$invocation" -o cat --no-pager 2>/dev/null)
-        PLAYER_ENGINE=$(printf '%s\n' "$startup" | sed -nE 's/^YENEY_PLAYER=(core|squeezelite)$/\1/p' | tail -n1)
+        PLAYER_ENGINE=$(printf '%s\n' "$startup" | sed -nE 's/^Player engine: yeney-(core)$/\1/p' | tail -n1)
         PLAYER_ENGINE=${PLAYER_ENGINE:-unknown}
         layer=$(printf '%s\n' "$startup" |
             sed -nE 's/^UPnP layer: (yeney).*/\1/p' | tail -n1)
@@ -915,7 +915,7 @@ bridge_layer() {
     BRIDGE_LAYER=${layer:-unknown}
     say "Bridge UPnP layer: $BRIDGE_LAYER"
     say "Player engine: $PLAYER_ENGINE"
-    if [[ -n $REQUIRE_PLAYER && ($REQUIRE_PLAYER != core && $REQUIRE_PLAYER != squeezelite || $REQUIRE_PLAYER != "$PLAYER_ENGINE") ]]; then
+    if [[ -n $REQUIRE_PLAYER && ($REQUIRE_PLAYER != core || $REQUIRE_PLAYER != "$PLAYER_ENGINE") ]]; then
         SUMMARY+=("engine | FAIL | required $REQUIRE_PLAYER; startup journal reports $PLAYER_ENGINE")
         AUTO_FAILED=1
     fi

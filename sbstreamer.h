@@ -24,7 +24,7 @@
 namespace bridge {
 
 // Registers "/music/yeney.flac" as a Sonos-facing HTTP resource and
-// serves the live FLAC-encoded PCM squeezelite hands to encode_squeezebox_audio().
+// serves the live FLAC-encoded PCM the core feeder hands to encode_squeezebox_audio().
 class SBStreamer {
 public:
     SBStreamer() = default;

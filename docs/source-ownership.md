@@ -1,8 +1,7 @@
 # Speaker source ownership
 
 YeneY releases the speaker when another source takes over. The policy lives in
-shared bridge transport and HTTP code, so `YENEY_PLAYER=core` and
-`YENEY_PLAYER=squeezelite` follow the same rules.
+bridge transport and HTTP code, independent of the core decoding pipeline.
 
 ## Decisions
 
@@ -52,7 +51,7 @@ shared bridge transport and HTTP code, so `YENEY_PLAYER=core` and
    speaker with this session's URI, rather than its previous external URI,
    because its original pause/resume expectations require an owned source.
 9. Add Port-style repeated transport timelines for AirPlay, Spotify, line-in,
-   and Sonos queues under both engines; verify cached URI use, one pause,
+   and Sonos queues with the core player; verify cached URI use, one pause,
    no device play/PlayStream, automatic restoration, explicit s/u reclaim,
    and exactly one legitimate PAUSED-to-PLAYING resume. Extend HTTP tests
    for restored delivery while LMS plays and repeated empty 200s while paused.

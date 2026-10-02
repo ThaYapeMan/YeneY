@@ -14,7 +14,7 @@ def packets(run, event, start=0):
 
 with tempfile.TemporaryDirectory(prefix='yeney-start-lead-') as tmp:
     dense = random.Random(20261002).randbytes(44100*6*8)
-    for mode in ('core','squeezelite'):
+    for mode in ('core',):
         os.environ['YENEY_START_LEAD_MS'] = '2000'
         os.environ['YENEY_DEBUG_STREAM'] = '1'
         run = Run(mode,Path(tmp))
@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-start-lead-') as tmp:
     # Actual default-off path and invalid setting fallback, on a separate process.
     os.environ['YENEY_START_LEAD_MS']='invalid'
     os.environ.pop('YENEY_DEBUG_STREAM',None)
-    # directory name must be unique but engine selection must remain real.
+    # directory name must be unique but the core startup path must remain real.
     with tempfile.TemporaryDirectory(prefix='yeney-lead-default-') as second:
         run=Run('core',Path(second))
         try:

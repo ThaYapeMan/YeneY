@@ -1,36 +1,9 @@
-FLAGS_SL = -g -O3 -Wall -fno-common -Isqueezelite -Wno-error=incompatible-pointer-types -fpermissive
-
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
 OBJS = core_sonos.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
-OBJS_SL = squeezelite.o \
-	output_sonos.o \
-	slimproto_sonos.o \
-	squeezelite/decode.o \
-	squeezelite/buffer.o \
-	squeezelite/stream.o \
-	squeezelite/utils.o \
-	squeezelite/output.o \
-	squeezelite/output_pack.o \
-	squeezelite/flac.o \
-	squeezelite/pcm.o \
-	squeezelite/vorbis.o \
-	squeezelite/faad.o \
-	squeezelite/mad.o \
-	squeezelite/mpg.o
-
 all: yeney
-
-%.o: %.cpp
-	g++ -g -O3 -Wall -c -o $@ $<
-
-%.o: %.c
-	gcc $(FLAGS_SL) -c -o $@ $<
-
-squeezelite.o: squeezelite.cpp
-	g++ $(FLAGS_SL) -c -o $@ $<
 
 CORE_LIB = third_party/yeney-core/libyeneycore.a
 .PHONY: core-library
@@ -39,28 +12,23 @@ $(CORE_LIB): core-library
 	$(MAKE) -C third_party/yeney-core libyeneycore.a
 
 core_sonos.o: core_sonos.h audio_mode.h sonos-position.h third_party/yeney-core/core/player.h third_party/yeney-core/core/sink.h
-yeney.o: player_mode.h
+yeney.o: obsolete_player.h
 core_sonos.o: %.o: %.cpp
 	g++ -std=c++17 -g -O3 -Wall -Wextra -c -o $@ $<
 
-yeney: $(OBJS) $(OBJS_SL) $(CORE_LIB)
+yeney: $(OBJS) $(CORE_LIB)
 	g++ -g -o $@ $^ \
 		-lFLAC++ -lFLAC -lcrypto \
-		-lpthread -lm -lrt -ldl -lasound
+		-lpthread
 
 clean:
-	rm -f slimproto_sonos_impl.h lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o squeezelite/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
-
-slimproto_sonos_impl.h: scripts/prepare-sonos-slimproto.py squeezelite/slimproto.c
-	python3 scripts/prepare-sonos-slimproto.py
-
-slimproto_sonos.o: slimproto_sonos.c slimproto_sonos_impl.h squeezelite/squeezelite.h
+	rm -f lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney
 	scripts/install-devices.sh
-encoder-test: tests/audio_pack_fixture.o squeezelite/output_pack.o upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
-	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.o squeezelite/output_pack.o sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
+encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
+	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
 test: export YENEY_START_LEAD_MS = 0
 test: lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
@@ -68,12 +36,10 @@ test: lead-test range-history-test range-test encoded-buffer-test stream-content
 	python3 tests/lead_setting_test.py
 	YENEY_START_LEAD_MS=2000 ./lead-test
 	YENEY_START_LEAD_MS=0 ./lead-test
-	YENEY_START_LEAD_MS=2000 YENEY_PLAYER=core ./range-test
-	YENEY_START_LEAD_MS=2000 YENEY_PLAYER=squeezelite ./range-test
+	YENEY_START_LEAD_MS=2000 ./range-test
 	python3 tests/start_lead_test.py
 	./range-history-test
-	YENEY_PLAYER=core ./range-test
-	YENEY_PLAYER=squeezelite ./range-test
+	./range-test
 	./encoded-buffer-test
 	python3 tests/encoded_overwrite_test.py
 	python3 tests/http_server_test.py
@@ -93,7 +59,6 @@ test: lead-test range-history-test range-test encoded-buffer-test stream-content
 	./streamer-test session
 	./streamer-test position
 	./streamer-test shutdown
-	python3 tests/output_shutdown_test.py
 	./encoder-test
 	./resume-state-test
 	YENEY_PAUSE=pause ./streamer-test
@@ -106,10 +71,10 @@ test: lead-test range-history-test range-test encoded-buffer-test stream-content
 	python3 tests/replaygain_probe_test.py
 	python3 tests/pause_mode_test.py
 	python3 tests/audio_mode_test.py
-	python3 tests/audio_output_test.py
-	python3 tests/player_mode_test.py
+	python3 tests/obsolete_player_test.py
 	python3 tests/core_sonos_test.py
 	python3 tests/player_engine_test.py
+	$(MAKE) -C third_party/yeney-core test
 
 sbstreamer.o sbencoder.o: sbencoder.h
 
@@ -125,7 +90,7 @@ yeney.o streamer-test: pause_mode.h
 position-test: tests/position_test.cpp position_state.h
 	g++ -g -O2 -Wall -I. -o $@ tests/position_test.cpp
 sonos-position.o: position_state.h sonos-position.h
-output_sonos.o yeney.o sbstreamer.o streamer-test: sonos-position.h
+yeney.o sbstreamer.o streamer-test: sonos-position.h
 streamer-test: sonos-position.cpp position_state.h
 
 yeney.o: transport_intent.h retry_budget.h
@@ -151,7 +116,7 @@ sbstreamer.o streamer-test: stream_close_log.h upnp/stale_stream.h
 yeney.o sonos-status.o: sonos-status.h
 sonos-status.o: speaker_uri.h stream_session.h
 
-output_sonos.o slimproto_sonos.o audio_mode.o yeney.o sbstreamer.o streamer-test: audio_mode.h
+audio_mode.o yeney.o sbstreamer.o streamer-test: audio_mode.h
 
 speaker-state-test: tests/speaker_state_test.cpp $(wildcard upnp/*.h) upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/speaker_state_test.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
@@ -183,8 +148,10 @@ range-test: tests/range_fixture.cpp sbstreamer.cpp sbencoder.cpp sonos-position.
 lead-test: tests/lead_fixture.cpp sbencoder.cpp sbencoder.h start_lead.h upnp/encoded_buffer.cpp
 	g++ -g -O2 -Wall -I. -o $@ tests/lead_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
-sbencoder.o core_sonos.o output_sonos.o: start_lead.h
+sbencoder.o core_sonos.o: start_lead.h
 sbstreamer.o: stream_debug.h sbencoder.h
 upnp/http_server.o: upnp/http_server.h upnp/stream_server.h
 
 sonos-position.o: position_state.h start_lead.h
+
+core_sonos.o encoder-test: pcm_pack.h

@@ -4,54 +4,30 @@ Technical background for [YeneY](../README.md): the design, the Sonos behaviour 
 
 ## The problem this solves
 
-LMS knows how to talk to Squeezebox hardware and to squeezelite instances. It has
-no idea what a Sonos speaker is. Sonos, in turn, expects to be driven through its
-own UPnP/SOAP control surface and to pull audio from an HTTP URL it is handed --
-not to receive a slimproto stream.
-
-This project sits between the two. It is squeezelite itself (same decode, buffer
-and stream pipeline LMS already trusts), but with the ALSA output swapped for a
-custom backend that talks to a Sonos device instead of a sound card. From LMS's
-point of view, a Sonos room is just another squeezelite client. From Sonos's point
-of view, it is being handed a normal HTTP audio URL to play, the same as if you had
-pasted a stream link into the Sonos app.
+LMS speaks Slimproto to Squeezebox-compatible clients. Sonos pulls an HTTP audio
+stream and uses UPnP/SOAP for transport. YeneY bridges the two with yeney-core,
+which owns the LMS connection and FLAC/MP3/PCM/ALAC decoding.
 
 ## How the pieces fit together
 
-Each running instance represents exactly one Sonos room. On startup it discovers
-the Sonos device (or connects to a given IP), discovers the LMS server (or uses
-`--server`), derives a stable player identity from the Sonos player's UUID, and
-launches squeezelite against that identity as if it were any other client.
+Each instance discovers one Sonos room, derives a stable MAC identity from its
+UUID and starts yeney-core. The core Sonos sink accepts bounded normalized PCM
+batches without blocking the core event loop. Its feeder packs signed stereo
+samples into little-endian 24-bit (or legacy 16-bit) PCM and sends them to the
+shared FLAC encoder. Same-rate gapless tracks retain a stream ID and encoder;
+new generations or rate changes create a new HTTP entity.
 
-From there, three loosely-coupled pieces keep the two sides in sync:
+LMS p/q/s/u commands feed the resume and stop-debounce state machines. StopTimer
+serializes device transport independently of the core event loop, including a
+400 ms q/s debounce. Held HTTP requests and legitimate device resumes retain
+existing ownership rules; foreign-source takeover pauses LMS and relinquishes
+control until an explicit LMS start/unpause.
 
-**Getting audio out.** The output backend does not push PCM to a sound card; it
-watches squeezelite's own silent/non-silent flag. A transition into audio starts a
-FLAC encoder and opens an HTTP endpoint (`/music/yeney.flac`) that Sonos is
-told to `PlayStream()`. A transition back to silence tears the stream down and
-stops the speaker. The encoder deliberately stays only a couple of seconds ahead
-of real time -- Sonos buffers aggressively on its own, and letting the encoder run
-far ahead only made that worse and confused LMS's own progress tracking.
-
-**Keeping transport commands sane.** LMS's `p`/`q`/`s`/`u` commands and the Sonos
-device's own pause/play events arrive independently and can race. Two small,
-independently testable state machines absorb that: one decides what an LMS
-"unpause" actually means right now (a genuinely new stream, resuming a held HTTP
-request, or reissuing the play command against the same URL), and the other
-delays turning a stop into an actual device pause by 400 ms, because a drag-seek
-in the UI arrives as a stop immediately followed by a new play -- without the
-delay, every seek would cause an audible blip on the speaker.
-
-**Keeping LMS's numbers honest.** squeezelite counts frames as it decodes them,
-which runs well over a second ahead of what the Sonos speaker is physically
-outputting once its own network and playback buffering is accounted for. A
-background poll of the Sonos device's actual transport position (via UPnP) feeds
-a corrected figure back into the same counter LMS reads for its progress bar and
-`ms_played` calculation, so the displayed position tracks what you actually hear
-rather than what has merely been decoded. A zero speaker position remains zero
-while Sonos buffers, including its early startup reconnect. STAT reports use the
-speaker-derived frame difference without a wall-clock fallback or extrapolation
-from a blocked output pump, and never move backwards within a track.
+Playback position comes from Sonos, not submitted PCM. Initial STMs establishes
+an LMS session, queued track boundaries wait for audible progress, and STMd
+means decode-complete so LMS can provide a successor before playback completes.
+See [the initial reserve and diagnostics](start-lead.md),
+[Range recovery](grouped-range-recovery.md) and [source ownership](source-ownership.md).
 
 ## Why a continuous stream, and how this differs from track-by-track UPnP
 
@@ -66,7 +42,7 @@ UPnP/DLNA bridges work by default.
 
 **Continuous stream (this project).** The Sonos is handed a single, never-ending
 FLAC stream, the way it would play an internet radio station. The audio is
-produced by squeezelite under full LMS control: LMS decides what plays, when, and
+produced by yeney-core under full LMS control: LMS decides what plays, when, and
 how it sounds; the Sonos simply renders what it receives.
 
 The [comparison table in the README](../README.md#yeney-compared-with-lms-upnp) shows the trade-off for YeneY and both LMS-uPnP
@@ -101,7 +77,6 @@ Status:
 
 | Setting | Values | Default |
 |---|---|---|
-| `YENEY_PLAYER` | `squeezelite`: existing engine; `core`: yeney-core for A/B testing | `squeezelite` |
 | `YENEY_AUDIO` | `24/48`: 24-bit FLAC at the source's 44.1/48 kHz rate; `16/44`: legacy 16-bit/44.1 kHz | `24/48` |
 
 The setting is read once at startup and logged. Invalid values warn and use
@@ -441,88 +416,10 @@ dBFS. Missing tags or unreliable alignment are INVALID. The tarball retains the
 two full pcaps, FLAC/WAV files and `s9-report.txt`. This measures the digital stream,
 not acoustic output. See [S9 verification details](../DEVICE-VERIFICATION.md#s9--measure-replaygain-in-the-streamed-audio).
 
-### Comparing the player engines
+### Core host integration
 
-Both engines are linked into the same binary. The default remains squeezelite.
-To switch only Study, run `sudo systemctl edit yeney@Study.service` and set:
-
-```ini
-[Service]
-Environment=YENEY_PLAYER=core
-```
-
-Then run `sudo systemctl daemon-reload && sudo systemctl restart yeney@Study.service`.
-Use `Environment=YENEY_PLAYER=squeezelite` and restart again for the other half of
-the comparison. Both modes register the same player name and MAC, retaining LMS
-player preferences. Invalid settings warn and select squeezelite. The startup
-journal logs the selected engine once as `YENEY_PLAYER=core` or `squeezelite`.
-
-Run the existing device scenarios with `REQUIRE_PLAYER=core` (or `squeezelite`)
-to reject an accidental test of the wrong engine. Reports record the mode from
-the room service's current startup journal, rather than the test shell's settings.
-For ReplayGain, run `sudo env SCENARIOS="9" REQUIRE_PLAYER=core scripts/device-test.sh`.
-S9 is expected to measure about **-7.99 dB** with the owner's default tagged track
-in both modes. Core uses only yeney-core's decoders: libFLAC (BSD-3-Clause), minimp3
-(CC0) and Apple ALAC (Apache-2.0), plus its PCM reader. LMS converts OGG, AAC
-and other formats to FLAC/PCM. Automated tests compare lossless output bit for
-bit and LAME-tagged MP3 fixtures by exact gapless frame counts, correlation and
-signal-to-noise ratio. Physical device checks and deployment on LXC 113 are left
-to the owner.
-
-### Core host integration decisions
-
-- A pre-command observer receives the letter, unsigned offset-18 field and
-  pre-command running/submitted flag. Transport exceptions match squeezelite.
-- A 48,000-frame staging queue plus one feeder batch (normally at most 256
-  frames) bounds the output hand-off. The core loop never waits for an encoder.
-- The feeder applies boundaries in FIFO order. Same-rate modern continuation
-  retains its stream; rate changes and all legacy boundaries create a new ID.
-- Audible frames are the stream's cumulative base plus the Sonos audible
-  position, clamped to frames handed to the encoder and a monotonic floor.
-  Pausing freezes this clock. Stop/flush retain the floor and cancel queued PCM.
-- The pinned squeezelite `slimproto.c` sends STMu when output is running, its
-  PCM queue is empty, input is disconnected and decoding is stopped; it does
-  not compare audible frames. Core's optional `Sink::drained` therefore uses
-  feeder completion. Whole-second Sonos reports cannot prevent playlist end.
-  STMd remains decoder completion. `startOnSubmit` uses the feeder's
-  `startedFrames()` coordinate to match the output-boundary
-  STMs signal while STAT elapsed remains exclusively the Sonos clock.
-- STMo means running output has genuinely run dry while HTTP streaming is
-  incomplete. The pinned squeezelite fork (`0e1667e`, `slimproto.c:725–728`)
-  checks running state, empty output ring, active HTTP streaming and its report
-  latch. Core additionally requires STMs and submitted frames, no pause/timed
-  start, an empty core queue and `Sink::outputEmpty(submitted)`. Sonos reports
-  emptiness only after both feeder drain and audible progress through submitted
-  frames; an empty staging queue alone says nothing about buffered HTTP/device
-  audio. Successful writes clear core's latch for a later underrun. The coarse
-  Sonos clock may delay or suppress a fractional-second genuine underrun
-  report, avoiding false rebuffer interruptions.
-- STMd remains decoder completion; STMl remains pre-start readiness; STMu
-  retains feeder completion for playlist end. STAT fullness remains the core
-  and decoder queues, matching squeezelite's ring accounting rather than its
-  separate device frames. Zero fullness alone must not trigger rebuffering.
-- The localhost fake LMS responds to STMo with zero-interval `p` followed by
-  `u` after a controlled refill interval. Both engines' repeated manual
-  `q, q, s` tests assert no reports, rebuffer commands or extra UPnP Stop/Play.
-  Squeezelite remains the default and its source and pin are unchanged.
-- Core transport dispatch runs on StopTimer; squeezelite retains inline
-  dispatch. Encoder cancellation checks a generation token and shutdown flag.
-- Both libraries link without symbol collisions. A weak core-running probe
-  lets existing standalone squeezelite output fixtures retain their linkage.
-- Core uses yeney-core's default decoder selection, including minimp3 for MP3;
-  no host decoder factory or libmad compatibility adapter is installed.
-  MP3 float synthesis is scaled by 2^31, rounded to nearest (ties away from
-  zero) and saturated into int32 frames; there is no intermediate int16
-  quantisation. The 24-bit Sonos path retains this additional precision.
-
-The A/B MP3 fixtures use genuine LAME gapless tags and verify exactly 70,130
-and 80,060 frames with a following PCM marker, which releases the final partial
-FLAC block and checks the boundary without waveform alignment. Both measured
-126.86/126.72 dB SNR against squeezelite's dynamically loaded libmad, up from
-88.03 dB with int16 decoding. Correlations were 0.999999999999924 and
-0.999999999999920. The test requires at least 120 dB SNR and
-0.999999999999 correlation. FLAC and PCM remain bit-identical.
-For ALAC, core receives the native fixture and the unchanged squeezelite build
-receives its reference PCM, modelling LMS's lossless conversion. Core's existing
-Lavc-tagged fixtures have different trimming from squeezelite's LAME-only parser;
-this round does not change either submodule's metadata handling.
+The core is the only engine. Its identity, real HTTP audio, lossless PCM,
+MP3 trimming, native ALAC, pause/seek/transport behavior, nonblocking heartbeat
+and signal shutdown are exercised by tests/player_engine_test.py. The bundled
+core suite validates its decoders and transition pipeline against independent
+reference fixtures. See [core-only Decisions](core-only.md).

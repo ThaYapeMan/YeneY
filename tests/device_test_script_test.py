@@ -771,14 +771,14 @@ exit 0
 
 # Engine provenance must come from the current service invocation, not this shell.
 with tempfile.TemporaryDirectory(prefix='yeney-player-report-') as directory:
-    for actual, required, code in [('core', 'core', 0), ('squeezelite', 'core', 1),
-                                   ('unknown', 'squeezelite', 1), ('squeezelite', '', 0)]:
+    for actual, required, code in [('core', 'core', 0), ('unknown', 'core', 1),
+                                   ('unknown', 'invalid', 1), ('core', '', 0)]:
         result = subprocess.run(['bash', '-c', prefix + r'''
 UNIT=fixture
 systemctl() { printf '0123456789abcdef0123456789abcdef\n'; }
 journalctl() {
     [[ $* == *'_SYSTEMD_INVOCATION_ID=0123456789abcdef0123456789abcdef'* ]] || exit 95
-    printf 'YENEY_PLAYER=%s\n' "$ACTUAL"
+    printf 'Player engine: yeney-%s\n' "$ACTUAL"
 }
 bridge_layer
 auto_summary
@@ -789,9 +789,9 @@ exit "$AUTO_FAILED"
         assert f'player engine: {actual}' in result.stdout, result
         assert ('engine | FAIL |' in result.stdout) == bool(code)
     assert 'player_engine=$PLAYER_ENGINE' in script
-    assert auto.player_engine('YENEY_PLAYER=squeezelite\nYENEY_PLAYER=core\n', 'core') == 'core'
+    assert auto.player_engine('Player engine: yeney-core\n', 'core') == 'core'
     try:
-        auto.player_engine('YENEY_PLAYER=squeezelite\n', 'core')
+        auto.player_engine('Player engine: yeney-unknown\n', 'core')
         raise AssertionError('mismatch accepted')
     except RuntimeError:
         pass

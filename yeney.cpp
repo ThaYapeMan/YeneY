@@ -1,4 +1,4 @@
-// yeney.cpp -- bridges a Sonos zone player into an LMS/squeezelite session
+// yeney.cpp -- bridges a Sonos zone player into an LMS session
 //
 // Copyright (c) 2026 Jaap van Vliet
 //
@@ -27,7 +27,7 @@
 #include "stop_debounce.h"
 #include "stream_session.h"
 #include "audio_mode.h"
-#include "player_mode.h"
+#include "obsolete_player.h"
 void runCoreClient(const char*, const uint8_t*, const char*);
 
 extern "C" {
@@ -51,10 +51,6 @@ unsigned get_squeezebox_stream_id(void);
 #include <sys/socket.h>
 #include <thread>
 #include <unistd.h>
-
-// Defined in squeezelite.cpp; runs the squeezelite client loop on the
-// calling thread until the LMS connection is torn down.
-void squeezelite(const char* server, uint8_t* mac, const char* name);
 
 namespace {
 void onSonosEvent(void* handle);
@@ -271,7 +267,6 @@ extern "C" void yeney_transport(char command)
         printf("strm q: deferring %s for 400 ms\n", pauseMode() == PauseMode::Stop ? "Stop" : "Pause");
         return; // receive the next strm s without waiting on UPnP
     }
-    if (playerMode() == PlayerMode::Squeezelite) dispatchTransportIntent();
     {
         std::lock_guard<std::mutex> lock(intentMutex);
         if (transportIntent.revision == revision && transportIntent.pending) {
@@ -498,12 +493,11 @@ static bool sendLmsCommand(const std::string& server, const uint8_t* mac, const 
     return ok;
 }
 
-// Runs the selected player engine on a dedicated thread; returns when the
+// Runs yeney-core on a dedicated thread; returns when the
 // LMS connection is torn down (e.g. process shutdown).
 static void runPlayerClient(const char* server, std::string playerName)
 {
-    if (playerMode() == PlayerMode::Core) runCoreClient(server, gMac, playerName.c_str());
-    else squeezelite(server, gMac, playerName.c_str());
+    runCoreClient(server, gMac, playerName.c_str());
     printf("player client thread stopped\n");
 }
 
@@ -884,7 +878,8 @@ int main(int argc, char** argv)
     }
     (void)pauseMode();
     (void)audioMode();
-    (void)playerMode();
+    warnObsoletePlayer();
+    printf("Player engine: yeney-core\n");
     (void)upnp::streamContentMode();
     (void)upnp::titleFormat();
     (void)upnp::backend();
@@ -899,7 +894,7 @@ int main(int argc, char** argv)
     const char* room = findOption(argc, argv, "--room");
     const char* server = findOption(argc, argv, "--server");
 
-    printf("\n\n| YeneY -- bridges a Sonos zone player into an LMS/squeezelite session\n\n\n");
+    printf("\n\n| YeneY -- bridges a Sonos zone player into an LMS session\n\n\n");
 
     configure_squeezebox_close_logging(true);
     {
@@ -910,7 +905,7 @@ int main(int argc, char** argv)
             const auto id = streamId.load();
             return upnp::StreamActivity{bool(squeezebox_response_streaming(id)), bool(squeezebox_request_open(id))};
         }, [] { onSonosEvent(nullptr); }, serverBackend);
-        // squeezelite's clean signal path calls exit(), which skips main's
+        // Core's clean signal path calls exit(), which skips main's
         // automatic Status (and its shared player reference) destructor.
         std::atexit([] {
             auto own = std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer);
@@ -943,7 +938,7 @@ int main(int argc, char** argv)
     if (gServer.empty()) {
         printf("No LMS server resolved from --server, config, or UDP discovery. "
             "Track metadata and Sonos-app pause/play relay are unavailable without a resolved server. "
-            "Squeezelite's independent discovery will keep retrying for core playback; "
+            "Core's independent discovery will keep retrying for playback; "
             "restart with a reachable server to enable metadata and relay.\n");
     }
 

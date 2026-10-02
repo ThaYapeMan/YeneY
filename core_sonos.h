@@ -51,4 +51,4 @@ public:
     bool paced() const override { return false; }
 };
 void runCoreClient(const char* server, const uint8_t* mac, const char* name);
-extern "C" int core_output_running();
+extern "C" int sonos_output_running();
