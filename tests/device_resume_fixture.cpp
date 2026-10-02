@@ -1,3 +1,4 @@
+#include "source_ownership.h"
 #include "resume_state.h"
 #include "upnp/speaker_control.h"
 #include "upnp/title_format.h"
@@ -34,12 +35,14 @@ static std::atomic<unsigned> streamPlays{0};
 static std::atomic<unsigned> transportPlays{0};
 static unsigned heldGetInvalidations = 0;
 static std::vector<std::string> callOrder;
-struct Transport { std::string state, status; };
+struct Transport { std::string state, status; std::string uri{}; bool uriKnown = false; };
 struct FakePlayer {
+    unsigned uriReads = 0;
+    bool uriReadable = true;
     Transport property;
-    std::string uri;
+    std::string uri = "http://bridge/stream?stream=6&session=" + streamSessionToken();
     bool readTransportInfo(upnp::TransportInfo& info) { info.state = property.state; return true; }
-    bool currentUri(std::string& out) { out = uri; return true; }
+    bool currentUri(std::string& out) { ++uriReads; if (!uriReadable) return false; out = uri.empty() ? "http://bridge/stream?stream=6&session=" + streamSessionToken() : uri; return true; }
     Transport transportInfo() { return property; }
     std::string controllerUri() { return "http://bridge"; }
     bool playStream(const std::string& url, const std::string&, const std::string&,
@@ -119,7 +122,7 @@ struct Status {
 }
 
 // Observe completion, including skipped calls, before resetting fixture state.
-static unsigned decisionLogs = 0;
+static unsigned decisionLogs = 0, sourceChanges = 0, relinquishLogs = 0, foreignPauseLogs = 0;
 static int productionPrintf(const char* format, ...) {
     char message[1024];
     va_list args;
@@ -127,6 +130,9 @@ static int productionPrintf(const char* format, ...) {
     int result = vsnprintf(message, sizeof(message), format, args);
     va_end(args);
     fputs(message, stdout);
+    if (std::string(message).find("speaker source:") == 0) ++sourceChanges;
+    if (std::string(message) == "relinquished\n") ++relinquishLogs;
+    if (std::string(message).find("Foreign source took over") == 0) ++foreignPauseLogs;
     if (std::string(message).find(": decision=") != std::string::npos)
         ++decisionLogs;
     return result;
@@ -159,7 +165,84 @@ static void paused(const char* status) {
 #include "transport_intent_cases.h"
 #include "retry_cases.h"
 
-int main() {
+static void foreignSourceCases() {
+    bridge::Status snapshot;
+    for (const auto scheme : {"x-sonos-vli", "x-sonos-spotify", "x-rincon-stream", "x-rincon-queue"}) {
+        speakerRelinquished = speakerReclaimPending = false;
+        player.uri = SqueezeBoxURL(6);
+        player.property = {"PLAYING", "OK"};
+        ourStreamStarted = true; completedStream = streamId = 6;
+        streamStartRetry = RetryBudget{}; retryStream = 0; retryRevision = 0;
+        transportIntent = TransportIntent{}; deferredStop = StopDebounce{};
+        resumeState = ResumeState{}; resumeState.command('s'); resumeState.observe("PLAYING");
+        lmsPaused = false; responseOpen = true; responseEnded = false;
+        pauseCalls = 0;
+        cliPauses = cliPlays = streamPlays = transportPlays = responseEnds = heldGetInvalidations = 0;
+        testingStreamStart = true; playStreamFailures = 0; callOrder.clear();
+        const auto unknownReads = player.uriReads;
+        assert(ObserveSpeakerOwnership());
+        assert(player.uriReads == unknownReads + 1);
+        player.property.uriKnown = true; player.property.uri = player.uri;
+        const auto readsBefore = player.uriReads;
+        refreshStatus(snapshot);
+        sourceChanges = relinquishLogs = foreignPauseLogs = 0;
+        player.uri = std::string(scheme) + ":foreign";
+        player.property.uri = player.uri;
+        // Logical event times from the Port trace; foreign ownership must
+        // remain latched across pauses and longer-than-resume-lease gaps.
+        struct Event { const char* time; const char* state; };
+        for (const auto event : {Event{"14:13:34", "PLAYING"}, Event{"14:14:21", "PAUSED_PLAYBACK"},
+                                Event{"14:14:22", "PLAYING"}, Event{"14:15:17", "STOPPED"},
+                                Event{"14:15:18", "PLAYING"}, Event{"14:15:53", "PAUSED_PLAYBACK"},
+                                Event{"14:15:54", "PLAYING"}}) {
+            (void)event.time; // No timers are needed once ownership is relinquished.
+            player.property.state = event.state;
+            refreshStatus(snapshot); ResumeSqueezeBox(6);
+            dispatchTransportIntent(); dispatchDeferredStop(); dispatchStreamStart();
+        }
+        assert(player.uriReads == readsBefore);
+        assert(sourceChanges == 1 && relinquishLogs == 1 && foreignPauseLogs == 1);
+        assert(speakerRelinquished && lmsPaused && cliPauses == 1 && cliPlays == 0);
+        assert(streamPlays == 0 && transportPlays == 0 && responseEnds == 1 && !responseOpen);
+        yeney_transport('p'); dispatchTransportIntent(); // LMS pause acknowledgement never pauses foreign source
+        assert(pauseCalls == 0);
+        player.uri = SqueezeBoxURL(6); player.property.uri = player.uri; player.property.state = "PLAYING";
+        refreshStatus(snapshot); ResumeSqueezeBox(6);
+        assert(speakerRelinquished && cliPlays == 0 && cliPauses == 1 && streamPlays == 0);
+        yeney_transport('s');
+        assert(!speakerRelinquished && !lmsPaused);
+        new_squeezebox_stream_id(); // fixture uses stream 6 for network assertions
+        streamId = 6; completedStream = 5;
+        dispatchStreamStart();
+        assert(streamPlays == 1 && completedStream == 6 && !speakerReclaimPending);
+        printf("PASS: %s Port takeover timeline: one LMS pause, zero play/PlayStream; restored URI stays relinquished; LMS strm s reclaims once\n", scheme);
+        // LMS u also explicitly reclaims, even if a restored GET is open.
+        player.uri = std::string(scheme) + ":foreign"; player.property.uri = player.uri; refreshStatus(snapshot);
+        assert(speakerRelinquished);
+        responseOpen = true; testingStreamStart = false;
+        streamPlays = heldGetInvalidations = 0; callOrder.clear();
+        yeney_transport('u'); dispatchTransportIntent();
+        assert(!speakerRelinquished && streamPlays == 1 && cliPlays == 0);
+    }
+    speakerRelinquished = speakerReclaimPending = false;
+    player.uri = SqueezeBoxURL(6); testingStreamStart = false;
+    pauseCalls = 0;
+    player.property = {"PAUSED_PLAYBACK", "OK"};
+    resumeState = ResumeState{}; resumeState.command('p');
+    lmsPaused = true; cliPlays = 0;
+    refreshStatus(snapshot);
+    player.property.state = "PLAYING";
+    player.uriReadable = false;
+    ResumeSqueezeBox(6);
+    assert(cliPlays == 0); // unknown URI with a failed read cannot authorize resume
+    player.uriReadable = true;
+    refreshStatus(snapshot); refreshStatus(snapshot); ResumeSqueezeBox(6);
+    assert(cliPlays == 1 && !speakerRelinquished);
+    puts("PASS: our URI PAUSED to PLAYING device resume sends exactly one LMS play");
+}
+
+int main(int argc, char**) {
+    if (argc > 1) { foreignSourceCases(); return 0; }
     assert(SqueezeBoxURL(6) == "http://bridge/music/yeney.flac?session=" + streamSessionToken() + "&stream=6");
     serverStub.value.uri += "?existing=1";
     assert(SqueezeBoxURL(7) == "http://bridge/music/yeney.flac?existing=1&session=" + streamSessionToken() + "&stream=7");

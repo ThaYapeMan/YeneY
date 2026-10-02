@@ -1,3 +1,4 @@
+#include "source_ownership.h"
 #include "sbstreamer.h"
 #include "upnp/http_server.h"
 #include "sonos-position.h"
@@ -777,6 +778,7 @@ int main(int argc, char** argv) {
     std::cout << "PASS: matching held GET invalidates with HTTP 503 and closes within 300ms; wrong ID is ignored\n";
 
     state.command('u'); deviceState = "PLAYING"; paused = false;
+    speakerRelinquished = true; // playing LMS may still serve a restored queue
     Socket afterInvalidation(2, false, true);
     auto freshGet = std::async(std::launch::async, [&] { serve(broker, afterInvalidation); });
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
@@ -796,5 +798,18 @@ int main(int argc, char** argv) {
     playable(afterInvalidation, 1200);
     assert(generation == 2 && afterInvalidation.eof && afterInvalidation.disconnected);
     std::cout << "PASS: fresh same-ID GET decodes after invalidation; active audio is never invalidated\n";
+
+    speakerRelinquished = true; paused = true;
+    const auto beforeResume = resumeCommands.load();
+    for (int retry = 0; retry < 3; ++retry) {
+        Socket restored(2, false, true);
+        serve(broker, restored);
+        assert(restored.headers.find("200 OK") != std::string::npos);
+        assert(restored.headers.find("Content-Length: 0") != std::string::npos);
+        assert(restored.body.empty());
+    }
+    assert(resumeCommands == beforeResume && !squeezebox_response_open(2));
+    std::cout << "PASS: restored queue GET while relinquished and LMS paused gets empty HTTP 200, no LMS resume or 503 retries\n";
+    speakerRelinquished = false;
 
 }

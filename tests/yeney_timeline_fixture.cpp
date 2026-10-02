@@ -1,3 +1,4 @@
+#include "source_ownership.h"
 #include "clock.h"
 #include <resume_state.h>
 #include "sbstreamer.h"
@@ -11,10 +12,11 @@
 #include <thread>
 static std::atomic<unsigned> streamId{30}, plays{0}, logs{0}, unconfirmed{0};
 static std::atomic<bool> ourStreamStarted{true};
+static std::atomic<bool> lmsPaused{false};
 static ResumeState resumeState;
 static std::mutex resumeMutex;
 static upnp::SpeakerStateStore speakerState;
-struct Player { upnp::TransportInfo transportInfo() { return speakerState.snapshot().transport; } } player;
+struct Player { bool currentUri(std::string& uri) { uri = "http://bridge/stream?stream=30&session=" + streamSessionToken(); return true; } upnp::TransportInfo transportInfo() { return speakerState.snapshot().transport; } } player;
 static Player* gPlayer = &player;
 static int gServer, gMac;
 static bool stream_just_restarted() { return false; }

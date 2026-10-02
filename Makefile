@@ -156,3 +156,5 @@ encoded-buffer-test: tests/encoded_buffer_test.cpp upnp/encoded_buffer.cpp upnp/
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/encoded_buffer_test.cpp upnp/encoded_buffer.cpp -lpthread
 
 upnp/http_server.o streamer-test own-control-test: upnp/icon.h
+
+yeney.o sbstreamer.o streamer-test: source_ownership.h speaker_uri.h

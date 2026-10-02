@@ -29,6 +29,7 @@ bodies = "\n\n".join(production_function(signature) for signature in (
     "static void dispatchStreamStart(",
     "static void dispatchTransportIntent(",
     'extern "C" void yeney_transport(',
+    "static bool ObserveSpeakerOwnership(",
     "static void ObserveDeviceTransport(",
     "void ResumeSqueezeBox(",
     "void refreshStatus(",
@@ -45,3 +46,7 @@ with tempfile.TemporaryDirectory(prefix="sonos-device-resume-") as directory:
     for mode in ("stop", "pause"):
         subprocess.run([str(executable)], check=True,
                        env={**os.environ, "YENEY_PAUSE": mode})
+
+    for engine in ("core", "squeezelite"):
+        subprocess.run([str(executable), "foreign"], check=True,
+                       env={**os.environ, "YENEY_PLAYER": engine})

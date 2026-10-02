@@ -1,3 +1,4 @@
+#include "source_ownership.h"
 #include "upnp/own_speaker_control.h"
 #include "sonos-status.h"
 #include "resume_state.h"
@@ -9,6 +10,7 @@
 static std::shared_ptr<upnp::SpeakerControl> gPlayer;
 static std::atomic<bool> ourStreamStarted{true};
 static std::atomic<unsigned> streamId{6};
+static std::atomic<bool> lmsPaused{false};
 static ResumeState resumeState;
 static std::mutex resumeMutex;
 static int gServer = 0, gMac = 0;
@@ -29,6 +31,7 @@ int main(int argc, char** argv) {
     assert(argc == 2);
     gPlayer = std::make_shared<upnp::OwnSpeakerControl>([] { return 1450; }, std::strtoul(argv[1], nullptr, 10));
     assert(gPlayer->discover("Study", "127.0.0.1"));
+    assert(gPlayer->playStream("http://bridge/stream?stream=6&session=" + streamSessionToken(), "fixture"));
     bridge::Status status(gPlayer);
     resumeState.command('s');
     refreshStatus(status); // PLAYING poll

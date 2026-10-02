@@ -1,3 +1,4 @@
+#include "source_ownership.h"
 #include "upnp/own_speaker_control.h"
 #include "upnp/title_format.h"
 #include "transport_intent.h"

@@ -44,6 +44,9 @@ int main(int argc, char** argv) {
         "A & B <Live> \"Mix\" '26", "http://lms:9000/art?a=1&b=2"));
     assert(std::chrono::steady_clock::now() - begin >= std::chrono::seconds(6));
     assert(control.transportInfo().title == "A & B <Live> \"Mix\" '26");
+    assert(control.transportInfo().uriKnown);
+    assert(control.transportInfo().uri.find("session=0123456789abcdef&stream=7") != std::string::npos);
+    std::cout << "PASS: successful URI assignment updates the ownership cache before polling\n";
     std::cout << "PASS: own Play accepts a six-second acknowledgement without timeout\n";
     for (const auto action : {"Play", "Pause", "Stop", "SetAVTransportURI"}) assert(upnp::OwnSpeakerControl::actionTimeoutMs(action) == 20000);
     for (const auto action : {"GetTransportInfo", "GetPositionInfo", "GetMediaInfo", "GetVolume", "GetZoneGroupState"}) assert(upnp::OwnSpeakerControl::actionTimeoutMs(action) == 5000);

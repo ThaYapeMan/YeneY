@@ -18,6 +18,7 @@
 #include <iostream>
 
 #include "resume_state.h"
+#include "source_ownership.h"
 #include "transport_intent.h"
 #include "pause_mode.h"
 #include "sbstreamer.h"
@@ -116,7 +117,7 @@ extern "C" void new_squeezebox_stream_id(void)
 static void dispatchTransportIntent()
 {
     std::unique_lock<std::mutex> transport(transportMutex, std::try_to_lock);
-    if (!transport.owns_lock() || stream_just_restarted() || !ourStreamStarted.load() || !gPlayer)
+    if (speakerRelinquished.load() || !transport.owns_lock() || stream_just_restarted() || !ourStreamStarted.load() || !gPlayer)
         return;
     TransportIntent intent;
     {
@@ -205,6 +206,13 @@ extern "C" void yeney_transport(char command)
         if (pending && command == 's')
             printf("strm q: superseded by strm s, no Pause\n");
     }
+    const bool reclaim = (command == 's' || command == 'u') && speakerRelinquished.exchange(false);
+    if (reclaim) {
+        speakerReclaimPending.store(true);
+        printf("reclaimed by LMS strm %c\n", command);
+        std::lock_guard<std::mutex> lock(resumeMutex);
+        resumeState = ResumeState{};
+    }
     ResumeState::Unpause unpause;
     bool responseOpen;
     {
@@ -214,6 +222,7 @@ extern "C" void yeney_transport(char command)
         if (pauseMode() == PauseMode::Stop && responseOpen
             && unpause == ResumeState::Unpause::SameURL)
             unpause = ResumeState::Unpause::FeedHeldGet;
+        if (reclaim && command == 'u') unpause = ResumeState::Unpause::SameURL;
     }
     uint64_t revision = 0;
     if (command == 'p' || command == 'u' || command == 's' || command == 'q') {
@@ -245,6 +254,7 @@ extern "C" void yeney_transport(char command)
         ++lmsStreamSerial; // release a producer waiting on an obsolete HTTP request
         return;
     }
+    if (speakerRelinquished.load()) return;
     if (command != 'p' && command != 'q' && command != 'u') return;
     if (!ourStreamStarted.load() && (streamId.load() == 0 || command == 'q')) {
         printf("strm %c: transport ignored before first bridge stream\n", command);
@@ -286,7 +296,7 @@ static void dispatchDeferredStop()
         std::lock_guard<std::mutex> lock(stopMutex);
         if (!deferredStop.takeDue(StopDebounce::Clock::now())) return;
     }
-    if (!ourStreamStarted.load() || stream_just_restarted() || !lmsPaused.load()) return;
+    if (speakerRelinquished.load() || !ourStreamStarted.load() || stream_just_restarted() || !lmsPaused.load()) return;
     const bool stopForPause = pauseMode() == PauseMode::Stop;
     if (stopForPause) {
         std::lock_guard<std::mutex> lock(resumeMutex);
@@ -507,8 +517,43 @@ std::string SqueezeBoxURL(unsigned stream_id)
         + "session=" + streamSessionToken() + "&stream=" + std::to_string(stream_id);
 }
 
-static void ObserveDeviceTransport(const std::string& state)
+// Resolve unknown ownership once per observation; status polling has already
+// populated this cache in the usual event and periodic refresh paths.
+static bool ObserveSpeakerOwnership()
 {
+    auto info = gPlayer->transportInfo();
+    std::string uri = info.uri;
+    if (!info.uriKnown && !gPlayer->currentUri(uri)) return false;
+    const auto description = speakerUriDescription(uri, streamSessionToken());
+    const bool ours = description.compare(0, 7, "stream=") == 0;
+    bool takeover = false;
+    {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        const std::string source = ours ? "ours" : description;
+        if (source != lastSpeakerSource) {
+            printf("speaker source: %s → %s\n", lastSpeakerSource.empty() ? "unknown" : lastSpeakerSource.c_str(), source.c_str());
+            lastSpeakerSource = source;
+        }
+        if (!ours && ourStreamStarted.load() && !speakerReclaimPending.load() && !speakerRelinquished.exchange(true))
+            takeover = true;
+    }
+    if (takeover) {
+        printf("Foreign source took over (%s): LMS pause, no resume\n", description.substr(6).c_str());
+        printf("relinquished\n");
+        {
+            std::lock_guard<std::mutex> lock(resumeMutex);
+            resumeState = ResumeState{};
+            lmsPaused.store(true);
+        }
+        end_squeezebox_response();
+        sendLmsCommand(gServer, gMac, "pause 1");
+    }
+    return ours && !speakerRelinquished.load();
+}
+
+static void ObserveDeviceTransport(const std::string& state, bool ownershipChecked = false)
+{
+    if (!ownershipChecked && !ObserveSpeakerOwnership()) return;
     bool relay, expectedClose;
     static std::string previousState;
     {
@@ -538,17 +583,18 @@ static void ObserveDeviceTransport(const std::string& state)
 void ResumeSqueezeBox(unsigned requested)
 {
     if (!ourStreamStarted.load() || stream_just_restarted()) return;
-    ObserveDeviceTransport(gPlayer->transportInfo().state);
+    if (!ObserveSpeakerOwnership()) return;
+    ObserveDeviceTransport(gPlayer->transportInfo().state, true);
     bool resume;
     {
         std::lock_guard<std::mutex> lock(resumeMutex);
-        resume = resumeState.takeResume(requested, streamId.load());
+        resume = !speakerRelinquished.load() && resumeState.takeResume(requested, streamId.load());
         // Publish the HTTP hold before CLI I/O: LMS can reply with q/s before
         // sendLmsCommand returns. Status and GET callbacks share this decision.
         if (requested == streamId.load() && resumeState.stopResumeRequested())
             hold_squeezebox_resume(requested);
     }
-    if (resume) {
+    if (resume && !speakerRelinquished.load()) {
         printf("Device-initiated resume: current stream %u\n", requested);
         if (!sendLmsCommand(gServer, gMac, "play")) {
             printf("Device-initiated resume: LMS play failed; retaining 5 s lease\n");
@@ -562,6 +608,7 @@ void ResumeSqueezeBoxGetPair(unsigned stream, unsigned long long active, unsigne
                            ResumeState::Clock::duration separation)
 {
     if (!ourStreamStarted.load() || stream_just_restarted() || stream != streamId.load()) return;
+    if (!ObserveSpeakerOwnership()) return;
     bool accepted;
     {
         std::lock_guard<std::mutex> lock(resumeMutex);
@@ -581,6 +628,7 @@ static bool alreadyPlayingCurrentStream(unsigned stream)
     if (expected.empty() || !gPlayer->readTransportInfo(info)
         || (info.state != "PLAYING" && info.state != "TRANSITIONING")
         || !gPlayer->currentUri(uri) || uri != expected || stream != streamId.load()) return false;
+    speakerReclaimPending.store(false);
     ourStreamStarted.store(true);
     completedStream.store(stream);
     acknowledge_squeezebox_resume(stream);
@@ -590,7 +638,7 @@ static bool alreadyPlayingCurrentStream(unsigned stream)
 
 static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)
 {
-    if (stream_id != streamId.load()) return false;
+    if (speakerRelinquished.load() || stream_id != streamId.load()) return false;
     std::string streamURL = SqueezeBoxURL(stream_id);
     bool ok = false;
     if (!streamURL.empty()) {
@@ -603,6 +651,7 @@ static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)
         if (resetPosition) reset_sonos_position(stream_id);
         ok = gPlayer->playStream(streamURL, title, artUrl, track.artist, track.album);
         if (ok) {
+            speakerReclaimPending.store(false);
             ourStreamStarted.store(true);
             acknowledge_squeezebox_resume(stream_id);
         }
@@ -615,7 +664,7 @@ static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)
 static void dispatchStreamStart()
 {
     std::unique_lock<std::mutex> transport(transportMutex, std::try_to_lock);
-    if (!transport.owns_lock()) return;
+    if (speakerRelinquished.load() || !transport.owns_lock()) return;
     const unsigned current = streamId.load();
     if (!current || completedStream.load() == current) return;
     uint64_t revision;

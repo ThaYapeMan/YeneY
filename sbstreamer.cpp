@@ -1,3 +1,4 @@
+#include "source_ownership.h"
 // sbstreamer.cpp -- HTTP request broker that serves the FLAC stream to Sonos
 //
 // Copyright (c) 2026 Jaap van Vliet
@@ -307,6 +308,14 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
         return;
     }
 
+    if (speakerRelinquished.load() && yeney_is_paused()) {
+        // Sonos can restore the previous queue after AirPlay. Do not request
+        // LMS resume and do not turn a paused queue into a 503 retry loop.
+        const std::string paused = "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        handle->send(paused.c_str(), paused.size());
+        return;
+    }
+
     unsigned long long pairActive = 0;
     std::chrono::steady_clock::duration pairSeparation{};
     {
@@ -383,7 +392,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
     auto waitingForAudio = [&] {
         return !enc->hasAudio() || (request->heldResume && !request->resumeAcknowledged);
     };
-    while (opened && waitForResumeAudio && waitingForAudio() && !enc->cancelled() && !enc->responseEnded() && !(IsAborted() || handle->aborted()) && !peerClosed()
+    while (opened && !(speakerRelinquished.load() && yeney_is_paused()) && waitForResumeAudio && waitingForAudio() && !enc->cancelled() && !enc->responseEnded() && !(IsAborted() || handle->aborted()) && !peerClosed()
            && (unsigned)stream == get_squeezebox_stream_id()
            && std::chrono::steady_clock::now() < deadline) {
         // A marked resume already sent LMS play. Its q/s reply may clear the
@@ -397,12 +406,15 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
     const bool closedResume = heldResume && peerClosed();
     const bool expiredResume = heldResume && waitingForAudio()
         && std::chrono::steady_clock::now() >= deadline;
-    if (opened && !closedResume && (!waitForResumeAudio || !waitingForAudio()) && !enc->cancelled())
+    if (opened && !(speakerRelinquished.load() && yeney_is_paused()) && !closedResume && (!waitForResumeAudio || !waitingForAudio()) && !enc->cancelled())
         r = enc->read(buf, sizeof(buf), SBSTREAMER_HTTP_IDLE_TIMEOUT, false, peerClosed);
     bool streamReady = r >= 4 && memcmp(buf, "fLaC", 4) == 0;
     const std::string streamingHeaders = "HTTP/1.1 200 OK\r\nServer: " + handle->serverName() + "\r\nConnection: close\r\n"
         "Content-Type: audio/flac\r\nTransfer-Encoding: chunked\r\n\r\n";
-    if (closedResume) {
+    if (speakerRelinquished.load() && yeney_is_paused()) {
+        const std::string paused = "HTTP/1.1 200 OK\r\nContent-Type: audio/flac\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        handle->send(paused.c_str(), paused.size());
+    } else if (closedResume) {
         printf("held resume GET #%llu closed by client\n", request->id);
     } else if (!streamReady && waitForResumeAudio && (unsigned)stream != get_squeezebox_stream_id()) {
         if (heldResume)

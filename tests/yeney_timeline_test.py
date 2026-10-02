@@ -29,7 +29,7 @@ struct TimelineClock {
     for name in ('sbstreamer.cpp', 'resume_state.h'):
         (temp / name).write_text('#include "clock.h"\n' + (ROOT / name).read_text().replace('std::chrono::steady_clock', 'TimelineClock'))
     (temp / 'production_resume.inc').write_text('\n'.join(function(s) for s in (
-        'static void checkGetPairConfirmation(', 'static void ObserveDeviceTransport(', 'void ResumeSqueezeBox(', 'void ResumeSqueezeBoxGetPair(')))
+        'static void checkGetPairConfirmation(', 'static bool ObserveSpeakerOwnership(', 'static void ObserveDeviceTransport(', 'void ResumeSqueezeBox(', 'void ResumeSqueezeBoxGetPair(')))
     exe = temp / 'timeline'
     subprocess.run(['g++', '-O2', '-Wall', '-Wextra', '-I', str(temp), '-I', str(ROOT),
                     str(ROOT / 'tests/yeney_timeline_fixture.cpp'), str(temp / 'sbstreamer.cpp'),

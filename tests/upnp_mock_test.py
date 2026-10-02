@@ -114,7 +114,7 @@ class Speaker(BaseHTTPRequestHandler):
             assert node.findtext('Channel') == 'Master'
             values = '<CurrentVolume>37</CurrentVolume>'
         if action == 'GetMediaInfo':
-            uri = self.server.current_uri if self.server.mode == 'timeout-playing' else 'http://external/?a=1&b=2'
+            uri = self.server.current_uri if self.server.mode in ('timeout-playing', 'poll') else 'http://external/?a=1&b=2'
             values = '<CurrentURI>' + escape(uri) + '</CurrentURI><TrackURI>wrong</TrackURI>'
         self.send(f'<s:Envelope xmlns:s="{SOAP}"><s:Body><u:{action}Response '
                   f'xmlns:u="urn:schemas-upnp-org:service:{service}:1">{values}</u:{action}Response></s:Body></s:Envelope>')
@@ -188,7 +188,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-play-timeout-') as temp:
 with tempfile.TemporaryDirectory(prefix='sonos-own-poll-') as temp:
     temp = Path(temp)
     (temp / 'production_own_poll.inc').write_text('\n'.join(production_function(s) for s in (
-        'static void ObserveDeviceTransport(', 'void ResumeSqueezeBox(', 'void refreshStatus(')))
+        'static bool ObserveSpeakerOwnership(', 'static void ObserveDeviceTransport(', 'void ResumeSqueezeBox(', 'void refreshStatus(')))
     executable = temp / 'poll-test'
     subprocess.run(['g++', '-O2', '-Wall', '-Wextra', '-I', str(ROOT), '-I', str(temp),
                     str(ROOT / 'tests/own_poll_fixture.cpp'), str(ROOT / 'sonos-status.cpp'),
@@ -385,10 +385,10 @@ with tempfile.TemporaryDirectory(prefix='sonos-gena-') as temp:
         'Transport transportInfo() { if (eventControl) { auto t = eventControl->transportInfo(); return {t.state, t.status}; } return property; }')
     fixture = fixture.replace('++stopCalls;\n        return true;', '++stopCalls;\n        return eventControl ? eventControl->stop() : true;')
     fixture = fixture.replace('return player.property.state;', 'return player.transportInfo().state;')
-    fixture = fixture.replace('static unsigned decisionLogs = 0;', 'static unsigned decisionLogs = 0, resumeLogs = 0;')
+    fixture = fixture.replace('static unsigned decisionLogs = 0,', 'static unsigned decisionLogs = 0, resumeLogs = 0,')
     fixture = fixture.replace('    fputs(message, stdout);',
         '    fputs(message, stdout);\n    if (std::string(message).find("Device-initiated resume: current stream") == 0) ++resumeLogs;')
-    fixture = fixture.replace('int main() {', 'int legacyMain() {')
+    fixture = fixture.replace('int main(int argc, char**) {', 'int legacyMain(int argc, char**) {')
     fixture = fixture.rstrip()[:-1] + '    return 0;\n}\n'
     signatures = (
         'std::string SqueezeBoxURL(unsigned stream_id)',
@@ -396,7 +396,7 @@ with tempfile.TemporaryDirectory(prefix='sonos-gena-') as temp:
         'static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)\n',
         'extern "C" void new_squeezebox_stream_id(', 'static void dispatchDeferredStop(',
         'static void dispatchStreamStart(', 'static void dispatchTransportIntent(',
-        'extern "C" void yeney_transport(', 'static void ObserveDeviceTransport(',
+        'extern "C" void yeney_transport(', 'static bool ObserveSpeakerOwnership(', 'static void ObserveDeviceTransport(',
         'void ResumeSqueezeBox(', 'void refreshStatus(')
     Path(temp, 'production_resume.inc').write_text('\n'.join(production_function(s) for s in signatures))
     # Match the definition rather than the forward declaration.

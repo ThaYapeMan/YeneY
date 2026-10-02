@@ -63,8 +63,6 @@ bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
         if (!topologyUpdate(event.topology, room, previous.room.uuid, update)) return false;
     }
     apply(update);
-    printf("yeney: event service=%s TransportState=%s seq=%u\n", serviceName(event.service),
-        logValue(state.snapshot().transport.state).c_str(), event.sequence);
     if (eventCallback) eventCallback();
     return true;
 }
@@ -176,7 +174,12 @@ bool OwnSpeakerControl::playStream(const std::string& url, const std::string& ti
         sentTitle = displayTitle; sentUri = uri; sentUrl = url;
     }
     StateUpdate update; update.startedRevision = state.snapshot().revision; update.title = displayTitle; apply(update);
-    return call("SetAVTransportURI", {{"InstanceID", "0"}, {"CurrentURI", uri}, {"CurrentURIMetaData", metadata}}).ok && play();
+    if (!call("SetAVTransportURI", {{"InstanceID", "0"}, {"CurrentURI", uri}, {"CurrentURIMetaData", metadata}}).ok)
+        return false;
+    // A successful URI assignment is an ownership observation too. Preserve
+    // any newer URI event received during SOAP rather than overwriting it.
+    update.title.reset(); update.uri = uri; apply(update);
+    return play();
 }
 bool OwnSpeakerControl::play() { return call("Play", {{"InstanceID", "0"}, {"Speed", "1"}}).ok; }
 bool OwnSpeakerControl::pause() { return call("Pause", {{"InstanceID", "0"}, {"Speed", "1"}}).ok; }
