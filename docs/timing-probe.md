@@ -292,5 +292,6 @@ only these timing settings (or set PROBE/PUBLISH/RAW to 0), then restart.
     2% publication budget. New deterministic seeds are 17/31/89; locked-worker
     RTT seed is 18. Add actual POSIX lifecycle, real SHM sink and concurrent
     seqlock tests, plus owner-tool byte-for-byte read-only fixture checks.
-13. Keep all work on main in one YeneY commit; no core changes, device access,
+13. Keep all work on main; use a separate follow-up commit to set the reader
+    executable in Git on this mounted filesystem. No core changes, device access,
     deployment, clock/audio/LMS correction or SHM-content/ABI modifications.
