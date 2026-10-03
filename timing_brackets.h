@@ -6,6 +6,7 @@
 namespace timing_probe {
 struct Bracket {
     double second, lo, hi;
+    double observationWidth = 0;
 };
 // Interval consensus, independent of the midpoint comparison estimator.
 class BracketClock {
@@ -52,24 +53,48 @@ public:
     unsigned violators = 0, failures = 0;
     bool locked = false, fitted = false, driftReady = false;
     double warm = 0;
+    unsigned oneSided = 0, contradictions = 0;
+    double lastTwoSided = NAN;
     void reset(double previous = 0) {
         *this = BracketClock{};
         warm = previous;
     }
     double timeAt(double second) const { return reference + offset + (second - n0) * (1 + drift * 1e-6); }
     double rateDrift() const { return (1 / (1 + drift * 1e-6) - 1) * 1e6; }
-    double uncertainty() const { return locked ? width * 500 + 1 : NAN; }
+    double uncertainty(double now = NAN) const {
+        const double age =
+            std::isfinite(now) && std::isfinite(lastTwoSided) ? std::max(0., now - lastTwoSided) : 0;
+        return locked ? width * 500 + 1 + age * (.1 + std::max(0., highDrift - lowDrift) * .0005) : NAN;
+    }
     bool add(Bracket e) {
-        if (!std::isfinite(e.second) || !std::isfinite(e.lo) || !std::isfinite(e.hi) || e.hi < e.lo)
+        if (!std::isfinite(e.second) || std::isnan(e.lo) || std::isnan(e.hi) ||
+            (!std::isfinite(e.lo) && !std::isfinite(e.hi)) || e.hi < e.lo)
             return false;
         if (locked) {
             const double predicted = timeAt(e.second);
-            failures = predicted < e.lo - .002 || predicted > e.hi + .002 ? failures + 1 : 0;
+            const double ownWidth =
+                std::isfinite(e.lo) && std::isfinite(e.hi) ? e.hi - e.lo : e.observationWidth;
+            const double tolerance = std::max(.002, ownWidth * .5);
+            const bool inconsistent =
+                predicted + width / 2 < e.lo - tolerance || predicted - width / 2 > e.hi + tolerance;
+            if (inconsistent)
+                ++contradictions;
+            failures = inconsistent ? failures + 1 : 0;
             if (failures >= 2) {
                 reset(driftReady ? drift : warm);
             } else if (failures)
                 return false; // A single unconfirmed mismatch cannot move the contract.
         }
+        if (!std::isfinite(e.lo) || !std::isfinite(e.hi))
+            ++oneSided;
+        else
+            lastTwoSided = (e.lo + e.hi) / 2;
+        // One-sided send/receive bounds carry the bounding SOAP sample's latency.
+        // Use the same tolerance as contradiction detection for interval consensus.
+        if (!std::isfinite(e.lo))
+            e.hi += std::max(.002, e.observationWidth * .5);
+        if (!std::isfinite(e.hi))
+            e.lo -= std::max(.002, e.observationWidth * .5);
         edges.push_back(e);
         while (edges.size() > 1200 || (!edges.empty() && e.second - edges.front().second > 600))
             edges.pop_front();
@@ -79,8 +104,16 @@ public:
     void fit() {
         if (edges.empty())
             return;
+        // Preserve the previous finite model if a long one-sided-only window
+        // cannot reacquire both ends of an offset band.
+        if (locked && std::none_of(edges.begin(), edges.end(),
+                                   [](Bracket e) { return std::isfinite(e.lo) && std::isfinite(e.hi); }))
+            return;
         n0 = edges.back().second;
-        reference = (edges.back().lo + edges.back().hi) / 2;
+        const auto &recent = edges.back();
+        reference = std::isfinite(recent.lo) && std::isfinite(recent.hi) ? (recent.lo + recent.hi) / 2
+                    : std::isfinite(recent.lo)                           ? recent.lo
+                                                                         : recent.hi;
         span = edges.back().second - edges.front().second;
         struct Trial {
             double ppm;
@@ -147,13 +180,19 @@ public:
             selected = closest.ppm;
             chosen = closest.b;
         }
+        if (!std::isfinite(chosen.lo) || !std::isfinite(chosen.hi)) {
+            fitted = false;
+            width = NAN;
+            return;
+        }
         drift = selected;
         offset = (chosen.lo + chosen.hi) / 2;
         width = chosen.hi - chosen.lo;
         violators = unsigned(edges.size()) - best;
         fitted = true;
         driftReady = span >= 120;
-        locked = span >= 60 && edges.size() >= 40 && width <= .015 && violators <= edges.size() * .02;
+        locked =
+            locked || (span >= 60 && edges.size() >= 40 && width <= .015 && violators <= edges.size() * .02);
     }
 };
 } // namespace timing_probe

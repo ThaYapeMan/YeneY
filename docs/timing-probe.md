@@ -62,15 +62,33 @@ This is a counter-based bound, not a certified acoustic/DAC bound, and it does
 not include the union of possible slopes or arbitrary future clock changes.
 
 Locked probing targets one tick every LOCKED_EVERY seconds, with up to three
-samples at prediction -12/+4/+20 ms, compensated by median RTT/2. Typically two
-requests suffice: default steady-state traffic is about 0.4 requests/s. A single
-bracket excluding the prediction by >2 ms is held as an unconfirmed mismatch;
-it cannot move the published contract. Two consecutive mismatches (or two
-failed locked bursts) clear the clock and return to acquisition. Acquisition
-retains the previous adaptive search and midpoint fit. A true 10% population
-of brackets excluding the physical clock cannot meet a 2% violation contract;
-it must fail closed, rather than pretend that wide observations and invalid
-brackets are equivalent.
+samples at prediction -H/0/+H, with H = clamp(RTT p95 + send-latency p95
++ 5 ms, 20 ms, 60 ms). Median RTT/2 and the rolling median first-send
+lateness are subtracted from the planned burst centre. Send lateness is actual
+first send minus its planned deadline, over up to 120 bursts. Three requests
+are the maximum per burst; the existing 8/1 s and 30/10 s limits and SOAP-error
+backoff remain independent of epochs.
+
+An all-new burst contributes `edge <= first send` (`upper-bound`); an all-old
+burst contributes `edge >= last receive` (`lower-bound`). Raw timing-edge lines
+retain these literal bounds, with the open endpoint printed as `inf` or `-inf`
+and midpoint/half-width/residual as `nan`. The bounding sample's RTT supplies
+its observation width. For consensus, one-sided endpoints include tolerance
+max(2 ms, RTT/2), also used for contradiction detection. This accounts for
+SOAP evaluating RelTime during the request: the supplied field fixture has
+new-second replies whose send precedes the feasible tick by about 4 ms.
+Two-sided brackets keep their original endpoints.
+
+Lose lock only after two consecutive observations lie outside the predicted
+band by more than max(2 ms, half their observation width). Missing, rejected or
+failed replies alone cannot contradict it. A first contradiction is held out
+pending confirmation. A consistent one-sided bound keeps the mapping locked.
+After an unbracketed burst, retry at the next second up to three times, then
+resume the configured normal interval. A two-sided hit clears this retry count.
+Published uncertainty adds 0.1 ms per second since the last two-sided bracket,
+plus half the feasible slope range times that age. Steady publication continues
+at <=1 Hz while lock holds. The existing stale-observation expiry remains.
+
 
 ## Audio frame correspondence
 
@@ -191,7 +209,11 @@ by that comparison model include deliberately unprobed ticks after lock.
 
 Added fields: state, model_epoch, band_ms, violators, locked_drift_ppm (time
 slope), locked_rate_drift_ppm (reciprocal audio rate), published_uncertainty_ms,
-publish=on/off. probe_rps remains the ten-second additional-request rate.
+publish=on/off. New fields: one_sided_count (accepted upper/lower observations),
+contradiction_count (observations outside the tolerated predicted band),
+last_two_sided_age_s (age of the last usable adjacent bracket),
+send_latency_p50_ms (rolling first-send lateness), and burst_span_ms (2H,
+planned symmetric span). probe_rps remains the ten-second additional-request rate.
 Final lines describe the ending model; reason explains its subsequent reset.
 
 RAW still logs exactly one line per probe and every adjacent bracket, retaining
@@ -249,49 +271,28 @@ only these timing settings (or set PROBE/PUBLISH/RAW to 0), then restart.
 
 ## Decisions
 
-1. Preserve the old midpoint estimator, APIs, RAW classifications and all old
-   periodic meanings as comparison data. Add separate bracket contract fields.
-2. Use the last usable bracket for expiry, independently of the midpoint
-   comparison fit, preserving valid wide constraints through gaps. Use fixed
-   600 s/1200-edge history, endpoint-sweep maximum consensus, bounded
-   10/1/0.1 ppm slope refinement and centre selection; disconnected solutions
-   use the nearest consensus grid solution instead of an infeasible centre.
-3. Report band conditional on the selected slope, matching the field fixture's
-   band criterion; disclose that slope-family extrapolation is not included.
-4. Hold a first mismatch outside the model, confirming with the next edge;
-   reset on two misses as well as two contradictory brackets. Keep limiter and
-   error backoff independent of resets. Locked default bursts use -12/+4/+20 ms.
-5. Retain qualified room drift in memory as the search centre when the new
-   span reaches 120 s; hold unity before then and never retain offset. Convert
-   time-slope ppm to reciprocal rate ppb for ABI.
-6. Use the probe context epoch as model_epoch, additionally bumping it for
-   mapping changes and lost lock so in-flight old samples are rejected. Add
-   a 128-byte layout with size, validity bounds and reserved space. Bounds
-   prevent applying a new epoch to older PCM still in the audio ring. Unknown
-   uncertainty is UINT32_MAX; all unlocked anchors are zero.
-7. Instantiate the unchanged bundled core SHM sink only with publication; the
-   baseline Sonos path lacked a tap. Compile its existing source in the root
-   build because libyeneycore.a excludes it. No submodule or audio ABI changes.
-8. Observe committed SHM deltas at producer acceptance, attach them to feeder
-   batches, and map existing streamBase/ConnectionPosition coordinates. A lost
-   export invalidates/reacquires instead of inventing continuity. Same-rate
-   gapless and canonical Range recovery preserve the mapping.
-9. Keep publisher failures nonfatal, enforce one writer using flock, and zero
-   plus unlink on clean shutdown. Limit stable heartbeats to 1 Hz; the tool
-   uses a conservative 3 s freshness check and two-channel sequence validation.
-10. Parse extra settings only with PROBE and calibration only with PUBLISH.
-    Off-mode compatibility means PROBE off; PROBE on necessarily receives the
-    requested estimator/polling improvements even if PUBLISH is off.
-11. Keep every original field edge line verbatim, including the preceding
-    65-edge epoch; assert the owner's 1232-edge epoch separately. Preserve all
-    original fixture assertions; only extend core-fixture link/include inputs
-    to cover the root-built SHM sink.
-12. Distinguish wide brackets containing truth from genuinely delayed physical
-    ticks. Keep previous midpoint simulations unchanged and add bracket
-    simulations plus fail-closed inconsistent-tick tests rather than relax the
-    2% publication budget. New deterministic seeds are 17/31/89; locked-worker
-    RTT seed is 18. Add actual POSIX lifecycle, real SHM sink and concurrent
-    seqlock tests, plus owner-tool byte-for-byte read-only fixture checks.
-13. Keep all work on main; use a separate follow-up commit to set the reader
-    executable in Git on this mounted filesystem. No core changes, device access,
-    deployment, clock/audio/LMS correction or SHM-content/ABI modifications.
+1. Keep one-sided bounds in the same bounded consensus history, represented by
+   infinite open endpoints. Preserve literal bounds in RAW lines; use the bounding
+   sample's RTT/2 (minimum 2 ms) tolerance in consensus and contradiction checks.
+   The fixture demonstrates that SOAP can observe the new second after send;
+   treating first send as an exact physical upper limit would create false
+   violators. Two-sided endpoints remain unchanged.
+2. Compare observations with the full predicted band, not just its centre.
+   Keep lock through consistent bounds and missing bursts; a lone contradiction
+   cannot move the published mapping. Retain existing explicit and stale resets.
+3. Use three symmetric requests, a 20 ms minimum half-span and 60 ms cap.
+   Keep rolling send-latency p50/p95 over 120 first sends and compensate the
+   planned centre with p50. Only actual requests contribute latency statistics.
+4. Retry at the next second three times after missing brackets; reset this
+   counter on a hit and return to the configured interval after the third retry.
+   Rate limits and error backoff survive every reset exactly as before.
+5. Grow uncertainty with age by 0.1 ms/s plus half the feasible drift range
+   in ppm converted to milliseconds per second. Keep the published ABI and
+   mapping unchanged; old midpoint fields still provide comparison data.
+6. Keep all supplied timing-raw and timing-edge lines verbatim in the regression
+   fixture. Replay ignores historical model epochs because those resets are the
+   defect under test. Also test the actual worker scheduler using deterministic
+   0–25 ms dispatch latency and 4–20 ms RTT, plus a 50 ms positive step.
+7. Leave the owner's unrelated timing-read-study.txt untracked and untouched.
+   Change no playback, audio, LMS, settings or submodule code; commit on main
+   without rewriting history, and leave all device tests to the owner.

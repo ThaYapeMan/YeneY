@@ -272,6 +272,123 @@ static void publication() {
     puts("PASS: actual POSIX publication lock, <=1 Hz heartbeat, calibration, pause/new "
          "stream/generation/member fences, shutdown zero/unlink");
 }
+void oneSidedReplay() {
+    BracketClock clock;
+    std::ifstream file("tests/fixtures/timing-study-b.txt");
+    std::string line;
+    std::regex edge("second=([0-9]+)->([0-9]+).*lo_mono=([0-9.]+) hi_mono=([0-9.]+)");
+    std::regex raw(
+        "kind=burst send_mono=([0-9.]+) recv_mono=([0-9.]+).*reltime_s=([0-9.]+).*outcome=accepted");
+    std::smatch m;
+    double firstLock = NAN, lastTime = 0, maxUncertainty = 0;
+    unsigned losses = 0, lockedObservations = 0, observations = 0, bounds = 0;
+    double firstSend = 0, lastRecv = 0, sec = 0, firstRtt = 0, lastRtt = 0;
+    unsigned samples = 0;
+    auto finish = [&] {
+        if (samples >= 3 && clock.locked) {
+            const double target = std::round(clock.n0 + (firstSend - clock.reference - clock.offset) /
+                                                            (1 + clock.drift * 1e-6));
+            Bracket b = sec >= target ? Bracket{target, -INFINITY, firstSend, firstRtt}
+                                      : Bracket{target, lastRecv, INFINITY, lastRtt};
+            bool before = clock.locked;
+            clock.add(b);
+            losses += before && !clock.locked;
+            ++bounds;
+        }
+        samples = 0;
+    };
+    while (std::getline(file, line)) {
+        if (std::regex_search(line, m, edge)) {
+            samples = 0;
+            bool before = clock.locked;
+            const double n = std::stod(m[2]), lo = std::stod(m[3]), hi = std::stod(m[4]);
+            clock.add({n, lo, hi});
+            losses += before && !clock.locked;
+            lastTime = (lo + hi) / 2;
+            if (clock.locked && !std::isfinite(firstLock))
+                firstLock = lastTime;
+            if (std::isfinite(firstLock)) {
+                ++observations;
+                lockedObservations += clock.locked;
+            }
+            if (clock.locked)
+                maxUncertainty = std::max(maxUncertainty, clock.uncertainty(lastTime));
+            assert(clock.violators == 0);
+        } else if (std::regex_search(line, m, raw)) {
+            double sent = std::stod(m[1]), received = std::stod(m[2]), second = std::stod(m[3]);
+            if (samples && (sent - lastRecv > .2 || second != sec))
+                finish();
+            if (!samples) {
+                firstSend = sent;
+                firstRtt = received - sent;
+                sec = second;
+            }
+            lastRecv = received;
+            lastRtt = received - sent;
+            ++samples;
+        }
+    }
+    finish();
+    assert(std::isfinite(firstLock) && losses == 0 && bounds > 0);
+    assert(double(lockedObservations) / observations >= .95 && maxUncertainty <= 6);
+    printf("PASS: Study B replay: losses=%u bounds=%u locked_share=%.3f uncertainty_max_ms=%.3f\n", losses,
+           bounds, double(lockedObservations) / observations, maxUncertainty);
+    BracketClock simulated;
+    for (int n = 0; n <= 150; ++n)
+        simulated.add({double(n), n - .003, n + .003});
+    std::mt19937 rng(43);
+    for (int n = 151; n <= 750; ++n) {
+        double latency = (rng() % 25001) * 1e-6, rtt = .004 + (rng() % 16001) * 1e-6;
+        if (n % 3)
+            simulated.add({double(n), -INFINITY, n + latency, rtt});
+        else
+            simulated.add({double(n), n - .003, n + .003});
+        assert(simulated.locked);
+    }
+    simulated.add({751, 751.05, INFINITY, .01});
+    assert(simulated.locked);
+    simulated.add({752, 752.05, INFINITY, .01});
+    assert(!simulated.locked);
+    puts("PASS: 600 s late-send one-sided constraints retain lock; 50 ms contradiction loses lock in two "
+         "bursts");
+}
+void delayedWorker() {
+    now = 100;
+    Diagnostics d(fakeClock);
+    d.anchor(3, 0);
+    d.handed(3, 0, 44100);
+    std::mt19937 rng(73);
+    uint64_t lockedEpoch = 0;
+    unsigned requestsAfterStep = 0;
+    bool lost = false;
+    for (now = 100; now < 770; now += .002) {
+        auto c = d.start(true, "late-worker");
+        if (!d.request(c, now))
+            continue;
+        double latency = (rng() % 25001) * 1e-6;
+        double sent = now + latency, received = sent + .004 + (rng() % 16001) * 1e-6;
+        double second = std::floor((sent + received) / 2 - 100 - (now >= 750 ? .05 : 0));
+        if (now >= 750)
+            ++requestsAfterStep;
+        d.response(c, true, sent, received, second);
+        now = received;
+        double predicted, uncertainty;
+        if (d.contract(uint64_t(std::max(0., second)) * 44100, predicted, uncertainty)) {
+            if (!lockedEpoch)
+                lockedEpoch = d.snapshot().epoch;
+        }
+        if (lockedEpoch && now < 750)
+            assert(d.snapshot().epoch == lockedEpoch);
+        if (lockedEpoch && now >= 750 && d.snapshot().epoch != lockedEpoch) {
+            lost = true;
+            break;
+        }
+    }
+    assert(lockedEpoch && lost && requestsAfterStep <= 9);
+    printf(
+        "PASS: actual delayed worker keeps lock 600 s; 50 ms step detected after %u requests (<=3 bursts)\n",
+        requestsAfterStep);
+}
 int main(int argc, char **argv) {
     if (argc > 1) {
         if (!strcmp(argv[1], "publication")) {
@@ -283,6 +400,8 @@ int main(int argc, char **argv) {
     }
     setenv("YENEY_TIMING_PROBE", "1", 1);
     field();
+    oneSidedReplay();
+    delayedWorker();
     simulation();
     mapping();
     seqlock();
