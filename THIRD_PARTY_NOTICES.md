@@ -8,7 +8,7 @@ and [Apple's distribution notice](third_party/yeney-core/third_party/ALAC_NOTICE
 
 | Component | Inclusion | Licence |
 | --- | --- | --- |
-| yeney-core | Static player library | PolyForm Noncommercial 1.0.0 |
+| yeney-core | Static player library and unchanged SHM sink | PolyForm Noncommercial 1.0.0 |
 | minimp3 | Core MP3 decoder | CC0 1.0 Universal |
 | Apple ALAC | Recursive decoder submodule | Apache-2.0 |
 | libFLAC and libFLAC++ | System FLAC decoding/encoding libraries | BSD-3-Clause |

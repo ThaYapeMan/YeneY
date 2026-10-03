@@ -35,3 +35,6 @@ lead-test
 
 /timing-probe-field-test
 /timing-probe-settings-test
+
+timing-contract-test
+timing-tap-test

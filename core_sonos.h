@@ -6,6 +6,8 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <memory>
+namespace timing_probe { class TimingTap; }
 
 // Only the feeder may wait for an HTTP consumer. Event-loop callbacks only
 // copy bounded batches and update state under short-lived locks.
@@ -16,6 +18,8 @@ class CoreSonosSink : public yeney::Sink {
         size_t frames;
         bool boundary, continuous;
         unsigned rate;
+        uint64_t shmGeneration=0, shmFirst=0;
+        bool exported=false;
     };
     static constexpr size_t capacity = 48000;
     mutable std::mutex mutex;
@@ -30,9 +34,10 @@ class CoreSonosSink : public yeney::Sink {
     unsigned rate = 44100, streamRate = 0;
     uint64_t next = 0, streamBase = 0, handed = 0, started = 0;
     mutable uint64_t audible = 0;
+    std::unique_ptr<timing_probe::TimingTap> tap;
     void feed();
 public:
-    CoreSonosSink();
+    explicit CoreSonosSink(const uint8_t* mac=nullptr);
     ~CoreSonosSink() override;
     void command(const yeney::Command&);
     uint32_t maxSampleRate() const override;

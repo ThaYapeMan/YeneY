@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_sonos.h"
 #include "timing_probe_runtime.h"
+#include "timing_tap.h"
 #include "audio_mode.h"
 #include "pcm_pack.h"
 #include "start_lead.h"
@@ -23,7 +24,14 @@ extern "C" uint64_t get_sb_time_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 static void stopCore(int sig) { coreStop.store(true); std::signal(sig, SIG_DFL); }
-CoreSonosSink::CoreSonosSink() {
+CoreSonosSink::CoreSonosSink(const uint8_t* mac) {
+    if (mac && timing_probe::publishEnabled()) {
+        try {
+            tap = std::make_unique<timing_probe::TimingTap>(mac, maxSampleRate());
+        } catch (const std::exception& e) {
+            printf("yeney: timing tap unavailable reason=%s\n", e.what());
+        }
+    }
     coreRunning.store(true);
     feeder = std::thread(&CoreSonosSink::feed, this);
 }
@@ -46,6 +54,12 @@ void CoreSonosSink::trackBoundary(uint64_t frame, const yeney::Format& f, bool) 
     pending = true;
     continuous = !starts.empty() && starts.front();
     if (!starts.empty()) starts.pop_front();
+    if (tap) {
+        if (!continuous || (streamRate && streamRate != rate))
+            timing_probe::diagnostics().reset("tap-boundary", false, true);
+        yeney::Format exported = f; exported.rate = rate;
+        tap->boundary(frame, exported, continuous);
+    }
 }
 size_t CoreSonosSink::write(const yeney::Frame* frames, size_t count) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -60,19 +74,33 @@ size_t CoreSonosSink::write(const yeney::Frame* frames, size_t count) {
         packSonosSample(b.pcm.data() + i * bytes * 2, frames[i].left, bytes);
         packSonosSample(b.pcm.data() + (i * 2 + 1) * bytes, frames[i].right, bytes);
     }
+    if (tap) {
+        b.exported = tap->write(frames, count, b.shmGeneration, b.shmFirst);
+        if (b.exported) timing_probe::diagnostics().exported(b.shmGeneration, b.shmFirst + count);
+        else timing_probe::diagnostics().mapFrames(0, rate, b.shmGeneration, 0, 0, 0, false);
+    }
     queue.push_back(std::move(b));
     staged += count; next += count; pending = false;
     changed.notify_one();
     return count;
 }
-void CoreSonosSink::pause() { if (timing_probe::enabled()) timing_probe::diagnostics().reset("pause",false,true); std::lock_guard<std::mutex> lock(mutex); paused = true; }
-void CoreSonosSink::resume() { std::lock_guard<std::mutex> lock(mutex); paused = false; changed.notify_one(); }
+void CoreSonosSink::pause() {
+    if (timing_probe::enabled()) timing_probe::diagnostics().reset("pause",false,true);
+    std::lock_guard<std::mutex> lock(mutex); paused = true;
+    if (tap) tap->pause();
+}
+void CoreSonosSink::resume() {
+    std::lock_guard<std::mutex> lock(mutex); paused = false;
+    if (tap) tap->resume();
+    changed.notify_one();
+}
 void CoreSonosSink::stop() { pause(); flush(); }
 void CoreSonosSink::flush() {
     if (timing_probe::enabled()) timing_probe::diagnostics().reset("flush",false,true);
     const auto position = audibleFrames();
     std::lock_guard<std::mutex> lock(mutex);
     ++generation;
+    if (tap) tap->flush();
     queue.clear(); starts.clear(); staged = 0; pending = false;
     handed = next = streamBase = started = position;
     streamRate = 0;
@@ -120,6 +148,9 @@ void CoreSonosSink::feed() {
             first = b.first - streamBase;
             started = std::max(started, b.first + b.frames);
         }
+        if (tap && generation.load() == b.generation)
+            timing_probe::diagnostics().mapFrames(get_squeezebox_stream_id(), b.rate, b.shmGeneration,
+                first, b.shmFirst, b.frames, b.exported);
         struct Cancellation { CoreSonosSink* sink; uint64_t generation; } cancel{this, b.generation};
         int ok = encode_squeezebox_audio_cancellable(b.pcm.data(), b.pcm.size(), first, [](void* ptr) {
             auto& c = *static_cast<Cancellation*>(ptr);
@@ -135,7 +166,7 @@ void CoreSonosSink::feed() {
 void runCoreClient(const char* server, const uint8_t* mac, const char* name) {
     for (int sig : {SIGINT, SIGTERM, SIGQUIT, SIGHUP}) std::signal(sig, stopCore);
     try {
-        CoreSonosSink sink;
+        CoreSonosSink sink(mac);
         yeney::Config config;
         config.server = server ? server : "";
         auto colon = config.server.find(':');

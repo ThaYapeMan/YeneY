@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Read-only YeneY playback-clock inspector (standard library only)."""
+import argparse
+import json
+import mmap
+import os
+import re
+import struct
+import time
+
+SIZE = 128
+FIELDS = [
+    ('magic', 0, '4s'), ('version', 4, 'H'), ('flags', 6, 'H'),
+    ('write_seq', 8, 'I'), ('size', 12, 'I'), ('shm_generation', 16, 'Q'),
+    ('model_epoch', 24, 'Q'), ('state', 32, 'I'), ('discontinuity', 36, 'I'),
+    ('anchor_abs_frame', 40, 'Q'), ('anchor_audible_mono_ns', 48, 'Q'),
+    ('sample_rate_hz', 56, 'I'), ('drift_ppb', 60, 'i'),
+    ('uncertainty_us', 64, 'I'), ('offset_us', 68, 'i'),
+    ('updated_mono_ns', 72, 'Q'), ('valid_from_abs_frame', 80, 'Q'),
+    ('valid_until_abs_frame', 88, 'Q'),
+]
+
+def decode(data):
+    result = {name: struct.unpack_from('<' + fmt, data, offset)[0]
+              for name, offset, fmt in FIELDS}
+    if result['magic'] != b'YNTM' or result['version'] != 1 or result['size'] != SIZE:
+        raise ValueError('unsupported timing object')
+    result['magic'] = 'YNTM'
+    return result
+
+
+def record(mapping):
+    for _ in range(100):
+        before = struct.unpack_from('<I', mapping, 8)[0]
+        if before & 1:
+            continue
+        data = mapping[:SIZE]
+        after = struct.unpack_from('<I', mapping, 8)[0]
+        if before == after and before == struct.unpack_from('<I', data, 8)[0]:
+            return decode(data)
+    return None
+
+
+def audio_record(mapping):
+    for _ in range(100):
+        before = struct.unpack_from('<I', mapping, 32856)[0]
+        if before & 1:
+            continue
+        generation, absolute = struct.unpack_from('<QQ', mapping, 32860)
+        rate = struct.unpack_from('<I', mapping, 68)[0]
+        if before == struct.unpack_from('<I', mapping, 32856)[0]:
+            return generation, absolute, rate
+    return None
+
+
+def predict(r, generation, absolute, rate, now_ns):
+    # Reject expired publishers and frames from previous PCM runs/epochs.
+    if (r['state'] != 2 or generation != r['shm_generation'] or rate != r['sample_rate_hz']
+            or not r['valid_from_abs_frame'] <= absolute < r['valid_until_abs_frame']
+            or not 0 <= now_ns - r['updated_mono_ns'] <= 3_000_000_000):
+        return None
+    return r['anchor_audible_mono_ns'] + (absolute - r['anchor_abs_frame']) * 1e9 / (
+        rate * (1 + r['drift_ppb'] * 1e-9))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('mac', help='room MAC, e.g. 48:a6:b8:20:39:64')
+    parser.add_argument('--once', action='store_true')
+    parser.add_argument('--directory', default='/dev/shm', help='SHM directory (fixture testing)')
+    args = parser.parse_args()
+    mac = args.mac.lower()
+    if not re.fullmatch(r'(?:[0-9a-f]{2}:){5}[0-9a-f]{2}', mac):
+        parser.error('MAC must contain six colon-separated hexadecimal bytes')
+    try:
+        # ACCESS_READ and rb: neither object can be changed by this tool.
+        with open(os.path.join(args.directory, 'yeney-timing-' + mac), 'rb') as timing_file, \
+                open(os.path.join(args.directory, 'squeezelite-' + mac), 'rb') as audio_file, \
+                mmap.mmap(timing_file.fileno(), SIZE, access=mmap.ACCESS_READ) as timing, \
+                mmap.mmap(audio_file.fileno(), 32888, access=mmap.ACCESS_READ) as audio:
+            while True:
+                r = record(timing)
+                a = audio_record(audio)
+                again = record(timing)
+                now = time.monotonic_ns()
+                if r and a and again and r['write_seq'] == again['write_seq']:
+                    ns = predict(r, *a, now)
+                    r.update(audio_generation=a[0], abs_write_pos=a[1], audio_rate=a[2],
+                             age_ms=(now-r['updated_mono_ns'])/1e6,
+                             audible_mono_ns=round(ns) if ns is not None else None,
+                             head_start_ms=(ns-now)/1e6 if ns is not None else None)
+                    print(json.dumps(r, sort_keys=True), flush=True)
+                else:
+                    print('{"state":"unstable-snapshot"}', flush=True)
+                if args.once:
+                    break
+                time.sleep(1)
+    except (OSError, ValueError) as error:
+        parser.exit(1, f'{error}\n')
+
+
+if __name__ == '__main__':
+    main()

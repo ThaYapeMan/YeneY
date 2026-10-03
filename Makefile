@@ -1,7 +1,7 @@
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
-OBJS = core_sonos.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
+OBJS = core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
 all: yeney
 
@@ -14,7 +14,7 @@ $(CORE_LIB): core-library
 core_sonos.o: core_sonos.h audio_mode.h sonos-position.h third_party/yeney-core/core/player.h third_party/yeney-core/core/sink.h
 yeney.o: obsolete_player.h
 core_sonos.o: %.o: %.cpp
-	g++ -std=c++17 -g -O3 -Wall -Wextra -c -o $@ $<
+	g++ -std=c++17 -g -O3 -Wall -Wextra -Ithird_party/yeney-core -c -o $@ $<
 
 yeney: $(OBJS) $(CORE_LIB)
 	g++ -g -o $@ $^ \
@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney
@@ -33,8 +33,14 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 test: export YENEY_START_LEAD_MS = 0
 test: export YENEY_TIMING_PROBE = 0
 test: export YENEY_TIMING_RAW = 0
+test: export YENEY_TIMING_PUBLISH = 0
+test: export YENEY_TIMING_LOCKED_EVERY_S = 5
+test: export YENEY_AUDIBLE_OFFSET_MS = 0
 test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	YENEY_TIMING_PROBE=1 YENEY_TIMING_PUBLISH=1 ./timing-tap-test
+	./timing-contract-test
+	python3 tests/timing_contract_test.py
 	./timing-probe-test
 	./timing-probe-field-test
 	python3 tests/timing_probe_settings_test.py
@@ -178,3 +184,19 @@ timing-probe-field-test: tests/timing_probe_field_test.cpp timing_probe.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
 timing-probe-settings-test: tests/timing_probe_settings_fixture.cpp timing_probe.h timing_probe_runtime.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $< -lpthread
+
+core_sonos.o: timing_tap.h timing_settings.h timing_channel.h timing_brackets.h
+core_sonos.o sonos-position.o sbstreamer.o upnp/own_speaker_control.o upnp/http.o: timing_settings.h timing_channel.h timing_brackets.h
+
+timing-contract-test: tests/timing_contract_test.cpp timing_probe_runtime.h timing_probe.h timing_brackets.h timing_channel.h timing_settings.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
+test: timing-contract-test
+
+timing-tap-test: tests/timing_tap_test.cpp timing_tap.h timing_probe_runtime.h timing_brackets.h timing_channel.h timing_settings.h core_shm.o $(CORE_LIB)
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -Ithird_party/yeney-core -pthread -o $@ $< core_shm.o $(CORE_LIB) -lFLAC
+test: timing-tap-test
+
+core_shm.o: third_party/yeney-core/sinks/shm_v1/sink.cpp third_party/yeney-core/core/sink.h third_party/yeney-core/sinks/shm_v1/sink.h third_party/yeney-core/sinks/shm_v1/layout.h
+	g++ -std=c++17 -O2 -Wall -Wextra -Ithird_party/yeney-core -c -o $@ $<
+
+timing-probe-settings-test timing-probe-resets-test timing-probe-http-test streamer-test range-test own-control-test: timing_brackets.h timing_channel.h timing_settings.h

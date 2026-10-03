@@ -244,6 +244,9 @@ and uses the default.
 | `YENEY_TIMING_PROBE` | `1`: measurement-only coordinator playback-clock probe; unset/`0`: off | off |
 | `YENEY_TIMING_RAW` | `1`: per-request and edge observations, only with TIMING_PROBE enabled | off |
 | `YENEY_TIMING_STALE_S` | 10–600 seconds without a usable edge before probe expiry | `60` |
+| `YENEY_TIMING_LOCKED_EVERY_S` | 1–60 seconds between locked clock probes | `5` |
+| `YENEY_TIMING_PUBLISH` | `1`: publish the LampaStream timing contract and core audio tap, only with TIMING_PROBE | off |
+| `YENEY_AUDIBLE_OFFSET_MS` | -500–500 ms acoustic calibration, added to published audible times | `0` |
 
 The details of each setting are in [How YeneY works](docs/how-it-works.md).
 
@@ -455,4 +458,6 @@ Grouped playback reserve: `YENEY_START_LEAD_MS=1000` (default; valid 0–10000; 
 
 The opt-in, measurement-only playback-clock probe is documented in
 [Timing probe](docs/timing-probe.md). Enable it with `YENEY_TIMING_PROBE=1`; it
-never retimes audio or changes LMS reporting.
+never retimes audio or changes LMS reporting. With `YENEY_TIMING_PUBLISH=1`,
+LampaStream can read the opt-in SHM timing contract; inspect it with
+`scripts/yeney-timing-read <mac>`.
