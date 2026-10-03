@@ -223,41 +223,50 @@ void OwnSpeakerControl::timingLoop() {
         const bool currentStream =
             expected.size() >= suffix.size() &&
             expected.compare(expected.size() - suffix.size(), suffix.size(), suffix) == 0;
-        const bool allowed =
-            timing_probe::eligible(true, !before.group.uuid.empty() && before.room.uuid == before.group.uuid,
-                                   before.transport.state == "PLAYING",
-                                   before.transport.uriKnown && !expected.empty() &&
-                                       before.transport.uri == expected && currentStream,
-                                   activity.timingAllowed);
+        const bool allowed = timing_probe::eligible(
+            true, !before.group.uuid.empty() && before.room.uuid == before.group.uuid,
+            before.transport.state == "PLAYING",
+            before.transport.uriKnown && !expected.empty() && before.transport.uri == expected &&
+                currentStream,
+            activity.timingAllowed);
         const auto context = diagnostic.start(allowed, before.room.name);
         if (context.active && diagnostic.request(context, timing_probe::clockSeconds())) {
             ProbeHttpTiming stamp;
             probeHttpTiming = &stamp;
-            const auto http =
-                httpPost({before.room.ip, "/MediaRenderer/AVTransport/Control", speakerPort},
-                         {{"Content-Type", "text/xml"},
-                          {"SOAPACTION", "\"urn:schemas-upnp-org:service:AVTransport:1#GetPositionInfo\""}},
-                         soapBody("AVTransport", "GetPositionInfo", {{"InstanceID", "0"}}), 200);
+            const auto http = httpPost(
+                {before.room.ip, "/MediaRenderer/AVTransport/Control", speakerPort},
+                {{"Content-Type", "text/xml"},
+                 {"SOAPACTION", "\"urn:schemas-upnp-org:service:AVTransport:1#GetPositionInfo\""}},
+                soapBody("AVTransport", "GetPositionInfo", {{"InstanceID", "0"}}), 200);
             probeHttpTiming = nullptr;
+            const double completed = timing_probe::clockSeconds();
             const auto result = parseSoap(http.body, "GetPositionInfo");
             unsigned long long h = 0, m = 0, s = 0;
             char tail;
-            const bool parsed = sscanf(result.response.value("RelTime").c_str(), "%llu:%llu:%llu%c", &h, &m,
-                                       &s, &tail) == 3 &&
-                                m < 60 && s < 60 && h <= UINT32_MAX / 3600000;
+            const std::string relTime = result.response.value("RelTime");
+            const bool parsed =
+                sscanf(relTime.c_str(), "%llu:%llu:%llu%c", &h, &m, &s, &tail) == 3 && m < 60 &&
+                s < 60 && h <= UINT32_MAX / 3600000;
             const auto after = state.snapshot();
             const auto current = streamActivity ? streamActivity() : StreamActivity{};
             const bool unchanged = after.room.uuid == before.room.uuid &&
                                    after.group.uuid == before.group.uuid &&
-                                   after.transport.state == "PLAYING" && after.transport.uri == expected &&
-                                   current.timingAllowed;
-            if (unchanged)
-                diagnostic.response(context,
-                                    http.error.empty() && http.status == 200 && result.ok && parsed &&
-                                        stamp.sent > 0 && stamp.received >= stamp.sent,
-                                    stamp.sent, stamp.received, double(h * 3600 + m * 60 + s));
-            else
+                                   after.transport.state == "PLAYING" &&
+                                   after.transport.uri == expected && current.timingAllowed;
+            if (!unchanged)
                 diagnostic.start(false, before.room.name);
+            const bool ok = http.error.empty() && http.status == 200 && result.ok && parsed &&
+                            stamp.sent > 0 && stamp.received >= stamp.sent;
+            const std::string reason = !http.error.empty()  ? http.error
+                                       : http.status != 200 ? "http-status"
+                                       : !result.ok         ? "soap-error"
+                                       : !parsed            ? "invalid-reltime"
+                                                            : "invalid-timestamp";
+            diagnostic.response(context, ok, stamp.sent > 0 ? stamp.sent : NAN,
+                                http.error.empty() && stamp.received > 0 ? stamp.received
+                                                                         : completed,
+                                parsed ? double(h * 3600 + m * 60 + s) : NAN, relTime,
+                                http.error == "timeout" ? "timeout" : "error", reason);
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }

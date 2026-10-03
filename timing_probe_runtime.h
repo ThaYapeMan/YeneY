@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include "timing_probe.h"
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -23,6 +24,52 @@ inline bool enabled() {
     }();
     return on;
 }
+// Extra settings are deliberately not inspected while the probe is disabled.
+inline bool rawEnabled() {
+    if (!enabled())
+        return false;
+    static const bool on = [] {
+        const char *s = getenv("YENEY_TIMING_RAW");
+        if (s && strcmp(s, "0") && strcmp(s, "1"))
+            printf("yeney: setting key=YENEY_TIMING_RAW invalid=%s fallback=0\n", s);
+        return s && !strcmp(s, "1");
+    }();
+    return on;
+}
+inline unsigned staleSeconds() {
+    static const unsigned seconds = [] {
+        const char *s = getenv("YENEY_TIMING_STALE_S");
+        if (!s)
+            return 60u;
+        char *end = nullptr;
+        errno = 0;
+        const unsigned long n = strtoul(s, &end, 10);
+        const bool digits =
+            *s && std::all_of(s, s + strlen(s), [](char c) { return c >= '0' && c <= '9'; });
+        if (errno || !digits || *end || n < 10 || n > 600) {
+            printf("yeney: setting key=YENEY_TIMING_STALE_S invalid=%s fallback=60\n", s);
+            return 60u;
+        }
+        return unsigned(n);
+    }();
+    return seconds;
+}
+inline std::string quoted(const std::string &text) {
+    std::string result = "\"";
+    for (unsigned char c : text) {
+        if (c == '\\' || c == '"') {
+            result += '\\';
+            result += char(c);
+        } else if (c < 32 || c == 127) {
+            char escape[5];
+            snprintf(escape, sizeof escape, "\\x%02x", c);
+            result += escape;
+        } else
+            result += char(c);
+    }
+    return result + "\"";
+}
+inline double monotonicNow() { return clockSeconds(); }
 struct Context {
     unsigned stream = 0, rate = 0;
     uint64_t epoch = 0, base = 0;
@@ -37,6 +84,20 @@ class Diagnostics {
     double nextLog = 0, backoff = 0;
     unsigned errors = 0, consecutiveFailures = 0;
     std::string room;
+    double (*nowClock)();
+    double started = 0;
+    uint64_t sequence = 0, pendingSequence = 0;
+    const char *pendingKind = "seed";
+    unsigned stale;
+    bool raw;
+    double uncertainty() const {
+        if (model.inliers.size() < 20)
+            return NAN;
+        std::vector<double> widths;
+        for (auto e : model.inliers)
+            widths.push_back(e.width * 1000);
+        return percentile(widths, .95) / 2 + percentile(model.residuals(), .95);
+    }
     void line(bool final, const char *reason) {
         if (!context.active)
             return;
@@ -46,22 +107,32 @@ class Diagnostics {
             widths.push_back(e.width * 1000);
         auto residual = model.residuals();
         const double mono = clockSeconds(), real = clockSeconds(CLOCK_REALTIME);
-        const double uncertainty = percentile(widths, .95) / 2 + percentile(residual, .95);
+        const double uncertaintyMs = uncertainty();
         printf(
             "yeney: timing room=%s stream=%u rate=%u epoch=%llu edges=%zu window_ms=%.3f "
-            "residual_p50_ms=%.3f residual_p95_ms=%.3f uncertainty_ms=%.3f drift_ppm=%.3f rtt_p50_ms=%.3f "
+            "residual_p50_ms=%.3f residual_p95_ms=%.3f uncertainty_ms=%.3f drift_ppm=%.3f "
+            "rtt_p50_ms=%.3f "
             "rtt_p95_ms=%.3f lead_p5_ms=%.3f lead_p50_ms=%.3f probe_rps=%.2f rejected=%u errors=%u "
-            "frame=%llu audible_mono=%.9f mono=%.9f real=%.9f%s reason=%s\n",
+            "frame=%llu audible_mono=%.9f mono=%.9f real=%.9f "
+            "inliers=%zu outliers=%u outlier_frac=%.4f span_s=%.3f drift_sigma_ppm=%.3f "
+            "missed_edges=%u half_window_ms=%.3f%s reason=%s\n",
             room.c_str(), context.stream, context.rate, (unsigned long long)context.epoch,
-            model.inliers.size(), percentile(widths, .5), percentile(residual, .5), percentile(residual, .95),
-            uncertainty, model.inliers.size() >= 10 ? (model.slope - 1) * 1e6 : NAN,
-            percentile(rtts, .5) * 1000, percentile(rtts, .95) * 1000, percentile(lead, .05),
-            percentile(lead, .5), limiter.rate(mono), model.rejected, errors,
-            (unsigned long long)(context.base + uint64_t(std::max(0., model.lastSecond)) * context.rate),
-            model.fitted ? model.timeAt(model.lastSecond) : NAN, mono, real, final ? " final" : "", reason);
+            model.inliers.size(), percentile(widths, .5), percentile(residual, .5),
+            percentile(residual, .95), uncertaintyMs,
+            model.driftReported ? (model.slope - 1) * 1e6 : NAN, percentile(rtts, .5) * 1000,
+            percentile(rtts, .95) * 1000, percentile(lead, .05), percentile(lead, .5),
+            limiter.rate(nowClock()), model.rejected, errors,
+            (unsigned long long)(context.base +
+                                 uint64_t(std::max(0., model.lastSecond)) * context.rate),
+            model.fitted ? model.timeAt(model.lastSecond) : NAN, mono, real, model.inliers.size(),
+            model.outliers, model.edges.empty() ? NAN : double(model.outliers) / model.edges.size(),
+            model.span, model.driftSigma, model.missed, model.window * 1000, final ? " final" : "",
+            reason);
     }
 
   public:
+    explicit Diagnostics(double (*clock)() = monotonicNow)
+        : nowClock(clock), stale(enabled() ? staleSeconds() : 60), raw(rawEnabled()) {}
     void reset(const char *reason, bool clearAnchor = false, bool invalidateRate = false) {
         if (!enabled())
             return;
@@ -100,8 +171,9 @@ class Diagnostics {
             return;
         context.rate = rate;
         if (context.active && model.fitted && !model.edges.empty() &&
-            clockSeconds() - model.edges.back().time <= 10 && frame >= context.base) {
-            leads.push_back((model.timeAt(double(frame - context.base) / rate) - clockSeconds()) * 1000);
+            nowClock() - model.lastUsable <= stale && frame >= context.base) {
+            leads.push_back((model.timeAt(double(frame - context.base) / rate) - nowClock()) *
+                            1000);
             if (leads.size() > 4096)
                 leads.pop_front();
         }
@@ -120,7 +192,8 @@ class Diagnostics {
             context.active = true;
             errors = consecutiveFailures = 0;
             room = name;
-            nextLog = clockSeconds() + 10;
+            started = nowClock();
+            nextLog = started + 10;
         }
         return context;
     }
@@ -128,7 +201,7 @@ class Diagnostics {
         std::lock_guard<std::mutex> lock(mutex);
         if (!context.active || c.epoch != context.epoch)
             return false;
-        if (model.fitted && !model.edges.empty() && now - model.edges.back().time > 10) {
+        if (model.stale(now, started, stale)) {
             line(true, "stale-edges");
             ++context.epoch;
             context.active = false;
@@ -140,7 +213,11 @@ class Diagnostics {
             line(false, "periodic");
             nextLog = now + 10;
         }
-        return now >= model.due && now >= backoff && limiter.take(now);
+        if (now < model.due || now < backoff || !limiter.take(now))
+            return false;
+        pendingSequence = ++sequence;
+        pendingKind = !model.sampled ? "seed" : model.phase ? "burst" : "search";
+        return true;
     }
     void seed(const Context &c, double second, double time) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -158,28 +235,57 @@ class Diagnostics {
     bool estimate(uint64_t frame, double &monotonic, double &uncertaintyMs) {
         std::lock_guard<std::mutex> lock(mutex);
         if (!context.active || !context.rate || !model.fitted || model.edges.empty() ||
-            clockSeconds() - model.edges.back().time > 10 || frame < context.base)
+            nowClock() - model.lastUsable > stale || frame < context.base)
             return false;
         monotonic = model.timeAt(double(frame - context.base) / context.rate);
-        std::vector<double> widths;
-        for (auto e : model.inliers)
-            widths.push_back(e.width * 1000);
-        uncertaintyMs = percentile(widths, .95) / 2 + percentile(model.residuals(), .95);
+        uncertaintyMs = uncertainty();
         return true;
     }
-    void response(const Context &c, bool ok, double sent, double received, double second) {
+    void response(const Context &c, bool ok, double sent, double received, double second,
+                  const std::string &relTime = "", const char *failure = "error",
+                  const std::string &failureReason = "soap-or-parse") {
         std::lock_guard<std::mutex> lock(mutex);
-        if (!context.active || c.epoch != context.epoch)
-            return;
-        if (!ok) {
+        if (pendingSequence && std::isfinite(sent))
+            limiter.sent(sent + .005); // Allow for receive-side timestamp/dispatch jitter.
+        const uint64_t seq = pendingSequence ? pendingSequence : ++sequence;
+        pendingSequence = 0;
+        const char *outcome = "accepted";
+        std::string reason = "sample";
+        bool current = context.active && c.epoch == context.epoch;
+        if (!current) {
+            outcome = "rejected-stale-epoch";
+            reason = "epoch-or-eligibility-changed";
+        } else if (!ok) {
+            outcome = failure;
+            reason = failureReason;
             ++errors;
             ++consecutiveFailures;
-            backoff = clockSeconds() + std::min(10., std::pow(2., std::min(consecutiveFailures, 4u)));
-            return;
+            backoff = nowClock() + std::min(10., std::pow(2., std::min(consecutiveFailures, 4u)));
+        } else {
+            backoff = 0;
+            consecutiveFailures = 0;
+            model.sample(sent, received, second);
+            outcome = model.sampleOutcome;
+            reason = model.sampleReason;
         }
-        backoff = 0;
-        consecutiveFailures = 0;
-        model.sample(sent, received, second);
+        if (raw) {
+            printf("yeney: timing-raw room=%s stream=%u epoch=%llu seq=%llu kind=%s "
+                   "send_mono=%.9f recv_mono=%.9f rtt_ms=%.3f reltime=%s reltime_s=%.3f "
+                   "outcome=%s reason=%s\n",
+                   quoted(room).c_str(), c.stream, (unsigned long long)c.epoch,
+                   (unsigned long long)seq, pendingKind, sent, received, (received - sent) * 1000,
+                   quoted(relTime).c_str(), second, outcome, quoted(reason).c_str());
+            if (current && ok && model.decision.observed) {
+                const auto &d = model.decision;
+                printf("yeney: timing-edge room=%s stream=%u epoch=%llu seq=%llu second=%.0f->%.0f "
+                       "lo_mono=%.9f hi_mono=%.9f mid_mono=%.9f half_width_ms=%.3f "
+                       "residual_ms=%.3f classification=%s rule=%s\n",
+                       quoted(room).c_str(), c.stream, (unsigned long long)c.epoch,
+                       (unsigned long long)seq, d.edge.second - 1, d.edge.second,
+                       d.edge.time - d.edge.width / 2, d.edge.time + d.edge.width / 2, d.edge.time,
+                       d.edge.width * 500, d.residual, d.inlier ? "inlier" : "outlier", d.rule);
+            }
+        }
     }
 };
 inline Diagnostics &diagnostics() {

@@ -32,3 +32,6 @@ lead-test
 /timing-probe-test
 /timing-probe-resets-test
 /timing-probe-http-test
+
+/timing-probe-field-test
+/timing-probe-settings-test

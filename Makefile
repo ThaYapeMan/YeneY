@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney
@@ -32,10 +32,15 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 
 test: export YENEY_START_LEAD_MS = 0
 test: export YENEY_TIMING_PROBE = 0
-test: timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+test: export YENEY_TIMING_RAW = 0
+test: export YENEY_TIMING_STALE_S = 60
+test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	./timing-probe-test
-	./timing-probe-resets-test
+	./timing-probe-field-test
+	python3 tests/timing_probe_settings_test.py
+	YENEY_TIMING_STALE_S=10 ./timing-probe-resets-test
 	python3 tests/timing_probe_http_test.py
+	python3 tests/timing_probe_raw_http_test.py
 	python3 tests/stream_debug_test.py
 	python3 tests/lead_setting_test.py
 	YENEY_START_LEAD_MS=2000 ./lead-test
@@ -168,3 +173,8 @@ timing-probe-resets-test: tests/timing_probe_resets_test.cpp sonos-position.cpp 
 timing-probe-http-test: tests/timing_probe_http_fixture.cpp $(OWN_UPNP_SOURCES) timing_probe.h timing_probe_runtime.h $(wildcard upnp/*.h)
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^) -lpthread
 core_sonos.o sonos-position.o sbstreamer.o upnp/own_speaker_control.o upnp/http.o: timing_probe.h timing_probe_runtime.h
+
+timing-probe-field-test: tests/timing_probe_field_test.cpp timing_probe.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
+timing-probe-settings-test: tests/timing_probe_settings_fixture.cpp timing_probe.h timing_probe_runtime.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $< -lpthread

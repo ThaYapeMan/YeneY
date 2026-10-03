@@ -229,7 +229,7 @@ Environment=YENEY_TITLE_FORMAT=title
 sudo systemctl restart 'yeney@Study'
 ```
 
-Each setting is read and logged once at startup. An invalid value logs a warning
+Settings are read once; timing RAW/STALE are inspected only when the probe is enabled. An invalid value logs a warning
 and uses the default.
 
 | Setting | Values | Default |
@@ -241,6 +241,9 @@ and uses the default.
 | `YENEY_DEBUG_EVENTS` | `1`: log every received GENA service/state/sequence; other values: off | off |
 | `YENEY_POLL` | `events`: event-driven · `legacy`: the older polling schedule, for A/B tests | `events` |
 | `YENEY_STOPPED_MEDIAINFO` | `0` or `1`: poll media info while stopped | `0` |
+| `YENEY_TIMING_PROBE` | `1`: measurement-only coordinator playback-clock probe; unset/`0`: off | off |
+| `YENEY_TIMING_RAW` | `1`: per-request and edge observations, only with TIMING_PROBE enabled | off |
+| `YENEY_TIMING_STALE_S` | 10–600 seconds without a usable edge before probe expiry | `60` |
 
 The details of each setting are in [How YeneY works](docs/how-it-works.md).
 
