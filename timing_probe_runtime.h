@@ -180,6 +180,9 @@ class Diagnostics {
     double (*nowClock)();
     double started = 0;
     uint64_t sequence = 0, pendingSequence = 0;
+    // Normal SOAP observation metadata for the LMS read-only consumer.
+    uint64_t normalEpoch = 0;
+    double normalSecond = NAN, normalTime = NAN;
     const char *pendingKind = "seed";
     unsigned stale;
     bool raw;
@@ -399,6 +402,11 @@ public:
     }
     void seed(const Context &c, double second, double time) {
         std::lock_guard<std::mutex> lock(mutex);
+        if (c.active && context.active && c.epoch == context.epoch) {
+            normalEpoch = c.epoch;
+            normalSecond = second;
+            normalTime = time;
+        }
         if (c.active && context.active && c.epoch == context.epoch && !model.sampled) {
             // Only guide acquisition: cached/coarse reads are never fitted edges.
             model.seed(second, time);
@@ -418,6 +426,26 @@ public:
         monotonic = model.timeAt(double(frame - context.base) / context.rate);
         uncertaintyMs = uncertainty();
         return true;
+    }
+    // Read-only LMS view: invert the existing clock in ConnectionPosition's
+    // stream coordinate. Publication, fitting and probe scheduling are untouched.
+    bool lmsPosition(unsigned stream, uint64_t base, unsigned rate, double &frame, double &rateScale,
+                     double *relSecond = nullptr, double *observedTime = nullptr) {
+        std::lock_guard<std::mutex> lock(mutex);
+        const double now = nowClock();
+        if (!context.active || !context.anchored || context.stream != stream || context.base != base ||
+            context.rate != rate || !rate || !bracket.locked ||
+            now - (lastBracketAt ? lastBracketAt : started) > stale ||
+            !std::isfinite(bracket.uncertainty(now)) || bracket.uncertainty(now) > 10 ||
+            (publisher.active() && publishedState != 2))
+            return false;
+        if (relSecond)
+            *relSecond = normalEpoch == context.epoch ? normalSecond : NAN;
+        if (observedTime)
+            *observedTime = normalEpoch == context.epoch ? normalTime : NAN;
+        rateScale = 1 / (1 + bracket.drift * 1e-6);
+        frame = double(base) + (now - bracket.timeAt(0) - audibleOffset() * .001) * rate * rateScale;
+        return std::isfinite(frame) && frame >= base;
     }
     bool contract(uint64_t frame, double &time, double &uncertaintyMs, double *drift = nullptr) {
         std::lock_guard<std::mutex> lock(mutex);

@@ -64,5 +64,12 @@ uint64_t get_sonos_position_frames(uint32_t rate) {
 
 uint64_t get_sonos_audible_frames(uint32_t rate) {
     std::lock_guard<std::mutex> lock(positionMutex);
+    if (timing_probe::enabled() && timing_probe::lmsPositionFromModel()) {
+        double frame, scale, relSecond, observed;
+        uint64_t audible;
+        if (timing_probe::diagnostics().lmsPosition(position.streamId(), position.measurementBase(), rate, frame, scale, &relSecond, &observed) &&
+            position.modelAudibleFrames(rate, timing_probe::clockSeconds() * 1000, frame, scale, audible, relSecond, observed))
+            return audible;
+    }
     return position.audibleFrames(rate);
 }

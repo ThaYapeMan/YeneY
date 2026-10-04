@@ -1,6 +1,8 @@
 #ifndef POSITION_STATE_H
 #define POSITION_STATE_H
 #include <cstdint>
+#include <algorithm>
+#include <cmath>
 
 // Caller holds the position mutex. Time is monotonic milliseconds; explicit
 // arguments let tests cover connection/poll races without wall-clock sleeps.
@@ -40,12 +42,35 @@ public:
         // a handoff, and reject an old RelTime larger than this GET's lifetime.
         if (now - started < 1100 || ms > now - started + 1000) return;
         if (pendingAudibleBase) { audibleBase = base; pendingAudibleBase = false; }
+        // Repeated leased values are the same observation, not a fresh bracket.
+        if (!heardPosition || relative != ms) observed = now;
         relative = ms;
         heardPosition = true;
     }
     uint64_t frames(uint32_t rate) {
         lastFrames = base + uint64_t(relative) * rate / 1000;
         return lastFrames;
+    }
+    unsigned streamId() const { return stream; }
+    bool modelAudibleFrames(uint32_t rate, double now, double candidate, double rateScale, uint64_t &result, double relSecond = NAN, double observedMono = NAN) {
+        if (!anchored || !heardPosition || pendingAudibleBase || now < observed ||
+            !std::isfinite(now) || !std::isfinite(candidate) || !std::isfinite(rateScale) || rateScale <= 0) return false;
+        // RelTime is floored at observation. Project its interval to now, rather
+        // than force the model onto a leased, whole-second staircase.
+        // Prefer the timestamp of the actual normal SOAP read, already recorded
+        // by the probe seed path, when it corresponds to this leased value.
+        const double sampleMs = std::isfinite(observedMono) && relSecond == double(relative) / 1000
+            ? observedMono * 1000 : double(observed);
+        if (sampleMs > now) return false;
+        const double elapsed = (double(now) - sampleMs) * rate * rateScale / 1000;
+        const double low = double(audibleBase) + double(relative) * rate / 1000 + elapsed;
+        const double high = low + rate;
+        const double bounded = std::max(low, std::min(high, candidate));
+        if (bounded < 0 || bounded >= double(UINT64_MAX)) return false;
+        frames(rate); // preserve the encoded handoff coordinate
+        lastAudible = std::max(lastAudible, uint64_t(bounded));
+        result = lastAudible;
+        return true;
     }
     uint64_t audibleFrames(uint32_t rate) {
         frames(rate); // retain the encoded-stream coordinate for handoffs
@@ -55,7 +80,7 @@ public:
     }
 private:
     unsigned stream = 0;
-    uint64_t request = 0, generation = 0, base = 0, started = 0, lastFrames = 0;
+    uint64_t request = 0, generation = 0, base = 0, started = 0, lastFrames = 0, observed = 0;
     uint32_t relative = 0;
     uint64_t audibleBase = 0, lastAudible = 0;
     bool anchored = false, hadAudio = false, heardPosition = false, pendingAudibleBase = false;

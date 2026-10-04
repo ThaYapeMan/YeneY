@@ -1,0 +1,86 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Read-only LMS position sampling and CLOCK_MONOTONIC regression."""
+import argparse
+import math
+import re
+import socket
+import sys
+import time
+from urllib.parse import unquote
+
+
+def fit(samples):
+    origin = samples[0][0]
+    times = [t - origin for t, _ in samples]
+    mean_t = sum(times) / len(times)
+    mean_p = sum(p for _, p in samples) / len(samples)
+    variance = sum((t - mean_t) ** 2 for t in times)
+    if not variance:
+        raise ValueError("at least two distinct sample times are required")
+    slope = sum((t - mean_t) * (p - mean_p)
+                for t, (_, p) in zip(times, samples)) / variance
+    residuals = [p - (mean_p + slope * (t - mean_t))
+                 for t, (_, p) in zip(times, samples)]
+    return slope, residuals
+
+
+def collect(connection, mac, seconds, clock=time.monotonic, sleep=time.sleep):
+    samples = []
+    start = deadline = clock()
+    with connection.makefile("rb") as reader:
+        while deadline < start + seconds:
+            wait = deadline - clock()
+            if wait > 0:
+                sleep(wait)
+            sent = clock()
+            connection.sendall(f"{mac} time ?\n".encode("ascii"))
+            line = reader.readline(4097)
+            received = clock()
+            if not line or len(line) > 4096:
+                raise ValueError("missing or oversized LMS CLI reply")
+            words = unquote(line.decode("ascii").strip()).split()
+            if len(words) != 3 or words[0].lower() != mac or words[1] != "time":
+                raise ValueError("unexpected LMS CLI reply")
+            position = float(words[2])
+            if not math.isfinite(position) or position < 0:
+                raise ValueError("invalid LMS position")
+            samples.append(((sent + received) / 2, position))
+            deadline += .25
+            # Do not issue catch-up bursts after a slow reply.
+            if deadline < received:
+                deadline = start + (math.floor((received - start) / .25) + 1) * .25
+    return samples
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("server", help="LMS hostname or IP (CLI only)")
+    parser.add_argument("mac", help="player MAC, for example 94:9f:3e:fa:ba:66")
+    parser.add_argument("--seconds", type=float, default=60)
+    parser.add_argument("--port", type=int, default=9090)
+    args = parser.parse_args()
+    mac = args.mac.lower()
+    if not re.fullmatch(r"[0-9a-f]{2}(?::[0-9a-f]{2}){5}", mac):
+        parser.error("MAC must contain six colon-separated hexadecimal bytes")
+    if not math.isfinite(args.seconds) or args.seconds < .5:
+        parser.error("--seconds must be finite and at least 0.5")
+    if not 1 <= args.port <= 65535:
+        parser.error("--port must be 1..65535")
+    try:
+        with socket.create_connection((args.server, args.port), timeout=2) as connection:
+            samples = collect(connection, mac, args.seconds)
+        slope, residuals = fit(samples)
+        print("mono_s position_s residual_ms")
+        for (mono, position), residual in zip(samples, residuals):
+            print(f"{mono:.9f} {position:.6f} {residual * 1000:+.3f}")
+        print(f"samples={len(samples)} max_excursion_ms="
+              f"{max(abs(r) for r in residuals) * 1000:.3f} ppm={(slope - 1) * 1e6:+.3f}")
+    except (OSError, ValueError, UnicodeError) as error:
+        print(f"yeney-lms-position-check: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

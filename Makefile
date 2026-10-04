@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney
@@ -40,6 +40,8 @@ test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	YENEY_TIMING_PROBE=1 YENEY_TIMING_PUBLISH=1 ./timing-tap-test
 	./timing-contract-test
+	./lms-position-test
+	python3 tests/lms_position_check_test.py
 	python3 tests/timing_contract_test.py
 	./timing-probe-test
 	./timing-probe-field-test
@@ -200,3 +202,8 @@ core_shm.o: third_party/yeney-core/sinks/shm_v1/sink.cpp third_party/yeney-core/
 	g++ -std=c++17 -O2 -Wall -Wextra -Ithird_party/yeney-core -c -o $@ $<
 
 timing-probe-settings-test timing-probe-resets-test timing-probe-http-test streamer-test range-test own-control-test: timing_brackets.h timing_channel.h timing_settings.h
+
+lms-position-test: tests/lms_position_test.cpp position_state.h timing_probe_runtime.h timing_settings.h timing_brackets.h timing_channel.h timing_probe.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
+test: lms-position-test
+sonos-position.o position-test: position_state.h

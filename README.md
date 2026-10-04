@@ -245,6 +245,7 @@ and uses the default.
 | `YENEY_TIMING_RAW` | `1`: per-request and edge observations, only with TIMING_PROBE enabled | off |
 | `YENEY_TIMING_STALE_S` | 10–600 seconds without a usable edge before probe expiry | `60` |
 | `YENEY_TIMING_LOCKED_EVERY_S` | 1–60 seconds between locked clock probes | `5` |
+| `YENEY_LMS_POSITION_FROM_MODEL` | `1`: continuous locked-clock LMS position; `0`: RelTime-only. Requires an active timing probe model. | 1 |
 | `YENEY_TIMING_PUBLISH` | `1`: publish the LampaStream timing contract and core audio tap, only with TIMING_PROBE | off |
 | `YENEY_AUDIBLE_OFFSET_MS` | -500–500 ms acoustic calibration, added to published audible times | `0` |
 
@@ -456,8 +457,10 @@ Grouped HTTP recovery and investigation: [Decisions and findings](docs/grouped-r
 
 Grouped playback reserve: `YENEY_START_LEAD_MS=1000` (default; valid 0–10000; 0 retains legacy pacing). Set `YENEY_DEBUG_STREAM=1` for per-response lead and TCP diagnostics. See [decisions and device trials](docs/start-lead.md).
 
-The opt-in, measurement-only playback-clock probe is documented in
+The opt-in playback-clock probe is documented in
 [Timing probe](docs/timing-probe.md). Enable it with `YENEY_TIMING_PROBE=1`; it
-never retimes audio or changes LMS reporting. With `YENEY_TIMING_PUBLISH=1`,
+never retimes audio. A locked clock now supplies continuous LMS position by
+default; `YENEY_LMS_POSITION_FROM_MODEL=0` restores RelTime-only reporting. With
+`YENEY_TIMING_PUBLISH=1`,
 LampaStream can read the opt-in SHM timing contract; inspect it with
 `scripts/yeney-timing-read <mac>`.

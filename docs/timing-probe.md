@@ -1,7 +1,8 @@
 # Sonos playback clock and LampaStream timing contract
 
-Measurement and publication never correct playback, transport, LMS position,
-clocks, or audio. CLOCK_MONOTONIC is the time base; YeneY and LampaStream must
+The locked measurement model now supplies continuous LMS-visible audible
+position by default. It never changes playback, transport, clocks, audio,
+the audio tap or timing publication. CLOCK_MONOTONIC is the time base; YeneY and LampaStream must
 share the host kernel and make both SHM objects visible in the reader's
 filesystem. The owner performs deployment and acoustic tests.
 With PROBE unset/0, traffic, audio and output remain unchanged from 4641b46.
@@ -13,6 +14,7 @@ With PROBE unset/0, traffic, audio and output remain unchanged from 4641b46.
 | `YENEY_TIMING_STALE_S` | decimal seconds, 10–600 without a usable edge | 60 |
 | `YENEY_TIMING_LOCKED_EVERY_S` | decimal seconds, 1–60 between locked edge probes | 5 |
 | `YENEY_TIMING_PUBLISH` | `1` enables the timing object and existing core audio tap, only with PROBE | off |
+| `YENEY_LMS_POSITION_FROM_MODEL` | `1` uses a qualified locked model for LMS position; `0` restores RelTime-only reporting | 1 |
 | `YENEY_AUDIBLE_OFFSET_MS` | signed decimal integer, -500–500, added to published audible time | 0 |
 
 Invalid values warn once and fall back to defaults. Signs and whitespace are
@@ -89,6 +91,59 @@ Published uncertainty adds 0.1 ms per second since the last two-sided bracket,
 plus half the feasible slope range times that age. Steady publication continues
 at <=1 Hz while lock holds. The existing stale-observation expiry remains.
 
+
+## Continuous LMS position
+
+`YENEY_LMS_POSITION_FROM_MODEL=1` (the default) uses the existing locked clock
+instead of the floored RelTime position. It does not enable PROBE, add SOAP
+traffic, or require PUBLISH. With PROBE off there is no locked clock, so the
+old path remains. The setting accepts exactly `0` or `1`; invalid values warn
+once and fall back to `1`, when the model-position path is first used.
+
+Invert the unchanged bracket line at CLOCK_MONOTONIC now: stream frame =
+ConnectionPosition PCM base + (now - audible time of stream second zero) ×
+sample rate × reciprocal time slope. This is the same samples/second drift
+convention as the timing object's `drift_ppb`; translating the SHM anchor into
+the stream coordinate gives the same result. The published calibration offset
+is included when PUBLISH is enabled. No timing object is read or rewritten.
+
+Use the model only while active, anchored, locked, matching the current stream,
+PCM base and rate, and fresh under STALE, with finite uncertainty <=10 ms.
+When publication is active its state must also be locked. Otherwise use the
+existing RelTime calculation. Setting `0` selects the original calculation
+exactly. Pause, seek, flush, new stream and reconnect invalidate the existing
+clock and therefore force fallback until re-lock. Same-rate gapless boundaries
+retain their existing stream/model continuity and LMS track-boundary semantics.
+
+Constrain the model to the latest accepted RelTime interval, advanced by the
+observation's monotonic age and the model rate. The fresh normal SOAP read's
+midpoint timestamp already passed to the seed path is retained as read-only
+reporting metadata; it does not change seed fitting or caching. Repeated copies of the same
+leased integer do not refresh its observation timestamp; a genuinely different
+accepted RelTime starts a new interval. The interval remains one stream second
+wide. This avoids turning the lease into another staircase while retaining the
+speaker's coarse position bounds. The existing last-audible high-water mark
+prevents backward steps on either switch, and the sink still caps position at
+handed PCM and holds it while paused. Encoded handoff coordinates, start lead,
+transport commands, STMt cadence and the core's track elapsed/boundary accounting
+remain unchanged; they now consume the improved audible coordinate.
+
+For an owner-run field check while playing continuously, run:
+
+```sh
+scripts/yeney-lms-position-check <lms-host> 94:9f:3e:fa:ba:66 --seconds 120 > /tmp/study-lms-position.txt
+```
+
+The standard-library Python tool sends only `<mac> time ?` to the LMS CLI
+(default port 9090, override with `--port`). It samples every 0.25 s, timestamps
+request/response midpoint with CLOCK_MONOTONIC, and skips catch-up bursts after
+slow replies. After N seconds it prints every sample's monotonic timestamp,
+position and residual in ms against the centred least-squares line, followed
+by maximum absolute excursion and slope in ppm relative to CLOCK_MONOTONIC.
+Do not pause, seek or skip during this check; such discontinuities invalidate a
+single-line fit. Compare with `YENEY_LMS_POSITION_FROM_MODEL=0`, keeping probe
+and other settings unchanged. The owner runs this against LMS; automated tests
+use a fake CLI and virtual time only.
 
 ## Audio frame correspondence
 
@@ -271,28 +326,30 @@ only these timing settings (or set PROBE/PUBLISH/RAW to 0), then restart.
 
 ## Decisions
 
-1. Keep one-sided bounds in the same bounded consensus history, represented by
-   infinite open endpoints. Preserve literal bounds in RAW lines; use the bounding
-   sample's RTT/2 (minimum 2 ms) tolerance in consensus and contradiction checks.
-   The fixture demonstrates that SOAP can observe the new second after send;
-   treating first send as an exact physical upper limit would create false
-   violators. Two-sided endpoints remain unchanged.
-2. Compare observations with the full predicted band, not just its centre.
-   Keep lock through consistent bounds and missing bursts; a lone contradiction
-   cannot move the published mapping. Retain existing explicit and stale resets.
-3. Use three symmetric requests, a 20 ms minimum half-span and 60 ms cap.
-   Keep rolling send-latency p50/p95 over 120 first sends and compensate the
-   planned centre with p50. Only actual requests contribute latency statistics.
-4. Retry at the next second three times after missing brackets; reset this
-   counter on a hit and return to the configured interval after the third retry.
-   Rate limits and error backoff survive every reset exactly as before.
-5. Grow uncertainty with age by 0.1 ms/s plus half the feasible drift range
-   in ppm converted to milliseconds per second. Keep the published ABI and
-   mapping unchanged; old midpoint fields still provide comparison data.
-6. Keep all supplied timing-raw and timing-edge lines verbatim in the regression
-   fixture. Replay ignores historical model epochs because those resets are the
-   defect under test. Also test the actual worker scheduler using deterministic
-   0–25 ms dispatch latency and 4–20 ms RTT, plus a 50 ms positive step.
-7. Leave the owner's unrelated timing-read-study.txt untracked and untouched.
-   Change no playback, audio, LMS, settings or submodule code; commit on main
-   without rewriting history, and leave all device tests to the owner.
+1. Add a read-only inverse-clock query in Diagnostics; reuse the existing stream
+   PCM base instead of reading SHM, so no timing publication or tap changes are needed.
+2. Require finite uncertainty <=10 ms as the normal bound, leaving headroom above
+   the observed 3.6–5.4 ms and the initial 8.5 ms lock limit; degrade to RelTime
+   when age or drift uncertainty becomes larger.
+3. Project the accepted RelTime interval forward by its monotonic age and model
+   rate; repeated cached integers retain the first observation timestamp, so
+   the one-second lease cannot cause repeated clamping onto whole seconds.
+4. Reuse ConnectionPosition's last-audible high-water mark on both paths and
+   keep its encoded handoff coordinate separate; the existing sink's handed-PCM
+   cap and pause guard continue to govern LMS elapsed and track boundaries.
+5. Include the existing publication calibration offset only when PUBLISH is on,
+   matching that channel's anchor without changing its data or parsing behaviour.
+6. Keep PROBE opt-in and PUBLISH optional; the default model-position setting
+   changes reporting only when a qualified clock already exists. Preserve
+   same-rate gapless continuity rather than reset a still-valid stream clock.
+7. Sample CLI at 0.25 s using request/response midpoint timestamps and a centred
+   least-squares fit after collection; skip overdue deadlines rather than burst,
+   and print all samples plus maximum absolute residual and rate ppm. Default
+   to 60 s and CLI port 9090, require >=0.5 s for two samples, and use a 2 s
+   socket timeout so an unreachable server cannot block the owner indefinitely.
+8. Test with virtual time and a fake CLI only, preserving all existing assertions;
+   leave the owner's unrelated timing-read-study.txt untouched and untracked.
+9. Point origin at the requested ThaYapeMan/sonos-lms repository, whose main
+   matches the starting commit; the checkout initially pointed at YeneY. Use
+   one main commit with no history rewrite, core submodule changes, live LMS
+   queries, SSH access or deployment.
