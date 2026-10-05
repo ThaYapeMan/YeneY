@@ -22,10 +22,11 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney
+	install -d -m 0755 /var/lib/yeney
 	scripts/install-devices.sh
 encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
@@ -40,6 +41,7 @@ test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	YENEY_TIMING_PROBE=1 YENEY_TIMING_PUBLISH=1 ./timing-tap-test
 	./timing-contract-test
+	./cold-position-test
 	./lms-position-test
 	python3 tests/lms_position_check_test.py
 	python3 tests/timing_contract_test.py
@@ -207,3 +209,9 @@ lms-position-test: tests/lms_position_test.cpp position_state.h timing_probe_run
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
 test: lms-position-test
 sonos-position.o position-test: position_state.h
+
+core_sonos.o sonos-position.o sbstreamer.o upnp/own_speaker_control.o timing-contract-test lms-position-test: timing_drift_state.h
+
+cold-position-test: tests/cold_position_test.cpp timing_brackets.h timing_probe.h timing_drift_state.h timing_probe_runtime.h timing_settings.h timing_channel.h position_state.h
+	g++ -std=c++17 -g -O2 -Wall -I. -o $@ $<
+test: cold-position-test

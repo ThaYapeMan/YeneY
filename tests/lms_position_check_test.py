@@ -78,3 +78,24 @@ for value, expected, warning in ((None, 1, False), ("1", 1, False), ("0", 0, Fal
     assert f"model={expected}" in result.stdout
     assert result.stdout.count("invalid=") == int(warning)
 print("PASS: model-position default/0/1 and invalid fallback parsing")
+
+samples = [(100+i*.25, 10+i*.25 + (-.5 if i < 80 else 0)) for i in range(240)]
+assert tool.lock_time(samples, 'yeney: timing-lock state=locked mono=120.000 udn=RINCON') == 20
+assert tool.lock_time(samples, '') is None
+assert tool.lock_time(samples, 'yeney: timing mono=99 state=locked') == 0
+assert tool.lock_time(samples, 'yeney: timing mono=99 state=locked\nyeney: timing-lock state=acquiring mono=100\nyeney: timing-lock state=locked mono=120') == 20
+import contextlib
+import io
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    tool.summary(samples,20)
+assert 'largest_step_after_10s_ms=750.000' in output.getvalue()
+assert 'backwards_count=0' in output.getvalue()
+assert 'before_lock_error samples=80 max_ms=500.000' in output.getvalue()
+assert 'after_lock_error samples=160 max_ms=0.000' in output.getvalue()
+samples[100] = (samples[100][0],samples[99][1]-.1)
+with contextlib.redirect_stdout(output):
+    tool.summary(samples,None)
+assert 'backwards_count=1' in output.getvalue()
+assert 'before_lock_error=unknown' in output.getvalue()
+print('PASS: producer lock timestamp, largest step, backwards and separate startup/stable errors')

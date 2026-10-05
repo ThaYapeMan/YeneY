@@ -245,3 +245,40 @@ decoder logs, CLI replies, `s9-report.txt` and `s9-matches.txt` for title search
 16/24-bit WAV parsing, known-gain alignment, restoration and a real-FLAC round
 trip when `flac` is installed; without it that fixture prints an explicit SKIP.
 These synthetic checks do not replace a physical S9 run.
+
+## Startup position and persisted drift
+
+The owner deploys; agents never SSH to or deploy on LXC 113. Install initializes
+`/var/lib/yeney`, without deleting learned drift, and restarts configured rooms.
+Enable the timing probe and model reporting in the existing service environment.
+A first-ever install has no prior; an upgrade may already have one. Journal
+`timing-prior` confirms loading; `timing-lock` gives the true lock timestamp.
+`position_phase=acquiring/prior/slewing/locked` and `slew_offset_ms` show reporting.
+See [the clock contract](docs/timing-probe.md) for file format and expiry.
+
+On LXC 113, start continuous Study playback immediately after install and run:
+
+```sh
+/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 600 > /tmp/study-cold-start.txt
+sudo systemctl restart yeney@Study.service
+/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 600 > /tmp/study-warm-start.txt
+```
+
+Resume continuous playback immediately after the restart if LMS stopped it.
+Use a single item longer than ten minutes so LMS track-time resets do not invalidate the fit.
+Do not change probe settings between runs. On the Proxmox host:
+
+```sh
+pct pull 113 /tmp/study-cold-start.txt /tmp/study-cold-start.txt
+pct pull 113 /tmp/study-warm-start.txt /tmp/study-warm-start.txt
+```
+
+Expected: cold lock about 60–65 s, warm about 5–25 s (A2 fixture 60/10 s),
+no backwards samples, largest 250 ms step <=287.5 ms plus sampling jitter;
+`largest_step_excess_ms` <=37.5 ms plus jitter. Before lock expect smooth
+position with up to about 500 ms phase error; it is not yet a phase measurement.
+After lock the initial phase offset decays over <=5 s, so whole after-lock max
+may still approach 500 ms. After slew expect max error <=5 ms, ideally the
+previously observed ~1.5 ms. Error statistics reference the final linear fit,
+not acoustic truth. `time_to_lock_s=unknown` means journal evidence was unavailable;
+inspect `journalctl -u yeney@Study.service` instead of inferring lock from position.

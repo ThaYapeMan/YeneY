@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include "timing_brackets.h"
+#include "timing_drift_state.h"
 #include "timing_channel.h"
 #include "timing_probe.h"
 #include <cerrno>
@@ -86,6 +87,32 @@ class Diagnostics {
     BracketClock bracket;
     FrameMapping frames;
     Publisher publisher;
+    DriftState driftState;
+    DriftState::Value savedDrift;
+    std::string speakerUdn;
+    bool hasPrior = false, driftDirty = false;
+    double qualifiedSince = NAN, lastDriftWrite = -INFINITY;
+    const char *positionPhase = "acquiring";
+    double slewOffset = 0;
+    void rememberDrift(bool shutdown = false) {
+        if (bracket.locked && bracket.driftReady) {
+            if (!std::isfinite(qualifiedSince)) qualifiedSince = nowClock();
+        } else qualifiedSince = NAN;
+        if (std::isfinite(qualifiedSince) && nowClock() - qualifiedSince >= 60) {
+            const double sigma = std::max(.1, (bracket.highDrift - bracket.lowDrift) / std::sqrt(12.));
+            if (sigma <= 15 && std::abs(bracket.drift) <= 500 &&
+                (shutdown || !hasPrior || std::abs(savedDrift.ppm - bracket.drift) >= 1 ||
+                 std::abs(savedDrift.sigma - sigma) >= 1 ||
+                 time(nullptr) - savedDrift.timestamp >= 86400)) {
+                savedDrift = {bracket.drift, sigma, time(nullptr)};
+                hasPrior = driftDirty = true;
+            }
+        }
+        if (!speakerUdn.empty() && driftDirty && (shutdown || nowClock() - lastDriftWrite >= 3600)) {
+            driftState.save(savedDrift);
+            driftDirty = false; lastDriftWrite = nowClock();
+        }
+    }
     double warmDrift = 0, lastPublish = -INFINITY, lastBracketAt = 0;
     unsigned publishedState = 0;
     double lockedSecond = NAN, lockedDue = 0;
@@ -103,10 +130,15 @@ class Diagnostics {
                                                                 : frames.abs_first + frames.frames);
     }
     void clearClock() {
+        if (bracket.locked)
+            printf("yeney: timing-lock state=acquiring mono=%.9f udn=%s\n", nowClock(), speakerUdn.c_str());
         if (bracket.locked && bracket.driftReady)
             warmDrift = bracket.drift;
         retireFrames();
+        rememberDrift();
         bracket.reset(warmDrift);
+        if (hasPrior) bracket.usePrior(savedDrift.ppm, savedDrift.sigma);
+        qualifiedSince = NAN;
         lastBracketAt = 0;
         started = nowClock();
         lockedSecond = NAN;
@@ -214,7 +246,7 @@ class Diagnostics {
             "missed_edges=%u half_window_ms=%.3f state=%s model_epoch=%llu band_ms=%.3f "
             "violators=%u locked_drift_ppm=%.3f locked_rate_drift_ppm=%.3f "
             "published_uncertainty_ms=%.3f publish=%s one_sided_count=%u contradiction_count=%u "
-            "last_two_sided_age_s=%.3f send_latency_p50_ms=%.3f burst_span_ms=%.3f%s reason=%s\n",
+            "last_two_sided_age_s=%.3f send_latency_p50_ms=%.3f burst_span_ms=%.3f position_phase=%s slew_offset_ms=%.3f udn=%s%s reason=%s\n",
             room.c_str(), context.stream, context.rate, (unsigned long long)context.epoch,
             model.inliers.size(), percentile(widths, .5), percentile(residual, .5), percentile(residual, .95),
             uncertaintyMs, model.driftReported ? (model.slope - 1) * 1e6 : NAN, percentile(rtts, .5) * 1000,
@@ -230,12 +262,40 @@ class Diagnostics {
             publisher.active() ? "on" : "off", bracket.oneSided, bracket.contradictions,
             std::isfinite(bracket.lastTwoSided) ? std::max(0., nowClock() - bracket.lastTwoSided) : NAN,
             percentile({sendLatencies.begin(), sendLatencies.end()}, .5) * 1000, burstHalf * 2000,
-            final ? " final" : "", reason);
+            positionPhase, slewOffset * 1000, speakerUdn.c_str(), final ? " final" : "", reason);
     }
 
 public:
     explicit Diagnostics(double (*clock)() = monotonicNow)
         : nowClock(clock), stale(enabled() ? staleSeconds() : 60), raw(rawEnabled()) {}
+    void speaker(const std::string &udn, const std::string &directory = "/var/lib/yeney") {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (udn.empty() || speakerUdn == udn) return;
+        speakerUdn = udn;
+        printf("yeney: timing-lock state=acquiring mono=%.9f udn=%s\n", nowClock(), speakerUdn.c_str());
+        driftState.speaker(udn, directory);
+        hasPrior = driftState.load(savedDrift);
+        if (hasPrior) {
+            bracket.usePrior(savedDrift.ppm, savedDrift.sigma);
+            printf("yeney: timing-prior udn=%s drift_ppm=%.3f sigma_ppm=%.3f timestamp=%lld\n",
+                   udn.c_str(), savedDrift.ppm, savedDrift.sigma, savedDrift.timestamp);
+        }
+    }
+    bool priorActive() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return hasPrior;
+    }
+    double priorScale() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return hasPrior ? 1 / (1 + savedDrift.ppm * 1e-6) : 1;
+    }
+    void reporting(const char *phase, double offset) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (strcmp(positionPhase, phase))
+            printf("yeney: position-phase phase=%s slew_offset_ms=%.3f mono=%.9f udn=%s\n",
+                   phase, offset * 1000, nowClock(), speakerUdn.c_str());
+        positionPhase = phase; slewOffset = offset;
+    }
     bool configure(const std::string &mac) {
         if (!publishEnabled())
             return false;
@@ -297,6 +357,7 @@ public:
         if (!enabled())
             return;
         std::lock_guard<std::mutex> lock(mutex);
+        rememberDrift(!strcmp(reason, "shutdown"));
         line(true, reason);
         ++context.epoch;
         context.active = false;
@@ -433,16 +494,16 @@ public:
                      double *relSecond = nullptr, double *observedTime = nullptr) {
         std::lock_guard<std::mutex> lock(mutex);
         const double now = nowClock();
+        if (relSecond)
+            *relSecond = normalEpoch == context.epoch ? normalSecond : NAN;
+        if (observedTime)
+            *observedTime = normalEpoch == context.epoch ? normalTime : NAN;
         if (!context.active || !context.anchored || context.stream != stream || context.base != base ||
             context.rate != rate || !rate || !bracket.locked ||
             now - (lastBracketAt ? lastBracketAt : started) > stale ||
             !std::isfinite(bracket.uncertainty(now)) || bracket.uncertainty(now) > 10 ||
             (publisher.active() && publishedState != 2))
             return false;
-        if (relSecond)
-            *relSecond = normalEpoch == context.epoch ? normalSecond : NAN;
-        if (observedTime)
-            *observedTime = normalEpoch == context.epoch ? normalTime : NAN;
         rateScale = 1 / (1 + bracket.drift * 1e-6);
         frame = double(base) + (now - bracket.timeAt(0) - audibleOffset() * .001) * rate * rateScale;
         return std::isfinite(frame) && frame >= base;
@@ -485,6 +546,7 @@ public:
             outcome = model.sampleOutcome;
             reason = model.sampleReason;
             const bool wasLocked = bracket.locked;
+            rememberDrift();
             if (wasLocked && requested && lockedPhase == 0) {
                 sendLatencies.push_back(std::max(0., sent - plannedSend));
                 if (sendLatencies.size() > 120)
@@ -532,7 +594,15 @@ public:
                     lockedSecond = NAN;
                 }
             }
+            if (bracket.priorDropped) {
+                hasPrior = false; driftDirty = false;
+                savedDrift.timestamp = 0;
+                if (!speakerUdn.empty()) driftState.save(savedDrift);
+                printf("yeney: timing-prior dropped=live-edge-contradiction udn=%s mono=%.9f\n", speakerUdn.c_str(), nowClock());
+                bracket.priorDropped = false;
+            }
             if (wasLocked != bracket.locked) {
+                printf("yeney: timing-lock state=%s mono=%.9f udn=%s\n", bracket.locked ? "locked" : "acquiring", nowClock(), speakerUdn.c_str());
                 if (wasLocked) {
                     ++context.epoch;
                     retireFrames();

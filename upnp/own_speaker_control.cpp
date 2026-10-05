@@ -229,6 +229,7 @@ void OwnSpeakerControl::timingLoop() {
             before.transport.uriKnown && !expected.empty() && before.transport.uri == expected &&
                 currentStream,
             activity.timingAllowed);
+        diagnostic.speaker(before.room.uuid);
         const auto context = diagnostic.start(allowed, before.room.name);
         if (context.active && diagnostic.request(context, timing_probe::clockSeconds())) {
             ProbeHttpTiming stamp;

@@ -53,6 +53,11 @@ public:
     unsigned violators = 0, failures = 0;
     bool locked = false, fitted = false, driftReady = false;
     double warm = 0;
+    bool prior = false, priorDropped = false;
+    double priorDrift = 0, priorSigma = 0;
+    void usePrior(double ppm, double sigma) {
+        prior = true; priorDrift = ppm; priorSigma = sigma; warm = ppm;
+    }
     unsigned oneSided = 0, contradictions = 0;
     double lastTwoSided = NAN;
     void reset(double previous = 0) {
@@ -81,7 +86,9 @@ public:
                 ++contradictions;
             failures = inconsistent ? failures + 1 : 0;
             if (failures >= 2) {
-                reset(driftReady ? drift : warm);
+                const bool rejectedPrior = prior;
+                reset(rejectedPrior ? 0 : driftReady ? drift : warm);
+                priorDropped = rejectedPrior;
             } else if (failures)
                 return false; // A single unconfirmed mismatch cannot move the contract.
         }
@@ -134,7 +141,7 @@ public:
         };
         // Unity before 120 s; a qualified room drift seeds the subsequent search.
         if (span < 120) {
-            trials.push_back({0, band(0)});
+            trials.push_back({prior ? priorDrift : 0, band(prior ? priorDrift : 0)});
             best = trials.back().b.count;
         } else {
             const double center = searchCenter;
@@ -190,9 +197,20 @@ public:
         width = chosen.hi - chosen.lo;
         violators = unsigned(edges.size()) - best;
         fitted = true;
+        if (prior && ((edges.size() >= 10 && violators > edges.size() * .02) ||
+                      (span >= 120 && (priorDrift < lowDrift - 3 * priorSigma ||
+                                       priorDrift > highDrift + 3 * priorSigma)))) {
+            prior = false; priorDropped = true; locked = false; driftReady = false; warm = 0;
+            fit();
+            return;
+        }
+        if (prior && span < 120) {
+            lowDrift = priorDrift - 2 * priorSigma;
+            highDrift = priorDrift + 2 * priorSigma;
+        }
         driftReady = span >= 120;
         locked =
-            locked || (span >= 60 && edges.size() >= 40 && width <= .015 && violators <= edges.size() * .02);
+            locked || ((prior ? edges.size() >= 5 : span >= 60 && edges.size() >= 40) && width <= .015 && violators <= edges.size() * .02);
     }
 };
 } // namespace timing_probe

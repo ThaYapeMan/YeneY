@@ -6,6 +6,7 @@ import math
 import re
 import socket
 import sys
+import subprocess
 import time
 from urllib.parse import unquote
 
@@ -53,6 +54,78 @@ def collect(connection, mac, seconds, clock=time.monotonic, sleep=time.sleep):
     return samples
 
 
+def lock_time(samples, journal):
+    """Use producer events: smooth position alone cannot reveal estimator lock."""
+    events = []
+    for line in journal.splitlines():
+        m = re.search(r"timing-lock state=(locked|acquiring) mono=([0-9.]+)", line)
+        if m:
+            events.append((float(m[2]), m[1]))
+        elif "yeney: timing " in line:
+            state = re.search(r"(?:^| )state=(locked|acquiring)(?: |$)", line)
+            mono = re.search(r"(?:^| )mono=([0-9.]+)", line)
+            if state and mono:
+                events.append((float(mono[1]), state[1]))
+    events.sort(key=lambda event: event[0])
+    previous = [e for e in events if e[0] <= samples[0][0]]
+    if previous and previous[-1][1] == "locked":
+        return 0.0
+    for mono, state in events:
+        if state == "locked" and mono >= samples[0][0]:
+            return mono - samples[0][0]
+    return None
+
+
+def statistics(errors):
+    if not errors:
+        return "samples=0 max_ms=unknown p95_ms=unknown rms_ms=unknown"
+    values = sorted(abs(e) * 1000 for e in errors)
+    return (f"samples={len(values)} max_ms={values[-1]:.3f} "
+            f"p95_ms={values[math.ceil(.95 * (len(values)-1))]:.3f} "
+            f"rms_ms={math.sqrt(sum(e*e for e in values)/len(values)):.3f}")
+
+
+def summary(samples, locked):
+    differences = [(t, p - samples[i-1][1], t - samples[i-1][0])
+                   for i, (t, p) in enumerate(samples) if i]
+    late = [d for d in differences if d[0] - samples[0][0] >= 10]
+    backwards = [d for d in differences if d[1] < 0]
+    print(f"time_to_lock_s={locked if locked is not None else 'unknown'} "
+          "lock_source=local-producer-journal")
+    print(f"largest_step_after_10s_ms={max((d[1] for d in late), default=0)*1000:.3f} "
+          f"largest_step_excess_ms={max((d[1]-d[2] for d in late), default=0)*1000:.3f} "
+          f"backwards_count={len(backwards)} "
+          f"largest_backwards_ms={max((-d[1] for d in backwards), default=0)*1000:.3f}")
+    # Fit the final stable section, then extrapolate its reference across startup.
+    # This measures phase changes, not an independent acoustic ground truth.
+    start = samples[0][0]
+    stable = [s for s in samples if s[0] >= start + (locked + 5 if locked is not None else .8*(samples[-1][0]-start))]
+    if len(stable) < 2:
+        print("startup_error_reference=unavailable")
+        return
+    slope, _ = fit(stable)
+    mean_t = sum(t for t, _ in stable)/len(stable)
+    mean_p = sum(p for _, p in stable)/len(stable)
+    errors = [(t-start, p-(mean_p+slope*(t-mean_t))) for t, p in samples]
+    print("startup_error_reference=final-stable-linear-fit")
+    if locked is None:
+        print("before_lock_error=unknown after_lock_error=unknown (producer journal unavailable)")
+    else:
+        print("before_lock_error " + statistics([e for t,e in errors if t < locked]))
+        print("after_lock_error " + statistics([e for t,e in errors if t >= locked]))
+        print("after_slew_error " + statistics([e for t,e in errors if t >= locked+5]))
+
+
+def journal_for(mac, since):
+    try:
+        result = subprocess.run(["journalctl", "--since", f"@{since:.3f}", "--no-pager", "-o", "cat"],
+                                capture_output=True, text=True, timeout=10)
+        identity = "RINCON_" + mac.replace(":", "").upper()
+        return "\n".join(line for line in result.stdout.splitlines() if identity in line.upper())
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("server", help="LMS hostname or IP (CLI only)")
@@ -68,6 +141,7 @@ def main():
     if not 1 <= args.port <= 65535:
         parser.error("--port must be 1..65535")
     try:
+        started_real = time.time()
         with socket.create_connection((args.server, args.port), timeout=2) as connection:
             samples = collect(connection, mac, args.seconds)
         slope, residuals = fit(samples)
@@ -76,6 +150,7 @@ def main():
             print(f"{mono:.9f} {position:.6f} {residual * 1000:+.3f}")
         print(f"samples={len(samples)} max_excursion_ms="
               f"{max(abs(r) for r in residuals) * 1000:.3f} ppm={(slope - 1) * 1e6:+.3f}")
+        summary(samples, lock_time(samples, journal_for(mac, started_real - 600)))
     except (OSError, ValueError, UnicodeError) as error:
         print(f"yeney-lms-position-check: {error}", file=sys.stderr)
         return 1

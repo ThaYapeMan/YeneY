@@ -11,11 +11,11 @@ public:
     void reset(unsigned id) {
         stream = id; request = 0; base = relative = lastFrames = 0;
         anchored = hadAudio = heardPosition = pendingAudibleBase = false;
-        audibleBase = lastAudible = 0; ++generation;
+        audibleBase = lastAudible = 0; reportTime = 0; slewOffset = 0; reportingModel = false; ++generation;
     }
     void connection(unsigned id, uint64_t req, uint64_t now) {
         if (id != stream) reset(id);
-        request = req;
+        request = req; reportTime = 0; slewOffset = 0; reportingModel = false;
         // Hold the last reported position until the first PCM offset is known.
         base = lastFrames;
         audibleBase = lastAudible;
@@ -78,7 +78,38 @@ public:
         if (next > lastAudible) lastAudible = next;
         return lastAudible;
     }
+    // Smooth only the audible reporting coordinate; encoded handoffs stay exact.
+    uint64_t smoothFrames(uint32_t rate, double now, bool model, double candidate,
+                          double scale = 1, double relSecond = NAN, double observedMono = NAN) {
+        if (!anchored || !heardPosition || pendingAudibleBase || !rate) return audibleFrames(rate);
+        const double sample = std::isfinite(observedMono) && relSecond == double(relative) / 1000
+            ? observedMono * 1000 : double(observed);
+        double target = audibleBase + (double(relative) / 1000 + .5 + std::max(0., now - sample) * scale / 1000) * rate;
+        if (model) {
+            const double low = target - .5 * rate;
+            target = std::clamp(candidate, low, low + rate);
+        }
+        const double dt = reportTime ? std::max(0., now - reportTime) / 1000 : 0;
+        const double projected = reportTime ? double(lastAudible) + dt * rate * scale : target;
+        const double difference = target - projected;
+        // 15% corrects the observed 650 ms phase error in 4.34 seconds.
+        // Above 750 ms, treat it as a discontinuity instead of a long slew.
+        double next = !reportTime || std::abs(difference) > .75 * rate ? target
+            : projected + std::clamp(difference, -.15 * dt * rate, .15 * dt * rate);
+        lastAudible = std::max(lastAudible, uint64_t(std::max(0., next)));
+        reportTime = now; reportingModel = model;
+        slewOffset = (double(lastAudible) - target) / rate;
+        frames(rate);
+        return lastAudible;
+    }
+    const char *phase(bool prior) const {
+        return reportingModel ? (std::abs(slewOffset) > .00005 ? "slewing" : "locked")
+                              : (prior ? "prior" : "acquiring");
+    }
+    double offset() const { return slewOffset; }
 private:
+    double reportTime = 0, slewOffset = 0;
+    bool reportingModel = false;
     unsigned stream = 0;
     uint64_t request = 0, generation = 0, base = 0, started = 0, lastFrames = 0, observed = 0;
     uint32_t relative = 0;

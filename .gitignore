@@ -40,3 +40,5 @@ timing-contract-test
 timing-tap-test
 
 lms-position-test
+
+/cold-position-test

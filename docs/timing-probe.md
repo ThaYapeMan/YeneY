@@ -54,14 +54,38 @@ solution. Equal-count disconnected offset bands prefer the widest supported
 band, whose centre is used. `band_ms` is the full offset band **conditional on that chosen slope**,
 evaluated at the newest edge; it is not the union over every possible slope.
 
-Lock requires >=60 s span, >=40 brackets, band <=15 ms and <=2% violations.
-All acquisition holds unity slope before 120 s. Once a room has locked a
-120 s drift, that drift is retained in memory across epochs as the centre of
-the first slope search when the new span reaches 120 s; offset is always
-reacquired. No new drift is published before that span. Before lock published
-uncertainty is unknown; after lock it is half the chosen band plus a 1 ms guard.
-This is a counter-based bound, not a certified acoustic/DAC bound, and it does
-not include the union of possible slopes or arbitrary future clock changes.
+Without a prior, lock still requires >=60 s span, >=40 brackets, band <=15 ms
+and <=2% violations. The Study A2 epoch 15 fixture reaches a <=15 ms phase
+band after 11 edges / 10 s, but originally waits for the 60 s span. Drift fitting
+still requires 120 s. With a qualified prior, phase evidence alone (at least
+five brackets, the **same** <=15 ms band and <=2% violations) can lock; A2 locks
+at 10 s. The prior does not preserve phase. Its slope uncertainty contributes
+to uncertainty growth; LMS still rejects uncertainty above 10 ms. Other Study
+B epochs reach phase precision in 4–20 s, before the normal 60 s gate.
+
+The slope search and live 120 s drift fit remain unchanged. A prior fixes the
+acquisition slope, then the live fit validates it. More than 2% violations after
+ten observations, two consecutive locked contradictions, or a 120 s live slope
+range excluding the prior by over three stored sigmas discards it, logs
+`timing-prior dropped=live-edge-contradiction`, invalidates its disk record, and
+returns to the original acquisition gates. Drift survives epochs in memory.
+
+`make install` creates `/var/lib/yeney` (0755). Each speaker has
+`drift-<hex-encoded-UDN>.state`; the topology UUID is the speaker's UDN without
+the `uuid:` prefix. Version 1 stores time-slope ppm, sigma ppm and a Unix
+REALTIME timestamp, never phase or monotonic timestamps. Accept records at most
+seven days old, not future-dated, with |drift| <=500 ppm and 0<sigma<=15 ppm.
+A live drift needs the original 120 s fit and 60 s of qualified locked drift before being
+saved. Sigma is the feasible slope range divided by sqrt(12), floored at 0.1 ppm.
+Writes need a >=1 ppm drift/sigma change or daily timestamp refresh, are limited
+to once/hour, and flush pending changes on clean shutdown. Files use unique
+same-directory temporary files, fsync and atomic rename. Missing/read-only
+storage warns once and playback continues; no runtime directory creation is
+required. Service processes run under the existing systemd identity.
+
+Before lock published uncertainty is unknown; after lock it is half the chosen
+band plus a 1 ms guard. This is a counter-based bound, not a certified acoustic
+or DAC bound.
 
 Locked probing targets one tick every LOCKED_EVERY seconds, with up to three
 samples at prediction -H/0/+H, with H = clamp(RTT p95 + send-latency p95
@@ -94,56 +118,71 @@ at <=1 Hz while lock holds. The existing stale-observation expiry remains.
 
 ## Continuous LMS position
 
-`YENEY_LMS_POSITION_FROM_MODEL=1` (the default) uses the existing locked clock
-instead of the floored RelTime position. It does not enable PROBE, add SOAP
-traffic, or require PUBLISH. With PROBE off there is no locked clock, so the
-old path remains. The setting accepts exactly `0` or `1`; invalid values warn
-once and fall back to `1`, when the model-position path is first used.
+`YENEY_LMS_POSITION_FROM_MODEL=1` (default) uses a smooth audible reporting
+coordinate whenever PROBE is enabled; it does not enable PROBE or PUBLISH.
+Setting `0`, or PROBE off, keeps the original RelTime reporting. Transport,
+encoded handoff coordinates, delivered PCM, pause holds, handed-frame caps and
+track-boundary accounting are unchanged.
 
-Invert the unchanged bracket line at CLOCK_MONOTONIC now: stream frame =
-ConnectionPosition PCM base + (now - audible time of stream second zero) ×
-sample rate × reciprocal time slope. This is the same samples/second drift
-convention as the timing object's `drift_ppb`; translating the SHM anchor into
-the stream coordinate gives the same result. The published calibration offset
-is included when PUBLISH is enabled. No timing object is read or rewritten.
+Reporting phases (`position_phase` in timing lines and `position-phase` events):
 
-Use the model only while active, anchored, locked, matching the current stream,
-PCM base and rate, and fresh under STALE, with finite uncertainty <=10 ms.
-When publication is active its state must also be locked. Otherwise use the
-existing RelTime calculation. Setting `0` selects the original calculation
-exactly. Pause, seek, flush, new stream and reconnect invalidate the existing
-clock and therefore force fallback until re-lock. Same-rate gapless boundaries
-retain their existing stream/model continuity and LMS track-boundary semantics.
+| Phase | Meaning |
+|---|---|
+| acquiring | Extrapolate latest accepted RelTime with MONOTONIC, unity slope |
+| prior | Same extrapolation using the qualified stored rate |
+| slewing | Qualified locked model, bounded convergence from reported position |
+| locked | Report model position; convergence finished |
 
-Constrain the model to the latest accepted RelTime interval, advanced by the
-observation's monotonic age and the model rate. The fresh normal SOAP read's
-midpoint timestamp already passed to the seed path is retained as read-only
-reporting metadata; it does not change seed fitting or caching. Repeated copies of the same
-leased integer do not refresh its observation timestamp; a genuinely different
-accepted RelTime starts a new interval. The interval remains one stream second
-wide. This avoids turning the lease into another staircase while retaining the
-speaker's coarse position bounds. The existing last-audible high-water mark
-prevents backward steps on either switch, and the sink still caps position at
-handed PCM and holds it while paused. Encoded handoff coordinates, start lead,
-transport commands, STMt cadence and the core's track elapsed/boundary accounting
-remain unchanged; they now consume the improved audible coordinate.
+Acquisition uses the middle of the one-second RelTime interval (integer +0.5 s)
+and its actual normal SOAP midpoint when available. Repeated leased values do
+not refresh its timestamp. Between observations position advances locally;
+observation corrections also slew. Before the first accepted position the
+existing anchor/start safeguards apply. With no phase evidence, the first
+integer cannot reveal its fractional second: expect up to roughly 500 ms
+initial phase error, now smooth instead of a staircase.
 
-For an owner-run field check while playing continuously, run:
+The locked model is inverted in the existing ConnectionPosition PCM coordinate,
+including calibration if publication is enabled. It must match stream/base/rate,
+be fresh under STALE and have finite uncertainty <=10 ms; active publication
+must be locked. The model remains bounded to the aged latest RelTime interval.
+
+Each report advances the previous coordinate by monotonic elapsed time, then
+corrects at at most 15% of real time (0.85–1.15x nominal). A 650 ms error takes
+4.34 s; 750 ms takes 5 s. Corrections greater than 750 ms jump immediately as
+discontinuities. Explicit seek/new-stream/reconnect resets discard the slew
+state; ordinary switches retain the audible high-water mark. `slew_offset_ms`
+is reported position minus target. No ordinary switch moves backwards. Pause,
+unlock, stale model, flush, new stream and reconnect retain the existing model
+eligibility/fallback fences; same-rate gapless boundaries retain continuity.
+
+The owner field check retains its arguments and original sample/regression
+output:
 
 ```sh
-scripts/yeney-lms-position-check <lms-host> 94:9f:3e:fa:ba:66 --seconds 120 > /tmp/study-lms-position.txt
+scripts/yeney-lms-position-check <lms-host> 94:9f:3e:fa:ba:66 --seconds 600
 ```
 
-The standard-library Python tool sends only `<mac> time ?` to the LMS CLI
-(default port 9090, override with `--port`). It samples every 0.25 s, timestamps
-request/response midpoint with CLOCK_MONOTONIC, and skips catch-up bursts after
-slow replies. After N seconds it prints every sample's monotonic timestamp,
-position and residual in ms against the centred least-squares line, followed
-by maximum absolute excursion and slope in ppm relative to CLOCK_MONOTONIC.
-Do not pause, seek or skip during this check; such discontinuities invalidate a
-single-line fit. Compare with `YENEY_LMS_POSITION_FROM_MODEL=0`, keeping probe
-and other settings unchanged. The owner runs this against LMS; automated tests
-use a fake CLI and virtual time only.
+It still sends only `<mac> time ?`, every 0.25 s, without catch-up bursts.
+Additional summary fields report producer time to lock from the first sample,
+largest position step after ten seconds, step in excess of elapsed time, and
+backwards count/magnitude. It reads the **local** journal for `timing-lock`
+events matching the speaker RINCON UDN derived from the MAC. Run on the YeneY
+host with journal read permission. Lock is `unknown` if producer events are
+unavailable: smooth positions cannot independently identify estimator lock.
+Errors before/after lock and after the five-second slew allowance are relative
+to the final stable linear fit, not independent Sonos/acoustic ground truth.
+Use one item longer than the check; LMS track-time resets are legitimate discontinuities.
+The original whole-run residuals and ppm remain for compatibility. The after-lock
+statistics include the convergence transient; use `after_slew_error` for steady
+precision. Keep playback continuous without pause, seek, skips or repeats.
+
+Expected Study A2 replay: cold lock 60 s; prior lock 10 s; no backwards samples;
+250 ms steps <=287.5 ms plus scheduling/timestamp jitter. For the physical Study,
+aim for cold lock about 60–65 s, prior about 5–25 s (phase precision depends on
+brackets), steady errors <=5 ms (previous field results about 1.5 ms), initial
+errors <=500 ms plus SOAP/lease uncertainty. Slewing removes the lock jump but
+its first post-lock error can still equal the initial offset. These are field
+acceptance targets, not acoustic guarantees.
 
 ## Audio frame correspondence
 
@@ -353,3 +392,43 @@ only these timing settings (or set PROBE/PUBLISH/RAW to 0), then restart.
    matches the starting commit; the checkout initially pointed at YeneY. Use
    one main commit with no history rewrite, core submodule changes, live LMS
    queries, SSH access or deployment.
+
+## Decisions
+
+1. Retain the no-prior lock gates: A2 phase precision is ready at 10 s,
+   40 brackets at 39 s, and the 60 s span is the last gate. The separate 120 s
+   drift fit remains unchanged; shortening it would weaken rate evidence.
+2. With a prior, replace the span/count wait with at least five precise brackets.
+   A2 locks at 10 s instead of 60 s. Keep the 15 ms band, 2% violation budget,
+   two-contradiction unlock and 10 ms LMS uncertainty limit unchanged.
+3. Store only rate, sigma and wall-clock age under `/var/lib/yeney`, per hex UDN,
+   because phase and monotonic timestamps cannot survive a restart. Use a
+   versioned text record for inspection and atomic fsynced replacement.
+4. Accept priors for seven days with absolute drift <=500 ppm and sigma <=15 ppm;
+   these bounds allow the observed host/speaker rates while rejecting stale or
+   implausible records. Never create storage during playback; warn once and continue.
+5. Require 120 s of live rate evidence followed by 60 s of qualified lock before
+   persistence. Estimate sigma from the feasible slope range / sqrt(12), floor
+   0.1 ppm. Write changes >=1 ppm at most hourly, refresh age daily, and flush
+   pending changes on clean shutdown to limit disk writes.
+6. Invalidate a contradicted prior on disk as well as in memory, so a restart
+   cannot repeatedly trust a known bad rate. Use live interval violations,
+   the existing two-edge contradiction rule and a three-sigma live-rate check.
+7. Seed acquisition position at integer RelTime +0.5 s: without phase evidence
+   this minimises worst-case quantisation error to half a second. Use the actual
+   SOAP midpoint and local monotonic age; leased copies do not become fresh observations.
+8. Use a 15% reporting slew. A few-percent slew would take 13–22 s to correct
+   the observed 650 ms error; 15% takes 4.34 s, without backwards movement.
+9. Treat corrections above 750 ms as discontinuities, because slewing them
+   would exceed five seconds. Clear slew state on explicit connection/stream
+   resets; retain high-water, pause and handed-frame safeguards.
+10. Use local producer journal lock events for field time-to-lock, matched by
+    RINCON UDN/MAC. LMS CLI position alone cannot distinguish smooth acquisition
+    from lock. Report unknown if evidence is unavailable, preserving current arguments.
+11. Reference startup errors to the final stable linear fit and report both
+    after-lock and after-five-second-slew statistics. The former includes the
+    transient; neither is an acoustic truth measurement.
+12. Reserve the requested yeney-core update for a separate commit so it can be
+    reverted independently of startup position and drift persistence.
+13. Install the missing clang-format 18.1.8 in `/tmp` for the core's required
+    format check, keeping dependency setup outside repository and system files.
