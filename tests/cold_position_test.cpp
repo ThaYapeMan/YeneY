@@ -7,7 +7,7 @@
 #include <regex>
 #include <unistd.h>
 using namespace timing_probe;
-static void replay(bool prior) {
+static void replay(bool prior, bool timestamp = true) {
     std::ifstream file("tests/fixtures/timing-study-a2.txt");
     std::regex expression("epoch=15.*second=[0-9]+->([0-9]+).*lo_mono=([0-9.]+) hi_mono=([0-9.]+)");
     BracketClock clock;
@@ -16,6 +16,8 @@ static void replay(bool prior) {
     double first = 0, firstSecond = 0, lock = NAN, phaseReady = NAN, countReady = NAN, previousTime = 0, maxStep = 0, maxCorrection = 0;
     ConnectionPosition p;
     uint64_t previous = 0;
+    double sampleSecond = NAN, sampleTime = NAN;
+    std::vector<std::pair<double,double>> reports;
     constexpr unsigned rate = 48000;
     while (std::getline(file, line)) {
         if (!std::regex_search(line, m, expression)) continue;
@@ -25,6 +27,8 @@ static void replay(bool prior) {
             p.connection(1, 1, uint64_t((first - n) * 1000));
             p.pcm(1, 1, 0, uint64_t((first - n) * 1000));
         }
+        const bool reportLocked = clock.locked;
+        const double reportScale = 1 / (1 + clock.drift * 1e-6), reportZero = clock.timeAt(0);
         clock.add({n, lo, hi});
         if (clock.width <= .015 && !std::isfinite(phaseReady)) phaseReady = n - firstSecond;
         if (clock.edges.size() >= 40 && !std::isfinite(countReady)) countReady = n - firstSecond;
@@ -34,10 +38,13 @@ static void replay(bool prior) {
         if (!previousTime) previousTime = first;
         for (double t = previousTime + .25; t <= end; t += .25) {
             const double relative = std::floor(t - (first - n + (n-firstSecond)) - .65);
-            p.poll(p.token(), unsigned(std::max(1., relative)) * 1000, uint64_t(t * 1000));
-            const double scale = 1 / (1 + clock.drift * 1e-6);
-            double candidate = (t - clock.timeAt(0)) * rate * scale;
-            uint64_t next = p.smoothFrames(rate, t * 1000, clock.locked, candidate, scale);
+            const double coarse = std::max(1., relative);
+            p.poll(p.token(), unsigned(coarse) * 1000, uint64_t(t * 1000));
+            if (coarse != sampleSecond) { sampleSecond = coarse; sampleTime = t-.65; }
+            double candidate = (t - reportZero) * rate * reportScale;
+            uint64_t next = p.smoothFrames(rate, t * 1000, reportLocked, candidate, reportScale,
+                                           timestamp ? sampleSecond : NAN, timestamp ? sampleTime : NAN);
+            reports.push_back({t, double(next) / rate});
             assert(next >= previous);
             if (previous) {
                 maxStep = std::max(maxStep, double(next - previous) / rate);
@@ -51,7 +58,17 @@ static void replay(bool prior) {
     assert(std::isfinite(lock) && phaseReady == 10 && countReady == 39);
     assert(prior ? lock <= 15 : lock == 60);
     assert(maxStep <= .288 && maxCorrection <= .038);
-    printf("PASS: Study cold prior=%d lock_s=%.0f phase_ready_s=%.0f count_40_ready_s=%.0f largest_250ms_step_ms=%.3f no_backwards\n", prior, lock, phaseReady, countReady, maxStep * 1000);
+    std::vector<double> beforeErrors, afterErrors, settledErrors;
+    for (auto report : reports) {
+        const double error = std::abs(report.second - (report.first-clock.timeAt(0))/(1+clock.drift*1e-6))*1000;
+        (report.first-first < lock ? beforeErrors : afterErrors).push_back(error);
+        if (report.first-first >= lock+5) settledErrors.push_back(error);
+    }
+    assert(percentile(settledErrors,1) <= 10);
+    if (timestamp) assert(percentile(beforeErrors,1) <= 510);
+    printf("PASS: Study final-fit errors prior=%d timestamp=%d before_max_ms=%.3f after_max_ms=%.3f after_p95_ms=%.3f settled_max_ms=%.3f\n",
+           prior, timestamp, percentile(beforeErrors,1), percentile(afterErrors,1), percentile(afterErrors,.95), percentile(settledErrors,1));
+    printf("PASS: Study cold prior=%d timestamp=%d lock_s=%.0f phase_ready_s=%.0f count_40_ready_s=%.0f largest_250ms_step_ms=%.3f no_backwards\n", prior, timestamp, lock, phaseReady, countReady, maxStep * 1000);
 }
 static void persistence() {
     char directory[] = "/tmp/yeney-drift-test-XXXXXX";
@@ -119,6 +136,17 @@ static void runtimePersistence() {
     assert(warm.contract(5*48000,t,u) && std::abs(t-(1000+5*1.00001015))<.003);
     puts("PASS: runtime saves only mature drift; restart loads rate and reacquires a new phase in five precise edges");
 }
+static void quantisedAcquisition() {
+    ConnectionPosition p;
+    p.connection(1,1,100000); p.pcm(1,1,0,100000);
+    p.poll(p.token(),2000,102600);
+    const auto before = p.smoothFrames(48000,102600,false,0);
+    // Leased one-second polling can cross a tick and skip an integer.
+    p.poll(p.token(),4000,103600);
+    const auto after = p.smoothFrames(48000,103600,false,0);
+    assert(after >= before && after-before <= uint64_t(55200));
+    puts("PASS: skipped quantised RelTime tick during acquisition slews without a false seek jump");
+}
 static void seek() {
     ConnectionPosition p; p.connection(1,1,100000); p.pcm(1,1,0,100000);
     p.poll(p.token(),2000,102600);
@@ -132,4 +160,4 @@ static void seek() {
     assert(std::string(p.phase(false)) == "acquiring");
     puts("PASS: seek during slew resets offset and jumps to new coordinate");
 }
-int main() { replay(false); replay(true); persistence(); contradiction(); seek(); runtimePersistence(); }
+int main() { replay(false); replay(true); replay(false,false); persistence(); contradiction(); quantisedAcquisition(); seek(); runtimePersistence(); }

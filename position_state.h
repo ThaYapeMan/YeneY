@@ -93,8 +93,10 @@ public:
         const double projected = reportTime ? double(lastAudible) + dt * rate * scale : target;
         const double difference = target - projected;
         // 15% corrects the observed 650 ms phase error in 4.34 seconds.
-        // Above 750 ms, treat it as a discontinuity instead of a long slew.
-        double next = !reportTime || std::abs(difference) > .75 * rate ? target
+        // A qualified model correction above 750 ms is a discontinuity.
+        // Unlocked integer observations can skip a tick as the poll phase
+        // crosses it: only explicit stream hooks may authorize their jumps.
+        double next = !reportTime || (model && std::abs(difference) > .75 * rate) ? target
             : projected + std::clamp(difference, -.15 * dt * rate, .15 * dt * rate);
         lastAudible = std::max(lastAudible, uint64_t(std::max(0., next)));
         reportTime = now; reportingModel = model;
