@@ -100,7 +100,11 @@ public:
             : projected + std::clamp(difference, -.15 * dt * rate, .15 * dt * rate);
         // Unlocked corrections may slew only while inside the latest
         // quantisation interval. They cannot accumulate unbounded phase lag.
-        if (!model) next = std::clamp(next, target - .5 * rate, target + .5 * rate);
+        // RelTime midpoint phase follows the polling phase. Chasing each new
+        // midpoint runs at the polling rate (and slews a whole second when
+        // that phase crosses a tick). Keep unity/prior projection whenever
+        // it is still consistent with the latest quantisation interval.
+        if (!model) next = std::clamp(projected, target - .5 * rate, target + .5 * rate);
         reportFrames = model ? std::max(double(lastAudible), std::max(0., next)) : std::max(0., next);
         lastAudible = uint64_t(reportFrames);
         reportTime = now; reportingModel = model;

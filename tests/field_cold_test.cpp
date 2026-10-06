@@ -82,12 +82,23 @@ static void positionBound(const std::vector<Read>& input, bool prior) {
             assert(std::abs(error)<=.50003);
         }
     }
-    // High-frequency steady extrapolation must preserve fractions of frames.
+    // Preserve nominal rate when a normal SOAP polling phase drifts: one
+    // integer every 1.0045 s used to pull the midpoint at about -4500 ppm,
+    // followed by a ~1 s correction when the poll skips an integer.
     ConnectionPosition steady;steady.connection(1,1,100000);steady.pcm(1,1,0,100000);
-    steady.poll(steady.token(),2000,102500);
-    double first=double(steady.smoothFrames(44100,102500,false,0,scale))/44100;
-    for(unsigned i=1;i<=100000;++i)steady.smoothFrames(44100,102500+i*.2,false,0,scale);
-    double last=double(steady.smoothFrames(44100,122500,false,0,scale))/44100;
+    steady.poll(steady.token(),2000,102200);
+    double first=double(steady.smoothFrames(44100,102200,false,0,scale,2,102.2))/44100;
+    double observed=102.2,second=2,nextPoll=103.2045;
+    for(unsigned i=1;i<=100000;++i) {
+        double t=102.2+i*.0002;
+        if(t>=nextPoll) {
+            observed=t;second=std::floor(t-100);
+            steady.poll(steady.token(),uint32_t(second)*1000,uint64_t(t*1000));
+            nextPoll+=1.0045;
+        }
+        steady.smoothFrames(44100,t*1000,false,0,scale,second,observed);
+    }
+    double last=double(steady.smoothFrames(44100,122200,false,0,scale,second,observed))/44100;
     assert(std::abs(last-first-20*scale)<.00003);
     printf("PASS: field pre-lock prior=%d samples=%u interval_error_max_ms=%.3f; high-frequency 20 s drift <1.5 ppm\n",prior,count,worst*1000);
 }
