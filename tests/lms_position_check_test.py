@@ -141,7 +141,7 @@ assert len(tool.segments(samples,identities))==2
 from unittest.mock import patch
 records = '\n'.join(__import__('json').dumps({'_PID':pid,'MESSAGE':message}) for pid,message in (
     ('7','Creating new stream (1)'), ('7','core: STMs jiffies=100000 elapsed_ms=0'),
-    ('8','unrelated'), ('7','yeney: timing-lock state=locked mono=105 udn=RINCON_949F3EFABA6601400')))
+    ('8','unrelated RINCON_949F3EFABA6601400 in shared topology'), ('8','core: STMs jiffies=110000 elapsed_ms=0'), ('7','yeney: timing-lock state=locked mono=105 udn=RINCON_949F3EFABA6601400')))
 with patch.object(tool.subprocess,'run',return_value=type('Result',(),{'stdout':records})()):
     journal=tool.journal_for(mac,0)
 assert 'Creating new stream' in journal and 'unrelated' not in journal

@@ -198,8 +198,8 @@ overall ppm is the duration-weighted mean of segment slopes. No line is fitted
 across a track boundary. Legitimate resets are excluded from backwards counts.
 A backwards anomaly also creates a segment, so inspect segment boundaries.
 
-It reads the local JSON journal, identifies the producer PID by the MAC-derived
-RINCON UDN, then keeps that process's complete messages, including core STMs.
+It reads the local JSON journal, identifies the producer PID by its own `udn=` field containing the
+MAC-derived RINCON UDN (rather than mentions in shared topology XML), then keeps that process's complete messages, including core STMs.
 `time_to_lock_s` is lock MONOTONIC minus the initial STMs jiffies / 1000 for the
 stream covering the capture, even if sampling starts later. Gapless STMs does
 not create a new stream; following segments report `already_locked=1` and the

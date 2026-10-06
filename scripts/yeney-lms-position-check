@@ -228,7 +228,10 @@ def journal_for(mac, since):
                                 capture_output=True, text=True, timeout=10)
         identity = "RINCON_" + mac.replace(":", "").upper()
         records = [json.loads(line) for line in result.stdout.splitlines()]
-        pids = {r.get("_PID") for r in records if identity in str(r.get("MESSAGE", "")).upper()}
+        # Topology XML in every room can mention every speaker. Select the
+        # producer's own diagnostic UDN field, not incidental topology mentions.
+        pids = {r["_PID"] for r in records if r.get("_PID") and
+                f"udn={identity}".upper() in str(r.get("MESSAGE", "")).upper()}
         return "\n".join(str(r.get("MESSAGE", "")) for r in records if r.get("_PID") in pids)
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return ""
