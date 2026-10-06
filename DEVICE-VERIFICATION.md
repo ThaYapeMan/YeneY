@@ -256,37 +256,83 @@ A first-ever install has no prior; an upgrade may already have one. Journal
 `position_phase=acquiring/prior/slewing/locked` and `slew_offset_ms` show reporting.
 See [the clock contract](docs/timing-probe.md) for file format and expiry.
 
-On LXC 113, start continuous Study playback immediately after install and run:
+The user runs the following on LXC 113 after deploying. Queue two long tracks
+in LMS on **Study (Sonos)** first: make the first about 6–8 minutes and the next
+at least 6 minutes so the 600 s capture includes a gapless boundary. Enable
+PROBE and RAW in the existing service environment. These commands force a new
+stream and start the checker within a few seconds of LMS playback. The runtime
+service override changes only prior loading; it never deletes drift files.
+The cold run can learn/save a mature rate for the subsequent warm run.
+
+Deployment (from the installed checkout):
 
 ```sh
-/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 600 > /tmp/study-cold-start.txt
-sudo systemctl restart yeney@Study.service
-/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 600 > /tmp/study-warm-start.txt
+cd /opt/yeney
+git pull --ff-only
+git submodule update --init --recursive
+make
+sudo make install
 ```
 
-Resume continuous playback immediately after the restart if LMS stopped it.
-Use a single item longer than ten minutes so LMS track-time resets do not invalidate the fit.
-Do not change probe settings between runs. On the Proxmox host:
+Forced cold run:
+
+```sh
+COLD_SINCE=$(date --iso-8601=seconds)
+printf '94:9f:3e:fa:ba:66 stop\n' | nc -w 1 192.168.178.23 9090
+sudo install -d /run/systemd/system/yeney@Study.service.d
+printf '[Service]\nEnvironment=YENEY_TIMING_PROBE=1 YENEY_TIMING_RAW=1 YENEY_TIMING_PRIOR=0\n' | sudo tee /run/systemd/system/yeney@Study.service.d/90-field-prior.conf
+sudo systemctl daemon-reload
+sudo systemctl restart yeney@Study.service
+printf '94:9f:3e:fa:ba:66 playlist index 0\n94:9f:3e:fa:ba:66 play\n' | nc -w 1 192.168.178.23 9090
+/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 600 > /tmp/study-cold-start.txt
+sudo journalctl -u yeney@Study.service --since "$COLD_SINCE" --no-pager -o short-precise > /tmp/study-cold-journal.txt
+```
+
+Warm run (same playlist and timing settings; prior loading restored):
+
+```sh
+WARM_SINCE=$(date --iso-8601=seconds)
+printf '94:9f:3e:fa:ba:66 stop\n' | nc -w 1 192.168.178.23 9090
+printf '[Service]\nEnvironment=YENEY_TIMING_PROBE=1 YENEY_TIMING_RAW=1 YENEY_TIMING_PRIOR=1\n' | sudo tee /run/systemd/system/yeney@Study.service.d/90-field-prior.conf
+sudo systemctl daemon-reload
+sudo systemctl restart yeney@Study.service
+printf '94:9f:3e:fa:ba:66 playlist index 0\n94:9f:3e:fa:ba:66 play\n' | nc -w 1 192.168.178.23 9090
+/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 600 > /tmp/study-warm-start.txt
+sudo journalctl -u yeney@Study.service --since "$WARM_SINCE" --no-pager -o short-precise > /tmp/study-warm-journal.txt
+cat /tmp/study-cold-journal.txt /tmp/study-warm-journal.txt > /tmp/study-journal.txt
+```
+
+On the Proxmox host, pull to `/tmp`:
 
 ```sh
 pct pull 113 /tmp/study-cold-start.txt /tmp/study-cold-start.txt
 pct pull 113 /tmp/study-warm-start.txt /tmp/study-warm-start.txt
+pct pull 113 /tmp/study-journal.txt /tmp/study-journal.txt
 ```
 
-Expected: cold lock about 60–65 s, warm about 5–25 s (A2 fixture 60/10 s),
-no backwards samples at the default 250 ms interval; largest step about
-400 ms during slew plus network/sampling jitter (`largest_step_excess_ms`
-about 150 ms). Settled steps should be about 250 ms. The provider itself is
-bounded to 287.5 ms per 250 ms; LMS interpolates one-second status updates. Before lock expect smooth
-position with up to about 500 ms phase error; it is not yet a phase measurement.
-After lock the initial phase offset decays over <=5 s, so whole after-lock max
-may still approach 500 ms. After slew expect max error <=5 ms, ideally the
-previously observed ~1.5 ms. Error statistics reference the final linear fit,
-not acoustic truth. `time_to_lock_s=unknown` means journal evidence was unavailable;
-inspect `journalctl -u yeney@Study.service` instead of inferring lock from position.
+Expected per segment:
+
+| Metric | First cold track | First warm track | Following gapless tracks |
+|---|---|---|---|
+| Stream time to lock | 60–65 s | 5–25 s; prior-load log required | same stream duration, already_locked=1 |
+| Before lock | within RelTime quantisation, about ±500 ms + RTT | same, prior rate | zero pre-lock samples |
+| Convergence | normally <=5 s | normally <=5 s | no new convergence |
+| After-slew error | p95 <=5 ms, aim max <=5 ms | same | same; inspect isolated jitter outliers |
+| 250 ms steps | <=400 ms during slew + jitter | same | about 250 ms + jitter |
+| Excess step | <=150 ms during slew + jitter | same | near zero + jitter |
+| Flat interval / backwards | 0 / 0 | 0 / 0 | 0 / 0; boundary elapsed >=1 ms |
+
+Overall aggregates each segment; it must not show the former 750 ms boundary
+freeze or 854 ms excess step. A2 automated lock times remain 60/10 s; the new
+field-informed cold replay locks at 62.227 s. These are position/clock targets,
+not acoustic guarantees. If a valid prior was not saved during the cold run,
+the warm run must report a cold lock rather than pretending it loaded one.
+`time_to_lock_s=unknown` means stream/lock journal evidence is missing; inspect
+the captured journal. The runtime override disappears on reboot; the warm
+value `1` is the default. Restore your usual PROBE/RAW settings after testing.
 
 
-The separate core pin is `45779a4`. Deploy with
+The separate core pin is `f1996b6`. Deploy with
 `git submodule update --init --recursive` so Apple ALAC is present. YeneY's
 unpaced Sonos analysis tap deliberately leaves the core's optional play-time
 schedule unset; LampaStream should keep using the Sonos `/yeney-timing-<mac>`

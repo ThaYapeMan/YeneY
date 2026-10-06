@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Read-only LMS position sampling and CLOCK_MONOTONIC regression."""
 import argparse
+import json
 import math
 import re
 import socket
@@ -26,7 +27,7 @@ def fit(samples):
     return slope, residuals
 
 
-def collect(connection, mac, seconds, clock=time.monotonic, sleep=time.sleep):
+def collect(connection, mac, seconds, clock=time.monotonic, sleep=time.sleep, tracks=None):
     samples = []
     start = deadline = clock()
     with connection.makefile("rb") as reader:
@@ -35,15 +36,29 @@ def collect(connection, mac, seconds, clock=time.monotonic, sleep=time.sleep):
             if wait > 0:
                 sleep(wait)
             sent = clock()
-            connection.sendall(f"{mac} time ?\n".encode("ascii"))
-            line = reader.readline(4097)
+            command = "time ?" if tracks is None else "status - 1 tags:"
+            connection.sendall(f"{mac} {command}\n".encode("ascii"))
+            limit = 4096 if tracks is None else 16384
+            line = reader.readline(limit + 1)
             received = clock()
-            if not line or len(line) > 4096:
+            if not line or len(line) > limit:
                 raise ValueError("missing or oversized LMS CLI reply")
             words = unquote(line.decode("ascii").strip()).split()
-            if len(words) != 3 or words[0].lower() != mac or words[1] != "time":
+            if not words or words[0].lower() != mac:
                 raise ValueError("unexpected LMS CLI reply")
-            position = float(words[2])
+            if tracks is None:
+                if len(words) != 3 or words[1] != "time":
+                    raise ValueError("unexpected LMS CLI reply")
+                position = float(words[2])
+            else:
+                if len(words) < 4 or words[1:4] != ["status", "-", "1"]:
+                    raise ValueError("unexpected LMS status reply")
+                values = [word[5:] for word in words if word.startswith("time:")]
+                if len(values) != 1:
+                    raise ValueError("missing LMS status position")
+                position = float(values[0])
+                identity = tuple(sorted(word for word in words if word.startswith(("playlist_cur_index:", "id:"))))
+                tracks.append(identity or None)
             if not math.isfinite(position) or position < 0:
                 raise ValueError("invalid LMS position")
             samples.append(((sent + received) / 2, position))
@@ -54,26 +69,51 @@ def collect(connection, mac, seconds, clock=time.monotonic, sleep=time.sleep):
     return samples
 
 
-def lock_time(samples, journal):
-    """Use producer events: smooth position alone cannot reveal estimator lock."""
-    events = []
+def producer_clock(samples, journal):
+    """Return stream start and first lock in the stream covering these samples."""
+    starts, locks = [], []
+    last_acquiring = -math.inf
+    pending_stream = False
     for line in journal.splitlines():
-        m = re.search(r"timing-lock state=(locked|acquiring) mono=([0-9.]+)", line)
+        if "Creating new stream" in line:
+            pending_stream = True
+        m = re.search(r"core: STMs jiffies=(\d+)", line)
+        if m and pending_stream:
+            starts.append(int(m[1]) / 1000)
+            pending_stream = False
+        a = re.search(r"timing-lock state=acquiring mono=([0-9.]+)", line)
+        if a and float(a[1]) <= samples[0][0]:
+            last_acquiring = float(a[1])
+        m = re.search(r"timing-lock state=locked mono=([0-9.]+)", line)
         if m:
-            events.append((float(m[2]), m[1]))
-        elif "yeney: timing " in line:
-            state = re.search(r"(?:^| )state=(locked|acquiring)(?: |$)", line)
-            mono = re.search(r"(?:^| )mono=([0-9.]+)", line)
-            if state and mono:
-                events.append((float(mono[1]), state[1]))
-    events.sort(key=lambda event: event[0])
-    previous = [e for e in events if e[0] <= samples[0][0]]
-    if previous and previous[-1][1] == "locked":
-        return 0.0
-    for mono, state in events:
-        if state == "locked" and mono >= samples[0][0]:
-            return mono - samples[0][0]
-    return None
+            locks.append(float(m[1]))
+        elif "yeney: timing " in line and "state=locked" in line:
+            m = re.search(r"(?:^| )mono=([0-9.]+)", line)
+            if m:
+                locks.append(float(m[1]))
+    prior = [t for t in starts if t <= samples[0][0]]
+    start = max(prior) if prior else None
+    finish = min((t for t in starts if t > samples[0][0]), default=math.inf)
+    lock = min((t for t in locks if (t >= last_acquiring if start is None else t >= start) and t < finish), default=None)
+    return start, lock
+
+
+def lock_time(samples, journal):
+    start, lock = producer_clock(samples, journal)
+    if lock is None:
+        return None
+    return max(0., lock - (samples[0][0] if start is None else start))
+
+
+def segments(samples, tracks=None):
+    result, begin = [], 0
+    for i in range(1, len(samples)):
+        changed = tracks is not None and tracks[i] is not None and tracks[i-1] is not None and tracks[i] != tracks[i-1]
+        if samples[i][1] < samples[i-1][1] or changed:
+            result.append(samples[begin:i])
+            begin = i
+    result.append(samples[begin:])
+    return result
 
 
 def statistics(errors):
@@ -85,12 +125,28 @@ def statistics(errors):
             f"rms_ms={math.sqrt(sum(e*e for e in values)/len(values)):.3f}")
 
 
-def summary(samples, locked):
+def step_metrics(samples):
+    differences = [(p-samples[i-1][1], t-samples[i-1][0]) for i,(t,p) in enumerate(samples) if i]
+    flat = longest = 0.
+    for step,dt in differences:
+        flat = flat+dt if step == 0 else 0.
+        longest = max(longest,flat)
+    return (max((step for step,dt in differences),default=0),
+            max((step-dt for step,dt in differences),default=0),longest)
+
+
+def print_step_metrics(metrics):
+    step,excess,flat=metrics
+    print(f"largest_step_ms={step*1000:.3f} largest_step_excess_all_ms={excess*1000:.3f} longest_flat_s={flat:.3f}")
+
+
+def summary(samples, locked, stream_duration=None):
+    print_step_metrics(step_metrics(samples))
     differences = [(t, p - samples[i-1][1], t - samples[i-1][0])
                    for i, (t, p) in enumerate(samples) if i]
     late = [d for d in differences if d[0] - samples[0][0] >= 10]
     backwards = [d for d in differences if d[1] < 0]
-    print(f"time_to_lock_s={locked if locked is not None else 'unknown'} "
+    print(f"time_to_lock_s={stream_duration if stream_duration is not None else (locked if locked is not None else 'unknown')} "
           "lock_source=local-producer-journal")
     print(f"largest_step_after_10s_ms={max((d[1] for d in late), default=0)*1000:.3f} "
           f"largest_step_excess_ms={max((d[1]-d[2] for d in late), default=0)*1000:.3f} "
@@ -116,13 +172,65 @@ def summary(samples, locked):
         print("after_slew_error " + statistics([e for t,e in errors if t >= locked+5]))
 
 
+def report(samples, journal, tracks=None):
+    groups = segments(samples, tracks)
+    all_metrics, rates = [], []
+    all_residuals, all_steps, all_errors = [], [], {"before_lock_error": [], "after_lock_error": [], "after_slew_error": []}
+    for index, group in enumerate(groups, 1):
+        print(f"segment={index} start_mono_s={group[0][0]:.9f} end_mono_s={group[-1][0]:.9f}")
+        if len(group) < 2:
+            print("samples=1 fit=unavailable")
+            continue
+        slope, residuals = fit(group)
+        all_residuals.extend(residuals)
+        all_metrics.append(step_metrics(group))
+        rates.append((slope, group[-1][0]-group[0][0]))
+        print(f"samples={len(group)} max_excursion_ms={max(abs(r) for r in residuals)*1000:.3f} ppm={(slope-1)*1e6:+.3f}")
+        stream, lock = producer_clock(group, journal)
+        relative = lock-group[0][0] if lock is not None else None
+        # Summary uses the absolute lock for error partitions, including when
+        # capture starts after lock. The stream-based duration is printed below.
+        summary(group, relative, lock-stream if stream is not None and lock is not None else "unknown")
+        print(f"stream_start_mono_s={stream if stream is not None else 'unknown'} "
+              f"stream_time_to_lock_s={lock-stream if stream is not None and lock is not None else 'unknown'} "
+              f"already_locked={int(lock is not None and lock <= group[0][0])}")
+        for i in range(1,len(group)):
+            all_steps.append((group[i][0]-group[0][0],group[i][1]-group[i-1][1],group[i][0]-group[i-1][0]))
+        threshold = lock+5 if lock is not None else group[0][0]+.8*(group[-1][0]-group[0][0])
+        stable = [s for s in group if s[0]>=threshold]
+        if len(stable)>=2 and lock is not None:
+            stable_slope,_=fit(stable)
+            mt=sum(t for t,_ in stable)/len(stable); mp=sum(p for _,p in stable)/len(stable)
+            for t,p in group:
+                error=p-(mp+stable_slope*(t-mt))
+                all_errors["before_lock_error" if t<lock else "after_lock_error"].append(error)
+                if t>=lock+5: all_errors["after_slew_error"].append(error)
+    duration=sum(dt for _,dt in rates)
+    mean_rate=sum(rate*dt for rate,dt in rates)/duration if duration else math.nan
+    resets = [samples[i-1][1]-samples[i][1] for i in range(1,len(samples)) if samples[i][1]<samples[i-1][1]]
+    print(f"position_decreases={len(resets)} largest_position_decrease_ms={max(resets,default=0)*1000:.3f} (segment boundaries)")
+    print(f"overall segments={len(groups)} samples={len(samples)} max_excursion_ms={max((abs(r) for r in all_residuals),default=0)*1000:.3f} ppm={(mean_rate-1)*1e6:+.3f} rate_source=duration-weighted-segment-fits")
+    print_step_metrics(tuple(max((m[i] for m in all_metrics),default=0) for i in range(3)))
+    print("residual_error " + statistics(all_residuals))
+    late=[d for d in all_steps if d[0]>=10]
+    backwards=[d for d in all_steps if d[1]<0]
+    print(f"largest_step_after_10s_ms={max((d[1] for d in late),default=0)*1000:.3f} "
+          f"largest_step_excess_ms={max((d[1]-d[2] for d in late),default=0)*1000:.3f} "
+          f"backwards_count={len(backwards)} largest_backwards_ms={max((-d[1] for d in backwards),default=0)*1000:.3f}")
+    for name,errors in all_errors.items(): print(name + " " + statistics(errors))
+    stream,lock=producer_clock(samples,journal)
+    print(f"time_to_lock_s={lock-stream if stream is not None and lock is not None else 'unknown'} lock_source=local-producer-journal")
+
+
 def journal_for(mac, since):
     try:
-        result = subprocess.run(["journalctl", "--since", f"@{since:.3f}", "--no-pager", "-o", "cat"],
+        result = subprocess.run(["journalctl", "--since", f"@{since:.3f}", "--no-pager", "-o", "json"],
                                 capture_output=True, text=True, timeout=10)
         identity = "RINCON_" + mac.replace(":", "").upper()
-        return "\n".join(line for line in result.stdout.splitlines() if identity in line.upper())
-    except (OSError, subprocess.TimeoutExpired):
+        records = [json.loads(line) for line in result.stdout.splitlines()]
+        pids = {r.get("_PID") for r in records if identity in str(r.get("MESSAGE", "")).upper()}
+        return "\n".join(str(r.get("MESSAGE", "")) for r in records if r.get("_PID") in pids)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return ""
 
 
@@ -143,14 +251,17 @@ def main():
     try:
         started_real = time.time()
         with socket.create_connection((args.server, args.port), timeout=2) as connection:
-            samples = collect(connection, mac, args.seconds)
-        slope, residuals = fit(samples)
-        print("mono_s position_s residual_ms")
-        for (mono, position), residual in zip(samples, residuals):
-            print(f"{mono:.9f} {position:.6f} {residual * 1000:+.3f}")
-        print(f"samples={len(samples)} max_excursion_ms="
-              f"{max(abs(r) for r in residuals) * 1000:.3f} ppm={(slope - 1) * 1e6:+.3f}")
-        summary(samples, lock_time(samples, journal_for(mac, started_real - 600)))
+            tracks = []
+            samples = collect(connection, mac, args.seconds, tracks=tracks)
+        journal = journal_for(mac, started_real - 3600)
+        groups = segments(samples, tracks)
+        residuals = []
+        for group in groups:
+            residuals.extend(fit(group)[1] if len(group) > 1 else [0.])
+        print("mono_s position_s residual_ms track")
+        for (mono, position), residual, track in zip(samples, residuals, tracks):
+            print(f"{mono:.9f} {position:.6f} {residual * 1000:+.3f} track={','.join(track or ()) or 'unknown'}")
+        report(samples, journal, tracks)
     except (OSError, ValueError, UnicodeError) as error:
         print(f"yeney-lms-position-check: {error}", file=sys.stderr)
         return 1

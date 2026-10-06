@@ -34,6 +34,7 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 test: export YENEY_START_LEAD_MS = 0
 test: export YENEY_TIMING_PROBE = 0
 test: export YENEY_TIMING_RAW = 0
+test: export YENEY_TIMING_PRIOR = 1
 test: export YENEY_TIMING_PUBLISH = 0
 test: export YENEY_TIMING_LOCKED_EVERY_S = 5
 test: export YENEY_AUDIBLE_OFFSET_MS = 0

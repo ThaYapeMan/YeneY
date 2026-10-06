@@ -5,11 +5,13 @@ position by default. It never changes playback, transport, clocks, audio,
 the audio tap or timing publication. CLOCK_MONOTONIC is the time base; YeneY and LampaStream must
 share the host kernel and make both SHM objects visible in the reader's
 filesystem. The owner performs deployment and acoustic tests.
-With PROBE unset/0, traffic, audio and output remain unchanged from 4641b46.
+PROBE unset/0 preserves HTTP traffic and audio; the 1 ms gapless STMs sentinel
+fix described below applies independently of PROBE.
 
 | Setting | Accepted values | Default |
 |---|---|---|
 | `YENEY_TIMING_PROBE` | `1` enables coordinator measurements; unset/`0` disables | off |
+| `YENEY_TIMING_PRIOR` | `0` forces cold acquisition without loading a disk prior; unset/`1` loads it | 1 |
 | `YENEY_TIMING_RAW` | `1` logs requests and brackets, only with PROBE | off |
 | `YENEY_TIMING_STALE_S` | decimal seconds, 10–600 without a usable edge | 60 |
 | `YENEY_TIMING_LOCKED_EVERY_S` | decimal seconds, 1–60 between locked edge probes | 5 |
@@ -40,7 +42,15 @@ RelTime define each adjacent n -> n+1 bracket. RTT rejection, 200 ms deadline,
 2/4/8/10 s error backoff and rolling limits (8 requests/1 s, 30/10 s, across
 resets) remain unchanged. RTT rejection starts at 80 ms, then uses twice the
 128-sample p95 clamped to 10–80 ms. Normal leased reads can seed acquisition
-without becoming fitted observations or additional requests.
+without becoming fitted observations or additional requests. During early
+acquisition (fewer than 20 midpoint inliers), a rejected edge returns to 340 ms
+search sampling rather than predicting the next tick from the same fit. Three
+consecutive rejected edges discard the transient midpoint fit, retaining RTT
+history and the rolling request budget. Valid interval constraints survive this
+scheduler recovery; brackets wider than 650 ms do not enter the acquiring
+interval clock or refresh its staleness timer. Locked observations retain their
+existing wide-bracket and one-sided semantics. No blanket startup wait is added,
+so precise normal fixtures retain their original lock times.
 
 The published clock fits `t(n) = t0 + k*(n-n0)` inside the largest number of
 brackets in the last 600 stream seconds, at most 1200 brackets. Wide brackets
@@ -146,14 +156,28 @@ including calibration if publication is enabled. It must match stream/base/rate,
 be fresh under STALE and have finite uncertainty <=10 ms; active publication
 must be locked. The model remains bounded to the aged latest RelTime interval.
 
-Each report advances the previous coordinate by monotonic elapsed time, then
+The running reporting coordinate retains fractional PCM frames in a double;
+only the returned frame value is truncated. Otherwise frequent status reads
+lose a fraction of a frame on every call and run slow. There was a second
+source of slow acquisition: slewing towards the new integer +0.5 s at every
+normal SOAP read chases the slowly drifting polling phase. One integer every
+1.0045 s pulls the rate toward -4500 ppm; when the poll crosses a tick and
+skips an integer, that target jumps by about one second. The old acquisition
+slew then corrected it even without a lock. Retaining unity/prior projection
+inside the interval removes this midpoint attraction. Before lock the rate is
+unity or the qualified prior rate, never the midpoint or unqualified interval
+fit. Each report advances the previous coordinate by monotonic elapsed time, then
 corrects at at most 15% of real time (0.85–1.15x nominal). A 650 ms error takes
 4.34 s; 750 ms takes 5 s. Qualified model corrections greater than 750 ms jump immediately as
-discontinuities. Acquisition corrections always slew: skipped integer ticks
-can reflect a polling phase change, so only explicit stream hooks authorize
-acquisition jumps. Explicit seek/new-stream/reconnect resets discard the slew
+discontinuities. Acquisition keeps the unity/prior projection whenever it remains inside the
+latest aged RelTime interval; it does not chase each observation midpoint. If a skipped tick would leave the report outside that interval,
+re-anchor at its nearest endpoint. An inconsistent delayed/repeated device
+observation can require a bounded backward re-anchor before lock; enforcing
+both this observation bound and unconditional monotonicity is impossible in
+that case. The normal field target remains no backwards samples. Explicit
+stream hooks still own seek/discontinuity resets. Explicit seek/new-stream/reconnect resets discard the slew
 state; ordinary switches retain the audible high-water mark. `slew_offset_ms`
-is reported position minus target. No ordinary switch moves backwards. Pause,
+is reported position minus target. Qualified model switches retain the audible high-water mark. Pause,
 unlock, stale model, flush, new stream and reconnect retain the existing model
 eligibility/fallback fences; same-rate gapless boundaries retain continuity.
 
@@ -164,27 +188,69 @@ output:
 scripts/yeney-lms-position-check <lms-host> 94:9f:3e:fa:ba:66 --seconds 600
 ```
 
-It still sends only `<mac> time ?`, every 0.25 s, without catch-up bursts.
-Additional summary fields report producer time to lock from the first sample,
-largest position step after ten seconds, step in excess of elapsed time, and
-backwards count/magnitude. It reads the **local** journal for `timing-lock`
-events matching the speaker RINCON UDN derived from the MAC. Run on the YeneY
-host with journal read permission. Lock is `unknown` if producer events are
-unavailable: smooth positions cannot independently identify estimator lock.
-Errors before/after lock and after the five-second slew allowance are relative
-to the final stable linear fit, not independent Sonos/acoustic ground truth.
-Use one item longer than the check; LMS track-time resets are legitimate discontinuities.
-The original whole-run residuals and ppm remain for compatibility. The after-lock
-statistics include the convergence transient; use `after_slew_error` for steady
-precision. Keep playback continuous without pause, seek, skips or repeats.
+It samples read-only `<mac> status - 1 tags:` every 0.25 s without catch-up
+bursts. Time and playlist index/track ID come from the same response, avoiding
+a track-change race between separate time and identity queries. A position decrease or changed
+playlist index/track ID starts a new segment. Each segment gets its own fit,
+residuals, ppm, steps (including startup), longest flat interval, and before-lock,
+after-lock and after-slew errors. Overall errors aggregate segment residuals;
+overall ppm is the duration-weighted mean of segment slopes. No line is fitted
+across a track boundary. Legitimate resets are excluded from backwards counts.
+A backwards anomaly also creates a segment, so inspect segment boundaries.
+
+It reads the local JSON journal, identifies the producer PID by the MAC-derived
+RINCON UDN, then keeps that process's complete messages, including core STMs.
+`time_to_lock_s` is lock MONOTONIC minus the initial STMs jiffies / 1000 for the
+stream covering the capture, even if sampling starts later. Gapless STMs does
+not create a new stream; following segments report `already_locked=1` and the
+same stream lock duration. Missing stream/lock evidence is `unknown`.
+Run on the YeneY host with journal read permission. The journal lookup covers
+the preceding hour; longer-running streams need a separate complete journal.
+Errors use each track's final stable linear fit, not acoustic ground truth.
+After-lock includes convergence; after-slew starts at absolute lock + 5 s.
+This also means a later track's boundary glitch remains visible in after-slew
+errors. Keep playback continuous without pause, seek, skips or repeats.
+
+For network gapless boundaries only, yeney-core changes exactly-zero STMs
+elapsed to 1 ms. LMS `Slim/Player/Squeezebox2.pm::songElapsedSeconds` returns
+before interpolation when both elapsed fields are zero; 1 ms bypasses that
+sentinel with at most 1 ms wire bias. Initial starts, non-network outputs,
+other statuses, audio, URLs, HTTP constants and transport ordering are unchanged.
+`Slim/Networking/Slimproto.pm::_stat_handler` replaces the stored play-point
+fields on each STAT, and `getPlayPointData` returns that latest jiffies/ms/seconds
+triple to Squeezebox2. Thus STMs zero remains authoritative until the next STAT.
+Sources: https://github.com/LMS-Community/slimserver/blob/public/9.0/Slim/Player/Squeezebox2.pm
+and https://github.com/LMS-Community/slimserver/blob/public/9.0/Slim/Networking/Slimproto.pm
+
+The 6 October Study cold capture acquired at 325.213 s, with 325 interval
+brackets, span 324 s, band 10.379 ms and zero violations: there was no lock gate
+bypass or staleness reset. The scheduler's midpoint diagnostic count of 7–11
+was a different estimator. The new scheduled counterfactual uses the first five
+observed edge midpoints, later field-supported phase/rate, and captured RTTs;
+it locks at 62.227 s. It is a simulation of the missing sub-second queries,
+not a claim to have measured new device responses. Literal recorded rejection
+replay verifies recovery deadlines and discarding transient midpoint edges.
+Pre-lock replay stays within 500.000 ms of the latest quantisation midpoint
+with or without the 10.850 ppm prior. The 20 s drifting-poll replay runs at -4280.045 ppm on start commit 7284fd9
+and -1.134 ppm after the fix; with a prior it differs from that rate by less
+than 1.5 ppm. A2 still locks at 60/10 s.
+
+The segmented original cold checker capture shows 0.750 s flat at the second
+track boundary and 854.250 ms excess step; warm has no flat interval. Warm
+stream lock is 6.703 s. Its first segment after-slew max/p95 is 4.339/1.424 ms;
+the second has max/p95 8.627/1.543 ms, including sampling/status jitter. Check
+p95 as well as maximum rather than hiding isolated field outliers.
 
 Measured Study A2 replay with normal SOAP timestamps: cold/prior locks 60/10 s,
-pre-lock maximum errors 347.699/347.466 ms, after-lock maxima 310.200/309.946 ms,
-after-lock p95 1.007/2.230 ms, and settled maxima 1.391/2.263 ms, relative to the
+pre-lock maximum errors 152.554/152.574 ms, after-lock maxima 114.800/115.033 ms,
+after-lock p95 0.975/2.216 ms, and settled maxima 1.391/2.263 ms, relative to the
 final fitted line. Without a SOAP timestamp the delayed-lease fixture's initial
 maximum is 801.762 ms; extrapolation cannot reconstruct unknown read latency.
 No backwards samples;
-Internal 250 ms steps are <=287.5 ms. LMS receives elapsed status once per
+With known SOAP timestamps, internal 250 ms steps are <=287.5 ms. The
+unknown-latency fixture crosses the existing >750 ms qualified-model
+discontinuity threshold at lock (1051.875 ms step); this is a documented
+exception, distinct from the fixed unqualified acquisition correction. LMS receives elapsed status once per
 second and extrapolates between updates: at the checker, allow about 400 ms
 per 250 ms sample during slew (150 ms excess), plus network/sampling jitter,
 and about 250 ms when settled. For the physical Study,

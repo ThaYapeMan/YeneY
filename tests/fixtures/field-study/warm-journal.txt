@@ -1,0 +1,5 @@
+yeney: timing-lock state=acquiring mono=688005.538828879 udn=RINCON_949F3EFABA6601400
+Creating new stream (1) for Sonos
+core: STMs jiffies=688019456 elapsed_ms=0
+yeney: timing-lock state=locked mono=688026.159424315 udn=RINCON_949F3EFABA6601400
+core: STMs jiffies=688383620 elapsed_ms=1
