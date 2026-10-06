@@ -148,8 +148,10 @@ must be locked. The model remains bounded to the aged latest RelTime interval.
 
 Each report advances the previous coordinate by monotonic elapsed time, then
 corrects at at most 15% of real time (0.85–1.15x nominal). A 650 ms error takes
-4.34 s; 750 ms takes 5 s. Corrections greater than 750 ms jump immediately as
-discontinuities. Explicit seek/new-stream/reconnect resets discard the slew
+4.34 s; 750 ms takes 5 s. Qualified model corrections greater than 750 ms jump immediately as
+discontinuities. Acquisition corrections always slew: skipped integer ticks
+can reflect a polling phase change, so only explicit stream hooks authorize
+acquisition jumps. Explicit seek/new-stream/reconnect resets discard the slew
 state; ordinary switches retain the audible high-water mark. `slew_offset_ms`
 is reported position minus target. No ordinary switch moves backwards. Pause,
 unlock, stale model, flush, new stream and reconnect retain the existing model
@@ -176,8 +178,16 @@ The original whole-run residuals and ppm remain for compatibility. The after-loc
 statistics include the convergence transient; use `after_slew_error` for steady
 precision. Keep playback continuous without pause, seek, skips or repeats.
 
-Expected Study A2 replay: cold lock 60 s; prior lock 10 s; no backwards samples;
-250 ms steps <=287.5 ms plus scheduling/timestamp jitter. For the physical Study,
+Measured Study A2 replay with normal SOAP timestamps: cold/prior locks 60/10 s,
+pre-lock maximum errors 347.699/347.466 ms, after-lock maxima 310.200/309.946 ms,
+after-lock p95 1.007/2.230 ms, and settled maxima 1.391/2.263 ms, relative to the
+final fitted line. Without a SOAP timestamp the delayed-lease fixture's initial
+maximum is 801.762 ms; extrapolation cannot reconstruct unknown read latency.
+No backwards samples;
+Internal 250 ms steps are <=287.5 ms. LMS receives elapsed status once per
+second and extrapolates between updates: at the checker, allow about 400 ms
+per 250 ms sample during slew (150 ms excess), plus network/sampling jitter,
+and about 250 ms when settled. For the physical Study,
 aim for cold lock about 60–65 s, prior about 5–25 s (phase precision depends on
 brackets), steady errors <=5 ms (previous field results about 1.5 ms), initial
 errors <=500 ms plus SOAP/lease uncertainty. Slewing removes the lock jump but
@@ -419,7 +429,7 @@ only these timing settings (or set PROBE/PUBLISH/RAW to 0), then restart.
    SOAP midpoint and local monotonic age; leased copies do not become fresh observations.
 8. Use a 15% reporting slew. A few-percent slew would take 13–22 s to correct
    the observed 650 ms error; 15% takes 4.34 s, without backwards movement.
-9. Treat corrections above 750 ms as discontinuities, because slewing them
+9. Treat qualified model corrections above 750 ms as discontinuities, because slewing them
    would exceed five seconds. Clear slew state on explicit connection/stream
    resets; retain high-water, pause and handed-frame safeguards.
 10. Use local producer journal lock events for field time-to-lock, matched by
@@ -432,3 +442,40 @@ only these timing settings (or set PROBE/PUBLISH/RAW to 0), then restart.
     reverted independently of startup position and drift persistence.
 13. Install the missing clang-format 18.1.8 in `/tmp` for the core's required
     format check, keeping dependency setup outside repository and system files.
+
+14. Leave core play-timing unset for Sonos and its analysis tap because no local
+    pacer schedule exists. Verify the new extension flag/anchor/rate are unset,
+    initialise recursive ALAC, and rebuild the library, standalone sinks, Sonos
+    sink and test sinks against the new virtual interface. This preserves remote
+    delivery timing while allowing the core's own paced clients to supply correct timing.
+
+15. Always slew unlocked RelTime corrections, even when polling skips an integer.
+    Such skips can be ordinary quantisation rather than seeks; retain immediate
+    jumps for explicit stream resets and qualified model discontinuities.
+
+16. Require a positive RelTime for smoothing after a new connection. The
+    retained audible history must not let an old observation timestamp seed
+    acquisition, including with start lead disabled; keep the original fallback.
+17. Repeat the full suite after final position changes and without a concurrent
+    standalone build, preserving the existing 500 ms socket-cleanup assertion
+    rather than weakening it in response to a loaded-host failure.
+
+18. Preserve acquisition request scheduling. A2 epoch 14 stays at a 65.512 ms
+    phase band over 64 s; a rate prior cannot manufacture precise phase evidence.
+    An experimental scheduling guide did not resolve a synthetic stalled seed
+    and was removed. Only the evidence-count/span gate is shortened with a prior.
+19. Distinguish internal slew bounds from CLI sampling bounds. LMS interpolates
+    one-second elapsed updates, so the field target is about 400 ms per 250 ms
+    sample during slew, not the internal 287.5 ms; allow measured network jitter.
+
+## Core pin and optional play timing
+
+YeneY pins yeney-core `45779a4` (formerly `88ea939`). Its additive `playTiming`,
+`syncPause` and `syncSkip` callbacks remain source-compatible. The standalone
+paced core sinks receive the core pacer's scheduled time, including accumulated
+credit. YeneY's Sonos sink returns `paced() == false`: PCM acceptance, encoding
+and HTTP handoff are not a correct playback schedule. Its private analysis tap
+therefore never calls `playTiming`. The new audio timing block exists, but its
+play-clock flag, play-time anchor and rate remain unset. The separate
+`/yeney-timing-<mac>` Sonos bracket clock remains the audible timing contract.
+The legacy audio layout and frame correspondence are preserved.

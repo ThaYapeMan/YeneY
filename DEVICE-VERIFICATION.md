@@ -274,11 +274,20 @@ pct pull 113 /tmp/study-warm-start.txt /tmp/study-warm-start.txt
 ```
 
 Expected: cold lock about 60–65 s, warm about 5–25 s (A2 fixture 60/10 s),
-no backwards samples, largest 250 ms step <=287.5 ms plus sampling jitter;
-`largest_step_excess_ms` <=37.5 ms plus jitter. Before lock expect smooth
+no backwards samples at the default 250 ms interval; largest step about
+400 ms during slew plus network/sampling jitter (`largest_step_excess_ms`
+about 150 ms). Settled steps should be about 250 ms. The provider itself is
+bounded to 287.5 ms per 250 ms; LMS interpolates one-second status updates. Before lock expect smooth
 position with up to about 500 ms phase error; it is not yet a phase measurement.
 After lock the initial phase offset decays over <=5 s, so whole after-lock max
 may still approach 500 ms. After slew expect max error <=5 ms, ideally the
 previously observed ~1.5 ms. Error statistics reference the final linear fit,
 not acoustic truth. `time_to_lock_s=unknown` means journal evidence was unavailable;
 inspect `journalctl -u yeney@Study.service` instead of inferring lock from position.
+
+
+The separate core pin is `45779a4`. Deploy with
+`git submodule update --init --recursive` so Apple ALAC is present. YeneY's
+unpaced Sonos analysis tap deliberately leaves the core's optional play-time
+schedule unset; LampaStream should keep using the Sonos `/yeney-timing-<mac>`
+audible mapping. Standalone paced yeney-core players can supply the new schedule.

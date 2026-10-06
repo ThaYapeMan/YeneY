@@ -18,9 +18,16 @@ int main() {
         assert(tap.write(pcm.data(), pcm.size(), gen, first) && gen && first == 0);
         int fd = shm_open(name.c_str(), O_RDONLY, 0);
         assert(fd >= 0);
+        struct stat status{};
+        assert(fstat(fd, &status) == 0 && status.st_size == off_t(sizeof(yeney::shm_v1::TimedLayout)));
+        yeney::shm_v1::TimingBlock optional{};
+        assert(pread(fd, &optional, sizeof optional, sizeof(yeney::shm_v1::Layout)) == ssize_t(sizeof optional));
+        // A Sonos analysis export is not a paced playback schedule.
+        for (auto byte : optional.anchor_play_mono_ns) assert(byte == 0);
+        for (auto byte : optional.rate_milli_hz) assert(byte == 0);
         auto *wire =
             static_cast<const yeney::shm_v1::Layout *>(mmap(nullptr, 32888, PROT_READ, MAP_SHARED, fd, 0));
-        assert(wire != MAP_FAILED && wire->rate == 44100 && wire->pcm[0] == 1 && wire->pcm[1] == -1);
+        assert(wire != MAP_FAILED && !(wire->extension.flags & 1) && wire->rate == 44100 && wire->pcm[0] == 1 && wire->pcm[1] == -1);
         bool refused = false;
         try {
             timing_probe::TimingTap duplicate(mac, 48000);
@@ -37,11 +44,12 @@ int main() {
         tap.boundary(0, f, false);
         assert(tap.write(pcm.data(), pcm.size(), gen2, first) && first == 512 && gen2 == gen &&
                wire->rate == 48000);
+        assert(!(wire->extension.flags & 1));
         munmap(const_cast<yeney::shm_v1::Layout *>(wire), 32888);
         close(fd);
     }
     timing_probe::diagnostics().reset("shutdown", true);
     shm_unlink(name.c_str());
     puts("PASS: real core SHM sink exact accepted frame counts, existing PCM quantization/ABI, pause/flush "
-         "absolute continuity and rate change");
+         "absolute continuity, rate change and unpaced play-timing left unset");
 }

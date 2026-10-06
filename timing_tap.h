@@ -72,6 +72,8 @@ public:
     bool write(const yeney::Frame *data, size_t count, uint64_t &generation, uint64_t &first) {
         uint64_t beforeGen = 0, before = 0, afterGen = 0, after = 0;
         bool valid = snapshot(beforeGen, before);
+        // This tap exports an unpaced remote sink's accepted frames. No local
+        // schedule exists to supply playTiming; the separate Sonos clock applies.
         sink->write(data, count);
         valid = valid && snapshot(afterGen, after) && beforeGen == afterGen && after == before + count;
         generation = afterGen;

@@ -53,6 +53,8 @@ public:
     bool outputEmpty(uint64_t) const override;
     void volume(uint32_t, uint32_t) override {}
     void power(bool) override {}
+    // Remote Sonos has no local pacer schedule. Keep the core's optional
+    // playTiming callback unset; encoder/HTTP handoff time is not audible time.
     bool paced() const override { return false; }
 };
 void runCoreClient(const char* server, const uint8_t* mac, const char* name);
