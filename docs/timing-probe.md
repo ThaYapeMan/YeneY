@@ -143,41 +143,39 @@ Reporting phases (`position_phase` in timing lines and `position-phase` events):
 | slewing | Qualified locked model, bounded convergence from reported position |
 | locked | Report model position; convergence finished |
 
-Acquisition uses the middle of the one-second RelTime interval (integer +0.5 s)
-and its actual normal SOAP midpoint when available. Repeated leased values do
-not refresh its timestamp. Between observations position advances locally;
-observation corrections also slew. Before the first accepted position the
-existing anchor/start safeguards apply. With no phase evidence, the first
-integer cannot reveal its fractional second: expect up to roughly 500 ms
-initial phase error, now smooth instead of a staircase.
+The first accepted observation anchors at the middle of the one-second RelTime
+interval (integer +0.5 s), using its actual normal SOAP midpoint when available.
+Repeated leased values do not refresh their timestamp. Subsequent observations
+constrain the unity/prior projection to their aged quantisation interval; they
+do not attract it towards each new midpoint. If it leaves the interval,
+re-anchor at the nearest endpoint. Before the first accepted observation the
+existing anchor/start safeguards apply. Without phase evidence, expect roughly
+500 ms initial phase uncertainty plus SOAP/lease uncertainty.
 
 The locked model is inverted in the existing ConnectionPosition PCM coordinate,
 including calibration if publication is enabled. It must match stream/base/rate,
 be fresh under STALE and have finite uncertainty <=10 ms; active publication
 must be locked. The model remains bounded to the aged latest RelTime interval.
+Only qualified model convergence corrects at at most 15% of real time
+(0.85–1.15x nominal): 650 ms takes 4.34 s and 750 ms takes 5 s. Qualified model
+corrections above 750 ms jump as discontinuities.
 
-The running reporting coordinate retains fractional PCM frames in a double;
-only the returned frame value is truncated. Otherwise frequent status reads
-lose a fraction of a frame on every call and run slow. There was a second
-source of slow acquisition: slewing towards the new integer +0.5 s at every
-normal SOAP read chases the slowly drifting polling phase. One integer every
-1.0045 s pulls the rate toward -4500 ppm; when the poll crosses a tick and
-skips an integer, that target jumps by about one second. The old acquisition
-slew then corrected it even without a lock. Retaining unity/prior projection
-inside the interval removes this midpoint attraction. Before lock the rate is
-unity or the qualified prior rate, never the midpoint or unqualified interval
-fit. Each report advances the previous coordinate by monotonic elapsed time, then
-corrects at at most 15% of real time (0.85–1.15x nominal). A 650 ms error takes
-4.34 s; 750 ms takes 5 s. Qualified model corrections greater than 750 ms jump immediately as
-discontinuities. Acquisition keeps the unity/prior projection whenever it remains inside the
-latest aged RelTime interval; it does not chase each observation midpoint. If a skipped tick would leave the report outside that interval,
-re-anchor at its nearest endpoint. An inconsistent delayed/repeated device
-observation can require a bounded backward re-anchor before lock; enforcing
-both this observation bound and unconditional monotonicity is impossible in
-that case. The normal field target remains no backwards samples. Explicit
-stream hooks still own seek/discontinuity resets. Explicit seek/new-stream/reconnect resets discard the slew
-state; ordinary switches retain the audible high-water mark. `slew_offset_ms`
-is reported position minus target. Qualified model switches retain the audible high-water mark. Pause,
+The reporting coordinate retains fractional PCM frames in a double; only the
+returned value is truncated. This avoids losing a fraction on every frequent
+read. The main source of the field's slow acquisition was midpoint attraction:
+one integer per 1.0045 s pulls the report towards -4500 ppm. When the polling
+phase crosses a tick and skips an integer, that midpoint target jumps by about
+one second and the old acquisition slew corrects it without a lock. Keeping
+unity/prior projection inside the interval removes that attraction; an
+unvalidated midpoint or interval fit never supplies the pre-lock rate.
+
+An inconsistent delayed/repeated observation can require a bounded backward
+re-anchor in the reporting state before lock. Both that observation bound and
+unconditional monotonicity cannot be enforced for contradictory observations;
+the normal field target remains no backwards samples. Encoded handoff and
+sink safeguards remain unchanged. Explicit seek/new-stream/reconnect resets
+discard reporting convergence state. Qualified model switches retain the
+reporting high-water mark. `slew_offset_ms` is report minus target. Pause,
 unlock, stale model, flush, new stream and reconnect retain the existing model
 eligibility/fallback fences; same-rate gapless boundaries retain continuity.
 

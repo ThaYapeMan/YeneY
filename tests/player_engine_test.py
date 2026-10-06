@@ -101,6 +101,7 @@ class Run:
         self.start_packet = len(self.lms.packets)
         self.lms.strm('s', source, fmt=fmt, rate=rate, bits=bits)
         boundary = self.lms.wait('STMs', 10)
+        self.last_boundary = boundary
         if getattr(self, 'expect_gapless_nonzero', False):
             assert boundary['elapsed'] >= 1, boundary
             self.expect_gapless_nonzero = False
@@ -110,7 +111,8 @@ class Run:
             self.start(continuation, fmt='p')
         elapsed = [self.lms.timer(stamp)['elapsed'] for stamp in (41, 42, 43)]
         assert elapsed == sorted(elapsed), elapsed
-        if boundary['elapsed'] > 0:
+        # A recursive continuation may have advanced to the next track.
+        if self.last_boundary['elapsed'] > 0:
             assert elapsed[0] >= 1, elapsed
         else:
             assert elapsed[0] == 0, elapsed

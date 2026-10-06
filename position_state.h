@@ -94,12 +94,12 @@ public:
         const double difference = target - projected;
         // 15% corrects the observed 650 ms phase error in 4.34 seconds.
         // A qualified model correction above 750 ms is a discontinuity.
-        // Unlocked integer observations can skip a tick as the poll phase
-        // crosses it: only explicit stream hooks may authorize their jumps.
+        // Unlocked observations constrain nominal projection below; they
+        // cannot steer it towards a midpoint that follows the polling phase.
         double next = !reportTime || (model && std::abs(difference) > .75 * rate) ? target
             : projected + std::clamp(difference, -.15 * dt * rate, .15 * dt * rate);
-        // Unlocked corrections may slew only while inside the latest
-        // quantisation interval. They cannot accumulate unbounded phase lag.
+        // Unlocked re-anchors use the latest quantisation endpoints and
+        // cannot accumulate unbounded phase lag.
         // RelTime midpoint phase follows the polling phase. Chasing each new
         // midpoint runs at the polling rate (and slews a whole second when
         // that phase crosses a tick). Keep unity/prior projection whenever
