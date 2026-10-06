@@ -34,7 +34,8 @@ class Estimator {
          precisionFit = false;
     double lastTime = 0, lastSecond = 0, lastRtt = 0, due = 0;
     double missedSecond = -1;
-    unsigned phase = 0, rejected = 0, missed = 0, outliers = 0;
+    unsigned phase = 0, rejected = 0, missed = 0, outliers = 0, stalled = 0;
+    bool recovered = false;
     double dither = 0;
     unsigned burst = 0;
     uint64_t usableEdges = 0;
@@ -144,12 +145,13 @@ class Estimator {
         window = std::max(window, windowFloor());
     }
     bool stale(double now, double started, unsigned seconds) const {
-        return now - (fitted ? lastUsable : started) > seconds;
+        return now - (usableEdges ? lastUsable : started) > seconds;
     }
     double timeAt(double second) const { return origin + (second - intercept) / slope; }
     // Every adjacent transition is observable, even when too broad to fit.
     bool sample(double sent, double received, double second) {
         decision = {};
+        recovered = false;
         sampleOutcome = "accepted";
         sampleReason = "sample";
         const double rtt = received - sent, t = (sent + received) / 2;
@@ -199,8 +201,17 @@ class Estimator {
                     window = std::max(windowFloor(), window * .25);
                 }
             }
-            if (!decision.inlier)
+            if (!decision.inlier) {
                 ++rejected;
+                ++stalled;
+            } else stalled = 0;
+            // A bad acquisition phase must not schedule one rejected edge per
+            // second forever. Keep RTT history and the caller's request budget.
+            if (stalled >= 3 && inliers.size() < 20) {
+                edges.clear(); inliers.clear(); fitted = primed = false;
+                span = spread = 0; slope = 1; window = .2; phase = 0;
+                stalled = 0; recovered = true;
+            }
         }
         // Counter anomalies are observations, not authority to reset a model.
         // Existing transport/PCM-anchor hooks own discontinuity resets.
@@ -213,7 +224,13 @@ class Estimator {
         lastTime = t;
         lastSecond = second;
         lastRtt = rtt;
-        if (edges.size() < 5) {
+        if (decision.observed && !decision.inlier && inliers.size() < 20) {
+            // Search immediately after a miss; extrapolating the same bad fit
+            // here can place every subsequent request on the same tick side.
+            phase = 0;
+            window = .25;
+            due = t + .34;
+        } else if (edges.size() < 5) {
             due = t + .34;
         } else if (decision.observed) {
             phase = 0;

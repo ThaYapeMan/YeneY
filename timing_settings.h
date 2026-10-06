@@ -23,6 +23,15 @@ inline int integerSetting(const char *key, int fallback, int low, int high) {
     }
     return int(n);
 }
+inline bool priorEnabled() {
+    static const bool on = [] {
+        const char *s = getenv("YENEY_TIMING_PRIOR");
+        if (s && strcmp(s, "0") && strcmp(s, "1"))
+            printf("yeney: setting key=YENEY_TIMING_PRIOR invalid=%s fallback=1\n", s);
+        return !s || strcmp(s, "0");
+    }();
+    return on;
+}
 inline bool lmsPositionFromModel() {
     static const bool on = [] {
         const char *s = getenv("YENEY_LMS_POSITION_FROM_MODEL");

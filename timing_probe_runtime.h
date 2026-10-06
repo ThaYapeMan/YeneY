@@ -274,7 +274,7 @@ public:
         speakerUdn = udn;
         printf("yeney: timing-lock state=acquiring mono=%.9f udn=%s\n", nowClock(), speakerUdn.c_str());
         driftState.speaker(udn, directory);
-        hasPrior = driftState.load(savedDrift);
+        hasPrior = priorEnabled() && driftState.load(savedDrift);
         if (hasPrior) {
             bracket.usePrior(savedDrift.ppm, savedDrift.sigma);
             printf("yeney: timing-prior udn=%s drift_ppm=%.3f sigma_ppm=%.3f timestamp=%lld\n",
@@ -562,7 +562,12 @@ public:
                 burstAllOld = burstAllOld && second < lockedSecond;
                 burstAllNew = burstAllNew && second >= lockedSecond;
             }
-            if (model.decision.observed) {
+            if (!wasLocked && model.recovered) {
+                // Discard transient midpoint predictions, but retain valid
+                // interval constraints: broad startup intervals still bound phase.
+                printf("yeney: timing-recovery reason=no-usable-edges mono=%.9f udn=%s\n", nowClock(), speakerUdn.c_str());
+            }
+            if (model.decision.observed && !model.recovered && (wasLocked || model.decision.edge.width <= .65)) {
                 const auto e = model.decision.edge;
                 if (bracket.add({e.second, e.time - e.width / 2, e.time + e.width / 2}))
                     lastBracketAt = e.time;

@@ -144,8 +144,8 @@ static void quantisedAcquisition() {
     // Leased one-second polling can cross a tick and skip an integer.
     p.poll(p.token(),4000,103600);
     const auto after = p.smoothFrames(48000,103600,false,0);
-    assert(after >= before && after-before <= uint64_t(55200));
-    puts("PASS: skipped quantised RelTime tick during acquisition slews without a false seek jump");
+    assert(after >= before && double(after)/48000 >= 4 && double(after)/48000 <= 5);
+    puts("PASS: skipped quantised RelTime tick re-anchors only to the latest interval");
 }
 static void reconnectFallback() {
     ConnectionPosition p;

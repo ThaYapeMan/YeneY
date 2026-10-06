@@ -11,11 +11,11 @@ public:
     void reset(unsigned id) {
         stream = id; request = 0; base = relative = lastFrames = 0;
         anchored = hadAudio = heardPosition = pendingAudibleBase = false;
-        audibleBase = lastAudible = 0; reportTime = 0; slewOffset = 0; reportingModel = false; ++generation;
+        audibleBase = lastAudible = 0; reportTime = 0; reportFrames = 0; slewOffset = 0; reportingModel = false; ++generation;
     }
     void connection(unsigned id, uint64_t req, uint64_t now) {
         if (id != stream) reset(id);
-        request = req; reportTime = 0; slewOffset = 0; reportingModel = false;
+        request = req; reportTime = 0; reportFrames = 0; slewOffset = 0; reportingModel = false;
         // Hold the last reported position until the first PCM offset is known.
         base = lastFrames;
         audibleBase = lastAudible;
@@ -90,7 +90,7 @@ public:
             target = std::clamp(candidate, low, low + rate);
         }
         const double dt = reportTime ? std::max(0., now - reportTime) / 1000 : 0;
-        const double projected = reportTime ? double(lastAudible) + dt * rate * scale : target;
+        const double projected = reportTime ? reportFrames + dt * rate * scale : target;
         const double difference = target - projected;
         // 15% corrects the observed 650 ms phase error in 4.34 seconds.
         // A qualified model correction above 750 ms is a discontinuity.
@@ -98,7 +98,11 @@ public:
         // crosses it: only explicit stream hooks may authorize their jumps.
         double next = !reportTime || (model && std::abs(difference) > .75 * rate) ? target
             : projected + std::clamp(difference, -.15 * dt * rate, .15 * dt * rate);
-        lastAudible = std::max(lastAudible, uint64_t(std::max(0., next)));
+        // Unlocked corrections may slew only while inside the latest
+        // quantisation interval. They cannot accumulate unbounded phase lag.
+        if (!model) next = std::clamp(next, target - .5 * rate, target + .5 * rate);
+        reportFrames = model ? std::max(double(lastAudible), std::max(0., next)) : std::max(0., next);
+        lastAudible = uint64_t(reportFrames);
         reportTime = now; reportingModel = model;
         slewOffset = (double(lastAudible) - target) / rate;
         frames(rate);
@@ -110,7 +114,7 @@ public:
     }
     double offset() const { return slewOffset; }
 private:
-    double reportTime = 0, slewOffset = 0;
+    double reportTime = 0, reportFrames = 0, slewOffset = 0;
     bool reportingModel = false;
     unsigned stream = 0;
     uint64_t request = 0, generation = 0, base = 0, started = 0, lastFrames = 0, observed = 0;
