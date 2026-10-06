@@ -36,7 +36,7 @@ int main(int argc, char **) {
     assert(!d.lmsPosition(1, 0, rate, frame, scale));
     p.poll(p.token(), 2000, 102600);
     assert(p.audibleFrames(rate) == 2 * rate);
-    puts("PASS: acquiring uses unchanged RelTime fallback");
+    puts("PASS: legacy RelTime fallback remains available while acquiring");
     for (unsigned n = 1; n <= 240; ++n)
         edge(d, n);
     unsigned lastEdge = 240;

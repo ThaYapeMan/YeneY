@@ -147,6 +147,18 @@ static void quantisedAcquisition() {
     assert(after >= before && after-before <= uint64_t(55200));
     puts("PASS: skipped quantised RelTime tick during acquisition slews without a false seek jump");
 }
+static void reconnectFallback() {
+    ConnectionPosition p;
+    p.connection(1,1,100000); p.pcm(1,1,0,100000);
+    p.poll(p.token(),2000,102600);
+    p.smoothFrames(48000,102600,false,0);
+    // Reconnect without start lead: history is retained for the audible base,
+    // but its old RelTime timestamp must not seed the new connection.
+    p.connection(1,2,112600); p.pcm(1,2,3*48000,112600,false);
+    const auto fallback = p.audibleFrames(48000);
+    assert(p.smoothFrames(48000,122600,false,0) == fallback);
+    puts("PASS: reconnect holds the existing fallback until a fresh positive RelTime observation");
+}
 static void seek() {
     ConnectionPosition p; p.connection(1,1,100000); p.pcm(1,1,0,100000);
     p.poll(p.token(),2000,102600);
@@ -160,4 +172,4 @@ static void seek() {
     assert(std::string(p.phase(false)) == "acquiring");
     puts("PASS: seek during slew resets offset and jumps to new coordinate");
 }
-int main() { replay(false); replay(true); replay(false,false); persistence(); contradiction(); quantisedAcquisition(); seek(); runtimePersistence(); }
+int main() { replay(false); replay(true); replay(false,false); persistence(); contradiction(); quantisedAcquisition(); reconnectFallback(); seek(); runtimePersistence(); }

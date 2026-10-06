@@ -81,7 +81,7 @@ public:
     // Smooth only the audible reporting coordinate; encoded handoffs stay exact.
     uint64_t smoothFrames(uint32_t rate, double now, bool model, double candidate,
                           double scale = 1, double relSecond = NAN, double observedMono = NAN) {
-        if (!anchored || !heardPosition || pendingAudibleBase || !rate) return audibleFrames(rate);
+        if (!anchored || !heardPosition || !relative || pendingAudibleBase || !rate) return audibleFrames(rate);
         const double sample = std::isfinite(observedMono) && relSecond == double(relative) / 1000
             ? observedMono * 1000 : double(observed);
         double target = audibleBase + (double(relative) / 1000 + .5 + std::max(0., now - sample) * scale / 1000) * rate;
