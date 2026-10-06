@@ -100,9 +100,13 @@ class Run:
         source = HTTP(body); self.sources.append(source)
         self.start_packet = len(self.lms.packets)
         self.lms.strm('s', source, fmt=fmt, rate=rate, bits=bits)
-        self.lms.wait('STMs', 10)
+        boundary = self.lms.wait('STMs', 10)
+        if getattr(self, 'expect_gapless_nonzero', False):
+            assert boundary['elapsed'] >= 1, boundary
+            self.expect_gapless_nonzero = False
         if continuation is not None:
             self.decoded_track()
+            self.expect_gapless_nonzero = True
             self.start(continuation, fmt='p')
         elapsed = [self.lms.timer(stamp)['elapsed'] for stamp in (41, 42, 43)]
         assert elapsed == sorted(elapsed) and elapsed[0] == 0, elapsed
