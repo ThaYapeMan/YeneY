@@ -332,7 +332,7 @@ the captured journal. The runtime override disappears on reboot; the warm
 value `1` is the default. Restore your usual PROBE/RAW settings after testing.
 
 
-The separate core pin is `f1996b6`. Deploy with
+The separate core pin is `8e18db4`. Deploy with
 `git submodule update --init --recursive` so Apple ALAC is present. YeneY's
 unpaced Sonos analysis tap deliberately leaves the core's optional play-time
 schedule unset; LampaStream should keep using the Sonos `/yeney-timing-<mac>`

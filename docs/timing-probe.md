@@ -211,11 +211,13 @@ After-lock includes convergence; after-slew starts at absolute lock + 5 s.
 This also means a later track's boundary glitch remains visible in after-slew
 errors. Keep playback continuous without pause, seek, skips or repeats.
 
-For network gapless boundaries only, yeney-core changes exactly-zero STMs
-elapsed to 1 ms. LMS `Slim/Player/Squeezebox2.pm::songElapsedSeconds` returns
+For playing, unpaused network gapless tracks only, yeney-core changes
+exactly-zero STMs/STMt elapsed to 1 ms. An immediate timer reply must not
+replace the nonzero boundary sentinel with zero. LMS `Slim/Player/Squeezebox2.pm::songElapsedSeconds` returns
 before interpolation when both elapsed fields are zero; 1 ms bypasses that
 sentinel with at most 1 ms wire bias. Initial starts, non-network outputs,
-other statuses, audio, URLs, HTTP constants and transport ordering are unchanged.
+paused reports, other event codes, audio, URLs, HTTP constants and transport
+ordering are unchanged.
 `Slim/Networking/Slimproto.pm::_stat_handler` replaces the stored play-point
 fields on each STAT, and `getPlayPointData` returns that latest jiffies/ms/seconds
 triple to Squeezebox2. Thus STMs zero remains authoritative until the next STAT.

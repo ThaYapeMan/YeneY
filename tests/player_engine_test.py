@@ -109,7 +109,11 @@ class Run:
             self.expect_gapless_nonzero = True
             self.start(continuation, fmt='p')
         elapsed = [self.lms.timer(stamp)['elapsed'] for stamp in (41, 42, 43)]
-        assert elapsed == sorted(elapsed) and elapsed[0] == 0, elapsed
+        assert elapsed == sorted(elapsed), elapsed
+        if boundary['elapsed'] > 0:
+            assert elapsed[0] >= 1, elapsed
+        else:
+            assert elapsed[0] == 0, elapsed
     def decoded_track(self):
         if not any(p.get('event') == 'STMd' for p in self.lms.packets[self.start_packet:]):
             self.lms.wait('STMd')
