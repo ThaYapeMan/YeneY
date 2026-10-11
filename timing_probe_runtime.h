@@ -88,7 +88,8 @@ class Diagnostics {
     FrameMapping frames;
     Publisher publisher;
     DriftState driftState;
-    DriftState::Value savedDrift;
+    // Carry may precede disk qualification; compare writes with the disk record.
+    DriftState::Value savedDrift, persistedDrift;
     std::string speakerUdn;
     bool hasPrior = false, driftDirty = false;
     double qualifiedSince = NAN, lastDriftWrite = -INFINITY;
@@ -101,15 +102,16 @@ class Diagnostics {
         if (std::isfinite(qualifiedSince) && nowClock() - qualifiedSince >= 60) {
             const double sigma = std::max(.1, (bracket.highDrift - bracket.lowDrift) / std::sqrt(12.));
             if (sigma <= 15 && std::abs(bracket.drift) <= 500 &&
-                (shutdown || !hasPrior || std::abs(savedDrift.ppm - bracket.drift) >= 1 ||
-                 std::abs(savedDrift.sigma - sigma) >= 1 ||
-                 time(nullptr) - savedDrift.timestamp >= 86400)) {
+                (shutdown || !DriftState::valid(persistedDrift, time(nullptr)) ||
+                 std::abs(persistedDrift.ppm - bracket.drift) >= 1 ||
+                 std::abs(persistedDrift.sigma - sigma) >= 1 ||
+                 time(nullptr) - persistedDrift.timestamp >= 86400)) {
                 savedDrift = {bracket.drift, sigma, time(nullptr)};
                 hasPrior = driftDirty = true;
             }
         }
         if (!speakerUdn.empty() && driftDirty && (shutdown || nowClock() - lastDriftWrite >= 3600)) {
-            driftState.save(savedDrift);
+            if (driftState.save(savedDrift)) persistedDrift = savedDrift;
             driftDirty = false; lastDriftWrite = nowClock();
         }
     }
@@ -280,8 +282,10 @@ public:
         speakerUdn = udn;
         printf("yeney: timing-lock state=acquiring mono=%.9f udn=%s\n", nowClock(), speakerUdn.c_str());
         driftState.speaker(udn, directory);
+        persistedDrift = {};
         hasPrior = priorEnabled() && driftState.load(savedDrift);
         if (hasPrior) {
+            persistedDrift = savedDrift;
             bracket.usePrior(savedDrift.ppm, savedDrift.sigma);
             printf("yeney: timing-prior udn=%s drift_ppm=%.3f sigma_ppm=%.3f timestamp=%lld\n",
                    udn.c_str(), savedDrift.ppm, savedDrift.sigma, savedDrift.timestamp);
@@ -632,7 +636,7 @@ public:
                 }
             }
             if (bracket.priorDropped) {
-                hasPrior = false; driftDirty = false;
+                hasPrior = false; driftDirty = false; persistedDrift = {};
                 savedDrift.timestamp = 0;
                 if (!speakerUdn.empty()) driftState.save(savedDrift);
                 printf("yeney: timing-prior dropped=live-edge-contradiction udn=%s mono=%.9f\n", speakerUdn.c_str(), nowClock());

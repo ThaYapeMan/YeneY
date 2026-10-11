@@ -164,6 +164,29 @@ static void reconnectFallback() {
     assert(p.smoothFrames(48000,122600,false,0) == fallback);
     puts("PASS: reconnect holds the existing fallback until a fresh positive RelTime observation");
 }
+static void carriedPersistence() {
+    char directory[] = "/tmp/yeney-carried-save-XXXXXX";
+    assert(mkdtemp(directory));
+    simulatedNow = 100;
+    Diagnostics d(simulatedClock);d.speaker("carried-save", directory);
+    d.anchor(1,0);d.handed(1,0,48000);
+    auto c=d.start(true,"carry-before-save");
+    auto feed=[&](unsigned n,double zero) {
+        double tick=zero+n*1.000009;
+        simulatedNow=tick-.0005;d.response(c,true,simulatedNow-.00025,simulatedNow+.00025,n-1);
+        simulatedNow=tick+.0005;d.response(c,true,simulatedNow-.00025,simulatedNow+.00025,n);
+    };
+    for(unsigned n=1;n<=175;++n) feed(n,100);
+    DriftState state;state.speaker("carried-save",directory);DriftState::Value v;
+    assert(!state.load(v));
+    d.reset("stream-reset",true);d.anchor(2,0);d.handed(2,0,44100);
+    assert(d.priorActive());
+    const double zero=simulatedNow+.2;
+    simulatedNow=zero;c=d.start(true,"mature-after-carry");
+    for(unsigned n=1;n<=185;++n) feed(n,zero);
+    assert(state.load(v) && std::abs(v.ppm-9)<2);
+    puts("PASS: an unsaved carried prior still persists after qualification on the next stream");
+}
 static void seek() {
     ConnectionPosition p; p.connection(1,1,100000); p.pcm(1,1,0,100000);
     p.poll(p.token(),2000,102600);
@@ -177,4 +200,4 @@ static void seek() {
     assert(std::string(p.phase(false)) == "acquiring");
     puts("PASS: seek during slew resets offset and jumps to new coordinate");
 }
-int main() { replay(false); replay(true); replay(false,false); persistence(); contradiction(); quantisedAcquisition(); reconnectFallback(); seek(); runtimePersistence(); }
+int main() { replay(false); replay(true); replay(false,false); persistence(); contradiction(); quantisedAcquisition(); reconnectFallback(); seek(); runtimePersistence(); carriedPersistence(); }
