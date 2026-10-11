@@ -257,8 +257,9 @@ A first-ever install has no prior; an upgrade may already have one. Journal
 See [the clock contract](docs/timing-probe.md) for file format and expiry.
 
 The user runs the following on LXC 113 after deploying. Queue two long tracks
-in LMS on **Study (Sonos)** first: make the first about 6–8 minutes and the next
-at least 6 minutes so the 600 s capture includes a gapless boundary. Enable
+in LMS on **Study (Sonos)** first: use two queued tracks of different PCM sample rates, for example id:32671
+(48 kHz, 589 s) then id:32678 (44.1 kHz). The 720 s capture includes enough
+of the second track to measure phase reacquisition. Enable
 PROBE and RAW in the existing service environment. These commands force a new
 stream and start the checker within a few seconds of LMS playback. The runtime
 service override changes only prior loading; it never deletes drift files.
@@ -274,6 +275,12 @@ make
 sudo make install
 ```
 
+Queue the two owner-library tracks once; the warm run uses the same playlist:
+
+```sh
+printf '94:9f:3e:fa:ba:66 playlistcontrol cmd:load track_id:32671\n94:9f:3e:fa:ba:66 playlistcontrol cmd:add track_id:32678\n94:9f:3e:fa:ba:66 stop\n' | nc -w 1 192.168.178.23 9090
+```
+
 Forced cold run:
 
 ```sh
@@ -284,7 +291,7 @@ printf '[Service]\nEnvironment=YENEY_TIMING_PROBE=1 YENEY_TIMING_RAW=1 YENEY_TIM
 sudo systemctl daemon-reload
 sudo systemctl restart yeney@Study.service
 printf '94:9f:3e:fa:ba:66 playlist index 0\n94:9f:3e:fa:ba:66 play\n' | nc -w 1 192.168.178.23 9090
-/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 600 > /tmp/study-cold-start.txt
+/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 720 > /tmp/study-cold-start.txt
 sudo journalctl -u yeney@Study.service --since "$COLD_SINCE" --no-pager -o short-precise > /tmp/study-cold-journal.txt
 ```
 
@@ -297,7 +304,7 @@ printf '[Service]\nEnvironment=YENEY_TIMING_PROBE=1 YENEY_TIMING_RAW=1 YENEY_TIM
 sudo systemctl daemon-reload
 sudo systemctl restart yeney@Study.service
 printf '94:9f:3e:fa:ba:66 playlist index 0\n94:9f:3e:fa:ba:66 play\n' | nc -w 1 192.168.178.23 9090
-/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 600 > /tmp/study-warm-start.txt
+/opt/yeney/scripts/yeney-lms-position-check 192.168.178.23 94:9f:3e:fa:ba:66 --seconds 720 > /tmp/study-warm-start.txt
 sudo journalctl -u yeney@Study.service --since "$WARM_SINCE" --no-pager -o short-precise > /tmp/study-warm-journal.txt
 cat /tmp/study-cold-journal.txt /tmp/study-warm-journal.txt > /tmp/study-journal.txt
 ```
@@ -310,21 +317,21 @@ pct pull 113 /tmp/study-warm-start.txt /tmp/study-warm-start.txt
 pct pull 113 /tmp/study-journal.txt /tmp/study-journal.txt
 ```
 
-Expected per segment:
+Expected per track (a rate change creates a new stream):
 
-| Metric | First cold track | First warm track | Following gapless tracks |
+| Metric | First cold track | First warm track | Following different-rate track |
 |---|---|---|---|
-| Stream time to lock | 60–65 s | 5–25 s; prior-load log required | same stream duration, already_locked=1 |
-| Before lock | within RelTime quantisation, about ±500 ms + RTT | same, prior rate | zero pre-lock samples |
-| Convergence | normally <=5 s | normally <=5 s | no new convergence |
+| Stream time to lock | 60–63 s (60 s measured span gate) | <=15 s; prior-load log required | <=15 s from new-stream start; live drift carried |
+| Before lock | within RelTime quantisation, about ±500 ms + RTT | same, prior rate | unity/prior progress until phase lock |
+| Convergence | normally <=5 s | normally <=5 s | normally <=5 s |
 | After-slew error | p95 <=5 ms, aim max <=5 ms | same | same; inspect isolated jitter outliers |
 | 250 ms steps | <=400 ms during slew + jitter | same | about 250 ms + jitter |
 | Excess step | <=150 ms during slew + jitter | same | near zero + jitter |
-| Flat interval / backwards | 0 / 0 | 0 / 0 | 0 / 0; boundary elapsed >=1 ms |
+| Flat interval / backwards | 0 / 0 | 0 / 0 | 0 / 0 after audible start; no repeated 1 ms reports |
 
-Overall aggregates each segment; it must not show the former 750 ms boundary
+Overall aggregates each track; it must not show the former 750 ms boundary
 freeze or 854 ms excess step. A2 automated lock times remain 60/10 s; the new
-field-informed cold replay locks at 62.227 s. These are position/clock targets,
+field-informed cold replay now locks at 61.222 s (62.227 s before this change). These are position/clock targets,
 not acoustic guarantees. If a valid prior was not saved during the cold run,
 the warm run must report a cold lock rather than pretending it loaded one.
 `time_to_lock_s=unknown` means stream/lock journal evidence is missing; inspect
@@ -337,3 +344,19 @@ The separate core pin is `8e18db4`. Deploy with
 unpaced Sonos analysis tap deliberately leaves the core's optional play-time
 schedule unset; LampaStream should keep using the Sonos `/yeney-timing-<mac>`
 audible mapping. Standalone paced yeney-core players can supply the new schedule.
+
+After both runs, remove the test override and restore the normal unit settings:
+
+```sh
+sudo rm /run/systemd/system/yeney@Study.service.d/90-field-prior.conf
+sudo systemctl daemon-reload
+sudo systemctl restart yeney@Study.service
+```
+
+The strict requested cold <=60 s from STMs is not claimed: the unchanged cold
+lock gate requires 60 s between the first and latest measured edges. Expect
+about 62 s from stream 2 start with this field timing. Preserve pre-lock constant
+phase without drift (the previous -165/-218 ms are capture-specific, not
+calibration targets), after-lock p95 <=5 ms, and no startup reset cycle on track 2.
+Inspect the explicit track-change sample gap and grouped anomaly output;
+`audible_gap_s=unknown` requires listening to assess acoustic silence.

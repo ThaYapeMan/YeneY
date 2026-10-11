@@ -147,3 +147,25 @@ with patch.object(tool.subprocess,'run',return_value=type('Result',(),{'stdout':
 assert 'Creating new stream' in journal and 'unrelated' not in journal
 assert tool.lock_time([(110,2),(111,3)],journal)==5
 print('PASS: live read-only track identity sampling and complete producer process journal selection')
+
+for kind in ('cold', 'warm'):
+    fixture = root/'tests/fixtures/field-2026-10-11'
+    rows = [line.split() for line in (fixture/f'{kind}-positions.txt').read_text().splitlines()]
+    samples = [(float(r[0]),float(r[1])) for r in rows]
+    tracks = [r[3] for r in rows]
+    journal = '\n'.join(l for l in (fixture/'journal.txt').read_text().splitlines() if ('[43745]' if kind=='cold' else '[43848]') in l)
+    assert len(tool.segments(samples,tracks)) == 2
+    output=io.StringIO()
+    with contextlib.redirect_stdout(output): tool.report(samples,journal,tracks)
+    report=output.getvalue()
+    assert 'overall segments=2' in report and report.count('track_change_gap_s=')==1
+    assert report.count('after_slew_error samples=') == 3
+    if kind=='cold':
+        assert report.count('startup_anomaly_count=1')==1
+        assert 'decreases=6 duration_s=6.500 size_ms=750.026' in report
+    else:
+        assert report.count('startup_anomaly_count=1')==1
+        assert 'decreases=5 duration_s=4.250 size_ms=750.061' in report
+    assert 'audible_gap_s=unknown' in report
+    (Path('/tmp')/f'oct11-{kind}-checker.txt').write_text(report)
+    print(f'PASS: October 11 {kind}: per-track statistics, grouped startup decreases and explicit track-change gap')

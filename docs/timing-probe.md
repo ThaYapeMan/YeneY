@@ -188,13 +188,13 @@ scripts/yeney-lms-position-check <lms-host> 94:9f:3e:fa:ba:66 --seconds 600
 
 It samples read-only `<mac> status - 1 tags:` every 0.25 s without catch-up
 bursts. Time and playlist index/track ID come from the same response, avoiding
-a track-change race between separate time and identity queries. A position decrease or changed
-playlist index/track ID starts a new segment. Each segment gets its own fit,
+a track-change race between separate time and identity queries. A changed playlist index/track ID starts a new track group; without identities,
+a position decrease starts a fallback segment. Each segment gets its own fit,
 residuals, ppm, steps (including startup), longest flat interval, and before-lock,
 after-lock and after-slew errors. Overall errors aggregate segment residuals;
 overall ppm is the duration-weighted mean of segment slopes. No line is fitted
 across a track boundary. Legitimate resets are excluded from backwards counts.
-A backwards anomaly also creates a segment, so inspect segment boundaries.
+Within-track backwards anomalies remain in the track fit and are reported together.
 
 It reads the local JSON journal, identifies the producer PID by its own `udn=` field containing the
 MAC-derived RINCON UDN (rather than mentions in shared topology XML), then keeps that process's complete messages, including core STMs.
@@ -227,7 +227,7 @@ brackets, span 324 s, band 10.379 ms and zero violations: there was no lock gate
 bypass or staleness reset. The scheduler's midpoint diagnostic count of 7–11
 was a different estimator. The new scheduled counterfactual uses the first five
 observed edge midpoints, later field-supported phase/rate, and captured RTTs;
-it locks at 62.227 s. It is a simulation of the missing sub-second queries,
+it now locks at 61.222 s (62.227 s on 7a9213f). It is a simulation of the missing sub-second queries,
 not a claim to have measured new device responses. Literal recorded rejection
 replay verifies recovery deadlines and discarding transient midpoint edges.
 Pre-lock replay stays within 500.000 ms of the latest quantisation midpoint
@@ -545,3 +545,81 @@ therefore never calls `playTiming`. The new audio timing block exists, but its
 play-clock flag, play-time anchor and rate remain unset. The separate
 `/yeney-timing-<mac>` Sonos bracket clock remains the audible timing contract.
 The legacy audio layout and frame correspondence are preserved.
+
+## October 11 acquisition and rate-change follow-up
+
+The supplied October 11 journal is replayed separately from the October 6
+fixtures. Only PID 43745 (cold) and 43848 (warm) are used. Acquisition starts
+at stream 2 STMs, respectively MONOTONIC 1110013.688 and 1110750.554; stream 1
+was LMS's earlier resume. The pause at 14:44:12 is the owner's stop.
+
+A qualified prior now guides acquisition from the interval intersection.
+Cold acquisition switches to the same guidance when the midpoint diagnostics
+show a rejection or more than 30 ms residual, then retains that guidance while
+the interval remains fully consistent. Precise existing acquisition fixtures
+keep their original schedule. Guidance uses the interval's unity/prior slope,
+its conditional phase band, and the existing golden-ratio sub-second dither.
+It does not make the diagnostic midpoint fit authoritative. Scheduler recovery
+still discards the transient midpoint fit after three rejections, but the edge
+that triggered recovery also enters the independent interval clock. Genuine
+interval contradictions retain the existing prior rejection and lock gates.
+RTT limits, rolling request budgets and locked probing remain unchanged.
+
+Across stream/PCM resets, a qualified live drift with sigma <=15 ppm is retained
+as an in-memory prior even before it has met the additional disk persistence
+age. Only stream phase and frame mapping are discarded. This never enables disk
+prior loading when YENEY_TIMING_PRIOR=0; a forced cold process may still learn
+and reuse its own speaker's live drift later in that process.
+
+The core's queued-successor flag formerly remained gapless across a PCM-rate
+change, although the Sonos sink created a new HTTP stream. The core now clears
+that flag when the rate differs. For the restarted rate-change stream the sink
+waits for a positive RelTime confirmation and audible position rather than
+submitted PCM before STMs. Either the normal read or a current eligible probe
+may provide that positive confirmation. An eligible probe zero may seed only
+this armed internal coordinate without waiting for the normal lease; the probe does not update the leased
+cache. This avoids waiting for the leased read that skipped the first integer.
+A PLAYING zero alone may initialize the internal
+reporting coordinate but cannot announce the new track. The 1 ms
+sentinel remains for same-rate gapless successors. An explicitly armed zero
+RelTime anchor allows the rate-change reporting coordinate to advance from the
+first PLAYING zero-second observation, instead of waiting for a normal leased
+positive integer and initializing at integer +0.5 seconds. Zero readings during
+TRANSITIONING do not seed it; later stop zeros cannot reset positive position.
+Arming survives repeated reset hooks for that same stream and ends on the next
+stream ID. Initial acquisition's midpoint anchor remains unchanged.
+
+Evidence: at 14:43:12.371359 the boundary logged rate=44100 gapless=1; at
+14:43:13.374545 the sink created stream 3. STMs at 14:43:13.376495 reported 1 ms,
+and STMt repeated it through 14:43:17.000. The first positive raw probe was
+14:43:16.766410 (RelTime 1); the normal leased reporting path only initialized
+later. STMt at 14:43:17.671059 jumped to 2558 ms: the positive integer,
+0.5-second midpoint anchor and aged SOAP observation explain that coordinate,
+rather than two and a half seconds of suddenly delivered audio.
+
+New scheduler replays use the final interval-supported field phase/rate and
+captured RTTs to answer counterfactual request times. They are simulations,
+not newly observed speaker replies. Literal journal interval replay is also
+reported. Cold gates still require a 60-second span between measured edges:
+with the first edge after stream start, a strict <=60 seconds from STMs is
+incompatible with keeping that gate. The field replay permits <=63 seconds
+from STMs; warm and carried-drift phase acquisition require <=15 seconds.
+The unchanged A2 evidence gates remain 60/10 seconds.
+
+With track identities available, the checker keeps one fit per track; short
+startup decreases do not split its reference line into micro-segments.
+It prints a grouped anomaly's duration, maximum decrease and raw decrease
+count. `track_change_gap_s` is the time between the two samples straddling the
+identity change; `position_reset_s` reports the reset size. Acoustic silence
+cannot be inferred from these captures, so `audible_gap_s=unknown` is explicit.
+Per-track before-lock, after-lock and after-slew statistics include glitches.
+
+Verified scheduler comparisons with identical simulated clock/RTT inputs:
+October 11 cold 61.950 -> 61.931 s, warm with prior 23.851 -> 11.855 s.
+The recorded producer locks remain 67.893/41.844 s from stream 2 STMs;
+accepting all valid recorded interval evidence gives 61.400/41.830 s in literal
+interval-only replay. The changed scheduling, rather than reinterpretation of
+the original samples, supplies the warm improvement. October 6's existing
+counterfactual improves 62.227 -> 61.222 s. The unsaved-live-drift rate-change
+field-RTT replay reacquires in 14.256 s; the original cold field change took
+36.253 s from its early STMs (37.258 s from tap boundary). A2 remains 60/10 s.

@@ -109,7 +109,7 @@ def segments(samples, tracks=None):
     result, begin = [], 0
     for i in range(1, len(samples)):
         changed = tracks is not None and tracks[i] is not None and tracks[i-1] is not None and tracks[i] != tracks[i-1]
-        if samples[i][1] < samples[i-1][1] or changed:
+        if changed or (tracks is None and samples[i][1] < samples[i-1][1]):
             result.append(samples[begin:i])
             begin = i
     result.append(samples[begin:])
@@ -158,6 +158,8 @@ def summary(samples, locked, stream_duration=None):
     stable = [s for s in samples if s[0] >= start + (locked + 5 if locked is not None else .8*(samples[-1][0]-start))]
     if len(stable) < 2:
         print("startup_error_reference=unavailable")
+        for name in ("before_lock_error", "after_lock_error", "after_slew_error"):
+            print(name + " " + statistics([]) + " reference=unavailable")
         return
     slope, _ = fit(stable)
     mean_t = sum(t for t, _ in stable)/len(stable)
@@ -174,9 +176,24 @@ def summary(samples, locked, stream_duration=None):
 
 def report(samples, journal, tracks=None):
     groups = segments(samples, tracks)
+    for index, group in enumerate(groups):
+        if index:
+            previous = groups[index-1][-1]
+            print(f"track_change_gap_s={group[0][0]-previous[0]:.3f} position_reset_s={previous[1]-group[0][1]:.3f} audible_gap_s=unknown")
+        decreases = [i for i in range(1,len(group)) if group[i][1] < group[i-1][1]]
+        if decreases:
+            first, last = decreases[0]-1, decreases[-1]
+            end = last
+            peak = max(p for _,p in group[first:last+1])
+            while end+1 < len(group) and group[end][1] < peak: end += 1
+            print(f"track={index+1} startup_anomaly_count=1 decreases={len(decreases)} duration_s={group[end][0]-group[first][0]:.3f} size_ms={max(group[i-1][1]-group[i][1] for i in decreases)*1000:.3f}")
     all_metrics, rates = [], []
     all_residuals, all_steps, all_errors = [], [], {"before_lock_error": [], "after_lock_error": [], "after_slew_error": []}
+    track_offset = 0
     for index, group in enumerate(groups, 1):
+        identity = tracks[track_offset] if tracks is not None else None
+        track_offset += len(group)
+        print(f"track={index} identity={identity or 'unknown'}")
         print(f"segment={index} start_mono_s={group[0][0]:.9f} end_mono_s={group[-1][0]:.9f}")
         if len(group) < 2:
             print("samples=1 fit=unavailable")
@@ -208,8 +225,8 @@ def report(samples, journal, tracks=None):
     duration=sum(dt for _,dt in rates)
     mean_rate=sum(rate*dt for rate,dt in rates)/duration if duration else math.nan
     resets = [samples[i-1][1]-samples[i][1] for i in range(1,len(samples)) if samples[i][1]<samples[i-1][1]]
-    print(f"position_decreases={len(resets)} largest_position_decrease_ms={max(resets,default=0)*1000:.3f} (segment boundaries)")
-    print(f"overall segments={len(groups)} samples={len(samples)} max_excursion_ms={max((abs(r) for r in all_residuals),default=0)*1000:.3f} ppm={(mean_rate-1)*1e6:+.3f} rate_source=duration-weighted-segment-fits")
+    print(f"position_decreases={len(resets)} largest_position_decrease_ms={max(resets,default=0)*1000:.3f} (includes track resets; within-track decreases are anomalies)")
+    print(f"overall segments={len(groups)} tracks={len(groups)} samples={len(samples)} max_excursion_ms={max((abs(r) for r in all_residuals),default=0)*1000:.3f} ppm={(mean_rate-1)*1e6:+.3f} rate_source=duration-weighted-segment-fits")
     print_step_metrics(tuple(max((m[i] for m in all_metrics),default=0) for i in range(3)))
     print("residual_error " + statistics(all_residuals))
     late=[d for d in all_steps if d[0]>=10]
