@@ -61,7 +61,7 @@ static void replay(bool prior) {
     printf("October 11 prior=%d recorded_first_band_s=%.3f scheduled_lock_s=%.3f\n",prior,literal-start,locked);
     assert(std::isfinite(locked) && locked <= (prior?15:63));
 }
-static void carriedDrift() {
+static void carriedDrift(bool warm) {
     now=100; Diagnostics d(clockNow);d.anchor(2,0);d.handed(2,0,48000);
     auto c=d.start(true,"rate-change");
     for(unsigned n=1;n<=175;++n) {
@@ -78,12 +78,12 @@ static void carriedDrift() {
     BracketClock recorded; recorded.usePrior(9,7);
     std::vector<double> rtts; std::string line; std::smatch m;
     while(getline(field,line)) {
-        if(line.find("[43745]")==std::string::npos) continue;
+        if(line.find(warm ? "[43848]" : "[43745]")==std::string::npos) continue;
         if(regex_search(line,m,raw)) rtts.push_back(stod(m[2])-stod(m[1]));
         if(regex_search(line,m,edge)) recorded.add({stod(m[1]),stod(m[2]),stod(m[3])});
     }
     assert(recorded.fitted && rtts.size()>20);
-    double start=1110603.844,locked=NAN;unsigned requests=0;
+    double start=warm ? 1111340.667 : 1110603.844,locked=NAN;unsigned requests=0;
     now=start;d.anchor(3,0);d.handed(3,0,44100);
     assert(!d.heardAudio(3));
     double zeroTime; assert(!d.startupZero(3,zeroTime));
@@ -97,7 +97,7 @@ static void carriedDrift() {
         double t,u;if(d.contract(uint64_t(n)*44100,t,u)&&!std::isfinite(locked))locked=now-start;
     }
     assert(std::isfinite(locked)&&locked<=15);
-    printf("PASS: 48 to 44.1 kHz retains unsaved live drift, reacquires phase in %.3f s\n",locked);
+    printf("PASS: %s 48 to 44.1 kHz retains unsaved live drift, reacquires phase in %.3f s\n",warm ? "warm" : "cold",locked);
 }
 static void rateChangePosition() {
     ConnectionPosition p; p.reset(3);p.allowZeroStart();p.reset(3);p.connection(3,1,100000);p.pcm(3,1,0,100000);
@@ -116,4 +116,4 @@ static void rateChangePosition() {
     }
     puts("PASS: 44.1 kHz new-stream zero anchor advances at unity without frozen floor or 2.5 s jump");
 }
-int main(){rateChangePosition();setenv("YENEY_TIMING_PROBE","1",1);replay(false);replay(true);carriedDrift();}
+int main(){rateChangePosition();setenv("YENEY_TIMING_PROBE","1",1);replay(false);replay(true);carriedDrift(false);carriedDrift(true);}

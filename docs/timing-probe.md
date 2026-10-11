@@ -621,5 +621,5 @@ accepting all valid recorded interval evidence gives 61.400/41.830 s in literal
 interval-only replay. The changed scheduling, rather than reinterpretation of
 the original samples, supplies the warm improvement. October 6's existing
 counterfactual improves 62.227 -> 61.222 s. The unsaved-live-drift rate-change
-field-RTT replay reacquires in 14.256 s; the original cold field change took
+field-RTT replays reacquire in 14.256 s (cold capture) and 14.240 s (warm capture); the original cold field change took
 36.253 s from its early STMs (37.258 s from tap boundary). A2 remains 60/10 s.
