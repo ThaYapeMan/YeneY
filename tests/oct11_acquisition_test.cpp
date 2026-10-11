@@ -114,6 +114,11 @@ static void rateChangePosition() {
         if(i) assert(next>previous && next-previous<.251);
         previous=next;
     }
-    puts("PASS: 44.1 kHz new-stream zero anchor advances at unity without frozen floor or 2.5 s jump");
+    p.connection(3,2,112000);p.pcm(3,2,500000,112000);
+    p.poll(p.token(),0,113200);
+    auto held=p.smoothFrames(44100,113200,false,0);
+    p.startZero(113300);
+    assert(p.smoothFrames(44100,113500,false,0)==held);
+    puts("PASS: 44.1 kHz zero anchor advances without frozen floor or 2.5 s jump; reconnect zero stays held");
 }
 int main(){rateChangePosition();setenv("YENEY_TIMING_PROBE","1",1);replay(false);replay(true);carriedDrift(false);carriedDrift(true);}

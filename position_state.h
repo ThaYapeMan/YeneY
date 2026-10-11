@@ -57,6 +57,7 @@ public:
         // Repeated leased values are the same observation, not a fresh bracket.
         if (!heardPosition || relative != ms) observed = now;
         relative = ms;
+        if (ms) allowZero = false; // Startup-only: reconnects retain the positive-read safeguard.
         if (!ms) zeroObserved = true;
         heardPosition = true;
     }

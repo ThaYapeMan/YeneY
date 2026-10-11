@@ -586,8 +586,9 @@ RelTime anchor allows the rate-change reporting coordinate to advance from the
 first PLAYING zero-second observation, instead of waiting for a normal leased
 positive integer and initializing at integer +0.5 seconds. Zero readings during
 TRANSITIONING do not seed it; later stop zeros cannot reset positive position.
-Arming survives repeated reset hooks for that same stream and ends on the next
-stream ID. Initial acquisition's midpoint anchor remains unchanged.
+Arming survives repeated reset hooks for that same stream until its first
+positive normal observation, and also ends on the next stream ID. Subsequent
+reconnects retain the original positive-read safeguard. Initial acquisition's midpoint anchor remains unchanged.
 
 Evidence: at 14:43:12.371359 the boundary logged rate=44100 gapless=1; at
 14:43:13.374545 the sink created stream 3. STMs at 14:43:13.376495 reported 1 ms,
