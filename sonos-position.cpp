@@ -66,6 +66,8 @@ uint64_t get_sonos_audible_frames(uint32_t rate) {
     std::lock_guard<std::mutex> lock(positionMutex);
     if (timing_probe::enabled() && timing_probe::lmsPositionFromModel()) {
         auto &diagnostic = timing_probe::diagnostics();
+        double zeroTime;
+        if (diagnostic.startupZero(position.streamId(), zeroTime)) position.startZero(zeroTime * 1000);
         double frame = 0, scale = diagnostic.priorScale(), relSecond = NAN, observed = NAN;
         const bool model = diagnostic.lmsPosition(position.streamId(), position.measurementBase(), rate, frame, scale, &relSecond, &observed);
         const auto audible = position.smoothFrames(rate, timing_probe::clockSeconds() * 1000, model, frame, scale, relSecond, observed);
@@ -73,4 +75,15 @@ uint64_t get_sonos_audible_frames(uint32_t rate) {
         return audible;
     }
     return position.audibleFrames(rate);
+}
+
+void sonos_position_allow_zero_start() {
+    std::lock_guard<std::mutex> lock(positionMutex);
+    position.allowZeroStart();
+}
+
+int sonos_position_audio_started() {
+    std::lock_guard<std::mutex> lock(positionMutex);
+    return position.audioStarted() || (timing_probe::enabled() &&
+        timing_probe::diagnostics().heardAudio(position.streamId()));
 }

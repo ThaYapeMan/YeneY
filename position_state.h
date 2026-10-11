@@ -8,13 +8,25 @@
 // arguments let tests cover connection/poll races without wall-clock sleeps.
 class ConnectionPosition {
 public:
+    void allowZeroStart() { allowZero = true; }
+    // An eligible current-stream probe is fresh evidence, unlike a leased
+    // normal zero. Seed only the explicit rate-change reporting coordinate.
+    void startZero(double time) {
+        if (!allowZero || !anchored || heardPosition || pendingAudibleBase ||
+            !std::isfinite(time) || time < started) return;
+        observed = uint64_t(time); heardPosition = zeroObserved = true;
+    }
+    bool audioStarted() const { return anchored && heardPosition && relative > 0 && !pendingAudibleBase; }
     void reset(unsigned id) {
+        if (id != stream) allowZero = false;
+        zeroObserved = false;
         stream = id; request = 0; base = relative = lastFrames = 0;
         anchored = hadAudio = heardPosition = pendingAudibleBase = false;
         audibleBase = lastAudible = 0; reportTime = 0; reportFrames = 0; slewOffset = 0; reportingModel = false; ++generation;
     }
     void connection(unsigned id, uint64_t req, uint64_t now) {
         if (id != stream) reset(id);
+        zeroObserved = false;
         request = req; reportTime = 0; reportFrames = 0; slewOffset = 0; reportingModel = false;
         // Hold the last reported position until the first PCM offset is known.
         base = lastFrames;
@@ -35,7 +47,7 @@ public:
     uint64_t measurementBase() const { return base; }
     uint64_t token() const { return generation; }
     void poll(uint64_t token, uint32_t ms, uint64_t now) {
-        if (token != generation || !anchored || ms == 0) return;
+        if (token != generation || !anchored || (ms == 0 && (!allowZero || relative != 0))) return;
         // Stop may report zero before the next GET; retain the last position.
         // A new connection/PCM anchor already clears relative to zero.
         // Position reads are cached for one second. Ignore that cache after
@@ -45,6 +57,7 @@ public:
         // Repeated leased values are the same observation, not a fresh bracket.
         if (!heardPosition || relative != ms) observed = now;
         relative = ms;
+        if (!ms) zeroObserved = true;
         heardPosition = true;
     }
     uint64_t frames(uint32_t rate) {
@@ -81,10 +94,10 @@ public:
     // Smooth only the audible reporting coordinate; encoded handoffs stay exact.
     uint64_t smoothFrames(uint32_t rate, double now, bool model, double candidate,
                           double scale = 1, double relSecond = NAN, double observedMono = NAN) {
-        if (!anchored || !heardPosition || !relative || pendingAudibleBase || !rate) return audibleFrames(rate);
+        if (!anchored || !heardPosition || (!relative && !zeroObserved) || pendingAudibleBase || !rate) return audibleFrames(rate);
         const double sample = std::isfinite(observedMono) && relSecond == double(relative) / 1000
             ? observedMono * 1000 : double(observed);
-        double target = audibleBase + (double(relative) / 1000 + .5 + std::max(0., now - sample) * scale / 1000) * rate;
+        double target = audibleBase + (double(relative) / 1000 + (relative ? .5 : 0) + std::max(0., now - sample) * scale / 1000) * rate;
         if (model) {
             const double low = target - .5 * rate;
             target = std::clamp(candidate, low, low + rate);
@@ -119,7 +132,7 @@ public:
     double offset() const { return slewOffset; }
 private:
     double reportTime = 0, reportFrames = 0, slewOffset = 0;
-    bool reportingModel = false;
+    bool reportingModel = false, allowZero = false, zeroObserved = false;
     unsigned stream = 0;
     uint64_t request = 0, generation = 0, base = 0, started = 0, lastFrames = 0, observed = 0;
     uint32_t relative = 0;

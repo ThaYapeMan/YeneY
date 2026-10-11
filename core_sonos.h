@@ -30,6 +30,7 @@ class CoreSonosSink : public yeney::Sink {
     std::atomic<bool> running{true};
     std::atomic<uint64_t> generation{0};
     size_t staged = 0;
+    bool rateChangedStream = false;
     bool paused = false, pending = false, continuous = false, inflight = false;
     unsigned rate = 44100, streamRate = 0;
     uint64_t next = 0, streamBase = 0, handed = 0, started = 0;

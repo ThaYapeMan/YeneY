@@ -26,6 +26,9 @@ extern "C" {
 #endif
 
 // All shared connection/PCM/poll state is protected by one mutex in C++.
+// Arm the zero-second audible anchor only for a new rate-change stream.
+void sonos_position_allow_zero_start(void);
+int sonos_position_audio_started(void);
 void reset_sonos_position(unsigned stream);
 void sonos_position_connection(unsigned stream, uint64_t request);
 void sonos_position_pcm(unsigned stream, uint64_t request, uint64_t first_frame);

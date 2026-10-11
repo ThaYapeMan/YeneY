@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney
@@ -44,6 +44,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	./timing-contract-test
 	./cold-position-test
 	./field-cold-test
+	./oct11-acquisition-test
 	YENEY_TIMING_PRIOR=0 ./field-cold-test prior-setting
 	YENEY_TIMING_PRIOR=1 ./field-cold-test prior-setting
 	./lms-position-test
@@ -223,3 +224,7 @@ test: cold-position-test
 field-cold-test: tests/field_cold_test.cpp timing_probe_runtime.h timing_probe.h timing_brackets.h timing_settings.h position_state.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
 test: field-cold-test
+
+oct11-acquisition-test: tests/oct11_acquisition_test.cpp timing_probe_runtime.h timing_probe.h timing_brackets.h timing_drift_state.h timing_settings.h timing_channel.h position_state.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
+test: oct11-acquisition-test

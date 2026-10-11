@@ -11,6 +11,8 @@ source = r'''
 #include <vector>
 #include <atomic>
 #include <mutex>
+std::atomic<unsigned> zeroArms{0};
+extern "C" void sonos_position_allow_zero_start(void) { ++zeroArms; }
 std::atomic<unsigned> id{0}; std::atomic<uint64_t> position{0};
 std::atomic<bool> block{false}; std::mutex capturedMutex;
 std::vector<char> captured; std::vector<uint64_t> anchors;
@@ -20,6 +22,7 @@ extern "C" unsigned get_squeezebox_stream_id() { return id.load(); }
 extern "C" void new_squeezebox_stream_id() { ++id; position=0; }
 extern "C" void set_squeezebox_audio_rate(unsigned, unsigned) {}
 extern "C" uint64_t get_sonos_audible_frames(uint32_t) { return position.load(); }
+extern "C" int sonos_position_audio_started(void) { return position.load()>0; }
 extern "C" int encode_squeezebox_audio_cancellable(const char* p,int n,uint64_t first,int(*cancel)(void*),void* ctx) {
     while(block && !cancel(ctx)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
     if(cancel(ctx)) return 0;
@@ -50,6 +53,11 @@ int main() {
     assert(id==(legacy?2:1)); assert(anchors.back()==(legacy?0:3));
     s.command({'s',0,true}); s.trackBoundary(6,{48000,24,2,false},true);
     assert(s.write(f,3)==3); drain(s); assert(id==(legacy?3:2));
+    if (!legacy) {
+        assert(zeroArms==1 && s.startedFrames()<=6);
+        position=1; assert(s.startedFrames()==7);
+        position=2; assert(s.startedFrames()==8);
+    } else assert(zeroArms==0);
     position=999999; assert(s.audibleFrames()==9);
     s.flush(); s.stop(); assert(s.audibleFrames()==9);
     s.resume(); block=true;

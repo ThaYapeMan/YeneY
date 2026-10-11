@@ -37,6 +37,9 @@ class Estimator {
     unsigned phase = 0, rejected = 0, missed = 0, outliers = 0, stalled = 0;
     bool recovered = false;
     double dither = 0;
+    bool guided = false;
+    double guideZero = 0, guideSlope = 1;
+    double scheduleAt(double second) const { return guided ? guideZero + second * guideSlope : timeAt(second); }
     unsigned burst = 0;
     uint64_t usableEdges = 0;
     EdgeDecision decision;
@@ -224,24 +227,24 @@ class Estimator {
         lastTime = t;
         lastSecond = second;
         lastRtt = rtt;
-        if (decision.observed && !decision.inlier && inliers.size() < 20) {
+        if (!guided && decision.observed && !decision.inlier && inliers.size() < 20) {
             // Search immediately after a miss; extrapolating the same bad fit
             // here can place every subsequent request on the same tick side.
             phase = 0;
             window = .25;
             due = t + .34;
-        } else if (edges.size() < 5) {
+        } else if (!guided && edges.size() < 5) {
             due = t + .34;
         } else if (decision.observed) {
             phase = 0;
             // Deterministic phase dither prevents the sampling schedule locking
             // to one side of a quantized tick and biasing the drift regression.
             dither = (std::fmod(++burst * .6180339887498949, 1.) - .5) * 2 * std::min(window, .040);
-            due = dither + timeAt(second + 1) - window -
+            due = dither + scheduleAt(second + 1) - window -
                   percentile({rtts.begin(), rtts.end()}, .5) / 2;
-        } else if (fitted || primed) {
+        } else if (guided || fitted || primed) {
             const double prediction =
-                dither + timeAt(second + 1) - percentile({rtts.begin(), rtts.end()}, .5) / 2;
+                dither + scheduleAt(second + 1) - percentile({rtts.begin(), rtts.end()}, .5) / 2;
             const double near = std::min(window, .020);
             if (phase == 0 && t < prediction) {
                 phase = 1;

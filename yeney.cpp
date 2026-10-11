@@ -697,6 +697,9 @@ void pollSonosPosition()
     auto token = sonos_position_poll_token();
     uint32_t ms;
     if (!gPlayer->positionInfo(ms)) return;
+    // A zero RelTime can seed a rate-change start only after PLAYING. During
+    // TRANSITIONING it describes preparation, rather than audible playback.
+    if (!ms && gPlayer->transportInfo().state != "PLAYING") return;
     set_sonos_position_ms(token, ms);
 }
 

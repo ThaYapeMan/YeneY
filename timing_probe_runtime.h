@@ -132,8 +132,14 @@ class Diagnostics {
     void clearClock() {
         if (bracket.locked)
             printf("yeney: timing-lock state=acquiring mono=%.9f udn=%s\n", nowClock(), speakerUdn.c_str());
-        if (bracket.locked && bracket.driftReady)
+        if (bracket.locked && bracket.driftReady) {
             warmDrift = bracket.drift;
+            const double sigma = std::max(.1, (bracket.highDrift - bracket.lowDrift) / std::sqrt(12.));
+            if (sigma <= 15) {
+                savedDrift = {bracket.drift, sigma, time(nullptr)};
+                hasPrior = true;
+            }
+        }
         retireFrames();
         rememberDrift();
         bracket.reset(warmDrift);
@@ -280,6 +286,20 @@ public:
             printf("yeney: timing-prior udn=%s drift_ppm=%.3f sigma_ppm=%.3f timestamp=%lld\n",
                    udn.c_str(), savedDrift.ppm, savedDrift.sigma, savedDrift.timestamp);
         }
+    }
+    // Positive counter evidence confirms playback independently of the normal
+    // one-second position lease. It does not update that cache or supply a rate.
+    bool startupZero(unsigned stream, double &time) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!context.active || !context.anchored || context.stream != stream ||
+            !model.sampled || model.lastSecond != 0 || nowClock() - model.lastTime > stale) return false;
+        time = model.lastTime;
+        return true;
+    }
+    bool heardAudio(unsigned stream) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return context.active && context.anchored && context.stream == stream &&
+               model.sampled && model.lastSecond > 0 && nowClock() - model.lastTime <= stale;
     }
     bool priorActive() {
         std::lock_guard<std::mutex> lock(mutex);
@@ -542,6 +562,18 @@ public:
         } else {
             backoff = 0;
             consecutiveFailures = 0;
+            // Keep precise cold fixtures on their established schedule. A prior
+            // can guide phase immediately; cold guidance first needs five edges
+            // so a genuinely moving startup phase cannot create tight false bounds.
+            model.guided = !bracket.locked && bracket.fitted && !bracket.violators &&
+                (bracket.prior || (bracket.edges.size() >= 5 && bracket.span >= 5 &&
+                 (model.guided || model.stalled || std::abs(model.decision.residual) > 30)));
+            if (model.guided) {
+                model.guideZero = bracket.timeAt(0);
+                model.guideSlope = 1 + bracket.drift * 1e-6;
+                model.window = bracket.prior ? std::clamp(bracket.width / 2 + .005, .010, .200)
+                                             : std::clamp(bracket.width / 2 + .010, .020, .200);
+            }
             model.sample(sent, received, second);
             outcome = model.sampleOutcome;
             reason = model.sampleReason;
@@ -567,7 +599,7 @@ public:
                 // interval constraints: broad startup intervals still bound phase.
                 printf("yeney: timing-recovery reason=no-usable-edges mono=%.9f udn=%s\n", nowClock(), speakerUdn.c_str());
             }
-            if (model.decision.observed && !model.recovered && (wasLocked || model.decision.edge.width <= .65)) {
+            if (model.decision.observed && (wasLocked || model.decision.edge.width <= .65)) {
                 const auto e = model.decision.edge;
                 if (bracket.add({e.second, e.time - e.width / 2, e.time + e.width / 2}))
                     lastBracketAt = e.time;

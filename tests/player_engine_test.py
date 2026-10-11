@@ -193,7 +193,14 @@ with tempfile.TemporaryDirectory(prefix='yeney-engine-ab-') as tmp:
             run.decoded_track()
             run.start(flac.read_bytes())  # same-rate continuation, stream 2 retained
             run.decoded_track()
+            # A new-rate stream must not announce playback while RelTime is zero.
+            def audible_rate_change():
+                run.until(lambda: 'stream=3' in run.device.current_uri)
+                time.sleep(1.3)
+                run.device.position = 1
+            threading.Thread(target=audible_rate_change, daemon=True).start()
             run.start(flac48.read_bytes(), rate=48000, bits=24)  # stream 3
+            assert run.last_boundary['elapsed'] > 1, run.last_boundary
             run.until(lambda: 'stream=3' in run.device.current_uri)
             time.sleep(3)  # the mock speaker reaches the end at a whole-second position
             run.device.position = 3

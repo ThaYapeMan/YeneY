@@ -103,7 +103,7 @@ void CoreSonosSink::flush() {
     if (tap) tap->flush();
     queue.clear(); starts.clear(); staged = 0; pending = false;
     handed = next = streamBase = started = position;
-    streamRate = 0;
+    streamRate = 0; rateChangedStream = false;
     changed.notify_one();
 }
 uint64_t CoreSonosSink::audibleFrames() const {
@@ -113,12 +113,15 @@ uint64_t CoreSonosSink::audibleFrames() const {
     return audible;
 }
 uint64_t CoreSonosSink::startedFrames() const {
-    if (!yeney_start_lead_ms()) { std::lock_guard<std::mutex> lock(mutex); return started; }
     const auto position = audibleFrames();
     std::lock_guard<std::mutex> lock(mutex);
-    // Initial STMs starts the LMS session; later boundaries must be audible.
+    // A rate change starts a new speaker stream, even for a queued successor.
+    if (rateChangedStream)
+        return sonos_position_audio_started() ? position : std::min(position, streamBase);
+    if (!yeney_start_lead_ms()) return started;
     return std::min(started, std::max<uint64_t>(position, started > streamBase ? streamBase + 1 : position));
 }
+
 bool CoreSonosSink::drained(uint64_t) const {
     if (yeney_start_lead_ms()) audibleFrames();
     std::lock_guard<std::mutex> lock(mutex);
@@ -139,8 +142,11 @@ void CoreSonosSink::feed() {
             b = std::move(queue.front()); queue.pop_front();
             staged -= b.frames; inflight = true;
             if (b.boundary && (!b.continuous || streamRate != b.rate || sonos_audio_legacy())) {
+                const bool rateChange = streamRate && streamRate != b.rate;
+                rateChangedStream = rateChange;
                 set_squeezebox_audio_rate(get_squeezebox_stream_id() + 1, b.rate);
                 new_squeezebox_stream_id();
+                if (rateChange) sonos_position_allow_zero_start();
                 streamRate = b.rate; streamBase = b.first;
                 printf("stream %u: FLAC %u-bit %u Hz\n", get_squeezebox_stream_id(),
                        sonos_audio_legacy() ? 16u : 24u, b.rate);
