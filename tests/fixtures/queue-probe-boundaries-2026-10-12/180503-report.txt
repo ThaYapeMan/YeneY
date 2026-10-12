@@ -1,0 +1,20 @@
+3: Run status: **complete**
+25:     "modelName": "Sonos Play:1",
+27:     "softwareVersion": "86.10-80260",
+83:   "queue_length": 0,
+196: | Question | Verdict |
+198: | Q1: Same-rate gapless queue items | GO — for this tested capability only |
+199: | Q2: Mixed-rate gapless queue items | GO — for this tested capability only |
+200: | Q3: Finite FLAC/WAV formats | GO — for this tested capability only |
+201: | Q4: Paced finite delivery | GO — for this tested capability only |
+202: | Q5: Seek, pause/resume and navigation | GO — for this tested capability only |
+203: | Q6: Per-item position reporting | GO — for this tested capability only |
+204: | Q7: Grouped gapless playback | GO — for this tested capability only |
+2995: Error/interruption: none
+2997: Test queue still marked dirty: False. Check events.log for cleanup failures.
+
+# Additional Q4 metric context
+530: ### FLAC 24-bit paced 1.0x
+559:     "max_socket_write_ahead_s": 0.8806701603241862,
+567: ### FLAC 24-bit paced 1.2x
+596:     "max_socket_write_ahead_s": 10.674893955983656,

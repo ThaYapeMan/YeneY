@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Only loopback HTTP/UDP/TCP; never discovers or contacts a real speaker."""
 import contextlib
+import csv
 import ctypes as C
 import ctypes.util
 import http.client
@@ -299,6 +300,73 @@ class ProbeTests(unittest.TestCase):
             self.assertFalse(any(' play' in c or ' stop' in c for c in fake.commands))
         finally:
             fake.close()
+
+    def test_absent_lms_player_requires_confirmed_stopped_service_and_is_reported(self):
+        query = mock.Mock(return_value=['players', '0', '999', 'count:0'])
+        for state in ('inactive', 'failed'):
+            result = p.require_idle('fake-lms', query=query, service_check=lambda _, state=state: state)
+            self.assertTrue(result['idle'])
+            self.assertIsNone(result['player'])
+            self.assertEqual(result['verification'], 'stopped-service-player-absent')
+            self.assertEqual(result['mode'], 'not-listed')
+            self.assertEqual(query.call_args.args[1], 'players 0 999')
+        experiment = p.Experiment(self.device, self.cap, self.http, self.base)
+        p.write_report(self.cap, {'lms_check': result}, experiment, 'preflight')
+        self.assertIn('confirmed stopped service guarantees idle', (self.cap.directory/'report.md').read_text())
+        for state in ('active', 'activating', 'deactivating', 'unknown', ''):
+            with self.assertRaises(RuntimeError):
+                p.require_idle('fake-lms', query=query, service_check=lambda _, state=state: state)
+        query.return_value = ['playerindex:0', 'playerid:aa', 'name:Study (Sonos)',
+                              'playerindex:1', 'playerid:bb', 'name:Study (Sonos)']
+        with self.assertRaisesRegex(RuntimeError, 'uniquely verify'):
+            p.require_idle('fake-lms', query=query, service_check=lambda _: 'inactive')
+        query.side_effect = OSError('LMS unreachable')
+        with self.assertRaises(OSError):
+            p.require_idle('fake-lms', query=query, service_check=lambda _: 'inactive')
+
+    def test_prefetch_excludes_terminal_rewind_to_first_item(self):
+        self.cap.requests.append(dict(mono=120, event='begin', method='GET', path='/b'))
+        self.cap.positions.extend([
+            dict(send_mono=128, recv_mono=128.1, uri='http://x/a', rel_s=28,
+                 duration='0:00:30', state='PLAYING'),
+            dict(send_mono=130, recv_mono=130.1, uri='http://x/b', rel_s=0,
+                 duration='0:00:30', state='PLAYING'),
+            dict(send_mono=220, recv_mono=220.1, uri='http://x/a', rel_s=0,
+                 duration='0:00:30', state='PLAYING')])
+        result = p.boundary_metrics(self.cap, ['/a', '/b'])[0]
+        self.assertAlmostEqual(result['prefetch_lead_s'], 9.55)
+        self.assertEqual(result['old_sample_mono'], 128.1)
+        # Without successor evidence, a later different URI still ends visit 1.
+        self.cap.positions[1]['uri'] = 'http://x/third'
+        self.assertAlmostEqual(p.boundary_metrics(self.cap, ['/a','/b'])[0]['prefetch_lead_s'], 9.55)
+
+    def test_three_field_runs_corrected_prefetch_replay(self):
+        root = ROOT / 'tests/fixtures/queue-probe-boundaries-2026-10-12'
+        expected = {
+            '171905': [[3.198, 4.028], [3.804, 3.353], [3.269, 3.631]],
+            '174601': [[3.681, 3.559], [4.035, 3.648], [3.105, 3.254]],
+            '180503': [[3.122, 3.369], [3.605, 3.647], [3.800, 3.251],
+                       [3.356, 3.256], [3.115, 3.517]]}
+        for stamp, answers in expected.items():
+            with (root/(stamp+'-requests.tsv')).open() as f:
+                requests = list(csv.DictReader(f, delimiter='\t'))
+            with (root/(stamp+'-positions.tsv')).open() as f:
+                positions = list(csv.DictReader(f, delimiter='\t'))
+            for r in requests:
+                r['mono'] = float(r['mono'])
+            for r in positions:
+                for key in ('send_mono','recv_mono','rel_s'):
+                    r[key] = float(r[key]) if r[key] else None
+            self.cap.requests, self.cap.positions = requests, positions
+            triples = [(1,2,3),(4,5,6),(17,18,19),(20,21,22),(23,24,25)]
+            for ids, answer in zip(triples, answers):
+                results = p.boundary_metrics(self.cap, [f'/audio/{n}.flac' for n in ids])
+                for result, expected_lead in zip(results,answer):
+                    self.assertAlmostEqual(result['prefetch_lead_s'], expected_lead, delta=.001)
+                    low, high = result['prefetch_lead_interval_s']
+                    self.assertGreater(low, 2)
+                    self.assertLess(high, 5)
+
 
     def test_http_exact_length_ranges_head_errors_and_close_log(self):
         audio = p.generate_audio(44100, 24, 1, 'wav')

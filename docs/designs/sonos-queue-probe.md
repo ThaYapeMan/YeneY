@@ -22,7 +22,11 @@ experiment. In the Sonos app, disable shuffle and repeat so queue order is norma
 Start with Study ungrouped. The probe refuses LMS `play` **and**
 `pause`, an active room service, a playing/transitioning speaker, ambiguous room
 selection or an already grouped Study. LMS mode is checked through its read-only
-CLI; inability to verify it fails closed. It never sends LMS playback commands
+CLI. If LMS has forgotten a disconnected player, a confirmed `inactive` or
+`failed` room service establishes idle and the report records
+`stopped-service-player-absent`. An unknown service with an absent player,
+duplicate player names, CLI failure or a listed playing/paused player still
+causes refusal. It never sends LMS playback commands
 or starts/stops services itself. A stopped player/service is only a start-time
 check: an external controller can still interfere later.
 
@@ -191,10 +195,14 @@ paced. This tests finite-length paced HTTP, not live LMS production itself.
 | Q6: three mixed-rate items at 4 Hz | Track number against queue ordinal; TrackURI transitions and first new RelTime; within-item decreases, large jumps and flats. | GO if positions identify the item and restart consistently. Stable offsets/coarse events mean GO WITH CONDITIONS with a mapped per-item timing model; inconsistent identities/counters require further evidence before LMS synchronization. |
 | Q7, optional: grouped same/mixed rates | Q1/Q2 repeated with verified Study coordinator and exactly two members; notes from both rooms. | GO for the tested group only; failures restrict initial support to standalone rooms or require rate conversion/group investigation. |
 
-The prefetch interval uses the latest PLAYING position of the old item and its
+The prefetch interval uses the latest PLAYING position in the old item’s first
+playback visit, ending at its first observed departure, and its
 reported duration: `[send + duration − RelTime − 1 − GET,
 receive + duration − RelTime − GET]`. Its midpoint is an estimate, with at least
-the one-second RelTime quantization uncertainty and SOAP transit bounds. It
+the one-second RelTime quantization uncertainty and SOAP transit bounds. This
+excludes Sonos resetting CurrentTrackURI to item 1 at queue EOF while
+the cached state still says PLAYING; using that later zero inflated the first
+boundary by roughly 90 seconds in the 12 October captures. It
 assumes uninterrupted playback; Q5 intentionally omits this boundary calculation.
 The range list includes initial/header requests as well as seeks; use the control
 command timestamps to identify which requests belong to a seek. A positive

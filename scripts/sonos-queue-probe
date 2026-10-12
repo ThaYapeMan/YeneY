@@ -208,6 +208,15 @@ def find_lms(config=Path('/etc/yeney/config')):
 
 
 def require_idle(host, room='Study', query=lms_query, service_check=None):
+    # Verify the service even if LMS has forgotten its disconnected player.
+    if service_check is None:
+        result = subprocess.run(['systemctl', 'is-active', 'yeney@' + room],
+                                capture_output=True, text=True, timeout=5)
+        state = result.stdout.strip()
+    else:
+        state = service_check(room)
+    if state not in ('inactive', 'failed', 'unknown'):
+        raise RuntimeError(f'yeney@{room} state={state}; stop the service first')
     players = query(host, 'players 0 999')
     entries, current = [], {}
     for token in players:
@@ -222,19 +231,15 @@ def require_idle(host, room='Study', query=lms_query, service_check=None):
     if current:
         entries.append(current)
     matched = [p for p in entries if p.get('name') == room + ' (Sonos)']
+    if not matched and state in ('inactive', 'failed'):
+        return {'player': None, 'mode': 'not-listed', 'service': state, 'idle': True,
+                'verification': 'stopped-service-player-absent',
+                'reason': 'LMS no longer lists this room; the confirmed stopped service guarantees idle'}
     if len(matched) != 1 or not matched[0].get('playerid'):
-        raise RuntimeError('Cannot uniquely verify LMS player; use --lms and stop Study in LMS first')
+        raise RuntimeError('Cannot uniquely verify LMS player; confirm a stopped room service and use --lms')
     mode = query(host, matched[0]['playerid'] + ' mode ?')[-1]
     if mode != 'stop':
         raise RuntimeError(f'LMS {room} mode={mode}; STOP playback in LMS before running this tool')
-    if service_check is None:
-        result = subprocess.run(['systemctl', 'is-active', 'yeney@' + room],
-                                capture_output=True, text=True, timeout=5)
-        state = result.stdout.strip()
-    else:
-        state = service_check(room)
-    if state not in ('inactive', 'failed', 'unknown'):
-        raise RuntimeError(f'yeney@{room} state={state}; stop the service first')
     return {'player': matched[0]['playerid'], 'mode': mode, 'service': state}
 
 
@@ -622,8 +627,18 @@ def boundary_metrics(capture, paths):
         requests, positions = list(capture.requests), list(capture.positions)
     for old, new in zip(paths, paths[1:]):
         gets = [r for r in requests if r['event'] == 'begin' and r['method'] == 'GET' and r['path'] == new]
-        old_positions = [p for p in positions if urllib.parse.urlsplit(p['uri']).path == old and
-                         p['rel_s'] is not None and p['state'] == 'PLAYING']
+        # Sonos rewinds CurrentTrackURI to item 1 at queue EOF, sometimes
+        # with a leased PLAYING state. Restrict the estimate to the old item's
+        # first playback visit, before observing any successor/current URI.
+        old_positions = []
+        entered = False
+        for p in positions:
+            path = urllib.parse.urlsplit(p['uri']).path
+            if path == new or (entered and path != old):
+                break
+            if path == old and p['rel_s'] is not None and p['state'] == 'PLAYING':
+                entered = True
+                old_positions.append(p)
         row = {'old': old, 'next': new, 'first_get_mono': None, 'prefetch_lead_s': None}
         if gets:
             when = gets[0]['mono']

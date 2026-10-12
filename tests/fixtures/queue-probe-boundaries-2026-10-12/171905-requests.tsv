@@ -1,0 +1,92 @@
+source_line	mono	event	request	step	method	path	range	status	offset	bytes	audio_s	speed	detail
+4	1206360.49242745	begin	2	1	GET	/audio/1.flac							
+5	1206360.492527883	headers	2	1	GET	/audio/1.flac		200	0	7942113		0	
+978	1206366.672964263	close	2	1	GET	/audio/1.flac		200	0	7942113			complete
+983	1206386.821159712	begin	5	1	GET	/audio/2.flac							
+984	1206386.821260204	headers	5	1	GET	/audio/2.flac		200	0	7942113		0	
+1961	1206392.551810481	close	5	1	GET	/audio/2.flac		200	0	7942113			complete
+1962	1206416.818539607	begin	8	1	GET	/audio/3.flac							
+1963	1206416.818640239	headers	8	1	GET	/audio/3.flac		200	0	7942113		0	
+2942	1206422.644130558	close	8	1	GET	/audio/3.flac		200	0	7942113			complete
+2947	1206501.290522457	begin	14	2	GET	/audio/4.flac							
+2948	1206501.290614978	headers	14	2	GET	/audio/4.flac		200	0	7942113		0	
+3925	1206507.195348753	close	14	2	GET	/audio/4.flac		200	0	7942113			complete
+3926	1206527.613116561	begin	17	2	GET	/audio/5.flac							
+3927	1206527.613208188	headers	17	2	GET	/audio/5.flac		200	0	8644490		0	
+4990	1206533.547498345	close	17	2	GET	/audio/5.flac		200	0	8644490			complete
+4991	1206557.891559744	begin	20	2	GET	/audio/6.flac							
+4992	1206557.891651727	headers	20	2	GET	/audio/6.flac		200	0	7942113		0	
+5969	1206563.563025038	close	20	2	GET	/audio/6.flac		200	0	7942113			complete
+5974	1206605.610572002	begin	25	3	GET	/audio/7.flac							
+5975	1206605.610659681	headers	25	3	GET	/audio/7.flac		200	0	5296113		0	
+6629	1206609.14521531	close	25	3	GET	/audio/7.flac		200	0	5296113			complete
+6634	1206648.575689536	begin	30	3	GET	/audio/8.flac							
+6635	1206648.575786668	headers	30	3	GET	/audio/8.flac		200	0	7942113		0	
+7612	1206654.666310966	close	30	3	GET	/audio/8.flac		200	0	7942113			complete
+7617	1206690.480377709	begin	35	3	GET	/audio/9.wav							
+7618	1206690.480470132	headers	35	3	GET	/audio/9.wav		200	0	5292044		0	
+8272	1206693.858304082	close	35	3	GET	/audio/9.wav		200	0	5292044			complete
+8277	1206731.776899985	begin	40	3	GET	/audio/10.wav							
+8278	1206731.776964281	headers	40	3	GET	/audio/10.wav		200	0	7938044		0	
+9254	1206737.30429444	close	40	3	GET	/audio/10.wav		200	0	7938044			complete
+9259	1206774.586681411	begin	45	4	GET	/audio/11.flac							
+9260	1206774.586777387	headers	45	4	GET	/audio/11.flac		200	0	15884312		1.0	
+9261	1206774.586863409	progress	45	4	GET	/audio/11.flac		200	0	8192	0	1.0	
+9262	1206774.586920796	progress	45	4	GET	/audio/11.flac		200	8192	16384	0	1.0	
+9277	1206774.906445755	progress	47	4	GET	/art/11.png		200	0	179		0	
+11207	1206834.494597295	progress	45	4	GET	/audio/11.flac		200	15876096	15884288	59.90748299319728	1.0	
+11208	1206834.586932573	progress	45	4	GET	/audio/11.flac		200	15884288	15884312	60.0	1.0	
+11209	1206834.586993205	close	45	4	GET	/audio/11.flac		200	0	15884312			complete
+11214	1206846.046693606	begin	51	4	GET	/audio/12.flac							
+11215	1206846.046786025	headers	51	4	GET	/audio/12.flac		200	0	15884312		1.2	
+11216	1206846.046867614	progress	51	4	GET	/audio/12.flac		200	0	8192	0	1.2	
+11217	1206846.046924422	progress	51	4	GET	/audio/12.flac		200	8192	16384	0	1.2	
+11232	1206846.284824961	progress	53	4	GET	/art/12.png		200	0	179		0	
+13162	1206895.970027061	progress	51	4	GET	/audio/12.flac		200	15876096	15884288	59.90748299319728	1.2	
+13163	1206896.046928817	progress	51	4	GET	/audio/12.flac		200	15884288	15884312	60.0	1.2	
+13164	1206896.046998679	close	51	4	GET	/audio/12.flac		200	0	15884312			complete
+13169	1206930.52233429	begin	57	5	GET	/audio/13.wav							
+13170	1206930.522422649	headers	57	5	GET	/audio/13.wav		200	0	15876044		0	
+14580	1206938.967321881	close	57	5	GET	/audio/13.wav		200	0	11493376			ConnectionResetError: [Errno 104] Connection reset by peer
+14581	1206939.191133775	begin	60	5	GET	/audio/13.wav							
+14582	1206939.191233754	headers	60	5	GET	/audio/13.wav		200	0	15876044		0	
+14591	1206939.204230942	close	60	5	GET	/audio/13.wav		200	0	57344			ConnectionResetError: [Errno 104] Connection reset by peer
+14593	1206939.234851268	begin	62	5	GET	/audio/13.wav	bytes=10518528-						
+14594	1206939.23510232	headers	62	5	GET	/audio/13.wav	bytes=10518528-	206	10518528	5357516		0	
+15253	1206942.859103152	close	62	5	GET	/audio/13.wav	bytes=10518528-	206	10518528	5357516			complete
+15260	1206961.103571145	begin	68	5	GET	/audio/14.wav							
+15261	1206961.103673512	headers	68	5	GET	/audio/14.wav		200	0	15876044		0	
+16324	1206967.563515391	close	68	5	GET	/audio/14.wav		200	0	8634368			ConnectionResetError: [Errno 104] Connection reset by peer
+16325	1206967.829058354	begin	72	5	GET	/audio/13.wav							
+16326	1206967.829153794	headers	72	5	GET	/audio/13.wav		200	0	15876044		0	
+18269	1206980.842695259	close	72	5	GET	/audio/13.wav		200	0	15876044			complete
+18270	1207052.064312121	begin	75	5	GET	/audio/14.wav							
+18271	1207052.064419924	headers	75	5	GET	/audio/14.wav		200	0	15876044		0	
+20212	1207064.334915983	close	75	5	GET	/audio/14.wav		200	0	15876044			complete
+20213	1207073.003326262	begin	77	5	GET	/audio/15.wav							
+20214	1207073.003444414	headers	77	5	GET	/audio/15.wav		200	0	15876044		0	
+22161	1207086.033868424	close	77	5	GET	/audio/15.wav		200	0	15876044			complete
+22168	1207105.617521225	begin	84	5	GET	/audio/16.flac							
+22169	1207105.617610492	headers	84	5	GET	/audio/16.flac		200	0	23826511		0	
+23470	1207113.836792018	close	84	5	GET	/audio/16.flac		200	0	10600448			ConnectionResetError: [Errno 104] Connection reset by peer
+23471	1207113.972159034	begin	87	5	GET	/audio/16.flac							
+23472	1207113.972254112	headers	87	5	GET	/audio/16.flac		200	0	23826511		0	
+23480	1207113.98261988	close	87	5	GET	/audio/16.flac		200	0	57344			ConnectionResetError: [Errno 104] Connection reset by peer
+23483	1207114.011944569	begin	89	5	GET	/audio/16.flac	bytes=10043392-						
+23484	1207114.012039175	headers	89	5	GET	/audio/16.flac	bytes=10043392-	206	10043392	13783119		0	
+24529	1207120.282122368	close	89	5	GET	/audio/16.flac	bytes=10043392-	206	10043392	8536064			ConnectionResetError: [Errno 104] Connection reset by peer
+24532	1207130.325184938	begin	92	5	GET	/audio/16.flac							
+24533	1207130.325286447	headers	92	5	GET	/audio/16.flac		200	0	23826511		0	
+24542	1207130.333588516	close	92	5	GET	/audio/16.flac		200	0	65536			ConnectionResetError: [Errno 104] Connection reset by peer
+24543	1207130.346263559	begin	93	5	GET	/audio/16.flac	bytes=17612800-						
+24544	1207130.346345656	headers	93	5	GET	/audio/16.flac	bytes=17612800-	206	17612800	6213711		0	
+25308	1207135.439694544	close	93	5	GET	/audio/16.flac	bytes=17612800-	206	17612800	6213711			complete
+25311	1207146.548281617	begin	97	6	GET	/audio/17.flac							
+25312	1207146.548385953	headers	97	6	GET	/audio/17.flac		200	0	7942113		0	
+26291	1207152.94484328	close	97	6	GET	/audio/17.flac		200	0	7942113			complete
+26292	1207172.899884324	begin	101	6	GET	/audio/18.flac							
+26293	1207172.899992302	headers	101	6	GET	/audio/18.flac		200	0	8644490		0	
+27356	1207180.11771017	close	101	6	GET	/audio/18.flac		200	0	8644490			complete
+27357	1207203.190936384	begin	104	6	GET	/audio/19.flac							
+27358	1207203.191057206	headers	104	6	GET	/audio/19.flac		200	0	7942113		0	
+28335	1207209.049482107	close	104	6	GET	/audio/19.flac		200	0	7942113			complete
