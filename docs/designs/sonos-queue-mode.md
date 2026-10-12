@@ -1,0 +1,529 @@
+# Sonos queue mode
+
+Status: implementation design, 12 October 2026. No production changes in this
+round. The owner selected variant A: LMS remains the player and audio processor;
+Sonos plays one HTTP queue item per LMS track. Stream mode remains available.
+The required playback policy is `YENEY_PLAYBACK_MODE=auto|stream|queue`, default
+`auto`. Crossfade must work in queue mode, primarily through yeney-core mixing.
+Names of new classes, settings and callbacks below are proposals, not existing APIs.
+
+## Evidence and acceptance limits
+
+Study is a Play:1 with S2 firmware 86.10. The three owner-run probes are 17:19,
+17:46 and 18:05 on 2026-10-12. Q1–Q6 returned GO in all three; 18:05 also
+returned GO for grouped Q7. The 17:46 run stopped after Q6 because MBR's YeneY
+service was active: it is not evidence of a failed audio capability.
+[Trimmed evidence and provenance](../../tests/fixtures/queue-probe-boundaries-2026-10-12/README.md)
+retain source line numbers and hashes of the untouched original files.
+
+Corrected next-item request lead, seconds, first / second join:
+
+| Run | Q1 same rate | Q2 mixed rate | Q6 position trial |
+|---|---:|---:|---:|
+| 17:19 | 3.198 / 4.028 | 3.804 / 3.353 | 3.269 / 3.631 |
+| 17:46 | 3.681 / 3.559 | 4.035 / 3.648 | 3.105 / 3.254 |
+| 18:05 | 3.122 / 3.369 | 3.605 / 3.647 | 3.800 / 3.251 |
+
+18:05 Q7: same rate 3.356 / 3.256; mixed rate 3.115 / 3.517. These are
+midpoints, not acoustic measurements. All 22 midpoint estimates are
+3.105–4.035 s; their uncertainty intervals span 2.354–4.723 s. With last old-item
+sample `(send, receive, rel)` and duration D, estimated end lies in
+`[send + D - rel - 1, receive + D - rel]`; subtract the first successor GET.
+RelTime is floored to seconds. The old ~93 s first-join estimates selected the
+terminal rewind to item 1, RelTime 0, with a temporarily cached PLAYING state.
+The checker now uses only the first visit, before any different current URI.
+
+The latest owner summary says all standalone same- and mixed-rate joins were
+clean. Retain the earlier 17:19 Q6 note mentioning a small frequency-change
+click too; repeat native-rate standalone acceptance rather than discarding that
+note. Grouped same-rate joins were clean; grouped mixed-rate joins had “just a
+tiny click when change frequencies”. Automatic GO does not overrule that note:
+grouped native-rate switching is **GO WITH CONDITIONS**.
+
+Other observations change the implementation requirements:
+
+* FLAC and WAV, 16 and 24 bit, play with finite lengths. Some 30 s responses
+  completed at 8–9x real time, beyond the common approximately 5x FLAC fetch.
+  Socket write completion is not a TCP acknowledgement or acoustic measurement.
+* Exactly 1.0x paced FLAC worked; reported maximum socket-write ahead was
+  0.779, 0.953 and 0.881 s. This proves tolerance of a paced response, not
+  next-track production readiness. It does not yet qualify paced WAV24.
+* After a WAV seek to 12 s, requested offsets were 10,518,528, 11,010,048 and
+  9,322,496 bytes. With the tested 44-byte WAV16 stereo header they map to
+  59.629, 62.415 and 52.848 s. Fresh RelTime was 12. Byte alignment and file-time
+  mapping are exact; **a Range request is not the requested audible seek time**.
+* WAV resumed without another request because the response had already finished
+  before Pause. FLAC closed around Pause and made new GET/Range requests after
+  Resume. Support cached playback, persistent sockets and reconnection equally.
+* RelTime restarts for each item; 61, 59 and 71 AVTransport notifications arrived.
+  Events and 4 Hz position polling provide complementary identity and clock data.
+
+## 1. Architecture and item representation
+
+Keep LMS → yeney-core decode/ReplayGain/transitions → Sonos sink. Add a queue
+sink and immutable per-item store alongside the existing stream sink. Do not
+fetch original music directly from LMS's library endpoint: that would bypass the
+player's processing and settings. Obtain playlist identity and metadata through
+LMS CLI, matched to core track descriptors, not merely whichever title LMS
+currently displays while decoding ahead.
+
+Each playlist **occurrence**, including repeat visits to the same track ID, gets
+an opaque item token. Proposed URL:
+`http://<bridge>:<port>/music/queue.wav?session=<nonce>&epoch=<g>&item=<token>&revision=<v>`.
+Register a fixed HTTP route, validate the query and room/session ownership, and
+keep bytes immutable for that URL. Queue revisions, seeks that change rendered
+content, ReplayGain changes and new processing settings require new assets.
+A new HTTP request, including prefetch, must never create a new playback epoch.
+
+DIDL uses `object.item.audioItem.musicTrack`, escaped title, artist/creator,
+album, LMS cover URL `http://<lms>:9000/music/<id>/cover.jpg`, duration, size,
+sampleFrequency, bitsPerSample and nrAudioChannels. Use native
+`http-get:*:audio/wav:*`, not radio protocolInfo. Set the coordinator transport
+once to `x-rincon-queue:<coordinator-udn>#0`; enqueue item URLs with metadata.
+Sonos owns the joins; never SetAVTransportURI at every track boundary.
+
+Recommend stereo PCM WAV24, native 44.1/48 kHz when standalone. With the proposed
+canonical 44-byte PCM header, frame width is 6 bytes and exact entity length is
+`44 + 6 * output_frames`. Offset B maps to file time `(B - 44)/(6 * output_rate)`
+for B ≥ 44; header reads are not audio seeks. Accept byte ranges even when not
+frame-aligned; translate only complete frames for diagnostics. Support HEAD,
+200, 206, suffix/bounded ranges, 416 and exact Content-Range. Verify WAV24 seeks
+on the device: Q5 tested WAV16, while Q3 qualified WAV24 playback only. Check
+64-bit arithmetic and the classic RIFF 4 GiB limit; RF64 is unqualified.
+
+FLAC saves network/storage but compressed Range offsets are nonlinear and its
+exact encoded byte length normally requires sealing the asset first. A future
+sealed FLAC plus frame index is possible; WAV makes byte addressing and sparse
+cache debugging simpler. 16-bit sources occupy 24-bit containers without
+inventing resolution; preserve the core's gain, rounding and clipping rules.
+
+Current attachment points at baseline 5e8755b:
+
+| Code | Current behavior and required separation |
+|---|---|
+| `third_party/yeney-core/core/player.cpp:119–190, 724–745` | Track descriptors, elapsed, audible events and exact `boundary(next)`; add stable occurrence and resolved-boundary/completion callbacks. |
+| `core_sonos.cpp:46–86, 157–178, 212` | Stores boundary coordinates, stages PCM, replaces streams on rate change, sets startOnSubmit; queue sink must separate production from audibility. |
+| `sbencoder.cpp:119–153, 286–295` | Fixed-rate FLAC header and approximately 250 ms encode lead constrain the current stream; queue assets bypass this pacing. |
+| `sbstreamer.cpp:89–105, 340–412, 535–605` | One active encoder, retained stream ranges/restarts and chunked delivery; keep unchanged for stream mode. |
+| `upnp/http_server.cpp:272–274`, `upnp/soap.cpp` | Fixed routes and radio DIDL; add a separate finite-item route and music-track DIDL. |
+
+For a normal join, close item N immediately before the boundary callback's first
+frame of N+1. For a crossfade, the callback is at overlap start, so the mixed
+frames belong to N+1. Do not split by duration timers or by HTTP requests. The
+old core track's `end` can include its overlap tail: queue item end and decoder
+track end are distinct and need explicit records.
+
+## 2. Delivery, production ahead and the reservoir
+
+Use a disk-backed per-item reservoir with immutable rendered history, a bounded
+RAM write buffer and independently positioned readers. HTTP serves available
+bytes immediately at whatever speed Sonos requests, then waits for production.
+It does not drive core playback or steal frames from another reader. Retain at
+least current and previous items for app seeks/Previous, plus prepared successors.
+The existing encoded buffer holds **256 packets**, not 256 bytes or a whole-track
+reservoir; leave it and existing stream wire fixtures alone.
+
+The first implementation seals items before advertising them, including mixer
+boundary resolution. This is deliberately the correctness baseline: exact length,
+backward seeks, reconnection and crossfade all depend on retained history. Decode
+ahead through the same core processing path, with a non-paced queue-store sink;
+remove the current encoder/network lead restriction only for this sink. Keep
+core I/O nonblocking through bounded storage work queues and backpressure.
+STMd at decoder completion can request subsequent LMS data, but STMs must wait
+for the speaker's audible handoff. Verify LMS actually supplies successors under
+this separation before claiming continuous playback. Do not issue CLI skip just
+to make the producer run ahead.
+
+Sealing item N with crossfade can require decoding N+1's prefix; sealing N+1 can
+require N+2. The preparation window is therefore a rendering dependency window,
+not simply two original files. Keep a separate bounded future-PCM queue; the
+current core's approximately eight-second decoded buffer is insufficient as the
+sole store. A source that LMS throttles at 1x cannot build useful next-item lead
+without initial headroom. Wait at startup or use cached processed assets; do not
+claim a new sink alone makes remote/live data arrive faster.
+
+After the sealed path works, permit progressive assets only when exact counts
+and resolved transition decisions are guaranteed before publication. Initial
+engineering targets: approximately 12 s total production lead, next prefix up
+to 8 s ready by 5 s before the current end, measured in seconds across differing
+sample rates. A short successor needs its whole duration rather than 8 s. These
+are budgets to tune, not measurements of Sonos's required buffer. 48 kHz WAV24
+stereo is 288,000 bytes/s: 12 s is 3.456 MB, ten minutes 172.8 MB. Start with an
+8 MiB RAM buffer and configurable 512 MiB disk quota per room; long tracks and
+crossfade dependencies can exceed that quota and need explicit admission rules.
+
+A provisional 15 s startup preparation deadline bounds waiting; qualify or tune
+it on the device. Do not enqueue an unavailable URL and hope for a long HTTP
+retry. If a successor is late, let the current item finish; never discard its
+buffered tail by an early URI switch. A late append may introduce a real gap.
+Log that failure and fall back at a controlled boundary. Once an item is queued,
+serve its promised bytes or report a length/production fault; cancellation must
+wake waiting HTTP readers. Test Sonos timeouts rather than assuming an arbitrary
+30-second server wait is acceptable.
+
+## 3. Exact length and mismatch policy
+
+LMS's decimal duration is a scheduling hint, not an exact frame count. Prefer
+validated decoder counts (for example FLAC STREAMINFO and PCM headers), applying
+codec priming/padding removal and seek offsets exactly. MP3/VBR, transcoding and
+incomplete sources require verification; an apparently precise duration is not
+enough. Sealed assets derive headers, DIDL and Content-Length from actual emitted
+frames after transitions and optional conversion.
+
+Before publication, resolve differences by publishing the actual length. Do not
+pad or trim normal music to match an approximate LMS duration. Once advertised,
+headers and bytes cannot change under the same URL. If production disproves a
+progressive promise, quarantine that optimization, record expected/actual frames,
+and use the explicit crossfade fault policy below. HTTP short responses and
+surplus bodies are diagnostics, never the normal delivery mechanism. Q9 tests
+how the speaker fails, not whether invalid HTTP becomes acceptable.
+
+## 4. Controls in both directions
+
+A serialized room controller owns playlist revision, queue ownership, occurrence
+mapping, core generation, audible item, pending commands and coordinator lease.
+Callbacks enqueue observations; they do not perform blocking LMS/UPnP operations
+under event or audio locks. Every asynchronous result is fenced by epoch and
+revision. Use typed pending intents with expected target/state, deadline and
+origin; acknowledge matching echoes without reissuing them. New contrary user
+intent wins. A global period of ignoring events would lose genuine commands.
+
+| Intent/observation | Bridge behavior |
+|---|---|
+| App Play/Pause | Confirm AVTransport state, forward LMS play/pause once, gate producer independently of cached speaker audio. Queue mode uses native Pause rather than stream's Stop workaround. |
+| Natural next-item handoff | Identify the occurrence from TrackURI/ordinal, issue audible STMs exactly once; do not CLI-skip and advance LMS a second time. |
+| App Next/Previous | Distinguish requested jump from expected natural join, select the mapped LMS occurrence, reconcile the new core run and cached asset. Previous may restart the current item before selecting the predecessor. |
+| App Seek | Fresh per-item RelTime discontinuity/events establish the audible target. Range is only a fetch hint; confirm with GetPositionInfo. No Range-to-LMS-time forwarding on its own. |
+| LMS play/pause/skip/seek | Apply the corresponding queue operation or seek to the mapped item, suppress only its matching acknowledgement, then confirm position/identity. |
+| LMS playlist edit/power off | Reconcile future items by revision; on off stop production/playback, release owned queue state, invalidate timing and pending work. |
+
+Extend AVTransport parsing to retain CurrentTrack ordinal/URI and available
+relative-time events, and GetPositionInfo to return them together with timestamp
+bounds. Current `upnp/event_parsers.h`, `upnp/speaker_state.h` and
+`upnp/own_speaker_control.cpp:205–304` were built around a stream transport URI;
+a constant queue transport URI cannot identify the audible track. Per-field
+revision protection is useful but also needs item/epoch fencing. A terminal
+rewind to first URI at EOF is not a new repeat unless LMS authorized one.
+
+A canonical item's source time is `source_origin + audible_output_frame / R_out`
+for a constant-ratio conversion, with explicit rational source/output maps and
+codec delay compensation. For an overlap item, frame zero is incoming-track
+source time zero. Full retained assets make speaker seeks independent of network
+history. Forward the confirmed LMS time, but reconcile its resulting flush/refetch
+as a new decoder run bound to the existing immutable processed asset, rather than
+blindly replacing a URL or replaying its prefix. Verify replayed PCM/processing
+revision before adopting cached bytes. A settings change needs a new asset.
+
+Progressive forward seeks can create holes that one linear LMS producer cannot
+fill concurrently. They require an indexed segment/refill protocol or an explicit
+wait/fallback, not invented zero-filled audio. The first release therefore uses
+sealed current assets for unrestricted seeking. Validate CLI seek/refetch,
+app seek into buffered data, stale events, simultaneous Next and playlist edits,
+and pause while decode is ahead before enabling progressive seeks.
+
+## 5. Queue management and ownership
+
+Initially mirror previous/current/next occurrences, retaining the previous asset
+for Previous. Expand the ready window, bounded to eight occurrences, for short
+tracks and crossfade dependencies; do not mirror an entire unbounded LMS playlist.
+The Sonos app shows the mirrored window. Read-ahead is limited by asset admission
+and LMS availability, not merely queue length. Reconcile using occurrence tokens
+rather than ordinal numbers which change when entries are removed.
+
+LMS is authoritative for playlist order, shuffle and repeat. Render its effective
+order into the Sonos queue with native queue play mode NORMAL. Repeated tracks
+get fresh occurrence tokens. Do not independently shuffle/repeat on both sides.
+Detect app play-mode changes; initially restore NORMAL with an explanatory log,
+or relinquish ownership if a foreign controller insists. Full bidirectional
+shuffle/repeat mapping is a separate acceptance task.
+
+Snapshot transport URI, queue length and queue update revision before takeover.
+Default: preserve a nonempty foreign queue and require an explicit per-room
+owner takeover policy before replacing it. A snapshot of URI/length is not a
+backup; do not promise restoration. Mark owned URLs with session identity and
+check queue revision/content before mutations. On shutdown remove only owned
+entries; never clear somebody else's newly edited queue. Multiple services must
+not control the same coordinator simultaneously.
+
+Probe-tested actions cover clear/add/select, not atomic remove/reorder during
+playback. Discover advertised action signatures and qualify bounded future-item
+edits with queue update IDs on the device. If an edit races prefetched content,
+retire the old asset only after the speaker stops using it; replace future entries
+and confirm the queue snapshot. Do not rebuild the playing queue merely to change
+metadata. If safe reconciliation is unavailable, defer to a stopped boundary or
+fall back with a visible reason. Removing a prepared successor can also invalidate
+its predecessor's mixed tail: treat those assets as one dependency transaction.
+
+## 6. Timing, LMS position and LampaStream
+
+Keep three cursors: decoder/producer, HTTP byte reader, and speaker-audible item
+frame. Only the third drives LMS STMs/STMt and light timing. Prefetch, a fast GET
+or decoder STMd cannot advance the audible cursor. Maintain per-item rate/frame
+maps instead of dividing a mixed-rate global frame counter by the latest rate.
+
+At a confirmed audible item change, restart RelTime coordinates and the model's
+phase epoch. Carry a qualified device-rate prior, not the old phase offset.
+Between floored position observations advance at unity/prior rate; do not repeat
+a frozen start value. Cap the old item at its actual rendered end; any real gap
+is represented as a gap. Preserve the existing 1 ms LMS start sentinel only at
+its protocol boundary, while internal audible zero remains zero. Repeated reports
+must not repeatedly reset LMS interpolation or make it step backwards.
+
+Crossfade starts the incoming item's LMS clock at zero while its mixed overlap
+is audible; its clock counts overlap time once. The outgoing source continues
+inside that PCM but is no longer the primary LMS track. Do not add fade duration
+to incoming RelTime or subtract it again at overlap completion. Seeking within
+the overlap replays its rendered mix unless a new explicit transition plan is
+requested; document that retained overlap includes the old track. Manual app
+Next/Previous can likewise enter a prefetched mixed intro containing the planned
+predecessor tail, even if the skip occurred earlier. For the initial immutable
+asset path, preserve that deterministic rendered intro and align LMS to it;
+qualify this listening behavior explicitly. Strict live manual-skip fade semantics
+would need a new transition-specific asset and a controlled handoff, which cannot
+undo audio already started by an app action. Do not promise both instantly.
+
+`position_state.h` and `sonos-position.cpp` currently model a single stream;
+queue mode needs explicit occurrence epochs and separation of HTTP progress from
+audible progress. A constant-rate virtual timeline can later preserve clock
+phase across proven seamless joins; do not assume it before validation. Frequent
+phase resets can leave short tracks unlocked despite a good rate prior.
+
+The audio tap must publish the actual post-gain, post-mix, post-conversion PCM
+heard from the item, including both tracks during overlap. Spooling whole tracks
+into the existing small shared-memory audio ring would evict audio before it is
+heard. Add a bounded analysis pump from retained items near the audible horizon,
+with audio/timing generations switched together at the audible handoff, not at
+decode/prefetch. Keep old-item timing valid through its last audible frame.
+Invalidate before publishing incompatible rate/phase data. The current v1 timing
+contract is one affine active run; review whether item-local remapping suffices
+before changing its ABI. Test LampaStream phase, ring retention, group conversion,
+seeks and rapid item changes; do not publish false locked precision during relock.
+
+## 7. Crossfade in queue mode
+
+### Route A: yeney-core mixes; primary design
+
+ReplayGain stays in core. Core already implements transition types 1 crossfade,
+2 fade in, 3 fade out and 4 fade in/out. `prepareOverlap` at
+`third_party/yeney-core/core/player.cpp:757–790` calls `boundary(next)` immediately
+before mixing; `outputStep:834–881` applies crossFrame and advances both source
+cursors. Split the processed output at that exact callback: item N ends at fade
+start; item N+1 begins with the mixed overlap and continues with the incoming
+track alone. A gapless queue join reproduces the existing continuous mix without
+Sonos doing another fade. Force native CrossfadeMode off for owned route-A
+playback, restoring the saved mode on release; coordinator only.
+
+Read LMS player preferences through CLI (escape values correctly; keep the raw
+MAC/player ID convention used by this bridge):
+`<playerid> playerpref transitionType ?`, `transitionDuration ?` and
+`transitionSmart ?`. Read both tracks' album identity and effective sample rates
+from the same playlist/settings revision. Smart crossfade skips within the same
+album; validate LMS's actual album identity/compilation behavior instead of
+comparing display text alone. No core crossfade across differing source sample
+rates, even if the later group converter outputs both at 48 kHz. The received
+strm transition/period remains authoritative; CLI prediction is advisory and may
+race a settings change. Query and test preference semantics against the installed
+LMS version before implementation.
+
+Let D_N be decoded source duration and X_(N,N+1) the **resolved** outgoing overlap.
+Item N's duration is `D_N - X_(N,N+1)`; its incoming overlap is already counted
+inside D_N. For example two 30 s sources with 5 s crossfade give item N 25 s,
+then item N+1 starts at incoming source time zero with 5 s of mixed audio. Its
+own end depends on its next transition. Clamp the crossfade to actual available
+source frames, not approximate decimal durations. Predict X from the preferences,
+smart album rule, same-rate eligibility and source lengths, including core period conversion, transition-frame caps and
+short-track clamping (`player.cpp:684–690`), but seal the item only when the mixer
+confirms X. Exact length must be known **before it starts**;
+in practice before queue insertion or any header/prefetch response.
+
+Core can cancel for differing rates or insufficient incoming PCM, or shorten the
+fade to available frames (`crossWindow` and `prepareOverlap`). Read-ahead and
+sealing resolve that choice before publication and avoid a contradictory promise.
+The initial implementation must expose resolved transition and item-end callbacks,
+retain the tail until the decision, and prepare successor PCM ahead. Predicting
+five seconds and committing the header while the decision is unresolved is not
+route A's normal path.
+
+If a published progressive prediction nevertheless proves wrong:
+
+| Policy | Content-Length and audible consequence |
+|---|---|
+| Pad a too-short rendered item with silence | Honours byte count but inserts a gap, delays incoming source/clock and defeats seamless crossfade. Never silently enable as normal policy. |
+| End its response early | Violates HTTP length; may cause retry, skip, stall or app error. Q9 measures this failure; not acceptable normal behavior. |
+| Truncate excess PCM to promised length | Honours HTTP length but can cut music/fade and click. Never discard that music silently. |
+| Relocate the boundary in retained processed PCM | Preferred recovery if no successor bytes/header have been committed: keep the promised item end and place the remaining continuous PCM at the next item's start, revising its not-yet-published length. Audio stays continuous, but title/LMS source-zero can move relative to the join. Requires a piecewise source-time map and explicit degraded-transition log. |
+| Both adjacent promises already committed | Cannot generally preserve every music frame, both lengths and original timing. Fail the optimization, preserve valid old audio where possible, report the fault, and restart/fall back at a controlled point; a gap or cut cannot be ruled out. |
+
+Thus late boundary relocation is limited, not a universal solution: an outgoing
+fade cancelled after N promised a shortened length leaves old-track tail at the
+start of N+1, so N+1 source time must remain zero until its incoming audio begins.
+Do not report those tail-only frames as advancing incoming LMS time. Such a
+nonstandard overlap map must also drive LampaStream. Require audible confirmation
+and correct maps before using recovery; otherwise use explicit failure handling.
+A user playlist edit after prefetch can create exactly this condition. Immutable
+assets and dependency fencing are mandatory.
+
+Fade in (2), fade out (3), and fade in/out (4) alter amplitudes inside the source's
+own item without shortening it or creating a cross-item overlap. Preserve their
+core envelope and short-track clamping. Crossfade (1) moves the item boundary;
+standalone rate mismatch remains a normal unfaded gapless queue join. The group
+converter sits **after** mixing, preserving these LMS decisions. Test all types,
+smart same-album skips, different albums, insufficient incoming PCM, short tracks,
+rate changes, pause/seek inside overlap and preference/playlist races.
+
+### Route B: Sonos native crossfade; backup
+
+Use coordinator AVTransport Get/SetCrossfadeMode (on/off), with saved/restored
+state. Supply non-overlapped processed items and disable core crossfade only for
+this explicitly selected route, otherwise the music is faded twice. Advantages:
+Sonos owns overlap and original item lengths stay unchanged. Disadvantages:
+fixed undocumented fade length, no LMS smart/per-period fidelity, possible group
+or format limits, and the light tap cannot reproduce Sonos's hidden mix exactly.
+Q8 estimates overlap using request and position timing plus the listening note;
+HTTP prefetch itself is not overlap. Route B needs explicit owner acceptance of
+these losses and measured LMS/LampaStream timing. It is not an automatic silent
+substitute for route A.
+
+### Route C: stream mode during crossfade; last resort
+
+The existing continuous sink reproduces core mixing without per-item promises,
+but loses queue metadata/navigation and retains rate-change URI-switch limits.
+Use only after route A fails and route B is unavailable or rejected; log why and
+retain the LMS settings. Crossfade being enabled is **not** by itself a reason to
+exclude a normal eligible track from queue mode. Do not silently turn crossfade
+off or alter a global LMS preference.
+
+## 8. Groups and sample rates
+
+LMS synchronization groups stay in stream mode until queue synchronization is
+proven. Existing timed pause/skip/start semantics do not establish that separate
+Sonos queues stay aligned. Detect LMS sync membership and core synchronization
+commands; log `lms-sync-unqualified` and fence any pending queue plan.
+
+Sonos groups share the coordinator queue. Use ZoneGroupTopology subscription
+with a fresh topology read on takeover/change, available in `upnp/discovery.cpp`
+and `upnp/own_speaker_control.cpp:125–145`. Count visible members, identify the
+coordinator UDN and hold one controlling lease per coordinator. Do not let Study
+and MBR room processes independently replace the same queue.
+
+For a session starting grouped, output every queue item at 48 kHz, converting
+post-mix PCM with libsamplerate BSD-2-Clause (see the
+[rate-conversion design](rate-change-gapless.md) and
+[upstream license](https://github.com/libsndfile/libsamplerate/blob/0.2.2/COPYING)).
+Same-rate bypass remains exact. Preserve converter state across same-source-rate
+item boundaries, including mixed overlaps; compensate filter lookahead when
+assigning samples to each item. Rate changes require a separately validated
+delay/tail policy, not inserted converter silence. Maintain rational source/output frame counts,
+converter delay/tail compensation, deterministic quantization and exact WAV
+length. Group conversion must not enable crossfade across original differing
+sample rates. Requalify conversion CPU/quality on the deployment hardware.
+
+Standalone sessions can use native rates. If a group joins mid-session, a served
+WAV header cannot change. Replan unserved future items; already prefetched native
+assets remain immutable. Switch at a safe confirmed boundary, accepting that
+one transition may click or need a restart. Once 48 kHz is selected, keep it
+until session stop even after ungrouping, avoiding another rate transition.
+An optional always-48 kHz queue policy gives predictable dynamic grouping at the
+cost of converting standalone 44.1 kHz. A topology change during an active item
+cannot be promised glitch-free by rewriting its header. Coordinator changes
+invalidate pending commands and timing phase before lease reacquisition.
+
+## 9. Configuration, mode switching and rollout
+
+Use the **existing per-room systemd environment override**, as described in
+README's Settings section; do not overload `/etc/yeney/rooms` or create a second
+room configuration database. Proposed implemented configuration:
+
+```ini
+# /etc/systemd/system/yeney@Study.service.d/override.conf
+[Service]
+Environment=YENEY_PLAYBACK_MODE=auto
+```
+
+| Value | Required behavior |
+|---|---|
+| `auto` (default) | Queue for normal finite LMS tracks with reliable rendered length and ready data; stream for radio/live/unknown length, unqualified LMS sync groups, or after queue failure. Crossfade uses route A. |
+| `stream` | Always use today's stream sink and transport behavior. |
+| `queue` | Prefer queue wherever technically possible; endless/unknown-length content and unqualified sync still use stream with a reason. Do not manufacture a finite length. Failed queue playback uses logged fallback rather than retry loops. |
+
+Reliable length means a resolved exact rendered count, not just an LMS duration
+field. Sealing can qualify an otherwise uncertain finite source. Invalid setting
+values warn and select `auto`. Settings are read at room startup. This design
+round leaves the running production behavior unchanged; once queue implementation
+is qualified and shipped, `auto` is its default. Owners can explicitly select
+`stream` during staged device qualification or to roll back.
+
+The mode controller has prepare → active → drain → handoff states. Plan the next
+mode before the current audible end, retain the old response/timing until that
+end and fence both sinks by generation. Never switch transport simply because
+decoding crossed a boundary. An album followed by radio becomes queue → stream;
+a finite track after radio becomes stream → queue when its asset is ready.
+Radio's unknown end requires an explicit LMS skip/stop/transition intent to
+schedule the handoff; do not guess its duration.
+
+A seamless queue-to-queue join is demonstrated. A queue/HTTP-radio transport URI
+handoff is **not**: SetAVTransportURI can discard buffered audio and startup can
+add silence, as the rate-change investigation showed. Delaying the switch until
+the old end preserves the tail but can leave approximately the measured 2.3 s
+startup silence. Switching early hides some silence by cutting old audio, which
+is unacceptable. Preload/queue-next-URI behavior for a nonfinite HTTP item is an
+unproven optional experiment, not this design's guarantee. Without a proven
+speaker handoff primitive, no general zero-glitch album→radio promise is possible.
+The initial policy preserves the old tail, performs one controlled switch at the
+confirmed end, reports any real gap and uses stream for the unqueueable segment.
+If a playlist is known to mix radio and finite content and uninterrupted switching
+is essential, keep that playback session in stream mode; record this reason.
+Do not oscillate sinks on every transient error. A queue fault latches stream
+for that playback session; clear on explicit stop/new play after readiness checks.
+
+Log on selection and every transition: room/coordinator, requested setting,
+active mode, reason code/text, occurrence, epoch, old/new rate, promised/resolved
+frames, lead/cache readiness, pending fallback and measured handoff gap. Suggested
+reason codes include `finite-ready`, `live-source`, `length-unverified`,
+`lms-sync-unqualified`, `queue-ownership`, `preparation-timeout`, `queue-error`,
+`mixed-live-session` and `crossfade-recovery`. Expose active mode/reason in the
+existing room status/diagnostic output and timing diagnostics. Preserve metadata
+as track metadata; do not put implementation reasons into Sonos titles. Current
+configuration/probe output does not implement this status yet.
+
+Phases and approximate production changes (reviewable estimates, not this patch):
+
+| Phase/files | Work and approximate size |
+|---|---|
+| 1: new item-store/WAV writer + tests | Immutable disk/RAM assets, exact headers/ranges, cancellation and bounded retention; 500–850 C++ lines plus tests. |
+| 2: `core/player.h`, `core/player.cpp`, new queue sink, `core_sonos.*` | Stable descriptors, resolved transition/item-end callbacks, decode/audible separation, lookahead and cache adoption; 450–750 lines. Core changes must be committed/pushed before the bridge pin. |
+| 3: `upnp/soap.*`, `own_speaker_control.*`, `event_parsers.*`, `speaker_state.*`, HTTP route | Queue actions/music DIDL, identity/events/position, coordinator lease and finite serving; 350–600 lines. |
+| 4: `yeney.cpp`, LMS metadata/control helpers, room status/config docs | Serialized queue/mode controller, playlist revision/order, echo suppression, takeover and fallback; 500–850 lines. |
+| 5: `position_state.h`, `sonos-position.cpp`, tap/timing exporter | Item clocks, overlap maps, audible analysis pump and generation fencing; 300–550 lines. |
+| 6: optional converter and device qualification | Group-aware sticky output rate, exact conversion lengths and ownership/group-change tests; 150–300 lines plus dependency/build work. |
+
+Expect roughly 4–6 engineering weeks plus owner device cycles; seek adoption,
+LMS read-ahead behavior and safe live queue edits can expand this. First qualify
+sealed same-rate/no-fade assets and bidirectional controls, then core crossfade,
+native mixed rates, group conversion, timing/light publication, and only then
+progressive production. The final `auto` behavior is the target, not a claim that
+all prerequisites are already solved. Stream wire fixtures must remain passing.
+
+## 10. Risks and validation gates
+
+| Risk/open question | Required test and acceptance |
+|---|---|
+| LMS sends successors only after an audible start/finish | Fake SlimProto replay plus real LMS logs: STMd requests ahead without early STMs, playlist advance or double skips. If unavailable, revise the source protocol before claiming seamless queue mode. |
+| Transition prediction differs from mixer | Core deterministic PCM tests of all transition types/smart/rates/shortage, verify emitted item frame totals and no missing/duplicated mixed frames; fault injection after prefetch. |
+| Exact duration/codec delay errors | PCM/FLAC/MP3/VBR/transcoded fixtures with decoded reference counts; mismatch must never silently trim music or publish mutable headers. |
+| Q9 recovery not known | Owner runs optional `--length-mismatch`: short/long WAV and FLAC, records tail/errors/next join. Keep production on sealed counts regardless of a tolerant speaker. |
+| Native Sonos crossfade undocumented | Owner runs optional `--native-crossfade` Q8 standalone and grouped; measure bounded overlap and listen. Route B requires explicit acceptance of fixed fade and light-timing limitations. |
+| WAV24 Range/pace not yet fully qualified | Real app seek to buffered/unbuffered targets, 1.0x WAV24 delivery, 10 s pause, reconnect, Next/Previous. Require correct RelTime and complete history, not Range-as-seek inference. |
+| Cache quota, long tracks, fast concurrent readers | Fake HTTP 1x/9x/multiple ranges, storage full/cancel/slow source; bounded memory, no old-byte overwrite and logged fallback. Measure disk use under several rooms. |
+| Foreign queue edits / coordinator races | Two controllers, stale update IDs, topology/coordinator changes, service restart. No clearing foreign entries or simultaneous ownership. |
+| LMS/queue loop and seek generation races | Reordered events, CLI commands, cached HTTP seeks and flush/refetch, album edits during mixed overlap. One intended action, correct occurrence and no stale writes. |
+| Mixed-rate standalone/group click | Repeat latest clean standalone joins and earlier click case; grouped fixed48 should remove the rate-transition click without changing LMS crossfade eligibility. Listening plus captured output if available. |
+| Timing/light continuity | Replay field clocks plus acoustic/device test: no backwards LMS steps, no frozen start, overlap counted once, SHM retains audible samples and invalidates phase on discontinuities. |
+| Mode-switch silence | Album→radio→album and failed queue handoffs, listening plus timestamps. Preserve old tail, explicitly measure gap; do not label an unproved transport switch seamless. |
+
+Owner implementation choices still needed: acceptable startup/cache budget;
+nonempty queue takeover policy and mirrored-window UI; grouped sticky48 versus
+always48; tolerance for transport-switch gaps (or stream-sticky mixed playlists);
+and whether route B's fixed fade/light limitations are acceptable as backup.
+Crossfade support, route A priority, and the three playback-mode meanings are
+already owner decisions and are not reopened here.
