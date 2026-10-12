@@ -99,6 +99,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/obsolete_player_test.py
 	python3 tests/core_sonos_test.py
 	python3 tests/player_engine_test.py
+	python3 tests/sonos_queue_probe_test.py
 	$(MAKE) -C third_party/yeney-core test
 
 sbstreamer.o sbencoder.o: sbencoder.h

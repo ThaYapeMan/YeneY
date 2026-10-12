@@ -1,0 +1,1080 @@
+#!/usr/bin/env python3
+"""Owner-run, finite-file Sonos queue experiment. Python standard library only.
+
+Stop Study in LMS and stop yeney@Study first. No YeneY code is loaded.
+Existing queue contents are NOT restored; --replace-queue authorizes removal.
+"""
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import argparse
+import bisect
+import csv
+import hashlib
+import html
+import ipaddress
+import json
+import math
+import re
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import xml.etree.ElementTree as ET
+import zlib
+from dataclasses import dataclass
+from datetime import datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from types import SimpleNamespace
+
+SOAP = 'http://schemas.xmlsoap.org/soap/envelope/'
+AVT = 'urn:schemas-upnp-org:service:AVTransport:1'
+QUEUE = 'urn:schemas-sonos-com:service:Queue:1'
+ZGT = 'urn:schemas-upnp-org:service:ZoneGroupTopology:1'
+ST = 'urn:schemas-upnp-org:device:ZonePlayer:1'
+# Bypass environment HTTP proxies for LAN control and loopback tests.
+OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def xml(data):
+    if len(data) > 2 * 1024 * 1024 or b'<!DOCTYPE' in data.upper():
+        raise ValueError('oversized XML or DTD')
+    return ET.fromstring(data)
+
+
+def fields(node):
+    return {e.tag.rsplit('}', 1)[-1]: e.text or '' for e in node.iter() if len(e) == 0}
+
+
+def fetch(url, method='GET', body=None, headers=None, timeout=3):
+    req = urllib.request.Request(url, body, headers or {}, method=method)
+    try:
+        response = OPENER.open(req, timeout=timeout)
+    except urllib.error.HTTPError as error:
+        error.body = error.read(2 * 1024 * 1024 + 1)
+        error.close()
+        raise
+    with response:
+        data = response.read(2 * 1024 * 1024 + 1)
+        if len(data) > 2 * 1024 * 1024:
+            raise ValueError('oversized response')
+        return data, dict(response.headers)
+
+
+class Device:
+    def __init__(self, location, record=lambda *args, **kwargs: None):
+        self.location, self.record = location, record
+        root = xml(fetch(location)[0])
+        device = next((n for n in root if n.tag.rsplit('}', 1)[-1] == 'device'), root)
+        # Embedded MediaServer/MediaRenderer identities must not overwrite the ZonePlayer.
+        self.info = {n.tag.rsplit('}', 1)[-1]: n.text or '' for n in device if len(n) == 0}
+        self.udn = self.info.get('UDN', '').removeprefix('uuid:')
+        if not self.udn:
+            raise ValueError('device description has no UDN')
+        self.services = {}
+        for service in root.iter():
+            if service.tag.rsplit('}', 1)[-1] == 'service':
+                f = fields(service)
+                self.services[f['serviceType']] = {
+                    k: urllib.parse.urljoin(location, f[k])
+                    for k in ('controlURL', 'eventSubURL', 'SCPDURL')}
+
+    def call(self, action, args=None, service=AVT, timeout=2):
+        args = {'InstanceID': '0'} if args is None else args
+        body = ''.join(f'<{k}>{html.escape(str(v))}</{k}>' for k, v in args.items())
+        data = (f'<s:Envelope xmlns:s="{SOAP}"><s:Body><u:{action} xmlns:u="{service}">'
+                f'{body}</u:{action}></s:Body></s:Envelope>').encode()
+        sent = time.monotonic()
+        try:
+            raw, _ = fetch(self.services[service]['controlURL'], 'POST', data,
+                           {'Content-Type': 'text/xml; charset="utf-8"',
+                            'SOAPACTION': f'"{service}#{action}"'}, timeout)
+            root = xml(raw)
+            if any(e.tag.rsplit('}', 1)[-1] == 'Fault' for e in root.iter()):
+                raise RuntimeError(str(fields(root)))
+            response = root.find(f'{{{SOAP}}}Body')
+            if response is None or not len(response) or response[0].tag != f'{{{service}}}{action}Response':
+                raise RuntimeError('wrong SOAP response')
+            result = fields(response[0])
+            self.record('soap', action=action, sent=sent, received=time.monotonic(), result=result)
+            return result
+        except Exception as error:
+            if isinstance(error, urllib.error.HTTPError):
+                try:
+                    detail = fields(xml(error.body))
+                except (ValueError, ET.ParseError):
+                    detail = {}
+                self.record('soap-error', action=action, sent=sent, error=str(error), fault=detail)
+                raise RuntimeError(f'{action}: HTTP {error.code} {detail}') from error
+            self.record('soap-error', action=action, sent=sent, error=str(error))
+            raise
+
+    def queue_length(self):
+        # Queue Browse, not ContentDirectory and not current radio NrTracks.
+        if QUEUE not in self.services:
+            raise RuntimeError('Speaker does not advertise Queue Browse; cannot safely verify original queue length')
+        result = self.call('Browse', {'QueueID': 0, 'StartingIndex': 0,
+                                      'RequestedCount': 1}, QUEUE)
+        return int(result['TotalMatches'])
+
+    def snapshot(self):
+        return {'location': self.location, 'udn': self.udn, 'device': self.info,
+                'media': self.call('GetMediaInfo'), 'position': self.call('GetPositionInfo'),
+                'transport': self.call('GetTransportInfo'), 'queue_length': self.queue_length()}
+
+
+def ssdp_locations(timeout=3, destination=('239.255.255.250', 1900)):
+    request = ('M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n'
+               f'MAN: "ssdp:discover"\r\nMX: 2\r\nST: {ST}\r\n\r\n').encode()
+    found = set()
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.sendto(request, destination)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            sock.settimeout(max(.001, deadline - time.monotonic()))
+            try:
+                data, _ = sock.recvfrom(65536)
+            except socket.timeout:
+                break
+            lines = data.decode('iso-8859-1').split('\r\n')
+            headers = dict((k.lower(), v.strip()) for k, v in
+                           (line.split(':', 1) for line in lines[1:] if ':' in line))
+            location = headers.get('location', '')
+            if lines[0].startswith('HTTP/1.1 200 ') and headers.get('st') == ST and location.startswith('http://'):
+                found.add(location)
+    return sorted(found)
+
+
+def topology(device):
+    raw = device.call('GetZoneGroupState', {}, ZGT)['ZoneGroupState']
+    rooms = []
+    for group in xml(raw.encode()).iter('ZoneGroup'):
+        members = [m.attrib for m in group.findall('ZoneGroupMember')
+                   if m.get('Invisible') != '1']
+        for member in members:
+            rooms.append({**member, 'coordinator': group.get('Coordinator'),
+                          'members': [m['ZoneName'] for m in members]})
+    return rooms
+
+
+def discover(room='Study', ip=None, port=1400, locations=None, record=lambda *a, **k: None):
+    seeds = [f'http://{ip}:{port}/xml/device_description.xml'] if ip else (
+        ssdp_locations() if locations is None else locations)
+    errors = []
+    for location in seeds:
+        try:
+            seed = Device(location, record)
+            rooms = topology(seed)
+            matches = [r for r in rooms if r['ZoneName'] == room]
+            if len(matches) != 1:
+                raise RuntimeError(f'room {room!r} missing or ambiguous')
+            chosen = matches[0]
+            if chosen['UUID'] != chosen['coordinator'] or chosen['members'] != [room]:
+                raise RuntimeError(f'{room} must be standalone before the probe: {chosen}')
+            return Device(chosen['Location'], record), rooms
+        except Exception as error:
+            errors.append(str(error))
+    raise RuntimeError('Discovery failed: ' + '; '.join(errors))
+
+
+def lms_query(host, command, port=9090):
+    with socket.create_connection((host, port), timeout=3) as sock:
+        sock.sendall((command + '\n').encode())
+        data = b''
+        while b'\n' not in data:
+            part = sock.recv(4096)
+            if not part or len(data) > 1024 * 1024:
+                raise RuntimeError('invalid LMS CLI response')
+            data += part
+    return [urllib.parse.unquote(x) for x in data.decode().splitlines()[0].split()]
+
+
+def find_lms(config=Path('/etc/yeney/config')):
+    if config.exists():
+        for line in config.read_text().splitlines():
+            if line.startswith('LMS_SERVER=') and line.partition('=')[2].strip():
+                return line.partition('=')[2].strip().strip('"\'')
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        sock.settimeout(2)
+        sock.sendto(b'eNAME\x00JSON\x00', ('255.255.255.255', 3483))
+        _, address = sock.recvfrom(4096)
+        return address[0]
+
+
+def require_idle(host, room='Study', query=lms_query, service_check=None):
+    players = query(host, 'players 0 999')
+    entries, current = [], {}
+    for token in players:
+        key, sep, value = token.partition(':')
+        if not sep:
+            continue
+        if key == 'playerindex':
+            if current:
+                entries.append(current)
+            current = {}
+        current[key] = value
+    if current:
+        entries.append(current)
+    matched = [p for p in entries if p.get('name') == room + ' (Sonos)']
+    if len(matched) != 1 or not matched[0].get('playerid'):
+        raise RuntimeError('Cannot uniquely verify LMS player; use --lms and stop Study in LMS first')
+    mode = query(host, matched[0]['playerid'] + ' mode ?')[-1]
+    if mode != 'stop':
+        raise RuntimeError(f'LMS {room} mode={mode}; STOP playback in LMS before running this tool')
+    if service_check is None:
+        result = subprocess.run(['systemctl', 'is-active', 'yeney@' + room],
+                                capture_output=True, text=True, timeout=5)
+        state = result.stdout.strip()
+    else:
+        state = service_check(room)
+    if state not in ('inactive', 'failed', 'unknown'):
+        raise RuntimeError(f'yeney@{room} state={state}; stop the service first')
+    return {'player': matched[0]['playerid'], 'mode': mode, 'service': state}
+
+
+def crc_table(width, polynomial):
+    table, mask = [], (1 << width) - 1
+    for byte in range(256):
+        value = byte << (width - 8)
+        for _ in range(8):
+            value = ((value << 1) ^ (polynomial if value & (1 << (width - 1)) else 0)) & mask
+        table.append(value)
+    return table
+
+
+CRC8, CRC16 = crc_table(8, 7), crc_table(16, 0x8005)
+
+
+def crc(data, width):
+    value, table, mask = 0, (CRC8 if width == 8 else CRC16), (1 << width) - 1
+    for byte in data:
+        value = ((value << 8) ^ table[(value >> (width - 8)) ^ byte]) & mask
+    return value
+
+
+def tone_second(rate, bits):
+    # Integer-Hz oscillators and whole-second items retain phase at all rates.
+    little, big = bytearray(), bytearray()
+    for n in range(rate):
+        t = n / rate
+        beep = .08 * math.sin(math.pi * (t - .15) / .10) ** 2 if .15 <= t < .25 else 0
+        sample = round((.10 * math.sin(2 * math.pi * 440 * t) +
+                        beep * math.sin(2 * math.pi * 880 * t)) * ((1 << (bits - 1)) - 1))
+        little.extend(sample.to_bytes(bits // 8, 'little', signed=True) * 2)
+        big.extend(sample.to_bytes(bits // 8, 'big', signed=True))
+    return bytes(little), bytes(big)
+
+
+@dataclass
+class Audio:
+    data: bytes
+    rate: int
+    bits: int
+    seconds: int
+    kind: str
+    # (file offset just after this FLAC frame, cumulative PCM seconds)
+    frame_ends: tuple = ()
+
+    @property
+    def mime(self):
+        return 'audio/flac' if self.kind == 'flac' else 'audio/wav'
+
+    def audio_seconds(self, offset):
+        if self.kind == 'wav':
+            return max(0, min(len(self.data), offset) - 44) / (self.rate * self.bits // 8 * 2)
+        i = bisect.bisect_right([p[0] for p in self.frame_ends], offset) - 1
+        return self.frame_ends[i][1] if i >= 0 else 0
+
+
+def generate_audio(rate, bits, seconds, kind):
+    little, big = tone_second(rate, bits)
+    pcm = little * seconds
+    if kind == 'wav':
+        width = bits // 8 * 2
+        header = struct.pack('<4sI4s4sIHHIIHH4sI', b'RIFF', len(pcm) + 36, b'WAVE',
+                             b'fmt ', 16, 1, 2, rate, rate * width, width, bits, b'data', len(pcm))
+        return Audio(header + pcm, rate, bits, seconds, kind)
+    # RFC 9639: independent stereo verbatim subframes, fixed-block numbering.
+    # No third-party encoder, subprocess, FFI, or external audio file needed.
+    total, block = rate * seconds, 4096
+    packed = (rate << 44) | (1 << 41) | ((bits - 1) << 36) | total
+    info = struct.pack('>HH', block, block) + b'\0' * 6 + packed.to_bytes(8, 'big') + hashlib.md5(pcm).digest()
+    data, ends = bytearray(b'fLaC\x80\x00\x00\x22' + info), []
+    planar = big * seconds
+    for index, first in enumerate(range(0, total, block)):
+        count = min(block, total - first)
+        header = bytes((0xff, 0xf8, 0x70 | (9 if rate == 44100 else 10),
+                        0x10 | (8 if bits == 16 else 12)))
+        header += chr(index).encode('utf-8') + struct.pack('>H', count - 1)
+        header += bytes([crc(header, 8)])
+        samples = planar[first * (bits // 8):(first + count) * (bits // 8)]
+        frame = header + b'\x02' + samples + b'\x02' + samples
+        frame += struct.pack('>H', crc(frame, 16))
+        data.extend(frame)
+        ends.append((len(data), (first + count) / rate))
+    return Audio(bytes(data), rate, bits, seconds, kind, tuple(ends))
+
+
+def artwork(number):
+    def chunk(tag, data):
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data))
+    rgb = bytes(((number * 71) % 220 + 20, 80, 180))
+    pixels = (b'\0' + rgb * 64) * 64
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 64, 64, 8, 2, 0, 0, 0)) +
+            chunk(b'IDAT', zlib.compress(pixels)) + chunk(b'IEND', b''))
+
+
+def time_text(seconds):
+    return f'{int(seconds)//3600}:{int(seconds)//60%60:02d}:{int(seconds)%60:02d}'
+
+
+def seconds(text):
+    try:
+        h, m, s = map(float, text.split(':'))
+        return h * 3600 + m * 60 + s
+    except (ValueError, AttributeError):
+        return None
+
+
+def metadata(url, title, audio, art):
+    return ('<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" '
+            'xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:upnp="urn:schemas-upnp-org:metadata-1-0/upnp/">'
+            '<item id="0" parentID="0" restricted="true"><dc:title>' + html.escape(title) +
+            '</dc:title><dc:creator>YeneY queue probe</dc:creator><upnp:class>object.item.audioItem.musicTrack</upnp:class>'
+            '<upnp:album>Finite queue capability test</upnp:album><upnp:albumArtURI>' + html.escape(art) +
+            f'</upnp:albumArtURI><res protocolInfo="http-get:*:{audio.mime}:*" '
+            f'duration="{time_text(audio.seconds)}" size="{len(audio.data)}" sampleFrequency="{audio.rate}" '
+            f'bitsPerSample="{audio.bits}" nrAudioChannels="2">{html.escape(url)}</res></item></DIDL-Lite>')
+
+
+class Capture:
+    REQUEST_COLUMNS = ('mono', 'event', 'request', 'step', 'method', 'path', 'range',
+                       'status', 'offset', 'bytes', 'audio_s', 'speed', 'detail')
+    POSITION_COLUMNS = ('send_mono', 'recv_mono', 'step', 'track', 'uri', 'reltime',
+                        'rel_s', 'duration', 'state', 'status', 'error')
+
+    def __init__(self, directory):
+        self.directory = Path(directory)
+        self.directory.mkdir(parents=True, exist_ok=False)
+        self.lock = threading.RLock()
+        self.step, self.requests, self.positions, self.events, self.counter = 0, [], [], [], 0
+        self.handles = {}
+        for name, columns in [('requests.tsv', self.REQUEST_COLUMNS), ('positions.tsv', self.POSITION_COLUMNS)]:
+            f = (self.directory / name).open('w', newline='', buffering=1)
+            writer = csv.DictWriter(f, fieldnames=columns, delimiter='\t', extrasaction='ignore')
+            writer.writeheader()
+            self.handles[name] = (f, writer)
+        self.event_file = (self.directory / 'events.log').open('w', buffering=1)
+
+    def event(self, kind, **kwargs):
+        with self.lock:
+            row = {'mono': time.monotonic(), 'step': self.step, 'kind': kind, **kwargs}
+            self.events.append(row)
+            self.event_file.write(json.dumps(row, ensure_ascii=True) + '\n')
+
+    def row(self, name, **kwargs):
+        with self.lock:
+            (self.requests if name == 'requests.tsv' else self.positions).append(kwargs)
+            self.handles[name][1].writerow(kwargs)
+
+    def close(self):
+        for f, _ in self.handles.values():
+            f.close()
+        self.event_file.close()
+
+
+class ProbeHTTP(ThreadingHTTPServer):
+    daemon_threads = False
+    block_on_close = True
+
+    def __init__(self, address, capture):
+        self.capture, self.media, self.art, self.stopping = capture, {}, {}, threading.Event()
+        self.media_origin = {}
+        self.sid, self.accepted_sids = '', set()
+        super().__init__(address, Handler)
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = 'HTTP/1.1'
+
+    def log_message(self, *_):
+        pass
+
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(3)
+
+    def do_NOTIFY(self):
+        cap = self.server.capture
+        with cap.lock:
+            cap.counter += 1
+            request, step = cap.counter, cap.step
+        base = dict(request=request, step=step, method='NOTIFY', path=self.path, range=self.headers.get('Range', ''))
+        cap.row('requests.tsv', mono=time.monotonic(), event='begin', **base)
+        status, detail = 200, 'complete'
+        try:
+            length = int(self.headers.get('Content-Length', '-1'))
+            if (self.path != '/events' or not 0 <= length <= 1024 * 1024 or
+                    self.headers.get('NT') != 'upnp:event' or self.headers.get('NTS') != 'upnp:propchange'):
+                raise ValueError('bad event headers')
+            sid = self.headers.get('SID', '')
+            if not sid or (self.server.sid and sid != self.server.sid):
+                raise ValueError('wrong SID')
+            body = self.rfile.read(length)
+            if len(body) != length or not self.headers.get('SEQ', '').isdigit():
+                raise ValueError('truncated event or invalid sequence')
+            root = xml(body)
+            values = fields(root)
+            change = values.get('LastChange', '')
+            parsed = []
+            if change:
+                for node in xml(change.encode()).iter():
+                    if node.tag.rsplit('}', 1)[-1] == 'InstanceID' and node.get('val') == '0':
+                        parsed = [{e.tag.rsplit('}', 1)[-1]: e.get('val', '')} for e in node]
+            self.server.accepted_sids.add(sid)
+            cap.event('notify', sid=sid, seq=self.headers.get('SEQ'), body=body.decode(), values=parsed)
+        except Exception as error:
+            status, detail = 412, str(error)
+            cap.event('notify-error', error=detail)
+        self.send_response(status)
+        self.send_header('Content-Length', '0')
+        self.send_header('Connection', 'close')
+        self.end_headers()
+        cap.row('requests.tsv', mono=time.monotonic(), event='close', status=status, bytes=0, detail=detail, **base)
+        self.close_connection = True
+
+    def do_HEAD(self):
+        self.serve(False)
+
+    def do_GET(self):
+        self.serve(True)
+
+    def serve(self, body):
+        server, cap = self.server, self.server.capture
+        path = urllib.parse.urlsplit(self.path).path
+        with cap.lock:
+            cap.counter += 1
+            request, step = cap.counter, cap.step
+        rng = self.headers.get('Range', '')
+        base = dict(request=request, step=step, method=self.command, path=path, range=rng)
+        cap.row('requests.tsv', mono=time.monotonic(), event='begin', **base)
+        status, offset, sent, detail, audio = 404, 0, 0, 'complete', None
+        try:
+            if path in server.art:
+                data, mime, speed = server.art[path], 'image/png', 0
+            elif path in server.media:
+                audio, speed = server.media[path]
+                data, mime = audio.data, audio.mime
+            else:
+                data, mime, speed = b'', 'text/plain', 0
+            end = len(data) - 1
+            status = 200 if data else 404
+            if rng and data:
+                match = re.fullmatch(r'bytes=(\d*)-(\d*)', rng)
+                if not match or not any(match.groups()):
+                    status = 416
+                else:
+                    start, stop = match.groups()
+                    if not start:
+                        offset = max(0, len(data) - int(stop))
+                    else:
+                        offset = int(start)
+                        end = min(end, int(stop)) if stop else end
+                    status = 206 if offset <= end and offset < len(data) else 416
+            if status == 416:
+                offset, end = 0, -1
+            size = max(0, end - offset + 1)
+            self.send_response(status)
+            self.send_header('Content-Type', mime)
+            self.send_header('Content-Length', str(size))
+            self.send_header('Accept-Ranges', 'bytes')
+            self.send_header('Connection', 'close')
+            if status == 206:
+                self.send_header('Content-Range', f'bytes {offset}-{end}/{len(data)}')
+            if status == 416:
+                self.send_header('Content-Range', f'bytes */{len(data)}')
+            self.end_headers()
+            cap.row('requests.tsv', mono=time.monotonic(), event='headers', status=status,
+                    offset=offset, bytes=size, speed=speed, **base)
+            # Producer availability clock is shared across GETs, including seeks.
+            with cap.lock:
+                origin = server.media_origin.setdefault(path, time.monotonic()) if audio and body else time.monotonic()
+            if body:
+                # Sonos may stop reading during the deliberate ten-second pause.
+                self.connection.settimeout(30)
+                for cursor in range(offset, end + 1, 8192):
+                    stop = min(cursor + 8192, end + 1)
+                    if audio and speed:
+                        due = origin + audio.audio_seconds(stop) / speed
+                        if server.stopping.wait(max(0, due - time.monotonic())):
+                            detail = 'server-shutdown'
+                            break
+                    self.wfile.write(data[cursor:stop])
+                    sent += stop - cursor
+                    cap.row('requests.tsv', mono=time.monotonic(), event='progress', status=status,
+                            offset=cursor, bytes=sent,
+                            audio_s=audio.audio_seconds(stop) if audio else '', speed=speed, **base)
+        except (OSError, ValueError) as error:
+            detail = type(error).__name__ + ': ' + str(error)
+        finally:
+            cap.row('requests.tsv', mono=time.monotonic(), event='close', status=status,
+                    offset=offset, bytes=sent, detail=detail, **base)
+            self.close_connection = True
+
+
+class Observer:
+    def __init__(self, device, server, capture, callback):
+        self.device, self.server, self.capture, self.callback = device, server, capture, callback
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.transport, self.subscription_due = {}, 0
+
+    def subscribe(self):
+        url = self.device.services[AVT]['eventSubURL']
+        headers = {'TIMEOUT': 'Second-300'}
+        if self.server.sid:
+            headers['SID'] = self.server.sid
+        else:
+            headers.update({'NT': 'upnp:event', 'CALLBACK': '<' + self.callback + '/events>'})
+        _, response = fetch(url, 'SUBSCRIBE', headers=headers)
+        response = {k.lower(): v for k, v in response.items()}
+        sid = response.get('sid', self.server.sid)
+        if not sid:
+            raise RuntimeError('subscription missing SID')
+        self.server.sid = sid
+        ttl = response.get('timeout', 'Second-300').removeprefix('Second-')
+        ttl = 300 if ttl == 'infinite' else int(ttl)
+        self.subscription_due = time.monotonic() + max(1, ttl / 2)
+        self.capture.event('subscription', sid=sid, timeout=ttl)
+
+    def start(self):
+        # Failure is recorded and polling continues; no event evidence = conditional verdict.
+        try:
+            self.subscribe()
+        except Exception as error:
+            self.capture.event('subscription-error', error=str(error))
+            self.subscription_due = time.monotonic() + 5
+        self.thread.start()
+
+    def run(self):
+        next_poll, next_transport = time.monotonic(), 0
+        while not self.stop.is_set():
+            now = time.monotonic()
+            if now >= self.subscription_due:
+                try:
+                    self.subscribe()
+                except Exception as error:
+                    self.capture.event('subscription-error', error=str(error))
+                    self.server.sid = ''
+                    self.subscription_due = time.monotonic() + 5
+            if now >= next_transport:
+                try:
+                    self.transport = self.device.call('GetTransportInfo')
+                except Exception as error:
+                    self.transport = {'error': str(error)}
+                next_transport = time.monotonic() + 1
+            received = self.sample()
+            next_poll += .25
+            if next_poll < received:
+                next_poll = received + .25  # no catch-up burst after delayed SOAP
+            self.stop.wait(max(0, next_poll - time.monotonic()))
+
+    def sample(self):
+        sent, step = time.monotonic(), self.capture.step
+        result, error = {}, ''
+        try:
+            result = self.device.call('GetPositionInfo')
+        except Exception as exc:
+            error = str(exc)
+        received = time.monotonic()
+        self.capture.row('positions.tsv', send_mono=sent, recv_mono=received, step=step,
+                         track=result.get('Track', ''), uri=result.get('TrackURI', ''),
+                         reltime=result.get('RelTime', ''), rel_s=seconds(result.get('RelTime')),
+                         duration=result.get('TrackDuration', ''),
+                         state=self.transport.get('CurrentTransportState', ''),
+                         status=self.transport.get('CurrentTransportStatus', ''),
+                         error=error or self.transport.get('error', ''))
+        return received
+
+    def close(self):
+        self.stop.set()
+        self.thread.join(timeout=10)
+        if self.thread.is_alive():
+            raise RuntimeError('position observer did not stop')
+        if self.server.sid:
+            try:
+                fetch(self.device.services[AVT]['eventSubURL'], 'UNSUBSCRIBE',
+                      headers={'SID': self.server.sid})
+            except Exception as error:
+                self.capture.event('unsubscribe-error', error=str(error))
+
+
+def boundary_metrics(capture, paths):
+    """Counter-based end interval at first next GET; never an acoustic-gap claim."""
+    result = []
+    with capture.lock:
+        requests, positions = list(capture.requests), list(capture.positions)
+    for old, new in zip(paths, paths[1:]):
+        gets = [r for r in requests if r['event'] == 'begin' and r['method'] == 'GET' and r['path'] == new]
+        old_positions = [p for p in positions if urllib.parse.urlsplit(p['uri']).path == old and
+                         p['rel_s'] is not None and p['state'] == 'PLAYING']
+        row = {'old': old, 'next': new, 'first_get_mono': None, 'prefetch_lead_s': None}
+        if gets:
+            when = gets[0]['mono']
+            row['first_get_mono'] = when
+            # In uninterrupted trials a late old-item sample also bounds an
+            # early-prefetch request. Do not assume queued-item start at Play.
+            if old_positions:
+                p = old_positions[-1]
+                duration = seconds(p['duration'])
+                if duration is not None:
+                    # SOAP evaluation can lie anywhere between send and receive;
+                    # RelTime is floored, hence a one-second phase interval.
+                    low = p['send_mono'] + duration - p['rel_s'] - 1 - when
+                    high = p['recv_mono'] + duration - p['rel_s'] - when
+                    row.update(prefetch_lead_s=(low + high) / 2,
+                               prefetch_lead_interval_s=[low, high],
+                               old_sample_mono=p['recv_mono'])
+            else:
+                row['reason'] = 'no old-item PLAYING position; lead unknown'
+        result.append(row)
+    return result
+
+
+def trial_metrics(capture, paths, since):
+    with capture.lock:
+        pos = [p for p in capture.positions if p['send_mono'] >= since and
+               urllib.parse.urlsplit(p['uri']).path in paths]
+        # Unique per-trial URLs include prefetch during AddURIToQueue, before Play.
+        req = [r for r in capture.requests if r['path'] in paths]
+        events = [e for e in capture.events if e['mono'] >= since]
+    visited = sorted({urllib.parse.urlsplit(p['uri']).path for p in pos
+                      if p['state'] == 'PLAYING' and p['rel_s'] is not None and p['rel_s'] > 0})
+    transitions, backwards, jumps, flats, previous, flat_start = [], [], [], [], None, None
+    for p in pos:
+        if p['rel_s'] is None:
+            continue
+        if previous and p['uri'] != previous['uri']:
+            transitions.append({'from_track': previous['track'], 'track': p['track'],
+                                'first_rel_s': p['rel_s'], 'mono': p['recv_mono'], 'uri': p['uri']})
+            flat_start = None
+        elif previous:
+            delta = p['rel_s'] - previous['rel_s']
+            dt = p['recv_mono'] - previous['recv_mono']
+            if delta < 0:
+                backwards.append({'mono': p['recv_mono'], 'delta_s': delta})
+            if delta > dt + 1.25:
+                jumps.append({'mono': p['recv_mono'], 'delta_s': delta, 'dt': dt})
+            if delta == 0 and p['state'] == previous['state'] == 'PLAYING':
+                flat_start = previous['recv_mono'] if flat_start is None else flat_start
+                if p['recv_mono'] - flat_start >= 3:
+                    flats.append({'mono': p['recv_mono'], 'flat_s': p['recv_mono'] - flat_start})
+            else:
+                flat_start = None
+        previous = p
+    ranges = []
+    for r in req:
+        if r['event'] == 'headers' and r.get('range'):
+            ranges.append({'path': r['path'], 'range': r['range'], 'offset': r['offset'], 'status': r['status']})
+    ahead = []
+    for r in req:
+        if r['event'] != 'progress' or r.get('audio_s', '') == '':
+            continue
+        preceding = [p for p in pos if urllib.parse.urlsplit(p['uri']).path == r['path'] and
+                     p['rel_s'] is not None and p['state'] == 'PLAYING']
+        if preceding:
+            p = min(preceding, key=lambda p: abs(p['recv_mono'] - r['mono']))
+            elapsed = r['mono'] - p['recv_mono']
+            # Extrapolation over an uninterrupted trial; controls are marked
+            # separately and their read-ahead is not used as a verdict.
+            ahead.append(r['audio_s'] - max(0, p['rel_s'] + elapsed + .5))
+    errors = sorted({p['error'] or p['status'] for p in pos if p['error'] or p['status'] not in ('', 'OK')})
+    notify_errors = [e for e in events if e['kind'] == 'notify' and
+                     any('ERROR' in str(v) for v in e.get('values', []))]
+    return {'visited_paths': visited, 'expected_paths': paths, 'position_samples': len(pos),
+            'boundaries': boundary_metrics(capture, paths) if capture.step != 5 else [], 'item_transitions': transitions,
+            'backwards': backwards, 'large_jumps': jumps, 'possible_stalls': flats,
+            'track_number_mismatches': [p for p in pos if str(paths.index(urllib.parse.urlsplit(p['uri']).path) + 1) != p['track']] if capture.step != 5 else [],
+            'ranges': ranges, 'max_socket_write_ahead_s': max(ahead) if ahead else None,
+            'errors': errors, 'event_errors': notify_errors}
+
+
+QUESTIONS = {
+    1: 'Same-rate gapless queue items', 2: 'Mixed-rate gapless queue items',
+    3: 'Finite FLAC/WAV formats', 4: 'Paced finite delivery',
+    5: 'Seek, pause/resume and navigation', 6: 'Per-item position reporting',
+    7: 'Grouped gapless playback'}
+
+
+class Experiment:
+    def __init__(self, device, capture, server, base, ask=input, wait=None):
+        self.device, self.capture, self.server, self.base = device, capture, server, base
+        self.ask = ask
+        self.wait = wait or time.sleep
+        self.results, self.cache, self.serial, self.dirty = {}, {}, 0, False
+        self.current_paths = []
+
+    def audio(self, rate, bits=16, duration=30, kind='wav'):
+        key = rate, bits, duration, kind
+        if key not in self.cache:
+            self.capture.event('generating', rate=rate, bits=bits, seconds=duration, format=kind)
+            self.cache[key] = generate_audio(*key)
+        return self.cache[key]
+
+    def prompt(self, key, text):
+        while True:
+            answer = self.ask(text + ' [y/n + optional note]: ').strip()
+            if answer.lower()[:1] in ('y', 'n'):
+                yes = answer.lower().startswith('y')
+                self.capture.event('observation', question=key, yes=yes, text=answer)
+                return {'yes': yes, 'note': answer}
+            print('Type y or n, optionally followed by a note.', flush=True)
+
+    def action(self, action, **args):
+        sent = time.monotonic()
+        self.capture.event('command', action=action, arguments=args, sent=sent)
+        result = self.device.call(action, {'InstanceID': 0, **args}, timeout=5)
+        return sent, result
+
+    def quiet(self):
+        try:
+            self.action('Pause')
+        except Exception as error:
+            self.capture.event('pause-unavailable', error=str(error))
+
+    def queue(self, items):
+        self.quiet()
+        # Mark dirty BEFORE mutation, including partial/ambiguous SOAP failures.
+        self.dirty = True
+        self.action('RemoveAllTracksFromQueue')
+        paths = []
+        for label, audio, speed in items:
+            self.serial += 1
+            path = f'/audio/{self.serial}.{audio.kind}'
+            art = f'/art/{self.serial}.png'
+            self.server.media[path] = (audio, speed)
+            self.server.art[art] = artwork(self.serial)
+            paths.append(path)
+            title = f'Q{self.capture.step} item {len(paths)} — {label} — {audio.rate} Hz {audio.bits}-bit'
+            didl = metadata(self.base + path, title, audio, self.base + art)
+            _, added = self.action('AddURIToQueue', EnqueuedURI=self.base + path,
+                                   EnqueuedURIMetaData=didl,
+                                   DesiredFirstTrackNumberEnqueued=0, EnqueueAsNext=0)
+            if int(added.get('NumTracksAdded', '0')) != 1:
+                raise RuntimeError('queue did not add exactly one item')
+        self.action('SetAVTransportURI', CurrentURI='x-rincon-queue:' + self.device.udn + '#0',
+                    CurrentURIMetaData='')
+        self.action('Seek', Unit='TRACK_NR', Target='1')
+        self.current_paths = paths
+        return paths
+
+    def trial(self, question, label, items, prompt, duration=None):
+        self.capture.step = question
+        self.capture.event('trial', label=label)
+        print(f'\nQ{question}: {label}. {prompt}', flush=True)
+        since, paths, error = time.monotonic(), [], ''
+        try:
+            paths = self.queue(items)
+            since = time.monotonic()
+            self.action('Play', Speed=1)
+            self.wait(duration if duration is not None else sum(a.seconds for _, a, _ in items) + 8)
+        except Exception as exc:
+            error = str(exc)
+            self.capture.event('trial-error', error=error)
+            print('Trial error:', error, flush=True)
+        observed = self.prompt(question, 'Was playback clean, complete and correct (no gap/click/error)?')
+        metrics = trial_metrics(self.capture, paths, since)
+        result = {'label': label, 'observation': observed, 'metrics': metrics, 'error': error}
+        self.results.setdefault(question, []).append(result)
+        self.quiet()
+        return result
+
+    def step1(self):
+        a = self.audio(44100, 24, kind='flac')
+        self.trial(1, '44.1 → 44.1 → 44.1 kHz', [(str(i), a, 0) for i in range(1, 4)],
+                   'Listen through all three 30-second items: steady tone, one soft beep/second; watch titles/art change.')
+
+    def step2(self):
+        self.trial(2, '44.1 → 48 → 44.1 kHz',
+                   [(str(rate), self.audio(rate, 24, kind='flac'), 0) for rate in (44100, 48000, 44100)],
+                   'Listen at 30 and 60 seconds for silence, clicks or a missing beep; both rate directions are tested.')
+
+    def step3(self):
+        for kind, bits in [('flac', 16), ('flac', 24), ('wav', 16), ('wav', 24)]:
+            self.trial(3, f'{kind.upper()} {bits}-bit', [(kind, self.audio(44100, bits, kind=kind), 0)],
+                       'Listen for 30 seconds; record any Sonos "could not be played" message and confirm title/artwork.')
+
+    def step4(self):
+        for speed in (1.0, 1.2):
+            self.trial(4, f'FLAC 24-bit paced {speed:.1f}x',
+                       [('paced', self.audio(44100, 24, duration=60, kind='flac'), speed)],
+                       'Listen for the full minute: report any stall, skip, missing tail or app error.')
+
+    def control_measurement(self, label, action, **args):
+        since, _ = self.action(action, **args)
+        self.wait(6)
+        with self.capture.lock:
+            rows = [p for p in self.capture.positions if p['send_mono'] >= since]
+            requests = [r for r in self.capture.requests if r['mono'] >= since and r['event'] == 'begin']
+        before = [p for p in self.capture.positions if p['recv_mono'] < since]
+        old = before[-1] if before else {}
+        def effect(p):
+            if action in ('Next', 'Previous'):
+                return p['uri'] != old.get('uri') or (action == 'Previous' and
+                       p['rel_s'] is not None and old.get('rel_s') is not None and
+                       p['rel_s'] < old['rel_s'] - 2)
+            if action == 'Play':
+                return p['state'] == 'PLAYING'
+            if action == 'Seek' and p['rel_s'] is not None and old.get('rel_s') is not None:
+                expected = old['rel_s'] + p['recv_mono'] - old['recv_mono']
+                return abs(p['rel_s'] - seconds(args['Target'])) <= 2 and abs(p['rel_s'] - expected) > 1.25
+            return False
+        changed = [p for p in rows if effect(p)]
+        return {'label': label, 'command_mono': since, 'requests': requests,
+                'first_effect_upper_s': changed[0]['recv_mono'] - since if changed else None,
+                'audio_get_latency_s': [r['mono'] - since for r in requests if r['method'] == 'GET' and r['path'] in self.server.media],
+                'positions': rows}
+
+    def step5(self):
+        self.capture.step = 5
+        print('\nQ5: Seek, pause/resume, navigation. Watch the app and listen for errors.', flush=True)
+        paths, since, controls, error = [], time.monotonic(), [], ''
+        try:
+            paths = self.queue([(str(i), self.audio(44100, duration=90), 0) for i in range(1, 4)])
+            since = time.monotonic()
+            self.action('Play', Speed=1)
+            self.wait(8)
+            controls.append(self.control_measurement('UPnP seek to 12 seconds', 'Seek', Unit='REL_TIME', Target='0:00:12'))
+            self.action('Pause')
+            self.capture.event('pause-ten-seconds')
+            self.wait(10)
+            controls.append(self.control_measurement('resume after ten seconds', 'Play', Speed=1))
+            controls.append(self.control_measurement('UPnP Next', 'Next'))
+            controls.append(self.control_measurement('UPnP Previous', 'Previous'))
+            for action in ('Next', 'Previous'):
+                self.ask(f'Press Enter when ready, then tap {action} ONCE in the Sonos app within 10 seconds: ')
+                marker = time.monotonic()
+                self.capture.event('app-window', action=action, note='tap time unknown; latency is from instruction window')
+                print(f'Tap {action} now. Listening/recording for 10 seconds.', flush=True)
+                self.wait(10)
+                with self.capture.lock:
+                    rows = [p for p in self.capture.positions if p['send_mono'] >= marker]
+                    requests = [r for r in self.capture.requests if r['mono'] >= marker and r['event'] == 'begin']
+                controls.append({'label': 'App ' + action, 'instruction_mono': marker,
+                                 'positions': rows, 'tap_latency_s': 'unknown',
+                                 'requests': requests,
+                                 'audio_get_window_delay_s': [r['mono'] - marker for r in requests if r['method'] == 'GET' and r['path'] in self.server.media]})
+                answer = self.prompt(5, f'Did app {action} work cleanly?')
+                controls[-1]['observation'] = answer
+            print('Now checking seek and pause/resume on finite 24-bit FLAC.', flush=True)
+            paths += self.queue([('FLAC controls', self.audio(44100, 24, duration=90, kind='flac'), 0)])
+            self.action('Play', Speed=1)
+            self.wait(8)
+            controls.append(self.control_measurement('FLAC seek to 12 seconds', 'Seek', Unit='REL_TIME', Target='0:00:12'))
+            self.action('Pause')
+            self.wait(10)
+            controls.append(self.control_measurement('FLAC resume after ten seconds', 'Play', Speed=1))
+        except Exception as exc:
+            error = str(exc)
+            self.capture.event('trial-error', error=error)
+        observed = self.prompt(5, 'Did seek, ten-second pause/resume and BOTH UPnP/app directions work without errors?')
+        metrics = trial_metrics(self.capture, paths, since)
+        # WAV byte offsets map exactly to PCM frames, excluding its 44-byte header.
+        for row in metrics['ranges']:
+            audio = self.server.media[row['path']][0]
+            row['format'] = audio.kind
+            if audio.kind != 'wav':
+                continue
+            row['wav_time_s'] = audio.audio_seconds(row['offset'])
+            row['frame_aligned'] = row['offset'] >= 44 and (row['offset'] - 44) % (audio.bits // 8 * 2) == 0
+            row['seek_target_delta_s'] = row['wav_time_s'] - 12
+        self.results[5] = [{'label': 'controls', 'observation': observed, 'metrics': metrics,
+                            'controls': controls, 'error': error}]
+        self.quiet()
+
+    def step6(self):
+        self.trial(6, 'Position counters across 44.1 → 48 → 44.1 kHz',
+                   [(str(rate), self.audio(rate, 24, kind='flac'), 0) for rate in (44100, 48000, 44100)],
+                   'Position is polled at 4 Hz; watch per-item titles and the app time restarting at each boundary.')
+
+    def cleanup(self):
+        if self.dirty:
+            self.quiet()
+            self.action('RemoveAllTracksFromQueue')
+            if self.device.queue_length() != 0:
+                raise RuntimeError('test queue did not become empty')
+            self.dirty = False
+            self.capture.event('cleanup', result='test queue empty')
+
+
+def verdict(question, trials):
+    if not trials:
+        return 'NOT RUN'
+    good = [not t['error'] and t['observation']['yes'] and bool(t['metrics']['visited_paths']) and
+            not t['metrics']['errors'] and not t['metrics']['event_errors'] for t in trials]
+    if question == 5 and any(not c.get('observation', {'yes': True})['yes']
+                             for t in trials for c in t.get('controls', [])):
+        return 'NO-GO — app navigation failed'
+    if not all(good):
+        if question in (3, 4) and any(good):
+            return 'GO WITH CONDITIONS — use only successful format/delivery variants'
+        return 'NO-GO — investigate or fall back'
+    # Q5 deliberately leaves a spare queue item unplayed and pauses/seeks.
+    if question != 5 and any(set(t['metrics']['visited_paths']) != set(t['metrics']['expected_paths']) or
+                            t['metrics']['possible_stalls'] for t in trials):
+        return 'GO WITH CONDITIONS — incomplete item evidence or possible stall'
+    if question == 6 and any(t['metrics']['backwards'] or t['metrics']['large_jumps'] or t['metrics']['track_number_mismatches'] or
+                            any(b['first_rel_s'] > 2 for b in t['metrics']['item_transitions']) for t in trials):
+        return 'GO WITH CONDITIONS — position semantics need adaptation'
+    return 'GO — for this tested capability only'
+
+
+def write_report(capture, initial, experiment, status='complete', error=''):
+    lines = ['# Sonos queue probe', '', f'Run status: **{status}**', '',
+             'This is device evidence, not an implemented YeneY queue bridge. No LMS audio processing was exercised.', '',
+             '## Initial speaker and transport', '', '```json', json.dumps(initial, indent=2), '```', '',
+             '## Verdicts', '', '| Question | Verdict |', '|---|---|']
+    for q, name in QUESTIONS.items():
+        if q <= 6 or q in experiment.results:
+            lines.append(f'| Q{q}: {name} | {verdict(q, experiment.results.get(q, []))} |')
+    event_count = sum(e['kind'] == 'notify' for e in capture.events)
+    lines += ['', f'AVTransport notifications captured: {event_count}.',
+              'Zero notifications makes the event-based design **GO WITH CONDITIONS**, even if polling succeeds.', '',
+              'Prefetch lead is an interval inferred from floored RelTime and SOAP send/receive bounds; it is not acoustic gap.',
+              'Socket-write ahead is not a speaker-buffer or TCP-ACK measurement. App tap timestamps are unknown.', '']
+    for q, trials in sorted(experiment.results.items()):
+        lines += [f'## Q{q}: {QUESTIONS[q]}', '']
+        for trial in trials:
+            lines += [f'### {trial["label"]}', '', '```json', json.dumps(trial, indent=2), '```', '']
+    lines += ['## Cleanup and restoration', '',
+              f'Error/interruption: {error or "none"}', '',
+              f'Test queue still marked dirty: {experiment.dirty}. Check events.log for cleanup failures.',
+              'The original transport URI and queue length are saved above; old queue contents were NOT backed up or restored.',
+              'If Q7 was used, restore grouping in the Sonos app. Start yeney@Study again, then press Play in LMS for Study.',
+              'Do not play a probe URL after this process exits: its HTTP server is gone.', '']
+    (capture.directory / 'report.md').write_text('\n'.join(lines))
+
+
+def print_pull(directory, container=113):
+    print('\nOn the Proxmox host, copy the four result files:', flush=True)
+    for name in ('report.md', 'requests.tsv', 'positions.tsv', 'events.log'):
+        print(f'pct pull {container} {directory}/{name} /tmp/{directory.name}-{name}', flush=True)
+
+
+def lan_address(location):
+    host = urllib.parse.urlsplit(location).hostname
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.connect((host, 1400))
+        return sock.getsockname()[0]
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--room', default='Study')
+    parser.add_argument('--ip', help='seed speaker IPv4, otherwise SSDP/ZoneGroupTopology')
+    parser.add_argument('--lms', help='LMS host; default /etc/yeney/config then UDP discovery')
+    parser.add_argument('--port', type=int, default=8099, help='LAN audio/event HTTP port')
+    parser.add_argument('--lan-ip', help='override route-selected local LAN address')
+    parser.add_argument('--replace-queue', action='store_true', help='authorize deletion of a NONEMPTY original queue')
+    parser.add_argument('--group-with', metavar='ROOM', help='optional Q7; owner groups rooms in the Sonos app')
+    args = parser.parse_args(argv)
+    if not 1024 <= args.port <= 65535:
+        parser.error('--port must be between 1024 and 65535 (normal-user compatible)')
+    if args.ip:
+        ipaddress.IPv4Address(args.ip)
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S') + f'-{time.monotonic_ns() % 1000000:06d}'
+    capture = Capture(Path('/tmp') / ('sonos-queue-probe-' + stamp))
+    device = server = observer = experiment = worker = None
+    initial, status, error = {}, 'aborted', ''
+    previous_sigterm = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+    print('Stop Study playback in LMS and stop yeney@Study first. Keep volume comfortable. About 15 minutes plus your notes.', flush=True)
+    print('Results:', capture.directory, flush=True)
+    try:
+        host = args.lms or find_lms()
+        initial['lms_check'] = require_idle(host, args.room)
+        device, rooms = discover(args.room, args.ip, record=capture.event)
+        initial.update(location=device.location, udn=device.udn, device=device.info)
+        initial.update(device.snapshot())
+        initial['topology'] = rooms
+        capture.event('initial-snapshot', snapshot=initial)
+        write_report(capture, initial, SimpleNamespace(results={}, dirty=False), 'preflight')
+        if initial['transport']['CurrentTransportState'] not in ('STOPPED', 'PAUSED_PLAYBACK', 'NO_MEDIA_PRESENT'):
+            raise RuntimeError('Speaker is playing or transitioning; stop playback before probing')
+        if initial['queue_length'] and not args.replace_queue:
+            raise RuntimeError('Original queue is nonempty. Save it in the Sonos app, then rerun with --replace-queue to authorize deletion')
+        print(f'Speaker: {device.info.get("modelName")} firmware={device.info.get("softwareVersion")} UDN={device.udn}', flush=True)
+        print(f'Saved URI={initial["media"].get("CurrentURI", "")} queue length={initial["queue_length"]}; old queue will NOT be restored.', flush=True)
+        local = args.lan_ip or lan_address(device.location)
+        address = ipaddress.IPv4Address(local)
+        if address.is_unspecified or address.is_multicast:
+            raise ValueError('--lan-ip must identify a reachable interface, not wildcard/multicast')
+        server = ProbeHTTP((local, args.port), capture)
+        base = f'http://{local}:{server.server_port}'
+        worker = threading.Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        experiment = Experiment(device, capture, server, base)
+        observer = Observer(device, server, capture, base)
+        observer.start()
+        for step in (experiment.step1, experiment.step2, experiment.step3,
+                     experiment.step4, experiment.step5, experiment.step6):
+            step()
+            write_report(capture, initial, experiment, status='running')
+        if args.group_with:
+            require_idle(host, args.group_with)
+            original = [r for r in rooms if r['ZoneName'] == args.group_with]
+            if len(original) != 1 or original[0]['members'] != [args.group_with]:
+                raise RuntimeError('--group-with room must initially be standalone')
+            input(f'In the Sonos app, group {args.group_with} under {args.room} (Study remains coordinator). Press Enter when done: ')
+            grouped = topology(device)
+            study = next(r for r in grouped if r['UUID'] == device.udn)
+            if study['coordinator'] != device.udn or set(study['members']) != {args.room, args.group_with}:
+                raise RuntimeError('Unexpected group membership/coordinator; Q7 not run')
+            capture.event('group-confirmed', topology=grouped)
+            a = experiment.audio(44100, 24, kind='flac')
+            experiment.trial(7, f'{args.room} + {args.group_with}: same rate', [(str(i), a, 0) for i in range(3)],
+                             'Listen in both rooms for boundary gaps/clicks and inter-room echo; note room-specific effects.')
+            experiment.trial(7, f'{args.room} + {args.group_with}: both rate directions',
+                             [(str(rate), experiment.audio(rate, 24, kind='flac'), 0) for rate in (44100, 48000, 44100)],
+                             'Listen in both rooms across 44.1 → 48 → 44.1 kHz.')
+        status = 'complete'
+    except (Exception, KeyboardInterrupt) as exc:
+        error = type(exc).__name__ + ': ' + str(exc)
+        capture.event('aborted', error=error)
+        print(error, file=sys.stderr, flush=True)
+    finally:
+        # Observer first, queue second, HTTP last: cleanup retains a responsive server.
+        if observer:
+            try:
+                observer.close()
+            except Exception as exc:
+                capture.event('cleanup-error', error=str(exc))
+                status = 'cleanup failed'
+        if experiment:
+            try:
+                experiment.cleanup()
+            except Exception as exc:
+                capture.event('cleanup-error', error=str(exc))
+                status = 'cleanup failed'
+            write_report(capture, initial, experiment, status, error)
+        else:
+            write_report(capture, initial, SimpleNamespace(results={}, dirty=False), status, error)
+        if server:
+            server.stopping.set()
+            server.shutdown()
+            server.server_close()
+            worker.join(timeout=5)
+        capture.close()
+        signal.signal(signal.SIGTERM, previous_sigterm)
+        print('\nRestore grouping if used. Start yeney@Study, then press Play for Study in LMS. Original queue contents are not restored.', flush=True)
+        print_pull(capture.directory)
+    return 0 if status == 'complete' else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
