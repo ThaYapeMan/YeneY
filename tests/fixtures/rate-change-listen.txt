@@ -1,0 +1,37 @@
+Source: field-2026-10-12-listen/study-listen-journal.txt, PID 46308.
+Selected verbatim lines; original 1-based line numbers follow in the design.
+Owner listening observations are recorded separately in the design.
+
+Oct 12 15:16:29.370073 YeneY yeney[46308]: core: boundary frame=53307551 rate=48000 gapless=0 jiffies=1198999838
+Oct 12 15:16:29.370197 YeneY yeney[46308]: Creating new stream (4) for Sonos
+Oct 12 15:16:29.370197 YeneY yeney[46308]: stream 4: FLAC 24-bit 48000 Hz
+Oct 12 15:16:29.376021 YeneY yeney[46308]: LMS identity: id=32671 playlist_timestamp=1791810984.19109 index=0 time=575 duration=591.09 mode=play
+Oct 12 15:16:30.121069 YeneY yeney[46308]: | OK                         | PLAYING                  | vol  22 / 100 |  0:00:00 /  0:00:00 |
+Oct 12 15:16:43.334542 YeneY yeney[46308]: yeney: timing room=Study stream=4 rate=48000 epoch=49 edges=7 window_ms=92.621 residual_p50_ms=20.381 residual_p95_ms=196.828 uncertainty_ms=nan drift_ppm=nan rtt_p50_ms=8.931 rtt_p95_ms=18.141 lead_p5_ms=1511.056 lead_p50_ms=1553.546 probe_rps=1.40 rejected=1 errors=0 frame=576000 audible_mono=1199012.432665643 mono=1199013.802279408 real=1791811003.334295511 inliers=7 outliers=0 outlier_frac=0.0000 span_s=10.979 drift_sigma_ppm=2552.472 missed_edges=3 half_window_ms=20.000 state=locked model_epoch=49 band_ms=12.788 violators=0 locked_drift_ppm=nan locked_rate_drift_ppm=nan published_uncertainty_ms=7.546 publish=on one_sided_count=0 contradiction_count=0 last_two_sided_age_s=1.358 send_latency_p50_ms=3.187 burst_span_ms=64.286 position_phase=locked slew_offset_ms=-0.017 udn=RINCON_949F3EFABA6601400 final reason=tap-boundary
+Oct 12 15:16:43.334542 YeneY yeney[46308]: yeney: timing-lock state=acquiring mono=1199013.802518864 udn=RINCON_949F3EFABA6601400
+Oct 12 15:16:43.334542 YeneY yeney[46308]: core: boundary frame=54072479 rate=44100 gapless=0 jiffies=1199013802
+Oct 12 15:16:43.374363 YeneY yeney[46308]: core: STMt jiffies=1199013842 elapsed_ms=13411
+Oct 12 15:16:44.040984 YeneY yeney[46308]: yeney: timing-raw room="Study" stream=4 epoch=50 seq=658 kind=search send_mono=1199014.504031986 recv_mono=1199014.508852619 rtt_ms=4.821 reltime="0:00:14" reltime_s=14.000 outcome=accepted reason="sample"
+Oct 12 15:16:44.040984 YeneY yeney[46308]: yeney: timing-edge room="Study" stream=4 epoch=50 seq=658 second=13->14 lo_mono=1199014.158986164 hi_mono=1199014.508852619 mid_mono=1199014.333919392 half_width_ms=174.933 residual_ms=nan classification=inlier rule=median-mad-width-floor
+Oct 12 15:16:44.338157 YeneY yeney[46308]: yeney: timing room=Study stream=4 rate=48000 epoch=50 edges=1 window_ms=349.866 residual_p50_ms=0.000 residual_p95_ms=0.000 uncertainty_ms=nan drift_ppm=nan rtt_p50_ms=4.821 rtt_p95_ms=5.446 lead_p5_ms=1457.171 lead_p50_ms=1457.793 probe_rps=1.30 rejected=0 errors=0 frame=672000 audible_mono=1199014.333919392 mono=1199014.806095312 real=1791811004.338111639 inliers=1 outliers=0 outlier_frac=0.0000 span_s=0.000 drift_sigma_ppm=nan missed_edges=0 half_window_ms=50.000 state=acquiring model_epoch=50 band_ms=349.866 violators=0 locked_drift_ppm=nan locked_rate_drift_ppm=nan published_uncertainty_ms=nan publish=on one_sided_count=0 contradiction_count=0 last_two_sided_age_s=0.472 send_latency_p50_ms=3.187 burst_span_ms=64.286 position_phase=prior slew_offset_ms=281.430 udn=RINCON_949F3EFABA6601400 final reason=stream-reset
+Oct 12 15:16:44.338157 YeneY yeney[46308]: Creating new stream (5) for Sonos
+Oct 12 15:16:44.338157 YeneY yeney[46308]: stream 5: FLAC 24-bit 44100 Hz
+Oct 12 15:16:44.338807 YeneY yeney[46308]: SBEncoder::read: stream mismatch (4 != 5)
+Oct 12 15:16:44.340028 YeneY yeney[46308]: stream 4: done
+Oct 12 15:16:44.340028 YeneY yeney[46308]: Done serving stream 4 to Sonos
+Oct 12 15:16:44.345360 YeneY yeney[46308]: LMS identity: id=32678 playlist_timestamp=1791810984.19109 index=1 time=14.3822729454041 duration=561.066 mode=play
+Oct 12 15:16:44.375725 YeneY yeney[46308]: core: STMt jiffies=1199014843 elapsed_ms=14412
+Oct 12 15:16:44.394152 YeneY yeney[46308]: stream 5: GET #5 headers: CONNECTION=close; USER-AGENT=Linux UPnP/1.0 Sonos/86.10-80260 (ZPS12); X-Sonos-SWGen=2; X-Sonos-Firmware=86.10-80260; X-Sonos-Muse-Api=1.54.1; X-Sonos-Id-Hash=yvjdPUQIMPvXFu8Vh5Xz9MFFUqjDE8uwPSQpRehRj70=
+Oct 12 15:16:44.394202 YeneY yeney[46308]: Sonos requested stream 5
+Oct 12 15:16:44.394479 YeneY yeney[46308]: stream 5: GET #5 ACTIVE
+Oct 12 15:16:44.394479 YeneY yeney[46308]: stream 5: serving current generation with fresh FLAC header
+Oct 12 15:16:44.435806 YeneY yeney[46308]: yeney: timing-raw room="Study" stream=5 epoch=55 seq=659 kind=seed send_mono=1199014.898955150 recv_mono=1199014.903677685 rtt_ms=4.723 reltime="0:00:00" reltime_s=0.000 outcome=accepted reason="sample"
+Oct 12 15:16:44.466584 YeneY yeney[46308]: speaker URI: stream=5 session=a6ecf985a7b425b8
+Oct 12 15:16:44.466584 YeneY yeney[46308]: | OK                         | TRANSITIONING            | vol  56 / 100 |  0:00:13 /  0:00:00 |
+Oct 12 15:16:45.375430 YeneY yeney[46308]: core: STMt jiffies=1199015843 elapsed_ms=15412
+Oct 12 15:16:46.375337 YeneY yeney[46308]: core: STMt jiffies=1199016843 elapsed_ms=15936
+Oct 12 15:16:46.667803 YeneY yeney[46308]: | OK                         | PLAYING                  | vol  56 / 100 |  0:00:00 /  0:00:00 |
+Oct 12 15:16:46.671148 YeneY yeney[46308]: yeney: timing-raw room="Study" stream=5 epoch=56 seq=660 kind=seed send_mono=1199017.133337938 recv_mono=1199017.139032189 rtt_ms=5.694 reltime="0:00:00" reltime_s=0.000 outcome=accepted reason="sample"
+Oct 12 15:16:46.672225 YeneY yeney[46308]: core: STMs jiffies=1199017140 elapsed_ms=4
+Oct 12 15:16:47.376263 YeneY yeney[46308]: core: STMt jiffies=1199017844 elapsed_ms=708
+Oct 12 15:16:47.709236 YeneY yeney[46308]: yeney: timing-raw room="Study" stream=5 epoch=56 seq=663 kind=search send_mono=1199018.172529822 recv_mono=1199018.177022793 rtt_ms=4.493 reltime="0:00:01" reltime_s=1.000 outcome=accepted reason="sample"
