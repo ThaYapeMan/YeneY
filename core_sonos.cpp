@@ -62,6 +62,9 @@ void CoreSonosSink::trackBoundary(uint64_t frame, const yeney::Format& f, bool) 
     }
 }
 size_t CoreSonosSink::write(const yeney::Frame* frames, size_t count) {
+    return write(frames, count, false);
+}
+size_t CoreSonosSink::write(const yeney::Frame* frames, size_t count, bool processed) {
     std::lock_guard<std::mutex> lock(mutex);
     if (paused || !running.load()) return 0;
     count = std::min(count, capacity - staged);
@@ -71,8 +74,8 @@ size_t CoreSonosSink::write(const yeney::Frame* frames, size_t count) {
     b.pcm.reserve(count * bytes * 2);
     b.pcm.resize(count * bytes * 2);
     for (size_t i = 0; i < count; ++i) {
-        packSonosSample(b.pcm.data() + i * bytes * 2, frames[i].left, bytes);
-        packSonosSample(b.pcm.data() + (i * 2 + 1) * bytes, frames[i].right, bytes);
+        packSonosSample(b.pcm.data() + i * bytes * 2, frames[i].left, bytes, processed, dither);
+        packSonosSample(b.pcm.data() + (i * 2 + 1) * bytes, frames[i].right, bytes, processed, dither);
     }
     if (tap) {
         b.exported = tap->write(frames, count, b.shmGeneration, b.shmFirst);

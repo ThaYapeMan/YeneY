@@ -48,3 +48,6 @@ field-cold-test
 /oct11-acquisition-test
 
 /oct12-boundary-test
+
+/libqueueitems.a
+/queue-item-store-test

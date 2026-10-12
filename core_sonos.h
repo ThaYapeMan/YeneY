@@ -1,5 +1,6 @@
 #pragma once
 #include "third_party/yeney-core/core/player.h"
+#include "pcm_pack.h"
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -29,6 +30,7 @@ class CoreSonosSink : public yeney::Sink {
     std::thread feeder;
     std::atomic<bool> running{true};
     std::atomic<uint64_t> generation{0};
+    PcmDither dither;
     size_t staged = 0;
     bool rateChangedStream = false;
     mutable bool awaitingStream = false;
@@ -48,6 +50,7 @@ public:
     uint32_t maxSampleRate() const override;
     void trackBoundary(uint64_t, const yeney::Format&, bool) override;
     size_t write(const yeney::Frame*, size_t) override;
+    size_t write(const yeney::Frame*, size_t, bool processed) override;
     void pause() override;
     void resume() override;
     void stop() override;
