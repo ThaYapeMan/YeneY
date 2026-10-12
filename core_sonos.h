@@ -31,14 +31,18 @@ class CoreSonosSink : public yeney::Sink {
     std::atomic<uint64_t> generation{0};
     size_t staged = 0;
     bool rateChangedStream = false;
+    mutable bool awaitingStream = false;
+    uint64_t heldPosition = 0, heldAt = 0;
+    unsigned heldRate = 0;
     bool paused = false, pending = false, continuous = false, inflight = false;
     unsigned rate = 44100, streamRate = 0;
     uint64_t next = 0, streamBase = 0, handed = 0, started = 0;
     mutable uint64_t audible = 0;
     std::unique_ptr<timing_probe::TimingTap> tap;
+    uint64_t (*clockMs)();
     void feed();
 public:
-    explicit CoreSonosSink(const uint8_t* mac=nullptr);
+    explicit CoreSonosSink(const uint8_t* mac=nullptr, uint64_t (*clock)()=nullptr);
     ~CoreSonosSink() override;
     void command(const yeney::Command&);
     uint32_t maxSampleRate() const override;

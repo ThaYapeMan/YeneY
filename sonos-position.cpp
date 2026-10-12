@@ -67,7 +67,11 @@ uint64_t get_sonos_audible_frames(uint32_t rate) {
     if (timing_probe::enabled() && timing_probe::lmsPositionFromModel()) {
         auto &diagnostic = timing_probe::diagnostics();
         double zeroTime;
-        if (diagnostic.startupZero(position.streamId(), zeroTime)) position.startZero(zeroTime * 1000);
+        if (position.needsStartEvidence() && diagnostic.playbackConfirmed(position.streamId()) &&
+            diagnostic.startupZero(position.streamId(), zeroTime)) position.startZero(zeroTime * 1000);
+        uint32_t startupMs; double startupTime;
+        if (position.needsStartEvidence() && diagnostic.startupReading(position.streamId(), startupMs, startupTime))
+            position.poll(position.token(), startupMs, uint64_t(startupTime * 1000));
         double frame = 0, scale = diagnostic.priorScale(), relSecond = NAN, observed = NAN;
         const bool model = diagnostic.lmsPosition(position.streamId(), position.measurementBase(), rate, frame, scale, &relSecond, &observed);
         const auto audible = position.smoothFrames(rate, timing_probe::clockSeconds() * 1000, model, frame, scale, relSecond, observed);
@@ -85,5 +89,6 @@ void sonos_position_allow_zero_start() {
 int sonos_position_audio_started() {
     std::lock_guard<std::mutex> lock(positionMutex);
     return position.audioStarted() || (timing_probe::enabled() &&
-        timing_probe::diagnostics().heardAudio(position.streamId()));
+        (position.needsStartEvidence() ? timing_probe::diagnostics().playbackConfirmed(position.streamId())
+                                      : timing_probe::diagnostics().heardAudio(position.streamId())));
 }

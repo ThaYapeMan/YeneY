@@ -14,19 +14,21 @@ public:
     void startZero(double time) {
         if (!allowZero || !anchored || heardPosition || pendingAudibleBase ||
             !std::isfinite(time) || time < started) return;
+        conservativeStart = true;
         observed = uint64_t(time); heardPosition = zeroObserved = true;
     }
+    bool needsStartEvidence() const { return allowZero && relative == 0; }
     bool audioStarted() const { return anchored && heardPosition && relative > 0 && !pendingAudibleBase; }
     void reset(unsigned id) {
         if (id != stream) allowZero = false;
-        zeroObserved = false;
+        zeroObserved = lowerStart = conservativeStart = false;
         stream = id; request = 0; base = relative = lastFrames = 0;
         anchored = hadAudio = heardPosition = pendingAudibleBase = false;
         audibleBase = lastAudible = 0; reportTime = 0; reportFrames = 0; slewOffset = 0; reportingModel = false; ++generation;
     }
     void connection(unsigned id, uint64_t req, uint64_t now) {
         if (id != stream) reset(id);
-        zeroObserved = false;
+        zeroObserved = lowerStart = conservativeStart = false;
         request = req; reportTime = 0; reportFrames = 0; slewOffset = 0; reportingModel = false;
         // Hold the last reported position until the first PCM offset is known.
         base = lastFrames;
@@ -47,7 +49,7 @@ public:
     uint64_t measurementBase() const { return base; }
     uint64_t token() const { return generation; }
     void poll(uint64_t token, uint32_t ms, uint64_t now) {
-        if (token != generation || !anchored || (ms == 0 && (!allowZero || relative != 0))) return;
+        if (token != generation || !anchored || (ms == 0 && (!allowZero || relative != 0 || !zeroObserved))) return;
         // Stop may report zero before the next GET; retain the last position.
         // A new connection/PCM anchor already clears relative to zero.
         // Position reads are cached for one second. Ignore that cache after
@@ -56,6 +58,7 @@ public:
         if (pendingAudibleBase) { audibleBase = base; pendingAudibleBase = false; }
         // Repeated leased values are the same observation, not a fresh bracket.
         if (!heardPosition || relative != ms) observed = now;
+        if (allowZero && ms && !relative) lowerStart = conservativeStart = true;
         relative = ms;
         if (ms) allowZero = false; // Startup-only: reconnects retain the positive-read safeguard.
         if (!ms) zeroObserved = true;
@@ -103,6 +106,13 @@ public:
             const double low = target - .5 * rate;
             target = std::clamp(candidate, low, low + rate);
         }
+        // A restarted stream begins at the conservative end of its observed
+        // interval. Do not import a speculative zero from before TRANSITIONING.
+        if (!reportTime && lowerStart) {
+            reportTime = now;
+            reportFrames = target - .5 * rate;
+            lowerStart = false;
+        }
         const double dt = reportTime ? std::max(0., now - reportTime) / 1000 : 0;
         const double projected = reportTime ? reportFrames + dt * rate * scale : target;
         const double difference = target - projected;
@@ -110,8 +120,9 @@ public:
         // A qualified model correction above 750 ms is a discontinuity.
         // Unlocked observations constrain nominal projection below; they
         // cannot steer it towards a midpoint that follows the polling phase.
+        const double correction = conservativeStart ? .05 : .15;
         double next = !reportTime || (model && std::abs(difference) > .75 * rate) ? target
-            : projected + std::clamp(difference, -.15 * dt * rate, .15 * dt * rate);
+            : projected + std::clamp(difference, -correction * dt * rate, correction * dt * rate);
         // Unlocked re-anchors use the latest quantisation endpoints and
         // cannot accumulate unbounded phase lag.
         // RelTime midpoint phase follows the polling phase. Chasing each new
@@ -133,6 +144,7 @@ public:
     double offset() const { return slewOffset; }
 private:
     double reportTime = 0, reportFrames = 0, slewOffset = 0;
+    bool lowerStart = false, conservativeStart = false;
     bool reportingModel = false, allowZero = false, zeroObserved = false;
     unsigned stream = 0;
     uint64_t request = 0, generation = 0, base = 0, started = 0, lastFrames = 0, observed = 0;

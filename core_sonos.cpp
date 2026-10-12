@@ -24,7 +24,7 @@ extern "C" uint64_t get_sb_time_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 static void stopCore(int sig) { coreStop.store(true); std::signal(sig, SIG_DFL); }
-CoreSonosSink::CoreSonosSink(const uint8_t* mac) {
+CoreSonosSink::CoreSonosSink(const uint8_t* mac, uint64_t (*clock)()) : clockMs(clock ? clock : get_sb_time_ms) {
     if (mac && timing_probe::publishEnabled()) {
         try {
             tap = std::make_unique<timing_probe::TimingTap>(mac, maxSampleRate());
@@ -86,11 +86,18 @@ size_t CoreSonosSink::write(const yeney::Frame* frames, size_t count) {
 }
 void CoreSonosSink::pause() {
     if (timing_probe::enabled()) timing_probe::diagnostics().reset("pause",false,true);
-    std::lock_guard<std::mutex> lock(mutex); paused = true;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (!paused && awaitingStream) {
+        heldPosition = std::min(streamBase, heldPosition + (clockMs() - heldAt) * heldRate / 1000);
+        audible = std::max(audible, heldPosition);
+    }
+    paused = true;
     if (tap) tap->pause();
 }
 void CoreSonosSink::resume() {
-    std::lock_guard<std::mutex> lock(mutex); paused = false;
+    std::lock_guard<std::mutex> lock(mutex);
+    if (paused && awaitingStream) heldAt = clockMs();
+    paused = false;
     if (tap) tap->resume();
     changed.notify_one();
 }
@@ -103,11 +110,21 @@ void CoreSonosSink::flush() {
     if (tap) tap->flush();
     queue.clear(); starts.clear(); staged = 0; pending = false;
     handed = next = streamBase = started = position;
-    streamRate = 0; rateChangedStream = false;
+    streamRate = 0; rateChangedStream = awaitingStream = false;
     changed.notify_one();
 }
 uint64_t CoreSonosSink::audibleFrames() const {
     std::lock_guard<std::mutex> lock(mutex);
+    if (!paused && awaitingStream) {
+        if (!sonos_position_audio_started()) {
+            // The new HTTP coordinate does not belong to the old audible track.
+            // Continue its clock at its own rate, bounded by its final PCM frame.
+            audible = std::max(audible, std::min(streamBase,
+                heldPosition + (clockMs() - heldAt) * heldRate / 1000));
+            return audible;
+        }
+        awaitingStream = false;
+    }
     if (!paused && streamRate)
         audible = std::max(audible, std::min(handed, streamBase + get_sonos_audible_frames(streamRate)));
     return audible;
@@ -143,6 +160,13 @@ void CoreSonosSink::feed() {
             staged -= b.frames; inflight = true;
             if (b.boundary && (!b.continuous || streamRate != b.rate || sonos_audio_legacy())) {
                 const bool rateChange = streamRate && streamRate != b.rate;
+                if (rateChange) {
+                    // Snapshot before reset changes the shared connection coordinate.
+                    audible = std::max(audible, std::min(handed,
+                        streamBase + get_sonos_audible_frames(streamRate)));
+                    heldPosition = audible; heldAt = clockMs(); heldRate = streamRate;
+                    awaitingStream = true;
+                }
                 rateChangedStream = rateChange;
                 set_squeezebox_audio_rate(get_squeezebox_stream_id() + 1, b.rate);
                 new_squeezebox_stream_id();

@@ -83,6 +83,7 @@ struct Context {
 class Diagnostics {
     std::mutex mutex;
     Context context;
+    bool startupTransitioned = false;
     Estimator model;
     BracketClock bracket;
     FrameMapping frames;
@@ -300,6 +301,22 @@ public:
         time = model.lastTime;
         return true;
     }
+    // A fresh zero confirms startup only after eligibility loss/recovery.
+    // A positive counter can confirm playback without that cycle.
+    bool playbackConfirmed(unsigned stream) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return context.active && context.anchored && context.stream == stream && model.sampled &&
+            (model.lastSecond > 0 || startupTransitioned) && nowClock() - model.lastTime <= stale;
+    }
+    // Positive fallback: full-response time anchors the conservative interval end.
+    bool startupReading(unsigned stream, uint32_t &ms, double &time) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!context.active || !context.anchored || context.stream != stream ||
+            !model.sampled || model.lastSecond <= 0 || nowClock() - model.lastTime > stale) return false;
+        ms = uint32_t(model.lastSecond * 1000);
+        time = model.lastTime + model.lastRtt / 2;
+        return true;
+    }
     bool heardAudio(unsigned stream) {
         std::lock_guard<std::mutex> lock(mutex);
         return context.active && context.anchored && context.stream == stream &&
@@ -406,6 +423,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         line(true, "pcm-anchor");
         ++context.epoch;
+        startupTransitioned = false;
         context.stream = stream;
         context.base = base;
         context.anchored = true;
@@ -434,6 +452,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         if (!allowed || !context.rate || !context.anchored) {
             if (context.active) {
+                startupTransitioned = true;
                 line(true, "ineligible");
                 ++context.epoch;
                 context.active = false;

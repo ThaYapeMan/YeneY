@@ -1,0 +1,119 @@
+Oct 12 12:34:57.465297 YeneY yeney[45739]: core: boundary frame=0 rate=48000 gapless=0
+Oct 12 12:44:43.457243 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:09:45 /  0:00:00 |
+Oct 12 12:44:43.789819 YeneY yeney[45739]: core: STMt jiffies=1189894257 elapsed_ms=585460
+Oct 12 12:44:44.470962 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:09:46 /  0:00:00 |
+Oct 12 12:44:44.790106 YeneY yeney[45739]: core: STMt jiffies=1189895257 elapsed_ms=586460
+Oct 12 12:44:45.000675 YeneY yeney[45739]: core: STMt jiffies=1189895468 elapsed_ms=586670
+Oct 12 12:44:45.300172 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=1 epoch=16 seq=311 kind=burst send_mono=1189895.763959783 recv_mono=1189895.767966070 rtt_ms=4.006 reltime="0:09:46" reltime_s=586.000 outcome=accepted reason="sample"
+Oct 12 12:44:45.332565 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=1 epoch=16 seq=312 kind=burst send_mono=1189895.794927505 recv_mono=1189895.800041815 rtt_ms=5.114 reltime="0:09:47" reltime_s=587.000 outcome=accepted reason="sample"
+Oct 12 12:44:45.332565 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=1 epoch=16 seq=312 second=586->587 lo_mono=1189895.763959783 hi_mono=1189895.800041815 mid_mono=1189895.782000799 half_width_ms=18.041 residual_ms=-19.624 classification=inlier rule=median-mad-width-floor
+Oct 12 12:44:45.474583 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:09:47 /  0:00:00 |
+Oct 12 12:44:45.790320 YeneY yeney[45739]: core: STMt jiffies=1189896258 elapsed_ms=587461
+Oct 12 12:44:46.486692 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:09:48 /  0:00:00 |
+Oct 12 12:44:46.586771 YeneY yeney[45739]: yeney: timing room=Study stream=1 rate=48000 epoch=16 edges=117 window_ms=39.383 residual_p50_ms=11.859 residual_p95_ms=24.362 uncertainty_ms=56.681 drift_ppm=nan rtt_p50_ms=5.369 rtt_p95_ms=16.158 lead_p5_ms=1816.552 lead_p50_ms=1817.315 probe_rps=0.50 rejected=5 errors=0 frame=28176000 audible_mono=1189895.801606771 mono=1189897.054240254 real=1791801886.586256504 inliers=117 outliers=5 outlier_frac=0.0410 span_s=580.990 drift_sigma_ppm=7.324 missed_edges=348 half_window_ms=48.184 state=locked model_epoch=16 band_ms=4.010 violators=0 locked_drift_ppm=10.100 locked_rate_drift_ppm=-10.100 published_uncertainty_ms=3.144 publish=on one_sided_count=0 contradiction_count=0 last_two_sided_age_s=1.272 send_latency_p50_ms=3.024 burst_span_ms=64.989 position_phase=locked slew_offset_ms=-0.014 udn=RINCON_949F3EFABA6601400 final reason=tap-boundary
+Oct 12 12:44:46.586771 YeneY yeney[45739]: yeney: timing-lock state=acquiring mono=1189897.054748415 udn=RINCON_949F3EFABA6601400
+Oct 12 12:44:46.586771 YeneY yeney[45739]: core: boundary frame=28371728 rate=44100 gapless=0
+Oct 12 12:44:46.597857 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=1 epoch=17 seq=313 kind=seed send_mono=1189897.061419701 recv_mono=1189897.065746362 rtt_ms=4.327 reltime="0:09:48" reltime_s=588.000 outcome=accepted reason="sample"
+Oct 12 12:44:46.792123 YeneY yeney[45739]: core: STMt jiffies=1189897260 elapsed_ms=588462
+Oct 12 12:44:46.947009 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=1 epoch=17 seq=314 kind=search send_mono=1189897.407020437 recv_mono=1189897.414880553 rtt_ms=7.860 reltime="0:09:48" reltime_s=588.000 outcome=accepted reason="sample"
+Oct 12 12:44:47.290252 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=1 epoch=17 seq=315 kind=search send_mono=1189897.753599180 recv_mono=1189897.758118848 rtt_ms=4.520 reltime="0:09:48" reltime_s=588.000 outcome=accepted reason="sample"
+Oct 12 12:44:47.491802 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:09:49 /  0:00:00 |
+Oct 12 12:44:47.590308 YeneY yeney[45739]: yeney: timing room=Study stream=1 rate=48000 epoch=17 edges=0 window_ms=nan residual_p50_ms=nan residual_p95_ms=nan uncertainty_ms=nan drift_ppm=nan rtt_p50_ms=4.520 rtt_p95_ms=7.860 lead_p5_ms=nan lead_p50_ms=nan probe_rps=0.80 rejected=0 errors=0 frame=28224000 audible_mono=nan mono=1189898.058249961 real=1791801887.590266228 inliers=0 outliers=0 outlier_frac=nan span_s=0.000 drift_sigma_ppm=nan missed_edges=0 half_window_ms=200.000 state=acquiring model_epoch=17 band_ms=nan violators=0 locked_drift_ppm=nan locked_rate_drift_ppm=nan published_uncertainty_ms=nan publish=on one_sided_count=0 contradiction_count=0 last_two_sided_age_s=nan send_latency_p50_ms=3.024 burst_span_ms=64.989 position_phase=prior slew_offset_ms=-402.033 udn=RINCON_949F3EFABA6601400 final reason=stream-reset
+Oct 12 12:44:47.590308 YeneY yeney[45739]: Creating new stream (2) for Sonos
+Oct 12 12:44:47.590308 YeneY yeney[45739]: stream 2: FLAC 24-bit 44100 Hz
+Oct 12 12:44:47.667345 YeneY yeney[45739]: stream 2: GET #2 headers: CONNECTION=close; USER-AGENT=Linux UPnP/1.0 Sonos/86.10-80260 (ZPS12); X-Sonos-SWGen=2; X-Sonos-Firmware=86.10-80260; X-Sonos-Muse-Api=1.54.1; X-Sonos-Id-Hash=yvjdPUQIMPvXFu8Vh5Xz9MFFUqjDE8uwPSQpRehRj70=
+Oct 12 12:44:47.670055 YeneY yeney[45739]: stream 2: GET #2 ACTIVE
+Oct 12 12:44:47.670055 YeneY yeney[45739]: stream 2: serving current generation with fresh FLAC header
+Oct 12 12:44:47.755380 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=22 seq=316 kind=seed send_mono=1189898.164516249 recv_mono=1189898.223173779 rtt_ms=58.658 reltime="0:00:00" reltime_s=0.000 outcome=accepted reason="sample"
+Oct 12 12:44:47.763654 YeneY yeney[45739]: yeney: timing room=Study stream=2 rate=44100 epoch=22 edges=0 window_ms=nan residual_p50_ms=nan residual_p95_ms=nan uncertainty_ms=nan drift_ppm=nan rtt_p50_ms=58.658 rtt_p95_ms=58.658 lead_p5_ms=nan lead_p50_ms=nan probe_rps=0.90 rejected=0 errors=0 frame=0 audible_mono=nan mono=1189898.231610029 real=1791801887.763626337 inliers=0 outliers=0 outlier_frac=nan span_s=0.000 drift_sigma_ppm=nan missed_edges=0 half_window_ms=200.000 state=acquiring model_epoch=22 band_ms=nan violators=0 locked_drift_ppm=nan locked_rate_drift_ppm=nan published_uncertainty_ms=nan publish=on one_sided_count=0 contradiction_count=0 last_two_sided_age_s=nan send_latency_p50_ms=3.024 burst_span_ms=64.989 position_phase=prior slew_offset_ms=-0.015 udn=RINCON_949F3EFABA6601400 final reason=ineligible
+Oct 12 12:44:47.766411 YeneY yeney[45739]: | OK                         | TRANSITIONING            | vol  28 / 100 |  0:09:49 /  0:00:00 |
+Oct 12 12:44:47.791897 YeneY yeney[45739]: core: STMt jiffies=1189898259 elapsed_ms=591139
+Oct 12 12:44:48.773711 YeneY yeney[45739]: | OK                         | TRANSITIONING            | vol  28 / 100 |  0:00:00 /  0:00:00 |
+Oct 12 12:44:48.792628 YeneY yeney[45739]: core: STMt jiffies=1189899260 elapsed_ms=592058
+Oct 12 12:44:49.000693 YeneY yeney[45739]: core: STMt jiffies=1189899468 elapsed_ms=592249
+Oct 12 12:44:49.793855 YeneY yeney[45739]: core: STMt jiffies=1189900261 elapsed_ms=592978
+Oct 12 12:44:49.938059 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:00 /  0:00:00 |
+Oct 12 12:44:49.947165 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=317 kind=seed send_mono=1189900.410075816 recv_mono=1189900.415058435 rtt_ms=4.983 reltime="0:00:00" reltime_s=0.000 outcome=accepted reason="sample"
+Oct 12 12:44:50.295706 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=318 kind=search send_mono=1189900.755917924 recv_mono=1189900.763568445 rtt_ms=7.651 reltime="0:00:00" reltime_s=0.000 outcome=accepted reason="sample"
+Oct 12 12:44:50.641727 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=319 kind=search send_mono=1189901.103118189 recv_mono=1189901.109599467 rtt_ms=6.481 reltime="0:00:00" reltime_s=0.000 outcome=accepted reason="sample"
+Oct 12 12:44:50.794868 YeneY yeney[45739]: core: STMt jiffies=1189901262 elapsed_ms=593578
+Oct 12 12:44:50.985580 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=320 kind=search send_mono=1189901.448161617 recv_mono=1189901.453357853 rtt_ms=5.196 reltime="0:00:01" reltime_s=1.000 outcome=accepted reason="sample"
+Oct 12 12:44:50.985580 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=320 second=0->1 lo_mono=1189901.103118189 hi_mono=1189901.453357853 mid_mono=1189901.278238021 half_width_ms=175.120 residual_ms=nan classification=inlier rule=median-mad-width-floor
+Oct 12 12:44:50.985708 YeneY yeney[45739]: core: STMs jiffies=1189901453 elapsed_ms=2721
+Oct 12 12:44:51.329744 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=321 kind=search send_mono=1189901.792865035 recv_mono=1189901.797609729 rtt_ms=4.745 reltime="0:00:01" reltime_s=1.000 outcome=accepted reason="sample"
+Oct 12 12:44:51.453848 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:01 /  0:00:00 |
+Oct 12 12:44:51.794764 YeneY yeney[45739]: core: STMt jiffies=1189902262 elapsed_ms=2721
+Oct 12 12:44:51.815269 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=322 kind=burst send_mono=1189902.278647893 recv_mono=1189902.283135435 rtt_ms=4.488 reltime="0:00:01" reltime_s=1.000 outcome=accepted reason="sample"
+Oct 12 12:44:51.833535 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=323 kind=burst send_mono=1189902.297085916 recv_mono=1189902.301386731 rtt_ms=4.301 reltime="0:00:01" reltime_s=1.000 outcome=accepted reason="sample"
+Oct 12 12:44:52.180784 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=324 kind=search send_mono=1189902.642975402 recv_mono=1189902.648621889 rtt_ms=5.646 reltime="0:00:02" reltime_s=2.000 outcome=accepted reason="sample"
+Oct 12 12:44:52.180784 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=324 second=1->2 lo_mono=1189902.297085916 hi_mono=1189902.648621889 mid_mono=1189902.472853902 half_width_ms=175.768 residual_ms=194.616 classification=inlier rule=median-mad-width-floor
+Oct 12 12:44:52.464515 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:02 /  0:00:00 |
+Oct 12 12:44:52.783860 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=325 kind=search send_mono=1189903.242846493 recv_mono=1189903.251645129 rtt_ms=8.799 reltime="0:00:02" reltime_s=2.000 outcome=accepted reason="sample"
+Oct 12 12:44:52.794167 YeneY yeney[45739]: core: STMt jiffies=1189903262 elapsed_ms=2849
+Oct 12 12:44:52.928602 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=326 kind=burst send_mono=1189903.386272496 recv_mono=1189903.396459565 rtt_ms=10.187 reltime="0:00:03" reltime_s=3.000 outcome=accepted reason="sample"
+Oct 12 12:44:52.928602 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=326 second=2->3 lo_mono=1189903.242846493 hi_mono=1189903.396459565 mid_mono=1189903.319653029 half_width_ms=76.807 residual_ms=-55.533 classification=inlier rule=median-mad-width-floor
+Oct 12 12:44:53.000756 YeneY yeney[45739]: core: STMt jiffies=1189903468 elapsed_ms=3055
+Oct 12 12:44:53.468293 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:03 /  0:00:00 |
+Oct 12 12:44:53.795564 YeneY yeney[45739]: core: STMt jiffies=1189904263 elapsed_ms=3850
+Oct 12 12:44:53.882690 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=327 kind=search send_mono=1189904.344902218 recv_mono=1189904.350525925 rtt_ms=5.624 reltime="0:00:04" reltime_s=4.000 outcome=accepted reason="sample"
+Oct 12 12:44:53.882690 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=327 second=3->4 lo_mono=1189903.386272496 hi_mono=1189904.350525925 mid_mono=1189903.868399211 half_width_ms=482.127 residual_ms=-466.642 classification=outlier rule=wide-bracket
+Oct 12 12:44:54.481414 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:04 /  0:00:00 |
+Oct 12 12:44:54.796068 YeneY yeney[45739]: core: STMt jiffies=1189905263 elapsed_ms=4851
+Oct 12 12:44:54.860812 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=328 kind=search send_mono=1189905.323657643 recv_mono=1189905.328684469 rtt_ms=5.027 reltime="0:00:05" reltime_s=5.000 outcome=accepted reason="sample"
+Oct 12 12:44:54.860812 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=328 second=4->5 lo_mono=1189904.344902218 hi_mono=1189905.328684469 mid_mono=1189904.836793344 half_width_ms=491.891 residual_ms=-498.248 classification=outlier rule=wide-bracket
+Oct 12 12:44:55.486883 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:05 /  0:00:00 |
+Oct 12 12:44:55.795778 YeneY yeney[45739]: core: STMt jiffies=1189906263 elapsed_ms=5850
+Oct 12 12:44:55.827670 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=329 kind=search send_mono=1189906.291093580 recv_mono=1189906.295547833 rtt_ms=4.454 reltime="0:00:05" reltime_s=5.000 outcome=accepted reason="sample"
+Oct 12 12:44:55.882243 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=330 kind=burst send_mono=1189906.344361669 recv_mono=1189906.350089115 rtt_ms=5.727 reltime="0:00:06" reltime_s=6.000 outcome=accepted reason="sample"
+Oct 12 12:44:55.882243 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=330 second=5->6 lo_mono=1189906.291093580 hi_mono=1189906.350089115 mid_mono=1189906.320591348 half_width_ms=29.498 residual_ms=-14.450 classification=inlier rule=median-mad-width-floor
+Oct 12 12:44:56.498325 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:06 /  0:00:00 |
+Oct 12 12:44:56.796070 YeneY yeney[45739]: core: STMt jiffies=1189907263 elapsed_ms=6850
+Oct 12 12:44:56.851061 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=331 kind=search send_mono=1189907.311673717 recv_mono=1189907.318880084 rtt_ms=7.206 reltime="0:00:07" reltime_s=7.000 outcome=accepted reason="sample"
+Oct 12 12:44:56.851061 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=331 second=6->7 lo_mono=1189906.344361669 hi_mono=1189907.318880084 mid_mono=1189906.831620876 half_width_ms=487.259 residual_ms=-491.419 classification=outlier rule=wide-bracket
+Oct 12 12:44:57.000619 YeneY yeney[45739]: core: STMt jiffies=1189907468 elapsed_ms=7055
+Oct 12 12:44:57.505386 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:07 /  0:00:00 |
+Oct 12 12:44:57.797113 YeneY yeney[45739]: core: STMt jiffies=1189908264 elapsed_ms=7852
+Oct 12 12:44:57.841049 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=332 kind=search send_mono=1189908.304406115 recv_mono=1189908.308888236 rtt_ms=4.482 reltime="0:00:07" reltime_s=7.000 outcome=accepted reason="sample"
+Oct 12 12:44:57.876640 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=333 kind=burst send_mono=1189908.340334614 recv_mono=1189908.344477086 rtt_ms=4.142 reltime="0:00:08" reltime_s=8.000 outcome=accepted reason="sample"
+Oct 12 12:44:57.876640 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=333 second=7->8 lo_mono=1189908.304406115 hi_mono=1189908.344477086 mid_mono=1189908.324441601 half_width_ms=20.035 residual_ms=1.402 classification=inlier rule=median-mad-width-floor
+Oct 12 12:44:58.520673 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:08 /  0:00:00 |
+Oct 12 12:44:58.797758 YeneY yeney[45739]: core: STMt jiffies=1189909265 elapsed_ms=8852
+Oct 12 12:44:58.834174 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=334 kind=search send_mono=1189909.297540715 recv_mono=1189909.302031588 rtt_ms=4.491 reltime="0:00:08" reltime_s=8.000 outcome=accepted reason="sample"
+Oct 12 12:44:58.854551 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=335 kind=burst send_mono=1189909.317783360 recv_mono=1189909.322398440 rtt_ms=4.615 reltime="0:00:09" reltime_s=9.000 outcome=accepted reason="sample"
+Oct 12 12:44:58.854551 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=335 second=8->9 lo_mono=1189909.297540715 hi_mono=1189909.322398440 mid_mono=1189909.309969577 half_width_ms=12.429 residual_ms=-13.972 classification=inlier rule=median-mad-width-floor
+Oct 12 12:44:59.525388 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:09 /  0:00:00 |
+Oct 12 12:44:59.799188 YeneY yeney[45739]: core: STMt jiffies=1189910267 elapsed_ms=9854
+Oct 12 12:44:59.859862 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=336 kind=search send_mono=1189910.322083562 recv_mono=1189910.327722614 rtt_ms=5.639 reltime="0:00:10" reltime_s=10.000 outcome=accepted reason="sample"
+Oct 12 12:44:59.859862 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=336 second=9->10 lo_mono=1189909.317783360 hi_mono=1189910.327722614 mid_mono=1189909.822752987 half_width_ms=504.970 residual_ms=-492.448 classification=outlier rule=wide-bracket
+Oct 12 12:44:59.938871 YeneY yeney[45739]: yeney: timing room=Study stream=2 rate=44100 epoch=23 edges=6 window_ms=153.613 residual_p50_ms=9.240 residual_p95_ms=157.653 uncertainty_ms=nan drift_ppm=nan rtt_p50_ms=5.196 rtt_p95_ms=10.187 lead_p5_ms=3139.052 lead_p50_ms=3184.704 probe_rps=2.00 rejected=4 errors=0 frame=441000 audible_mono=1189910.315201152 mono=1189910.406677434 real=1791801899.938693762 inliers=6 outliers=0 outlier_frac=0.0000 span_s=8.032 drift_sigma_ppm=4413.447 missed_edges=0 half_window_ms=13.991 state=acquiring model_epoch=23 band_ms=17.982 violators=0 locked_drift_ppm=nan locked_rate_drift_ppm=nan published_uncertainty_ms=nan publish=on one_sided_count=0 contradiction_count=0 last_two_sided_age_s=1.097 send_latency_p50_ms=3.024 burst_span_ms=64.989 position_phase=prior slew_offset_ms=36.209 udn=RINCON_949F3EFABA6601400 reason=periodic
+Oct 12 12:45:00.538522 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:10 /  0:00:00 |
+Oct 12 12:45:00.800290 YeneY yeney[45739]: core: STMt jiffies=1189911268 elapsed_ms=10855
+Oct 12 12:45:00.840002 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=337 kind=search send_mono=1189911.301430538 recv_mono=1189911.307854961 rtt_ms=6.424 reltime="0:00:10" reltime_s=10.000 outcome=accepted reason="sample"
+Oct 12 12:45:00.851840 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=338 kind=burst send_mono=1189911.315117394 recv_mono=1189911.319705628 rtt_ms=4.588 reltime="0:00:11" reltime_s=11.000 outcome=accepted reason="sample"
+Oct 12 12:45:00.851840 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=338 second=10->11 lo_mono=1189911.301430538 hi_mono=1189911.319705628 mid_mono=1189911.310568083 half_width_ms=9.138 residual_ms=-4.633 classification=inlier rule=median-mad-width-floor
+Oct 12 12:45:01.000715 YeneY yeney[45739]: core: STMt jiffies=1189911468 elapsed_ms=11055
+Oct 12 12:45:01.542339 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:11 /  0:00:00 |
+Oct 12 12:45:01.800773 YeneY yeney[45739]: core: STMt jiffies=1189912268 elapsed_ms=11855
+Oct 12 12:45:01.827078 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=339 kind=search send_mono=1189912.286863380 recv_mono=1189912.294887144 rtt_ms=8.024 reltime="0:00:11" reltime_s=11.000 outcome=accepted reason="sample"
+Oct 12 12:45:01.838383 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=340 kind=burst send_mono=1189912.301036211 recv_mono=1189912.306258186 rtt_ms=5.222 reltime="0:00:11" reltime_s=11.000 outcome=accepted reason="sample"
+Oct 12 12:45:01.848889 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=341 kind=burst send_mono=1189912.311563429 recv_mono=1189912.316779610 rtt_ms=5.216 reltime="0:00:11" reltime_s=11.000 outcome=accepted reason="sample"
+Oct 12 12:45:02.209313 YeneY yeney[45739]: yeney: timing-lock state=locked mono=1189912.677270956 udn=RINCON_949F3EFABA6601400
+Oct 12 12:45:02.209313 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=342 kind=search send_mono=1189912.665060353 recv_mono=1189912.677154643 rtt_ms=12.094 reltime="0:00:12" reltime_s=12.000 outcome=accepted reason="sample"
+Oct 12 12:45:02.209313 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=342 second=11->12 lo_mono=1189912.311563429 hi_mono=1189912.677154643 mid_mono=1189912.494359036 half_width_ms=182.796 residual_ms=181.435 classification=inlier rule=median-mad-width-floor
+Oct 12 12:45:02.552863 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:12 /  0:00:00 |
+Oct 12 12:45:02.801320 YeneY yeney[45739]: core: STMt jiffies=1189913269 elapsed_ms=12945
+Oct 12 12:45:03.560049 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:13 /  0:00:00 |
+Oct 12 12:45:03.801345 YeneY yeney[45739]: core: STMt jiffies=1189914269 elapsed_ms=13953
+Oct 12 12:45:04.572635 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:14 /  0:00:00 |
+Oct 12 12:45:04.801751 YeneY yeney[45739]: core: STMt jiffies=1189915269 elapsed_ms=14954
+Oct 12 12:45:05.000659 YeneY yeney[45739]: core: STMt jiffies=1189915468 elapsed_ms=15152
+Oct 12 12:45:05.577640 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:15 /  0:00:00 |
+Oct 12 12:45:05.802568 YeneY yeney[45739]: core: STMt jiffies=1189916270 elapsed_ms=15954
+Oct 12 12:45:06.591014 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:16 /  0:00:00 |
+Oct 12 12:45:06.803081 YeneY yeney[45739]: core: STMt jiffies=1189917271 elapsed_ms=16955
+Oct 12 12:45:06.822551 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=343 kind=burst send_mono=1189917.286534532 recv_mono=1189917.290378017 rtt_ms=3.843 reltime="0:00:16" reltime_s=16.000 outcome=accepted reason="sample"
+Oct 12 12:45:06.849744 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=344 kind=burst send_mono=1189917.312766202 recv_mono=1189917.317554672 rtt_ms=4.788 reltime="0:00:16" reltime_s=16.000 outcome=accepted reason="sample"
+Oct 12 12:45:06.876482 YeneY yeney[45739]: yeney: timing-raw room="Study" stream=2 epoch=23 seq=345 kind=burst send_mono=1189917.339525676 recv_mono=1189917.344304718 rtt_ms=4.779 reltime="0:00:17" reltime_s=17.000 outcome=accepted reason="sample"
+Oct 12 12:45:06.876482 YeneY yeney[45739]: yeney: timing-edge room="Study" stream=2 epoch=23 seq=345 second=16->17 lo_mono=1189917.312766202 hi_mono=1189917.344304718 mid_mono=1189917.328535460 half_width_ms=15.769 residual_ms=15.345 classification=inlier rule=median-mad-width-floor
+Oct 12 12:45:07.604476 YeneY yeney[45739]: | OK                         | PLAYING                  | vol  28 / 100 |  0:00:17 /  0:00:00 |
+Oct 12 12:45:07.803106 YeneY yeney[45739]: core: STMt jiffies=1189918271 elapsed_ms=17954
