@@ -624,3 +624,157 @@ the original samples, supplies the warm improvement. October 6's existing
 counterfactual improves 62.227 -> 61.222 s. The unsaved-live-drift rate-change
 field-RTT replays reacquire in 14.256 s (cold capture) and 14.240 s (warm capture); the original cold field change took
 36.253 s from its early STMs (37.258 s from tap boundary). A2 remains 60/10 s.
+
+
+## October 12 non-gapless boundary correction
+
+Core commit `946047c` supplies the end-frame cap and boundary jiffies.
+The field run at c92b594 confirms cold/warm first-track lock at 61.9/7.9 s,
+first-track after-lock p95 2.6/2.1 ms and second-track p95 1.3/1.1 ms.
+The rate-change streams reacquired at 12.3/14.6 s after creation. Their remaining
+error was reporting at the boundary, not slow clock acquisition.
+
+`CoreSonosSink::feed` changed `streamBase` from zero to 28,371,728 before the
+core's pending STMs. `audibleFrames` immediately evaluated the new connection's
+startup position plus that base, even though the core still held track 1.
+`Player::elapsed` divided that result by the old 48 kHz rate without bounding
+it by track 1's `end`. The base jump alone reaches 591.077667 s; new startup
+frames then masquerade as old-track overrun. Immediately before cold STMs,
+`(593692 * 48 - 28371728) / 44100 = 2.84553 s`: the excess in the old 48 kHz
+coordinate is the following STMs 2.846 s in the new 44.1 kHz coordinate, to
+wire rounding. This identifies startup-coordinate leakage, rather than extra
+old-track audio. The cold evidence is:
+
+```text
+12:31:12.367764 core: STMt jiffies=1189082835 elapsed_ms=587474
+12:31:13.154210 core: boundary frame=28371728 rate=44100 gapless=0
+12:31:13.368037 core: STMt jiffies=1189083835 elapsed_ms=588475
+12:31:14.156906 Creating new stream (2) for Sonos
+12:31:14.367538 core: STMt jiffies=1189084835 elapsed_ms=591145
+12:31:17.369020 core: STMt jiffies=1189087836 elapsed_ms=593692
+12:31:17.557866 core: STMs jiffies=1189088025 elapsed_ms=2846
+12:31:18.369117 core: STMt jiffies=1189088837 elapsed_ms=2846
+12:31:19.000521 core: STMt jiffies=1189089468 elapsed_ms=2846
+12:31:19.369150 core: STMt jiffies=1189089837 elapsed_ms=2846
+```
+
+A current-URI zero was seeded just before TRANSITIONING at 12:31:14.315960
+(epoch 22), then eligibility was lost at 12:31:14.348940. The global audible
+high-water mark retained this speculative estimate through startup. Positive
+counter evidence only permitted STMs at 12:31:17.557866. The later valid,
+lower connection coordinate could not displace the retained high-water mark;
+it froze at 2846 until real position caught up. Warm has the same sequence:
+stream creation 12:44:47.590308, STMt 591139 at 12:44:47.791897,
+STMs 2721 at 12:44:50.985708, repeated STMt 2721 at 12:44:51.794764.
+
+The 2846 ms start is wrong. The cold 0->1 bracket has endpoints
+1189087.672969442 and 1189088.025645743; its one-second tick implies zero
+between 1189086.672969442 and 1189087.025645743. At STMs 1189088.025, elapsed
+is about 1.00–1.35 s, not 2.846 s. A later precise edge (9->10 at
+1189096.889046614–1189096.935422624) narrows the inferred zero to about
+1189086.889–1189086.935, with negligible ten-second drift correction.
+Thus audible-counter start was about 12:31:16.42–16.47, about 1.1 s before
+STMs. The 3.401 s creation-to-STMs delay includes roughly 2.36 s of speaker
+startup/TRANSITIONING plus waiting for the first positive integer. Counters
+bound this phase; they cannot certify acoustic onset or silence.
+
+The sink now snapshots the old reporting position before reset, extrapolates
+it at its old rate, and caps it at the end frame until the restarted stream is
+confirmed. The core independently caps each track's elapsed at its own known
+PCM end. A stream-local zero can initialize/report only after an observed
+eligible -> ineligible -> eligible cycle since the PCM anchor; a fresh positive
+reply remains the fallback. This prevents a pre-TRANSITIONING zero from leaking
+into either track. Unqualified normal zeros cannot initialize the coordinate.
+A qualified zero advances immediately at unity/prior rate; STMs waits until its
+position is positive, without adding or repeating a 1 ms sentinel. The existing
+same-rate gapless 1 ms core rule is unchanged.
+
+Positive-only startup anchors the conservative lower end of its quantisation
+interval. Restarted-stream model convergence is limited to 5% (50 ms per
+one-second STAT) to keep boundary-window excess below 100 ms; ordinary initial
+acquisition retains its 15% policy. Same-rate gapless boundaries keep the current
+reporting state without reinitializing it. Clock gates,
+prior persistence, SOAP request schedule, PCM, transport and publication ABI
+are unchanged. Pause, reconnect and stream-reset fences still apply.
+
+The trimmed verbatim evidence lives in `tests/fixtures/oct12-boundary/`.
+`oct12-boundary-test` runs the production sink with a supplied monotonic clock,
+real ConnectionPosition/Diagnostics and captured response times/counters.
+Encoder throughput and eligibility transitions are deterministic inputs.
+Normal leased counters come from the status panel, using its display timestamp
+as an approximation because their exact SOAP timestamps are absent. Raw probe
+response timestamps remain literal. It
+replays recorded STMt schedules, emits the new STMs when the production sink
+permits it, and samples LMS's unity interpolation every 250 ms. The late old
+STMs is not injected again. The window extends to ten seconds after the
+original (later) STMs, so it also covers ten seconds after the corrected start.
+
+| Boundary metric | Recorded cold | Replayed cold | Recorded warm | Replayed warm |
+|---|---:|---:|---:|---:|
+| Old STAT overrun beyond PCM end, ms | 2614.333 | 0 | 2500.333 | 0 |
+| Largest sampled step excess, ms | 1597.533 | 0.000 | 1582.509 | 0.000 |
+| Longest interval between equal samples, s | 3.000 | 0.250 | 3.000 | 0.250 |
+| Within-track backwards samples | 3 | 0 | 2 | 0 |
+| Largest backwards sample, ms | 561.967 | 0 | 622.068 | 0 |
+
+The field's quoted 3.25 s freeze includes the first interval into the clamped
+plateau; the checker measures the time *between equal-position samples* (3.00 s).
+Likewise an individual warm STAT correction can approach 872 ms, while the
+250 ms CLI sample decrease is 622 ms after interpolation. The original evidence
+is preserved; no replacement measurements are claimed. Replayed STMs elapsed
+is 6 ms cold / 3 ms warm at the two-millisecond event-loop resolution, then
+advances. Listening and fresh owner captures must validate the device result.
+
+New boundary logs append MONOTONIC jiffies. `boundary_window` reports old PCM
+end/STAT overrun, total/longest CLI flat, largest excess step, backwards count/size,
+and explicitly unknown acoustic gap. Legacy logs use the adjacent timing mono
+and label that approximation. The old end uses the preceding core boundary's
+rate and first frame, rather than LMS's rounded library duration.
+
+Decisions for this follow-up:
+
+1. Fix reporting only; the evidence identifies coordinate contamination, so do
+   not alter encoder, HTTP, transport order, lock gates or probe scheduling.
+2. Add a core end-frame cap and publish its commit before the parent pin; a sink
+   startup coordinate must never be interpreted as completed old-track PCM.
+3. Keep the old reporting clock separate until restarted playback confirmation;
+   capping alone would retain a multi-second jump to the end.
+4. Permit a fresh zero after the eligibility-loss/recovery cycle, with positive
+   fallback; waiting for RelTime 1 unnecessarily delays STMs by another second.
+5. Reject normal startup zeros until explicitly seeded by eligible probe
+   evidence, preventing the normal lease from importing TRANSITIONING time.
+6. Seed positive-only starts at the lower interval endpoint; an integer +0.5 s
+   midpoint can start ahead and require backwards LMS corrections.
+7. Limit restarted-stream convergence to 5%, retaining 15% elsewhere, because
+   one-second STAT interpolation amplifies correction steps at CLI samples.
+8. Add an optional sink clock callback for deterministic production-sink replay;
+   the default remains the existing monotonic clock.
+9. Commit only trimmed verbatim boundary fixtures, leaving all original and
+   unrelated untracked evidence untouched.
+10. Treat original captures as before-results and replay changed reporting with
+    fixed responses as after-results; do not invent missing physical responses.
+11. Add boundary jiffies and retain a labelled adjacent-timing fallback for old
+    journals; acoustic gap remains unknown until the owner listens.
+12. Install clang-format 18.1.8 only under /tmp for the existing required format
+    check, keeping the system environment unchanged.
+13. Use the existing case-insensitive checkout through its lowercase sandbox
+    path for writes: both names resolve to the requested c92b594 checkout, but
+    the sandbox denies writes through the uppercase alias.
+14. Retain the existing deployment procedure and add the requested listening
+    check; no agent accesses or deploys to LXC 113.
+
+15. Ignore zero/rewound frame boundaries in the checker window detector rather
+    than invent a negative old-track duration on explicit resets.
+16. Use the captured carried rate with a conservative synthetic 7 ppm prior
+    sigma in boundary replay; the prior's exact unpublished sigma is not field
+    evidence. Existing acquisition fixtures continue to verify lock gates.
+
+17. Freeze/rebase the retained old clock across pause/resume and clear it on
+    flush; add a deterministic handoff-pause test so paused time cannot jump
+    the old track to its end.
+18. Commit the core from its existing detached submodule checkout and push
+    HEAD to main, preserving local branch pointers and all published ancestry.
+
+19. Replay the journal's displayed normal leased counters as well as raw probe
+    replies, labelling display timestamps as approximations rather than claiming
+    unlogged SOAP times were measured.

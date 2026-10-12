@@ -169,3 +169,39 @@ for kind in ('cold', 'warm'):
     assert 'audible_gap_s=unknown' in report
     (Path('/tmp')/f'oct11-{kind}-checker.txt').write_text(report)
     print(f'PASS: October 11 {kind}: per-track statistics, grouped startup decreases and explicit track-change gap')
+
+for kind in ('cold', 'warm'):
+    fixture = root/'tests/fixtures/oct12-boundary'
+    rows = [line.split() for line in (fixture/f'{kind}-positions.txt').read_text().splitlines()]
+    samples = [(float(r[0]), float(r[1])) for r in rows]
+    tracks = [r[3] for r in rows]
+    journal = (fixture/f'{kind}-journal.txt').read_text()
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output): tool.boundary_windows(samples, journal, tracks)
+    text = output.getvalue()
+    assert text.count('boundary_window=') == 1
+    assert 'old_end_ms=591077.667' in text
+    assert ('old_overrun_ms=2614.333' if kind=='cold' else 'old_overrun_ms=2500.333') in text
+    assert 'longest_flat_s=3.000 flat_time_s=3.000' in text
+    assert ('backwards_count=3' if kind=='cold' else 'backwards_count=2') in text
+    assert 'boundary_time_source=adjacent-timing' in text and 'audible_gap_s=unknown' in text
+    print(f'October 12 {kind} recorded boundary: {text.strip()}')
+# New logs provide a precise monotonic boundary timestamp without adjacency.
+synthetic = ('core: boundary frame=0 rate=48000 gapless=0 jiffies=100000\n'
+             'core: STMt jiffies=109000 elapsed_ms=9000\n'
+             'core: boundary frame=480000 rate=44100 gapless=0 jiffies=109500\n'
+             'core: STMt jiffies=110000 elapsed_ms=10000\n'
+             'core: STMs jiffies=110500 elapsed_ms=1')
+output = io.StringIO()
+with contextlib.redirect_stdout(output): tool.boundary_windows([(109,9),(110,10),(111,.5),(112,1.5)],synthetic,['a','a','b','b'])
+assert 'boundary_mono_s=109.500 boundary_time_source=jiffies old_end_ms=10000.000 old_overrun_ms=0.000' in output.getvalue()
+print('PASS: explicit boundary window, old PCM end/STAT overrun, flats, excess steps, backwards and legacy/new log timing')
+
+output = io.StringIO()
+with contextlib.redirect_stdout(output):
+    tool.boundary_windows([(100,0),(101,1)],
+        'core: boundary frame=0 rate=48000 gapless=0 jiffies=99000\n'
+        'core: boundary frame=0 rate=44100 gapless=0 jiffies=100000\n'
+        'core: STMs jiffies=100001 elapsed_ms=1', ['a','b'])
+assert output.getvalue() == ''
+print('PASS: reset to frame zero does not invent a negative-duration boundary')

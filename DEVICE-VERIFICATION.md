@@ -258,7 +258,7 @@ See [the clock contract](docs/timing-probe.md) for file format and expiry.
 
 The user runs the following on LXC 113 after deploying. Queue two long tracks
 in LMS on **Study (Sonos)** first: use two queued tracks of different PCM sample rates, for example id:32671
-(48 kHz, 589 s) then id:32678 (44.1 kHz). The 720 s capture includes enough
+(48 kHz, library duration 591.090 s) then id:32678 (44.1 kHz). The 720 s capture includes enough
 of the second track to measure phase reacquisition. Enable
 PROBE and RAW in the existing service environment. These commands force a new
 stream and start the checker within a few seconds of LMS playback. The runtime
@@ -329,8 +329,20 @@ Expected per track (a rate change creates a new stream):
 | Excess step | <=150 ms during slew + jitter | same | near zero + jitter |
 | Flat interval / backwards | 0 / 0 | 0 / 0 | 0 / 0 after audible start; no repeated 1 ms reports |
 
-Overall aggregates each track; it must not show the former 750 ms boundary
-freeze or 854 ms excess step. A2 automated lock times remain 60/10 s; the new
+The explicit `boundary_window` covers the last old-track STAT before the PCM
+boundary through ten seconds after the new STMs. Require `old_overrun_ms=0`,
+`largest_step_excess_ms<=100`, `backwards_count=0`, and `longest_flat_s<=0.5`
+unless listening confirms a real audible gap. The October 12 local replays
+show cold/warm excess 0/0 ms, no backwards samples, and 0.25 s longest flat.
+These are captured-response simulations, not new device measurements. Track 1's
+submitted PCM end is 28,371,728 / 48,000 = 591.077667 s (wire cap 591077 ms),
+about 12 ms below LMS's library duration. STMs for the restarted track should
+arrive just after a fresh eligible PLAYING zero following TRANSITIONING, with
+a small positive elapsed that advances on subsequent timers; it must not
+start at 2.7–2.85 s or repeat that value. If a zero cannot be qualified, a
+positive reply seeds its conservative elapsed interval instead.
+
+Overall aggregates each track; it must not show the former boundary jump/freeze. A2 automated lock times remain 60/10 s; the new
 field-informed cold replay now locks at 61.222 s (62.227 s before this change). These are position/clock targets,
 not acoustic guarantees. If a valid prior was not saved during the cold run,
 the warm run must report a cold lock rather than pretending it loaded one.
@@ -339,7 +351,7 @@ the captured journal. The runtime override disappears on reboot; the warm
 value `1` is the default. Restore your usual PROBE/RAW settings after testing.
 
 
-The separate core pin is `b6550c2`. Deploy with
+The separate core pin is `946047c`. Deploy with
 `git submodule update --init --recursive` so Apple ALAC is present. YeneY's
 unpaced Sonos analysis tap deliberately leaves the core's optional play-time
 schedule unset; LampaStream should keep using the Sonos `/yeney-timing-<mac>`
@@ -360,3 +372,19 @@ phase without drift (the previous -165/-218 ms are capture-specific, not
 calibration targets), after-lock p95 <=5 ms, and no startup reset cycle on track 2.
 Inspect the explicit track-change sample gap and grouped anomaly output;
 `audible_gap_s=unknown` requires listening to assess acoustic silence.
+
+
+For the short listening check, run on the deployment host after restoring the
+normal service environment. Load both tracks afresh, start, then seek near the end:
+
+```sh
+printf '94:9f:3e:fa:ba:66 playlistcontrol cmd:load track_id:32671\n94:9f:3e:fa:ba:66 playlistcontrol cmd:add track_id:32678\n94:9f:3e:fa:ba:66 playlist index 0\n94:9f:3e:fa:ba:66 play\n' | nc -w 1 192.168.178.23 9090
+sleep 3
+printf '94:9f:3e:fa:ba:66 time 575\n' | nc -w 1 192.168.178.23 9090
+```
+
+Listen through the change (about sixteen seconds later). Note any silence or
+truncated tail separately from LMS position. Seeking creates an explicit new
+coordinate and this short run is not a lock-time or drift acceptance test.
+No audio/transport change is intended; a physical gap or a cut-off tail needs
+its own follow-up before calling the transition acoustically seamless.

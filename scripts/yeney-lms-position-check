@@ -174,7 +174,68 @@ def summary(samples, locked, stream_duration=None):
         print("after_slew_error " + statistics([e for t,e in errors if t >= locked+5]))
 
 
+def boundary_windows(samples, journal, tracks=None):
+    """PCM end and STAT overrun, plus CLI anomalies through start + 10 s.
+
+    Legacy boundary logs lack jiffies; their immediately preceding timing
+    timestamp supplies an approximate boundary time. Acoustic gaps stay unknown.
+    """
+    previous = None
+    latest_mono = None
+    pending = None
+    windows = []
+    for line in journal.splitlines():
+        mono = re.search(r"(?:^| )mono=([0-9.]+)", line)
+        if mono:
+            latest_mono = float(mono[1])
+        boundary = re.search(r"core: boundary frame=(\d+) rate=(\d+) gapless=(\d+)(?: jiffies=(\d+))?", line)
+        if boundary:
+            frame, rate, gapless = map(int, boundary.group(1, 2, 3))
+            at = int(boundary[4])/1000 if boundary[4] else latest_mono
+            if previous and frame > previous[0] and not gapless and at is not None:
+                old_frame, old_rate = previous
+                pending = dict(boundary_mono_s=at, end_ms=(frame-old_frame)*1000/old_rate,
+                               time_source="jiffies" if boundary[4] else "adjacent-timing",
+                               old_reports=[], start=None)
+            previous = frame, rate
+        stat = re.search(r"core: (STMt|STMs) jiffies=(\d+) elapsed_ms=(\d+)", line)
+        if stat and pending:
+            event, stamp, elapsed = stat[1], int(stat[2])/1000, int(stat[3])
+            if event == "STMs":
+                pending["start"] = stamp
+                windows.append(pending)
+                pending = None
+            else:
+                pending["old_reports"].append(elapsed)
+    for index, window in enumerate(windows, 1):
+        before = [t for t, _ in samples if t <= window["boundary_mono_s"]]
+        begin = max(before, default=window["boundary_mono_s"])
+        # Include the last old-track report, rather than only the last CLI read.
+        reports = [int(m[1])/1000 for m in re.finditer(r"core: STMt jiffies=(\d+)", journal)
+                   if int(m[1])/1000 <= window["boundary_mono_s"]]
+        begin = max(reports, default=begin)
+        ids = [i for i, (t, _) in enumerate(samples) if begin <= t <= window["start"]+10]
+        if not ids:
+            continue
+        selected = [samples[i] for i in ids]
+        identities = [tracks[i] for i in ids] if tracks is not None else None
+        groups = segments(selected, identities)
+        metrics = [step_metrics(g) for g in groups]
+        flat_time = sum(g[i][0]-g[i-1][0] for g in groups for i in range(1, len(g))
+                        if g[i][1] == g[i-1][1])
+        backwards = [g[i-1][1]-g[i][1] for g in groups for i in range(1, len(g)) if g[i][1]<g[i-1][1]]
+        overrun = max((p-window["end_ms"] for p in window["old_reports"]), default=0)
+        print(f"boundary_window={index} start_mono_s={begin:.3f} end_mono_s={window['start']+10:.3f} "
+              f"boundary_mono_s={window['boundary_mono_s']:.3f} boundary_time_source={window['time_source']} "
+              f"old_end_ms={window['end_ms']:.3f} old_overrun_ms={max(0,overrun):.3f} "
+              f"longest_flat_s={max(m[2] for m in metrics):.3f} flat_time_s={flat_time:.3f} "
+              f"largest_step_excess_ms={max(m[1] for m in metrics)*1000:.3f} "
+              f"backwards_count={len(backwards)} largest_backwards_ms={max(backwards,default=0)*1000:.3f} "
+              "audible_gap_s=unknown")
+
+
 def report(samples, journal, tracks=None):
+    boundary_windows(samples, journal, tracks)
     groups = segments(samples, tracks)
     for index, group in enumerate(groups):
         if index:
