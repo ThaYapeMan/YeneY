@@ -18,7 +18,7 @@ check the app presentation.
 
 Use a comfortable listening volume. Stop playback for **Study (Sonos)** in LMS,
 then stop **yeney@Study**. Keep other controllers from starting Study during the
-experiment. In the Sonos app, disable shuffle and repeat so queue order is normal.
+experiment. In the Sonos app, disable shuffle, repeat and crossfade for the baseline trials.
 Start with Study ungrouped. The probe refuses LMS `play` **and**
 `pause`, an active room service, a playing/transitioning speaker, ambiguous room
 selection or an already grouped Study. LMS mode is checked through its read-only
@@ -270,3 +270,55 @@ report verdicts, partial mutation cleanup, nonempty-queue refusal, interrupted
 main execution, and owner-verified optional grouping. Independent libFLAC decoding
 checks both sample rates and bit depths, sample count and PCM MD5. The probe
 itself remains standard-library-only. There is no frontend to check.
+
+## Optional Q8 and Q9
+
+After the normal Q1–Q6 (and Q7 if requested), these flags add independent steps:
+
+```bash
+python3 scripts/sonos-queue-probe --replace-queue \
+  --native-crossfade --length-mismatch
+```
+
+Q8 adds about two minutes. It saves coordinator GetCrossfadeMode, enables
+SetCrossfadeMode=1 and verifies readback, then plays three 30 s WAV24 items at distinct 220, 440 and 660 Hz pitches.
+Listen for two pitches at once, fading beeps, clicks, silence and the apparent overlap
+length; enter that in the listening note. The report includes ordinary request
+lead and `overlap_estimates` from the outgoing item's inferred natural end minus
+the incoming item's inferred start. Bounds include two floored position clocks
+and SOAP transit. This is a coarse position-handoff estimate, not an acoustic
+measurement; early HTTP prefetch alone cannot establish crossfade. The original
+mode is restored on completion/interruption. A failed restore remains visible in
+report.md/events.log and is retried at cleanup; queue cleanup is attempted even
+if restoring the setting fails. Restore it in the app if the report says pending.
+Unsupported actions produce a failed Q8 result rather than a claim of support.
+A GO supports only backup route B in [the queue design](sonos-queue-mode.md):
+Sonos's undocumented fixed fade does not reproduce LMS smart/variable crossfade
+or reveal the mixed samples needed for precise light timing.
+
+Q9 adds about four minutes and deliberately serves invalid finite responses on
+probe-owned, connection-close URLs. Four trials cover WAV and FLAC, each promising
+20 s in DIDL, container header and HTTP Content-Length, but supplying 18 or 22 s
+of frame-complete audio. A valid 20 s successor follows each fault. Full GET closes
+after the actual body; bounded Range requests stay within the declared entity
+and available bytes. A long body can be ignored at Content-Length or reset by
+the client; it does not prove Sonos played the extra audio. The server records
+promised bytes, available bytes and bytes actually accepted by its socket.
+Listen/count beeps, note missing tails, errors, stalls/skips and whether the
+successor starts gaplessly. Each trial has a separate successor listening answer,
+positions, transport/error events, request/close logs and boundary estimates.
+
+Q9's verdict is always **DIAGNOSTIC ONLY**, even if the speaker appears tolerant.
+It measures consequences of a broken promise, not a valid production protocol or
+permission to pad/truncate music. No claim of exact acoustic tail duration is
+made without the listening observation. See the queue design's resolved-mixer
+boundary policy; sealed lengths remain the baseline regardless of Q9 outcome.
+Neither optional step has been run on the real speaker in this development round.
+
+Field interpretation correction: after a WAV seek to 12 s in the 12 October
+captures, Sonos requested offsets corresponding to approximately 53–62 s while
+RelTime reported 12. The byte-to-file-time calculation is exact, but the fetch
+horizon is not the audible seek target. Use fresh speaker position/events to
+forward a seek to LMS. WAV's no-request Resume followed an already completed
+response; FLAC reconnected. Retain byte history and support variable fetch speed
+and reconnects, rather than depending on one persistent socket or a 5x limit.

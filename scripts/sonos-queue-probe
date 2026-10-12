@@ -263,13 +263,13 @@ def crc(data, width):
     return value
 
 
-def tone_second(rate, bits):
+def tone_second(rate, bits, tone_hz=440):
     # Integer-Hz oscillators and whole-second items retain phase at all rates.
     little, big = bytearray(), bytearray()
     for n in range(rate):
         t = n / rate
         beep = .08 * math.sin(math.pi * (t - .15) / .10) ** 2 if .15 <= t < .25 else 0
-        sample = round((.10 * math.sin(2 * math.pi * 440 * t) +
+        sample = round((.10 * math.sin(2 * math.pi * tone_hz * t) +
                         beep * math.sin(2 * math.pi * 880 * t)) * ((1 << (bits - 1)) - 1))
         little.extend(sample.to_bytes(bits // 8, 'little', signed=True) * 2)
         big.extend(sample.to_bytes(bits // 8, 'big', signed=True))
@@ -285,6 +285,11 @@ class Audio:
     kind: str
     # (file offset just after this FLAC frame, cumulative PCM seconds)
     frame_ends: tuple = ()
+    declared_length: int = 0
+
+    @property
+    def entity_length(self):
+        return self.declared_length or len(self.data)
 
     @property
     def mime(self):
@@ -297,8 +302,8 @@ class Audio:
         return self.frame_ends[i][1] if i >= 0 else 0
 
 
-def generate_audio(rate, bits, seconds, kind):
-    little, big = tone_second(rate, bits)
+def generate_audio(rate, bits, seconds, kind, tone_hz=440):
+    little, big = tone_second(rate, bits, tone_hz)
     pcm = little * seconds
     if kind == 'wav':
         width = bits // 8 * 2
@@ -354,7 +359,7 @@ def metadata(url, title, audio, art):
             '</dc:title><dc:creator>YeneY queue probe</dc:creator><upnp:class>object.item.audioItem.musicTrack</upnp:class>'
             '<upnp:album>Finite queue capability test</upnp:album><upnp:albumArtURI>' + html.escape(art) +
             f'</upnp:albumArtURI><res protocolInfo="http-get:*:{audio.mime}:*" '
-            f'duration="{time_text(audio.seconds)}" size="{len(audio.data)}" sampleFrequency="{audio.rate}" '
+            f'duration="{time_text(audio.seconds)}" size="{audio.entity_length}" sampleFrequency="{audio.rate}" '
             f'bitsPerSample="{audio.bits}" nrAudioChannels="2">{html.escape(url)}</res></item></DIDL-Lite>')
 
 
@@ -478,7 +483,8 @@ class Handler(BaseHTTPRequestHandler):
                 data, mime = audio.data, audio.mime
             else:
                 data, mime, speed = b'', 'text/plain', 0
-            end = len(data) - 1
+            entity_length = audio.entity_length if audio else len(data)
+            end = entity_length - 1
             status = 200 if data else 404
             if rng and data:
                 match = re.fullmatch(r'bytes=(\d*)-(\d*)', rng)
@@ -487,11 +493,11 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     start, stop = match.groups()
                     if not start:
-                        offset = max(0, len(data) - int(stop))
+                        offset = max(0, entity_length - int(stop))
                     else:
                         offset = int(start)
                         end = min(end, int(stop)) if stop else end
-                    status = 206 if offset <= end and offset < len(data) else 416
+                    status = 206 if offset <= end and offset < entity_length else 416
             if status == 416:
                 offset, end = 0, -1
             size = max(0, end - offset + 1)
@@ -501,9 +507,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header('Accept-Ranges', 'bytes')
             self.send_header('Connection', 'close')
             if status == 206:
-                self.send_header('Content-Range', f'bytes {offset}-{end}/{len(data)}')
+                self.send_header('Content-Range', f'bytes {offset}-{end}/{entity_length}')
             if status == 416:
-                self.send_header('Content-Range', f'bytes */{len(data)}')
+                self.send_header('Content-Range', f'bytes */{entity_length}')
             self.end_headers()
             cap.row('requests.tsv', mono=time.monotonic(), event='headers', status=status,
                     offset=offset, bytes=size, speed=speed, **base)
@@ -513,8 +519,13 @@ class Handler(BaseHTTPRequestHandler):
             if body:
                 # Sonos may stop reading during the deliberate ten-second pause.
                 self.connection.settimeout(30)
-                for cursor in range(offset, end + 1, 8192):
-                    stop = min(cursor + 8192, end + 1)
+                # Q9 deliberately violates only the full GET length. Range
+                # responses stay within the declared entity and available data.
+                body_end = min(end, len(data) - 1) if rng else len(data) - 1
+                if audio and audio.declared_length:
+                    detail = f'deliberate-length-mismatch promised={entity_length} available={len(data)}'
+                for cursor in range(offset, body_end + 1, 8192):
+                    stop = min(cursor + 8192, body_end + 1)
                     if audio and speed:
                         due = origin + audio.audio_seconds(stop) / speed
                         if server.stopping.wait(max(0, due - time.monotonic())):
@@ -662,6 +673,38 @@ def boundary_metrics(capture, paths):
     return result
 
 
+def overlap_metrics(capture, paths):
+    with capture.lock:
+        positions = list(capture.positions)
+    estimates = []
+    for old, new in zip(paths, paths[1:]):
+        before, after = [], None
+        entered = False
+        for row in positions:
+            path = urllib.parse.urlsplit(row['uri']).path
+            if path == new:
+                after = row
+                break
+            if entered and path != old:
+                break
+            if path == old and row['state'] == 'PLAYING' and row['rel_s'] is not None:
+                entered = True
+                before.append(row)
+        if not before or after is None or after['rel_s'] is None:
+            continue
+        last = before[-1]
+        duration = seconds(last['duration'])
+        if duration is None:
+            continue
+        # Natural old-item end minus estimated next-item start. Each RelTime
+        # is floored, so expose bounds rather than a precise acoustic claim.
+        low = last['send_mono'] + duration - last['rel_s'] - 1 - (after['recv_mono'] - after['rel_s'])
+        high = last['recv_mono'] + duration - last['rel_s'] - (after['send_mono'] - after['rel_s'] - 1)
+        estimates.append({'from': old, 'to': new, 'overlap_low_s': low,
+                          'overlap_high_s': high, 'overlap_mid_s': (low + high) / 2})
+    return estimates
+
+
 def trial_metrics(capture, paths, since):
     with capture.lock:
         pos = [p for p in capture.positions if p['send_mono'] >= since and
@@ -724,7 +767,8 @@ QUESTIONS = {
     1: 'Same-rate gapless queue items', 2: 'Mixed-rate gapless queue items',
     3: 'Finite FLAC/WAV formats', 4: 'Paced finite delivery',
     5: 'Seek, pause/resume and navigation', 6: 'Per-item position reporting',
-    7: 'Grouped gapless playback'}
+    7: 'Grouped gapless playback', 8: 'Sonos native crossfade',
+    9: 'Deliberate finite length mismatch'}
 
 
 class Experiment:
@@ -734,6 +778,7 @@ class Experiment:
         self.wait = wait or time.sleep
         self.results, self.cache, self.serial, self.dirty = {}, {}, 0, False
         self.current_paths = []
+        self.original_crossfade = None
 
     def audio(self, rate, bits=16, duration=30, kind='wav'):
         key = rate, bits, duration, kind
@@ -803,7 +848,9 @@ class Experiment:
             error = str(exc)
             self.capture.event('trial-error', error=error)
             print('Trial error:', error, flush=True)
-        observed = self.prompt(question, 'Was playback clean, complete and correct (no gap/click/error)?')
+        observed = self.prompt(question,
+            'Did you hear native overlapping fades without a gap/click/error?' if question == 8 else
+            'Was playback clean, complete and correct (no gap/click/error)?')
         metrics = trial_metrics(self.capture, paths, since)
         result = {'label': label, 'observation': observed, 'metrics': metrics, 'error': error}
         self.results.setdefault(question, []).append(result)
@@ -918,7 +965,67 @@ class Experiment:
                    [(str(rate), self.audio(rate, 24, kind='flac'), 0) for rate in (44100, 48000, 44100)],
                    'Position is polled at 4 Hz; watch per-item titles and the app time restarting at each boundary.')
 
+    def step8(self):
+        self.capture.step = 8
+        try:
+            _, result = self.action('GetCrossfadeMode')
+            mode = int(result['CrossfadeMode'])
+            if mode not in (0, 1):
+                raise ValueError('invalid CrossfadeMode')
+            self.original_crossfade = mode
+            self.action('SetCrossfadeMode', CrossfadeMode=1)
+            _, enabled = self.action('GetCrossfadeMode')
+            if enabled.get('CrossfadeMode') != '1':
+                raise RuntimeError('Sonos did not enable native crossfade')
+            items = [(f'{hz} Hz tone', generate_audio(44100, 24, 30, 'wav', hz), 0)
+                     for hz in (220, 440, 660)]
+            trial = self.trial(8, 'Native crossfade: three 30-second WAV items',
+                               items,
+                               'Listen for two pitches at once as 220 → 440 → 660 Hz fades, with one soft beep/second; note overlap duration, gaps and clicks.')
+            trial['crossfade_mode'] = 1
+            trial['overlap_estimates'] = overlap_metrics(self.capture, self.current_paths)
+            trial['measurement_limit'] = 'Position handoff estimates overlap; HTTP prefetch alone cannot prove acoustic overlap. Supply listening note.'
+        except Exception as exc:
+            self.capture.event('native-crossfade-error', error=str(exc))
+            self.results.setdefault(8, []).append({'label': 'Native crossfade unavailable',
+                'error': str(exc), 'observation': self.prompt(8, 'Was native crossfade available and clean?'),
+                'metrics': trial_metrics(self.capture, [], time.monotonic())})
+        finally:
+            self.restore_crossfade()
+
+    def restore_crossfade(self):
+        if self.original_crossfade is not None:
+            self.action('SetCrossfadeMode', CrossfadeMode=self.original_crossfade)
+            self.capture.event('crossfade-restored', mode=self.original_crossfade)
+            self.original_crossfade = None
+
+    def step9(self):
+        for kind, delta in (('wav', -2), ('flac', -2), ('wav', 2), ('flac', 2)):
+            promised = self.audio(44100, 24, duration=20, kind=kind)
+            actual = self.audio(44100, 24, duration=20 + delta, kind=kind)
+            header = 44 if kind == 'wav' else 42
+            faulty = Audio(promised.data[:header] + actual.data[header:], actual.rate,
+                           actual.bits, promised.seconds, actual.kind, actual.frame_ends,
+                           promised.entity_length)
+            following = self.audio(44100, 24, duration=20, kind=kind)
+            trial = self.trial(9, f'{kind.upper()} body {delta:+d} s versus promised 20 s',
+                               [('deliberate mismatch', faulty, 0), ('valid successor', following, 0)],
+                               'Intentional corrupt length: count beeps/tail, note app errors, silence or overlap, and whether the next title starts cleanly.',
+                               duration=50)
+            trial['length_fault'] = {'format': kind, 'promised_seconds': 20,
+                'available_seconds': 20 + delta, 'promised_bytes': faulty.entity_length,
+                'available_bytes': len(faulty.data),
+                'policy': 'Header/DIDL/HTTP promise 20 s; full GET closes after actual body. Extra bytes may be ignored by HTTP client; Range remains bounded.'}
+            trial['next_item_clean'] = self.prompt(9, 'Did the valid next item start gaplessly without a skip or error?')
+
     def cleanup(self):
+        # Queue cleanup must still run if restoring the optional setting fails.
+        try:
+            self.clear_test_queue()
+        finally:
+            self.restore_crossfade()
+
+    def clear_test_queue(self):
         if self.dirty:
             self.quiet()
             self.action('RemoveAllTracksFromQueue')
@@ -933,6 +1040,8 @@ def verdict(question, trials):
         return 'NOT RUN'
     good = [not t['error'] and t['observation']['yes'] and bool(t['metrics']['visited_paths']) and
             not t['metrics']['errors'] and not t['metrics']['event_errors'] for t in trials]
+    if question == 9:
+        return 'DIAGNOSTIC ONLY — deliberate invalid responses; never a production length policy'
     if question == 5 and any(not c.get('observation', {'yes': True})['yes']
                              for t in trials for c in t.get('controls', [])):
         return 'NO-GO — app navigation failed'
@@ -970,6 +1079,7 @@ def write_report(capture, initial, experiment, status='complete', error=''):
     lines += ['## Cleanup and restoration', '',
               f'Error/interruption: {error or "none"}', '',
               f'Test queue still marked dirty: {experiment.dirty}. Check events.log for cleanup failures.',
+              f'Native crossfade restore still pending: {getattr(experiment, "original_crossfade", None)} (null/None means none).',
               'The original transport URI and queue length are saved above; old queue contents were NOT backed up or restored.',
               'If Q7 was used, restore grouping in the Sonos app. Start yeney@Study again, then press Play in LMS for Study.',
               'Do not play a probe URL after this process exits: its HTTP server is gone.', '']
@@ -997,6 +1107,8 @@ def main(argv=None):
     parser.add_argument('--port', type=int, default=8099, help='LAN audio/event HTTP port')
     parser.add_argument('--lan-ip', help='override route-selected local LAN address')
     parser.add_argument('--replace-queue', action='store_true', help='authorize deletion of a NONEMPTY original queue')
+    parser.add_argument('--native-crossfade', action='store_true', help='optional Q8; saves/restores Sonos native crossfade')
+    parser.add_argument('--length-mismatch', action='store_true', help='optional Q9; deliberately invalid HTTP audio lengths')
     parser.add_argument('--group-with', metavar='ROOM', help='optional Q7; owner groups rooms in the Sonos app')
     args = parser.parse_args(argv)
     if not 1024 <= args.port <= 65535:
@@ -1008,7 +1120,7 @@ def main(argv=None):
     device = server = observer = experiment = worker = None
     initial, status, error = {}, 'aborted', ''
     previous_sigterm = signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
-    print('Stop Study playback in LMS and stop yeney@Study first. Keep volume comfortable. About 15 minutes plus your notes.', flush=True)
+    print('Stop Study playback in LMS and stop yeney@Study first. Keep volume comfortable. About 15 minutes plus notes; Q8 adds about 2 minutes, Q9 about 4 minutes.', flush=True)
     print('Results:', capture.directory, flush=True)
     try:
         host = args.lms or find_lms()
@@ -1057,6 +1169,10 @@ def main(argv=None):
             experiment.trial(7, f'{args.room} + {args.group_with}: both rate directions',
                              [(str(rate), experiment.audio(rate, 24, kind='flac'), 0) for rate in (44100, 48000, 44100)],
                              'Listen in both rooms across 44.1 → 48 → 44.1 kHz.')
+        if args.native_crossfade:
+            experiment.step8()
+        if args.length_mismatch:
+            experiment.step9()
         status = 'complete'
     except (Exception, KeyboardInterrupt) as exc:
         error = type(exc).__name__ + ': ' + str(exc)

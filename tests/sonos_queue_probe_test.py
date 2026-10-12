@@ -107,6 +107,10 @@ class FakeHandler(p.BaseHTTPRequestHandler):
                           'RelTime': p.time_text(fake.elapsed), 'TrackDuration': item['duration']}
             else:
                 values = {'Track': 0, 'TrackURI': '', 'RelTime': '0:00:00', 'TrackDuration': '0:00:00'}
+        elif action == 'GetCrossfadeMode':
+            values = {'CrossfadeMode': getattr(fake, 'crossfade', 0)}
+        elif action == 'SetCrossfadeMode':
+            fake.crossfade = int(args['CrossfadeMode'])
         elif action == 'RemoveAllTracksFromQueue':
             fake.queue.clear()
             fake.index = fake.elapsed = 0
@@ -367,7 +371,6 @@ class ProbeTests(unittest.TestCase):
                     self.assertGreater(low, 2)
                     self.assertLess(high, 5)
 
-
     def test_http_exact_length_ranges_head_errors_and_close_log(self):
         audio = p.generate_audio(44100, 24, 1, 'wav')
         self.http.media['/audio/a.wav'] = (audio, 0)
@@ -511,6 +514,104 @@ class ProbeTests(unittest.TestCase):
             p.fetch(self.base + '/events', 'NOTIFY', b'<bad/>',
                     {'NT': 'upnp:event', 'NTS': 'upnp:propchange', 'SID': 'wrong', 'SEQ': '1'})
 
+    def test_optional_crossfade_restores_setting_and_reports_coarse_overlap(self):
+        experiment = p.Experiment(self.device, self.cap, self.http, self.base,
+                                  ask=lambda _: 'y overlapping beeps', wait=lambda _: None)
+        experiment.wait = lambda duration: self.fake.advance(duration, experiment)
+        self.fake.crossfade = 0
+        with contextlib.redirect_stdout(io.StringIO()):
+            experiment.step8()
+        self.assertEqual(self.fake.crossfade, 0)
+        trial = experiment.results[8][0]
+        self.assertEqual(trial['crossfade_mode'], 1)
+        paths = trial['metrics']['expected_paths']
+        self.assertNotEqual(self.http.media[paths[0]][0].data[44:2044],
+                            self.http.media[paths[1]][0].data[44:2044])
+        self.assertEqual(len(trial['overlap_estimates']), 2)
+        self.assertIn('cannot prove acoustic', trial['measurement_limit'])
+        modes = [a[1]['CrossfadeMode'] for a in self.fake.actions if a[0] == 'SetCrossfadeMode']
+        self.assertEqual(modes, ['1', '0'])
+        # A synthetic 5 s early handoff must be recognized independently of
+        # how early the successor was fetched.
+        self.cap.positions = [dict(uri='/a', state='PLAYING', rel_s=24,
+            duration='0:00:30', send_mono=124, recv_mono=124.1),
+            dict(uri='/b', state='PLAYING', rel_s=0, duration='0:00:30',
+                 send_mono=125, recv_mono=125.1)]
+        overlap = p.overlap_metrics(self.cap, ['/a', '/b'])[0]
+        self.assertAlmostEqual(overlap['overlap_mid_s'], 5)
+        self.assertLess(overlap['overlap_low_s'], 5)
+        self.assertGreater(overlap['overlap_high_s'], 5)
+        p.write_report(self.cap, {}, experiment)
+        report = (self.cap.directory/'report.md').read_text()
+        self.assertIn('Q8: Sonos native crossfade', report)
+        self.assertIn('overlap_estimates', report)
+        experiment.cleanup()
+
+    def test_length_mismatch_full_get_short_long_range_and_diagnostic_report(self):
+        experiment = p.Experiment(self.device, self.cap, self.http, self.base,
+                                  ask=lambda _: 'n deliberate missing tail', wait=lambda _: None)
+        # Exercise all trial construction/queue actions without a fake HTTP
+        # parser rejecting the intentionally truncated response before sampling.
+        with mock.patch.object(self.fake, 'get', return_value=None), contextlib.redirect_stdout(io.StringIO()):
+            experiment.step9()
+        trials = experiment.results[9]
+        self.assertEqual(len(trials), 4)
+        self.assertEqual([t['length_fault']['available_seconds'] for t in trials], [18, 18, 22, 22])
+        for trial in trials:
+            path = trial['metrics']['expected_paths'][0]
+            audio, _ = self.http.media[path]
+            conn = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+            conn.request('GET', path)
+            response = conn.getresponse()
+            self.assertEqual(int(response.getheader('Content-Length')), audio.entity_length)
+            if len(audio.data) < audio.entity_length:
+                with self.assertRaises(http.client.IncompleteRead) as caught:
+                    response.read()
+                self.assertEqual(len(caught.exception.partial), len(audio.data))
+            else:
+                self.assertEqual(len(response.read()), audio.entity_length)
+            conn.close()
+            if len(audio.data) > audio.entity_length:
+                with socket.create_connection(('127.0.0.1', self.http.server_port)) as raw:
+                    raw.sendall(f'GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n'.encode())
+                    chunks = []
+                    while chunk := raw.recv(65536):
+                        chunks.append(chunk)
+                body = b''.join(chunks).split(b'\r\n\r\n', 1)[1]
+                self.assertEqual(len(body), len(audio.data))
+            conn = http.client.HTTPConnection('127.0.0.1', self.http.server_port)
+            conn.request('GET', path, headers={'Range': 'bytes=0-43'})
+            response = conn.getresponse()
+            self.assertEqual(response.status, 206)
+            self.assertEqual(len(response.read()), 44)
+            conn.close()
+        time.sleep(.05)
+        logs = [r for r in self.cap.requests if r['event'] == 'close' and 'deliberate-length-mismatch' in r.get('detail', '')]
+        self.assertTrue(any(int(r['bytes']) > self.http.media[r['path']][0].entity_length for r in logs))
+        self.assertTrue(p.verdict(9, trials).startswith('DIAGNOSTIC ONLY'))
+        p.write_report(self.cap, {}, experiment)
+        report = (self.cap.directory/'report.md').read_text()
+        self.assertIn('Q9: Deliberate finite length mismatch', report)
+        self.assertIn('next_item_clean', report)
+        experiment.cleanup()
+
+    def test_crossfade_fault_retains_original_for_cleanup_retry(self):
+        experiment = p.Experiment(self.device, self.cap, self.http, self.base,
+                                  ask=lambda _: 'n unsupported', wait=lambda _: None)
+        self.fake.fail_action = 'SetCrossfadeMode'
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
+            experiment.step8()
+        self.assertEqual(experiment.original_crossfade, 0)
+        experiment.dirty = True
+        self.fake.queue = [{'uri': 'test', 'duration': '0:00:01'}]
+        with self.assertRaises(RuntimeError):
+            experiment.cleanup()
+        self.assertEqual(self.fake.queue, [])
+        self.assertFalse(experiment.dirty)
+        self.fake.fail_action = ''
+        experiment.cleanup()
+        self.assertIsNone(experiment.original_crossfade)
+
     def test_all_six_steps_real_soap_queue_http_and_report(self):
         def ask(text):
             if 'then tap' in text:
@@ -571,7 +672,7 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r'^\| Q[1-6]:', (self.cap.directory/'report.md').read_text(), re.M)), 6)
 
 
-    def run_main(self, experiment_class=None, group=False, replace=False):
+    def run_main(self, experiment_class=None, group=False, replace=False, extra=()):
         directory = Path(self.temp.name) / 'main-run'
         capture_class = p.Capture
         args = ['--lms', '127.0.0.1', '--lan-ip', '127.0.0.1', '--port']
@@ -582,6 +683,7 @@ class ProbeTests(unittest.TestCase):
             args.append('--replace-queue')
         if group:
             args += ['--group-with', 'Kitchen']
+        args += list(extra)
         output = io.StringIO()
         def group_input(_):
             self.fake.grouped = True
@@ -594,6 +696,24 @@ class ProbeTests(unittest.TestCase):
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
             result = p.main(args)
         return result, (directory / 'report.md').read_text(), output.getvalue()
+
+    def test_main_opt_in_crossfade_and_mismatch_steps_order_and_report(self):
+        calls = []
+        class Optional(p.Experiment):
+            def step1(inner):
+                pass
+            step2 = step3 = step4 = step5 = step6 = step1
+            def step8(inner):
+                calls.append(8)
+                inner.results[8] = []
+            def step9(inner):
+                calls.append(9)
+                inner.results[9] = []
+        result, report, _ = self.run_main(Optional, extra=('--native-crossfade', '--length-mismatch'))
+        self.assertEqual(result, 0)
+        self.assertEqual(calls, [8, 9])
+        self.assertIn('| Q8: Sonos native crossfade | NOT RUN', report)
+        self.assertIn('| Q9: Deliberate finite length mismatch | NOT RUN', report)
 
     def test_main_refuses_nonempty_queue_without_authorization(self):
         self.fake.queue = [{'uri': 'http://saved/', 'duration': '0:00:30'}]
