@@ -1,6 +1,6 @@
 # Sonos queue mode
 
-Status: phase 1 item-store implementation, 12 October 2026. Queue playback is
+Status: phases 1 and 2 implemented independently, 13 October 2026. Queue playback is
 not connected yet; the existing stream transport remains in use. The owner selected variant A: LMS remains the player and audio processor;
 Sonos plays one HTTP queue item per LMS track. Stream mode remains available.
 The required playback policy is `YENEY_PLAYBACK_MODE=auto|stream|queue`, default
@@ -153,11 +153,46 @@ rather than lose its audio or exceed quota. Decoder/encoder scratch space is
 bounded per chunk and separate from the RAM write-buffer budget. The encoded
 stream buffer is still **256 packets** and is unchanged.
 
-Decode ahead through the same LMS/core processing path into a non-paced queue
-store sink. Keep network/disk work off the core event loop with bounded storage
-work queues in the future sink integration. STMd requests subsequent LMS data;
-STMs waits for audible handoff. Verify that LMS supplies successors under this
-separation. Never CLI-skip merely to move the producer ahead.
+Phase 2 provides `CoreQueueSink`, constructed only by tests and
+`yeney-queue-dryrun`. Its `decodeAhead()` capability enables a separate core path:
+monotonic occurrence IDs, descriptor updates, decoder completion/STMd and resolved
+item ends are separate records. `resolvedItemBoundary` uses the exact mixer
+output coordinate; overlap PCM belongs to the incoming occurrence. Decoder-track
+end remains a separate event after its retained source tail is consumed. STMs
+requires an explicit `audibleFrom(occurrence, frame)` signal; HTTP reads, producer
+writes and STMd never create one. STMt reads the sink's audible coordinate.
+The existing stream capability remains unset and its fixture bytes are unchanged.
+The standalone test/dry-run sink accepts rates up to 192 kHz; the future Sonos
+controller must apply the actual coordinator format limits before preparation.
+
+A configurable `futurePcmSeconds` pool defaults to 30 s, charged using each
+track's own rate. In addition, two bounded mixer look-behind windows retain up to
+`transitionMaxFrames` each (default 2,097,152 frames). This reservation is explicit:
+30 s is the future pool, not a claim that total mixer RAM is 30 s. Without it,
+a long fade can fill the future pool before decoder completion and deadlock the
+STMd/successor exchange. The worker's PCM job queue separately defaults to 30 s
+and includes in-flight jobs in admission; `write` returns partial acceptance or
+zero without waiting for encoding/disk. Control jobs have an 8192-job hard cap.
+
+All item-store mutation/FLAC encoding/disk writes/eviction runs on one room
+worker. Store metadata locking is short: encode and history writes occur unlocked;
+reader decoding occurs unlocked from an already-open inode, so eviction cannot
+invalidate an in-progress file read. A blocked-write test proves producer
+backpressure and reader independence. This supersedes phase 1's serialized
+encoding under the room mutex. No production HTTP route or SOAP action is added.
+
+Transition commitment uses the actual successor descriptor/strm and the core's
+capped transition-frame count, never CLI preference prediction. Before publication,
+known-source pending history can be transferred into a new immutable promised
+asset generation without rewriting FLAC bytes. The unpublished handle is invalidated
+and its waiters are woken. If a successor arrives after 15 s from the track's
+strm, lacks required count information, or its promise would exclude already
+produced PCM, preserve a sealed asset instead. Unknown source counts stay sealed.
+A shorter runtime result than an existing promise is an explicit length fault,
+never silent padding; a longer result carries its residual forward.
+
+Qualify actual LMS successor delivery with the owner-run dry-run documented in
+DEVICE-VERIFICATION.md. Never CLI-skip merely to move the producer ahead.
 
 Preparation still needs approximately 12 s total audio lead and up to 8 s of
 successor prefix ready around 5 s before the current end; these are engineering
@@ -178,6 +213,24 @@ then actual rendered count supplies the immutable WAV header and Content-Length.
 An ALAC/container count must be validated, not assumed exact merely from a codec
 name. The store accepts a promise from its caller; it does not parse source files.
 
+Phase 2 decoder metadata supplies positive FLAC STREAMINFO counts; a retained-header
+seek subtracts the first decoded frame's absolute sample coordinate. Headerless
+FLAC seeks and zero total_samples remain unknown. ALAC uses validated sample tables
+and the existing edit-list/iTunSMPB priming/padding trim. In the queue decoder, finite WAV/AIFF payloads stop at their validated frame count,
+ignore trailing metadata and reject short payloads; the legacy stream decoder
+retains its behavior. WAV data sizes must be frame-aligned and non-sentinel; AIFF COMM counts must agree with SSND bytes. Raw
+PCM without a finite container count and MP3 remain unknown. AAC is not an
+advertised native decoder. No decimal LMS duration is used.
+
+Upstream transcoding cannot be identified from strm alone. The host can declare
+`sourceIsTranscoded`, which suppresses exact counts even if a transcoder supplies
+finite headers. The dry-run exposes `--transcoded` for this owner-controlled case;
+the future playlist controller must supply authoritative source metadata. Likewise,
+smart/same-album context is an optional host rule: without it the received strm
+transition is authoritative, and type 0 is reported as type 0 rather than guessed
+to mean smart crossfade. This is an explicit integration boundary, not a CLI
+preference prediction in phase 2.
+
 Publication commits the transition and item length. If a later playlist edit
 cancels or shortens the anticipated fade, item N still ends at its promised
 frame. The **next item carries the remaining previous-item tail** before the new
@@ -192,8 +245,10 @@ native rate. This exceptional extra queue entry is linked to the old occurrence;
 its clock advances the old source until the true incoming item starts. It avoids
 losing audio while the group/conversion policy remains deferred. Qualify the
 continuation insertion and any controlled requeue gap on the device.
-This routing is a future mixer/queue-controller responsibility, not the phase 1
-store silently accepting an overrun.
+Phase 2 implements this routing in the queue sink worker: same-rate residuals
+become a successor prefix; different-rate residuals remain a tail-only asset.
+The store still rejects an overrun. SOAP insertion/playlist revision handling is
+phase 4 work; these assets are currently exercised only by tests and the dry-run.
 
 Whole-playlist URL/DIDL placeholders do not authorize publishing speculative
 HTTP lengths. If a successor has already had a conflicting HTTP promise or
@@ -311,6 +366,13 @@ a frozen start value. Cap the old item at its actual rendered end; any real gap
 is represented as a gap. Preserve the existing 1 ms LMS start sentinel only at
 its protocol boundary, while internal audible zero remains zero. Repeated reports
 must not repeatedly reset LMS interpolation or make it step backwards.
+
+For same-rate tail recovery, the successor asset begins with retained old PCM.
+Its source clock and STMs start only after that prefix, at the original incoming
+core frame. A different-rate continuation advances the old source clock and
+emits no invented LMS occurrence start. The dry-run reports prefix/continuation
+assets separately; physical queue insertion and LampaStream analysis pumping
+remain later phases.
 
 Crossfade starts the incoming item's LMS clock at zero while its mixed overlap
 is audible; its clock counts overlap time once. The outgoing source continues
@@ -486,8 +548,7 @@ Reliable length means a resolved exact rendered count, not just an LMS duration
 field. Sealing can qualify an otherwise uncertain finite source. Invalid setting
 values warn and select `auto`. Settings are read at room startup. `YENEY_QUEUE_DISK_MIB` is a positive integer
 in MiB, read when the item store is constructed; invalid or overflowing values
-fail configuration. It has no effect on today's unmodified stream-only playback. This design
-round leaves the running production behavior unchanged; once queue implementation
+fail configuration. It has no effect on today's unmodified stream-only playback. These first two phases leave the running production behavior unchanged; once queue implementation
 is qualified and shipped, `auto` is its default. Owners can explicitly select
 `stream` during staged device qualification or to roll back.
 
@@ -525,12 +586,12 @@ existing room status/diagnostic output and timing diagnostics. Preserve metadata
 as track metadata; do not put implementation reasons into Sonos titles. Current
 configuration/probe output does not implement this status yet.
 
-Phases and approximate production changes (reviewable estimates, not this patch):
+Phases and approximate remaining production changes:
 
 | Phase/files | Work and approximate size |
 |---|---|
-| 1: new item-store/WAV writer + tests | Implemented independent progressive/sealed WAV24 readers, indexed FLAC history, RAM/disk quotas, cancellation/length faults and tests; no playback integration yet. |
-| 2: `core/player.h`, `core/player.cpp`, new queue sink, `core_sonos.*` | Processing provenance implemented; remaining stable descriptors, exact-count extraction, committed transition/tail routing, decode/audible separation, lookahead and cache adoption; 450–750 lines. Core changes must be committed/pushed before the bridge pin. |
+| 1: new item-store/WAV writer + tests | Done in `e3e0c70`. Implemented independent progressive/sealed WAV24 readers, indexed FLAC history, RAM/disk quotas, cancellation/length faults and tests; no playback integration yet. |
+| 2: core decoder/player/sink API, item store, new queue sink/dry-run + tests | Done in core `ff2e857`, `478ce6b`, `fbdc8b9`, `9c68473` and bridge `d26bdb8`. Stable occurrences/counts, resolved item boundaries, decode/audible separation, bounded lookahead, worker adoption and tail recovery. Owner-run LMS qualification remains required; no queue playback wiring. |
 | 3: `upnp/soap.*`, `own_speaker_control.*`, `event_parsers.*`, `speaker_state.*`, HTTP route | Queue actions/music DIDL, identity/events/position, coordinator lease and finite serving; 350–600 lines. |
 | 4: `yeney.cpp`, LMS metadata/control helpers, room status/config docs | Whole-playlist batches/UpdateID edits, on-demand preparation, SaveQueue/five-backup retention, serialized controls and fallback; 500–850 lines. |
 | 5: `position_state.h`, `sonos-position.cpp`, tap/timing exporter | Item clocks, overlap maps, audible analysis pump and generation fencing; 300–550 lines. |
@@ -547,7 +608,7 @@ all prerequisites are already solved. Stream wire fixtures must remain passing.
 
 | Risk/open question | Required test and acceptance |
 |---|---|
-| LMS sends successors only after an audible start/finish | Fake SlimProto replay plus real LMS logs: STMd requests ahead without early STMs, playlist advance or double skips. If unavailable, revise the source protocol before claiming seamless queue mode. |
+| LMS read-ahead has not yet been qualified on the owner server | Fake SlimProto replay plus real LMS logs: STMd requests ahead without early STMs, playlist advance or double skips. If unavailable, revise the source protocol before claiming seamless queue mode. |
 | Transition prediction differs from mixer | Core deterministic PCM tests of all transition types/smart/rates/shortage, verify emitted item frame totals and no missing/duplicated mixed frames; fault injection after prefetch. |
 | Exact duration/codec delay errors | PCM/FLAC/MP3/VBR/transcoded fixtures with decoded reference counts; mismatch must never silently trim music or publish mutable headers. |
 | Q9 recovery not known | Owner runs optional `--length-mismatch`: short/long WAV and FLAC, records tail/errors/next join. Keep production on exact committed counts or sealed unknown-count assets regardless of a tolerant speaker. |
