@@ -388,3 +388,59 @@ truncated tail separately from LMS position. Seeking creates an explicit new
 coordinate and this short run is not a lock-time or drift acceptance test.
 No audio/transport change is intended; a physical gap or a cut-off tail needs
 its own follow-up before calling the transition acoustically seamless.
+
+## Queue mode phase 2: LMS read-ahead
+
+This is an owner-run test of LMS/core preparation, with no Sonos involved. The
+extra player is **Queue Test (YeneY)**, MAC **02:59:51:54:00:01**. Reserve that
+identity for this tool; do not rename an existing room to it. Only one dry-run
+may run at a time. Existing room playback and services are untouched.
+
+After building/installing this revision, on the deployment machine run:
+
+```sh
+yeney-queue-dryrun --server 192.168.178.23 --seconds 900
+```
+
+Use the LMS address alone, never `:9000`. In LMS select **Queue Test (YeneY)**,
+load a local album with crossfade **off**, and play it. Then load another album
+with crossfade **on** and play it. Prefer tracks long enough to measure a 12 s
+lead, and let at least two joins complete in each case. Repeat with FLAC, ALAC,
+WAV/AIFF and MP3; MP3 must report an unknown exact source count. If LMS is
+configured to transcode these sources, run a separate invocation with
+`--transcoded`, which suppresses exact counts even if a transcoder supplies a
+finite container header. strm does not identify upstream transcoding; the future
+playlist controller must supply that source metadata explicitly. The dry-run
+simulates audible playback at 1.0x, including mixed overlap; it produces no
+physical sound and sends no CLI skip commands. Do not run it against a real LMS
+from an agent session.
+
+Ctrl-C or the time limit disconnects the extra LMS player and writes
+`/tmp/yeney-queue-dryrun-<timestamp>-<pid>.md`, `.tsv` and `.log`. Produced FLAC
+history is under `/tmp/yeney-queue-dryrun/QueueTest`, deleted on normal exit;
+`--keep` retains it for inspection. The next invocation cleans that same
+work directory at startup; copy retained history before starting another run. The tool never accesses room configuration,
+room services or `/var/lib/yeney`. Copy the exact filenames printed by the tool.
+From the Proxmox host, for example (replace the timestamp and PID):
+
+```sh
+pct pull 113 /tmp/yeney-queue-dryrun-20261013-120000-1234.md /tmp/yeney-queue-dryrun-report.md
+pct pull 113 /tmp/yeney-queue-dryrun-20261013-120000-1234.tsv /tmp/yeney-queue-dryrun-positions.tsv
+pct pull 113 /tmp/yeney-queue-dryrun-20261013-120000-1234.log /tmp/yeney-queue-dryrun-core.log
+```
+
+Every timestamp is monotonic seconds from sink creation. `-1` means unobserved.
+The TSV records strm receipt, decoder completion, STMd, successor strm, audible
+start, STMs, audible end, successor lead, source count, resolved transition,
+overlap, promised/actual item frames, publication mode and faults. Tail recovery
+may add a continuation row or a prefix count. Exact metadata is never inferred
+from decimal LMS duration. FLAC seeks without STREAMINFO stay unknown; retained
+STREAMINFO seeks subtract the first frame's source coordinate.
+
+**LMS read-ahead OK** requires every observed successor to arrive at least 12 s
+before its predecessor's audible end. An empty run, an unfinished predecessor
+with a successor, or any storage fault cannot pass. **LMS read-ahead INSUFFICIENT**
+prints the worst lead: collect the logs and revise preparation/startup policy
+before enabling Sonos queue playback. In particular, check whether LMS waits for
+STMs before supplying a successor despite early STMd. This diagnostic does not
+prove acoustic gaplessness or Sonos controls; those remain later phases.

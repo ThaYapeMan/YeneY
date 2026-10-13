@@ -3,7 +3,7 @@ UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
 OBJS = core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
-all: yeney libqueueitems.a
+all: yeney libqueueitems.a yeney-queue-dryrun
 
 CORE_LIB = third_party/yeney-core/libyeneycore.a
 .PHONY: core-library
@@ -22,11 +22,12 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
-install: yeney
+install: yeney yeney-queue-dryrun
 	install -d -m 0755 /var/lib/yeney
+	install -m 0755 yeney-queue-dryrun /usr/local/bin/yeney-queue-dryrun
 	scripts/install-devices.sh
 encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
@@ -41,6 +42,7 @@ test: export YENEY_AUDIBLE_OFFSET_MS = 0
 test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	./queue-item-store-test
+	./core-queue-sink-test
 	YENEY_TIMING_PROBE=1 YENEY_TIMING_PUBLISH=1 ./timing-tap-test
 	./timing-contract-test
 	./cold-position-test
@@ -244,3 +246,14 @@ libqueueitems.a: queue_item_store.o wav_writer.o
 queue-item-store-test: tests/queue_item_store_test.cpp libqueueitems.a pcm_pack.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $< libqueueitems.a -lFLAC -pthread
 test: queue-item-store-test
+
+core_queue_sink.o: core_queue_sink.cpp core_queue_sink.h queue_item_store.h third_party/yeney-core/core/sink.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
+core-queue-sink-test: tests/core_queue_sink_test.cpp core_queue_sink.o libqueueitems.a
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread
+test: core-queue-sink-test
+
+yeney-queue-dryrun: queue_dryrun.cpp core_queue_sink.o libqueueitems.a $(CORE_LIB)
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread
+
+core-queue-sink-test yeney-queue-dryrun: queue_report.h

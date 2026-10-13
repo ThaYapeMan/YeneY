@@ -106,15 +106,17 @@ FLAC__StreamDecoderWriteStatus decoded(const FLAC__StreamDecoder *, const FLAC__
 void decodeError(const FLAC__StreamDecoder *, FLAC__StreamDecoderErrorStatus, void *opaque) {
     static_cast<Decoded *>(opaque)->failed = true;
 }
-std::vector<char> decompress(const std::filesystem::path &path, size_t frames, uint32_t rate) {
+std::vector<char> decompress(FILE *file, size_t frames, uint32_t rate) {
     Decoded data{{}, frames * frameBytes, rate};
     data.bytes.reserve(data.expected);
     auto decoder = std::unique_ptr<FLAC__StreamDecoder, decltype(&FLAC__stream_decoder_delete)>(
         FLAC__stream_decoder_new(), FLAC__stream_decoder_delete);
-    if (!decoder)
+    if (!decoder) {
+        fclose(file);
         throw std::bad_alloc();
+    }
     FLAC__stream_decoder_set_md5_checking(decoder.get(), true);
-    if (FLAC__stream_decoder_init_file(decoder.get(), path.c_str(), decoded, nullptr, decodeError, &data) !=
+    if (FLAC__stream_decoder_init_FILE(decoder.get(), file, decoded, nullptr, decodeError, &data) !=
         FLAC__STREAM_DECODER_INIT_STATUS_OK)
         throw std::runtime_error("history FLAC open failed");
     bool ok = FLAC__stream_decoder_process_until_end_of_stream(decoder.get());
@@ -163,6 +165,7 @@ struct ItemState {
 };
 struct StoreState {
     mutable std::mutex mutex;
+    std::mutex producer; // one storage writer; never held by readers/cancellation
     std::condition_variable changed;
     Config config;
     std::filesystem::path directory;
@@ -210,9 +213,21 @@ struct StoreState {
             changed.notify_all();
         }
     }
-    void spill(ItemState &item) {
+    void spill(ItemState &item, std::unique_lock<std::mutex> &lock) {
+        // Snapshot RAM under the metadata lock, then encode/write without it.
+        // The single writer owns producer; cancellation may still wake readers.
+        auto snapshot = item.ram.front();
+        lock.unlock();
+        std::vector<uint8_t> flac;
+        try {
+            flac = compress(snapshot.bytes, item.descriptor.rate);
+        } catch (...) {
+            lock.lock();
+            throw;
+        }
+        lock.lock();
+        check(item);
         auto &r = item.ram.front();
-        auto flac = compress(r.bytes, item.descriptor.rate);
         space(flac.size(), item);
         const auto path = directory / (std::to_string(item.serial) + "-" + std::to_string(r.first) + ".flac");
         // FLAC is fully encoded in bounded temporary RAM before quota admission.
@@ -220,25 +235,34 @@ struct StoreState {
         if (item.history.size() == item.history.capacity())
             item.history.reserve(item.history.capacity() ? item.history.capacity() * 2 : 16);
         HistoryChunk record{r.first, r.bytes.size() / frameBytes, path, flac.size()};
+        lock.unlock();
         std::ofstream file(path, std::ios::binary | std::ios::trunc);
         file.write(reinterpret_cast<const char *>(flac.data()), flac.size());
         file.close();
         if (!file) {
+            lock.lock();
             std::filesystem::remove(path);
             throw std::runtime_error("history write failed");
+        }
+        lock.lock();
+        try {
+            check(item);
+        } catch (...) {
+            std::filesystem::remove(path);
+            throw;
         }
         item.history.push_back(std::move(record));
         disk += flac.size();
         ram -= r.bytes.capacity();
         item.ram.pop_front();
     }
-    void trimRam(size_t reserve) {
+    void trimRam(size_t reserve, std::unique_lock<std::mutex> &lock) {
         while (reserve > config.ramBytes - ram) {
             std::shared_ptr<ItemState> oldest;
             for (const auto &pair : items)
                 if (!pair.second->ram.empty() && (!oldest || pair.second->serial < oldest->serial))
                     oldest = pair.second;
-            spill(*oldest);
+            spill(*oldest, lock);
         }
     }
 };
@@ -283,6 +307,32 @@ std::shared_ptr<Item> Store::create(Descriptor descriptor) {
     state->items.emplace(key, item);
     return std::shared_ptr<Item>(new Item(state, item));
 }
+std::shared_ptr<Item> Store::publish(const std::shared_ptr<Item> &pending, uint64_t promised) {
+    wavLength(promised);
+    std::lock_guard<std::mutex> writer(state->producer);
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (!pending || pending->store != state)
+        throw std::invalid_argument("foreign pending item");
+    auto &old = *pending->state;
+    state->check(old);
+    if (old.descriptor.promisedFrames || old.finished || old.produced > promised)
+        throw std::invalid_argument("publication conflicts with produced frames");
+    auto descriptor = old.descriptor;
+    descriptor.promisedFrames = promised;
+    ++descriptor.generation;
+    const auto key = std::to_string(descriptor.generation) + ":" + descriptor.occurrence;
+    if (state->items.count(key))
+        throw std::invalid_argument("duplicate publication generation");
+    auto item = std::make_shared<ItemState>(descriptor, old.serial);
+    item->produced = old.produced;
+    item->ram = std::move(old.ram);
+    item->history = std::move(old.history);
+    item->protectedItem = old.protectedItem;
+    old.fault = std::make_exception_ptr(std::runtime_error("pending item superseded by publication"));
+    state->items.emplace(key, item);
+    state->changed.notify_all();
+    return std::shared_ptr<Item>(new Item(state, item));
+}
 void Store::protect(const std::shared_ptr<Item> &current, const std::shared_ptr<Item> &next) {
     std::lock_guard<std::mutex> lock(state->mutex);
     for (auto item : {current, next})
@@ -317,7 +367,8 @@ uint64_t Item::producedFrames() const {
     return state->produced;
 }
 void Item::append(const yeney::Frame *frames, size_t count, bool processed) {
-    std::lock_guard<std::mutex> lock(store->mutex);
+    std::lock_guard<std::mutex> writer(store->producer);
+    std::unique_lock<std::mutex> lock(store->mutex);
     store->check(*state);
     if (state->finished || (!frames && count))
         throw std::invalid_argument("invalid item append");
@@ -332,7 +383,7 @@ void Item::append(const yeney::Frame *frames, size_t count, bool processed) {
         while (count) {
             const size_t allocation = std::min(chunkFrames, store->config.ramBytes / frameBytes) * frameBytes;
             if (state->ram.empty() || state->ram.back().bytes.size() == allocation) {
-                store->trimRam(allocation);
+                store->trimRam(allocation, lock);
                 RamChunk chunk{state->produced, {}};
                 chunk.bytes.reserve(allocation);
                 state->ram.push_back(std::move(chunk));
@@ -357,7 +408,8 @@ void Item::append(const yeney::Frame *frames, size_t count, bool processed) {
     store->changed.notify_all();
 }
 void Item::finish() {
-    std::lock_guard<std::mutex> lock(store->mutex);
+    std::lock_guard<std::mutex> writer(store->producer);
+    std::unique_lock<std::mutex> lock(store->mutex);
     store->check(*state);
     if (state->finished)
         return;
@@ -365,7 +417,7 @@ void Item::finish() {
         if (state->descriptor.promisedFrames && state->produced != *state->descriptor.promisedFrames)
             throw LengthFault(*state->descriptor.promisedFrames, state->produced);
         while (!state->ram.empty())
-            store->spill(*state);
+            store->spill(*state, lock);
         state->finished = true;
     } catch (...) {
         store->fail(*state, std::current_exception());
@@ -412,11 +464,27 @@ size_t Reader::read(char *output, size_t capacity, std::chrono::milliseconds tim
                     std::upper_bound(state->history.begin(), state->history.end(), pcmOffset / frameBytes,
                                      [](uint64_t frame, const HistoryChunk &h) { return frame < h.first; });
                 if (history != state->history.begin()) {
-                    const auto &h = *--history;
+                    const auto h = *--history;
                     if (pcmOffset < (h.first + h.frames) * frameBytes) {
                         if (decodedFirst != h.first) {
                             try {
-                                decodedChunk = decompress(h.path, h.frames, state->descriptor.rate);
+                                // Open while indexed; an open inode survives concurrent
+                                // eviction.
+                                FILE *file = fopen(h.path.c_str(), "rb");
+                                if (!file)
+                                    throw std::runtime_error("history FLAC open failed");
+                                const auto first = h.first;
+                                const auto frames = h.frames;
+                                lock.unlock();
+                                try {
+                                    decodedChunk = decompress(file, frames, state->descriptor.rate);
+                                } catch (...) {
+                                    lock.lock();
+                                    throw;
+                                }
+                                lock.lock();
+                                store->check(*state);
+                                decodedFirst = first;
                             } catch (...) {
                                 store->fail(*state, std::current_exception());
                                 throw;

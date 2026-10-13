@@ -74,6 +74,7 @@ public:
     Store(const Store &) = delete;
     Store &operator=(const Store &) = delete;
     std::shared_ptr<Item> create(Descriptor);
+    std::shared_ptr<Item> publish(const std::shared_ptr<Item> &, uint64_t promisedFrames);
     void protect(const std::shared_ptr<Item> &current, const std::shared_ptr<Item> &next);
     uint64_t diskBytes() const;
     size_t ramBytes() const;
