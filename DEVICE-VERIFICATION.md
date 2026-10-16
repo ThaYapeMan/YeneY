@@ -412,15 +412,16 @@ from the exact invocation whose Report line was captured, never from a wildcard
 or a different run:
 
 ```bash
-run_queue() {
+run_queue() (
+    trap ':' INT
     name="$1"
-    /usr/local/bin/yeney-queue-dryrun --server 192.168.178.23 --seconds 1800 | tee "/tmp/dryrun-${name}.console"
+    /usr/local/bin/yeney-queue-dryrun --server 192.168.178.23 --seconds 1800 | tee -i "/tmp/dryrun-${name}.console"
     source_base=$(sed -n 's/^Report: \(.*\)\.md$/\1/p' "/tmp/dryrun-${name}.console")
     test -n "$source_base" && test -f "${source_base}.md" || return 1
     cp -- "${source_base}.md" "/tmp/dryrun-${name}.md"
     cp -- "${source_base}.tsv" "/tmp/dryrun-${name}.tsv"
     cp -- "${source_base}.log" "/tmp/dryrun-${name}.log"
-}
+)
 ```
 
 Use the LMS address alone, never append `:9000`. Perform these four separate
