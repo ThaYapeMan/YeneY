@@ -103,6 +103,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/core_sonos_test.py
 	python3 tests/player_engine_test.py
 	python3 tests/sonos_queue_probe_test.py
+	python3 tests/queue_dryrun_test.py
 	$(MAKE) -C third_party/yeney-core test
 
 sbstreamer.o sbencoder.o: sbencoder.h
@@ -257,3 +258,7 @@ yeney-queue-dryrun: queue_dryrun.cpp core_queue_sink.o libqueueitems.a $(CORE_LI
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread
 
 core-queue-sink-test yeney-queue-dryrun: queue_report.h
+
+yeney-queue-dryrun: queue_lms_cli.h
+
+test: yeney-queue-dryrun

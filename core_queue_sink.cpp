@@ -50,6 +50,7 @@ void CoreQueueSink::work() {
             for (auto &p : records)
                 if (p.second.item) {
                     p.second.fault = e.what();
+                    p.second.storageFault = true;
                     p.second.item->cancel(e.what());
                 }
         }
@@ -80,8 +81,11 @@ void CoreQueueSink::coreEvent(const std::string &event, uint64_t id, uint64_t) {
         std::lock_guard<std::mutex> lock(mutex);
         auto &r = records[id];
         r.source.occurrence = id;
-        if (event == "strm")
+        if (event == "strm") {
             r.strm = stamp;
+            r.expectedIndex = nextIndex++;
+        } else if (event.rfind("codec:", 0) == 0 && event.size() == 7)
+            r.source.codec = event[6];
         else if (event == "decode-complete")
             r.decoded = stamp;
         else if (event == "STMd")
@@ -115,13 +119,14 @@ void CoreQueueSink::commit(uint64_t previous, const yeney::TrackDescriptor &next
         std::lock_guard<std::mutex> lock(mutex);
         old = records[previous];
     }
-    if (!old.item || old.promised || !old.source.sourceFrames || now() - old.strm > 15)
+    if (!old.item || old.promised || !old.source.sourceFrames)
         return;
     uint64_t overlap = 0;
     if (next.transition == 1 && next.rate == old.source.rate) {
         if (!next.sourceFrames)
             return; // no speculative short-track prediction
-        overlap = std::min({next.transitionFrames, *old.source.sourceFrames, *next.sourceFrames});
+        overlap = std::min({next.transitionFrames,
+                            *old.source.sourceFrames ? *old.source.sourceFrames - 1 : 0, *next.sourceFrames});
     }
     auto promise = *old.source.sourceFrames - overlap + old.prefixFrames;
     if (old.item->producedFrames() > promise)
@@ -149,6 +154,9 @@ void CoreQueueSink::trackDescriptor(const yeney::TrackDescriptor &d) {
         }
         if (previous)
             commit(previous, d);
+        // Current strm carries player-level settings: promise the outgoing
+        // transition before a successor is requested. Unknown counts stay sealed.
+        commit(d.occurrence, d);
     });
 }
 void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) {
@@ -173,7 +181,12 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
                 tail = it->second;
         }
         auto item = store.create({std::to_string(id), f.rate, std::nullopt, 0});
-        if (tail.item && tail.source.rate == f.rate) {
+        bool tailPlaying;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            tailPlaying = tail.item && audibleId == tail.source.occurrence;
+        }
+        if (tail.item && tail.source.rate == f.rate && !tailPlaying) {
             const auto count = tail.item->producedFrames();
             auto reader = tail.item->reader(44);
             char bytes[6];
@@ -209,6 +222,12 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             if (!descriptorOrder.empty())
                 successor = records.at(descriptorOrder.front()).source;
         }
+        yeney::TrackDescriptor prediction;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            prediction = records.at(id).source;
+        }
+        commit(id, prediction);
         if (successor)
             commit(id, *successor);
         protectItems();
@@ -255,6 +274,7 @@ void CoreQueueSink::append(const std::vector<yeney::Frame> &pcm, bool processed)
             tail = t.item;
             if (!tail) {
                 t.source = r.source;
+                t.expectedIndex = r.expectedIndex;
                 t.source.sourceFrames.reset();
                 t.source.occurrence = UINT64_MAX - active;
                 t.first = r.first + *r.promised;
@@ -314,12 +334,9 @@ void CoreQueueSink::audibleFrom(uint64_t id, uint64_t frame) {
         records[audibleId].end = now();
     audibleId = id;
     audibleFrame = frame;
-    prefixPending = it->second.prefixFrames != 0;
-    if (!prefixPending) {
-        it->second.audible = now();
-        if (id < UINT64_MAX / 2)
-            audibleSignals.push_back({id, frame});
-    }
+    // A selected item is not audible until at least one of its source frames
+    // has actually advanced. This also fences zero-frame fault replacements.
+    prefixPending = true;
     lock.unlock();
     enqueue([this] { protectItems(); });
 }
@@ -331,17 +348,40 @@ void CoreQueueSink::audibleEnd(uint64_t id) {
     std::lock_guard<std::mutex> lock(mutex);
     records.at(id).end = now();
 }
+void CoreQueueSink::recordLms(uint64_t id, QueueRecord::LmsSample sample) {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto &r = records.at(id);
+    if (sample.matches && !*sample.matches) {
+        r.mismatchedSeconds += 1;
+        if (mismatchSince < 0)
+            mismatchSince = sample.stamp;
+        r.mismatchRun = sample.stamp - mismatchSince;
+        r.lmsMismatch = r.lmsMismatch || r.mismatchRun > 2;
+    } else {
+        r.mismatchRun = 0;
+        mismatchSince = -1;
+    }
+    r.lms.push_back(std::move(sample));
+}
 void CoreQueueSink::advanceAudible(uint64_t frame) {
     std::lock_guard<std::mutex> lock(mutex);
     audibleFrame = std::max(audibleFrame, std::min(frame, submitted));
     if (prefixPending) {
         auto &r = records.at(audibleId);
-        if (audibleFrame >= r.first + r.prefixFrames) {
+        if (audibleFrame > r.first + r.prefixFrames) {
             prefixPending = false;
             r.audible = now();
-            audibleSignals.push_back({audibleId, r.first + r.prefixFrames});
+            if (audibleId < UINT64_MAX / 2)
+                audibleSignals.push_back({audibleId, r.first + r.prefixFrames});
         }
     }
+}
+std::optional<uint64_t> CoreQueueSink::committedItemFrames(uint64_t id) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = records.find(id);
+    if (it == records.end() || !it->second.promised)
+        return std::nullopt;
+    return *it->second.promised - it->second.prefixFrames;
 }
 bool CoreQueueSink::takeAudibleStart(yeney::AudibleStart &s) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -365,14 +405,25 @@ void CoreQueueSink::resume() {
 }
 void CoreQueueSink::stop() { pause(); }
 void CoreQueueSink::flush() {
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        audibleSignals.clear();
+        audibleId = 0;
+        prefixPending = false;
+        mismatchSince = -1;
+    }
     enqueue([this] {
         std::vector<std::shared_ptr<Item>> items;
         {
             std::lock_guard<std::mutex> lock(mutex);
             for (auto &p : records)
+                if (p.second.end < 0 && p.second.incomplete.empty())
+                    p.second.incomplete = "flushed";
+            for (auto &p : records)
                 if (p.second.item)
                     items.push_back(p.second.item);
             active = 0;
+            nextIndex = 0;
             descriptorOrder.clear();
         }
         for (auto &i : items)

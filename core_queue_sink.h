@@ -11,10 +11,20 @@
 namespace queue_audio {
 struct QueueRecord {
     yeney::TrackDescriptor source;
+    uint64_t expectedIndex = 0;
     double strm = -1, decoded = -1, stmd = -1, audible = -1, stms = -1, end = -1;
     uint64_t first = 0, actual = 0, overlap = 0, prefixFrames = 0;
     std::optional<uint64_t> promised;
-    std::string publication = "pending", transition, fault;
+    std::string publication = "pending", transition, fault, incomplete;
+    bool storageFault = false;
+    struct LmsSample {
+        double stamp;
+        std::string index, time, title;
+        std::optional<bool> matches;
+    };
+    std::vector<LmsSample> lms;
+    double mismatchedSeconds = 0, mismatchRun = 0;
+    bool lmsMismatch = false;
     std::shared_ptr<Item> item;
 };
 class CoreQueueSink : public yeney::Sink {
@@ -28,12 +38,12 @@ class CoreQueueSink : public yeney::Sink {
     std::deque<Job> jobs;
     std::thread worker;
     bool closing = false, busy = false, paused = false;
-    double staged = 0, budget;
+    double staged = 0, budget, mismatchSince = -1;
     std::map<uint64_t, QueueRecord> records;
     std::deque<uint64_t> descriptorOrder;
     std::deque<yeney::AudibleStart> audibleSignals;
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
-    uint64_t lastEnded = 0;
+    uint64_t lastEnded = 0, nextIndex = 0;
     bool prefixPending = false;
     uint32_t rate = 48000;
     std::string workerFault;
@@ -63,8 +73,10 @@ public:
     void audibleFrom(uint64_t occurrence, uint64_t firstFrame);
     bool isPaused() const;
     void audibleEnd(uint64_t occurrence);
+    void recordLms(uint64_t occurrence, QueueRecord::LmsSample sample);
     void advanceAudible(uint64_t cumulativeFrame);
     bool takeAudibleStart(yeney::AudibleStart &) override;
+    std::optional<uint64_t> committedItemFrames(uint64_t) const override;
     uint64_t audibleFrames() const override;
     void waitIdle();
     std::vector<QueueRecord> snapshot() const;

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_queue_sink.h"
+#include "queue_lms_cli.h"
 #include "queue_report.h"
 #include "third_party/yeney-core/core/player.h"
 #include <algorithm>
@@ -25,7 +26,8 @@ int main(int argc, char **argv) {
         std::string a = argv[i];
         if (a == "--help") {
             std::cout << "yeney-queue-dryrun --server <ip> [--seconds 900] "
-                         "[--keep] [--transcoded]\nOwner-run only; select Queue Test (YeneY) in "
+                         "[--keep] [--transcoded]\nOwner-run only; select Queue Test "
+                         "(YeneY) in "
                          "LMS. No Sonos or room-service access.\n";
             return 0;
         }
@@ -82,7 +84,11 @@ int main(int argc, char **argv) {
         cfg.sourceIsTranscoded = [transcoded](uint64_t) { return transcoded; };
         cfg.name = "Queue Test (YeneY)";
         cfg.mac = {0x02, 0x59, 0x51, 0x54, 0, 1};
-        cfg.log = [&](const std::string &s) { log << s << std::endl; };
+        std::mutex logMutex;
+        cfg.log = [&](const std::string &s) {
+            std::lock_guard<std::mutex> lock(logMutex);
+            log << s << std::endl;
+        };
         yeney::Player player(cfg, sink);
         std::signal(SIGINT, stopSignal);
         std::signal(SIGTERM, stopSignal);
@@ -111,6 +117,49 @@ int main(int argc, char **argv) {
         double progress = 0;
         uint64_t active = 0;
         std::vector<uint64_t> completed;
+        struct CliResult {
+            uint64_t id;
+            std::vector<std::string> values;
+        };
+        std::mutex cliMutex;
+        std::vector<CliResult> cliResults;
+        std::atomic<uint64_t> cliActive{0};
+        std::atomic_bool cliStop{false};
+        std::thread cli([&] {
+            auto next = Clock::now();
+            while (!cliStop) {
+                if (Clock::now() >= next) {
+                    next += std::chrono::seconds(1);
+                    const auto id = cliActive.load();
+                    auto values = queue_audio::pollLms(server);
+                    {
+                        std::lock_guard<std::mutex> lock(logMutex);
+                        log << "LMS CLI poll stamp="
+                            << std::chrono::duration<double>(Clock::now() - start).count()
+                            << " audible=" << id;
+                        if (values.size() == 3)
+                            log << " index=" << values[0] << " time=" << values[1] << " title=" << values[2];
+                        else
+                            log << " unavailable";
+                        log << std::endl;
+                    }
+                    if (id && id == cliActive.load()) {
+                        std::lock_guard<std::mutex> lock(cliMutex);
+                        cliResults.push_back({id, std::move(values)});
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
+        });
+        struct CliJoin {
+            std::thread &thread;
+            std::atomic_bool &stop;
+            ~CliJoin() {
+                stop = true;
+                if (thread.joinable())
+                    thread.join();
+            }
+        } cliJoin{cli, cliStop};
         while (!stopped && Clock::now() - start < std::chrono::seconds(seconds)) {
             auto now = Clock::now();
             double dt = std::chrono::duration<double>(now - last).count();
@@ -134,7 +183,7 @@ int main(int argc, char **argv) {
                     }
                     continue;
                 }
-                if (!length)
+                if (!length || !r.item->producedFrames())
                     break;
                 if (!active) {
                     active = r.source.occurrence;
@@ -159,8 +208,43 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
+            cliActive = active;
+            std::vector<CliResult> samples;
+            {
+                std::lock_guard<std::mutex> lock(cliMutex);
+                samples.swap(cliResults);
+            }
+            for (const auto &sample : samples) {
+                auto it = std::find_if(rows.begin(), rows.end(),
+                                       [&](const auto &r) { return r.source.occurrence == sample.id; });
+                if (it == rows.end())
+                    continue;
+                queue_audio::QueueRecord::LmsSample value;
+                value.stamp = std::chrono::duration<double>(Clock::now() - start).count();
+                if (sample.values.size() == 3) {
+                    value.index = sample.values[0];
+                    value.time = sample.values[1];
+                    value.title = sample.values[2];
+                    value.matches = value.index == std::to_string(it->expectedIndex);
+                }
+                sink.recordLms(sample.id, value);
+                std::lock_guard<std::mutex> lock(logMutex);
+                log << "LMS CLI stamp=" << value.stamp << " audible=" << sample.id
+                    << " expected_index=" << it->expectedIndex << " index=" << value.index
+                    << " time=" << value.time << " title=" << value.title << " lms_matches_audible="
+                    << (value.matches ? (*value.matches ? "true" : "false") : "unknown") << std::endl;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
+        cliStop = true;
+        cli.join();
+        try {
+            sink.waitIdle();
+        } catch (const std::exception &e) {
+            std::lock_guard<std::mutex> lock(logMutex);
+            log << "worker fault: " << e.what() << std::endl;
+        }
+        auto rows = sink.snapshot();
         // Snapshot before Player shutdown flushes pending assets; timestamps remain
         // explicit.
         stopped = true;
@@ -170,7 +254,6 @@ int main(int argc, char **argv) {
         } catch (const std::exception &e) {
             log << "worker fault: " << e.what() << '\n';
         }
-        auto rows = sink.snapshot();
         std::ofstream tsv(base + ".tsv"), report(base + ".md");
         auto verdict = queue_audio::writeReadAheadReport(rows, report, tsv);
         std::cout << verdict.line() << "; worst lead " << verdict.worst << " s\n";

@@ -1,6 +1,6 @@
 # Sonos queue mode
 
-Status: phases 1 and 2 implemented independently, 13 October 2026. Queue playback is
+Status: phases 1 and 2 implemented independently, 16 October 2026 field corrections. Queue playback is
 not connected yet; the existing stream transport remains in use. The owner selected variant A: LMS remains the player and audio processor;
 Sonos plays one HTTP queue item per LMS track. Stream mode remains available.
 The required playback policy is `YENEY_PLAYBACK_MODE=auto|stream|queue`, default
@@ -58,6 +58,65 @@ Other observations change the implementation requirements:
   Resume. Support cached playback, persistent sockets and reconnection equally.
 * RelTime restarts for each item; 61, 59 and 71 AVTransport notifications arrived.
   Events and 4 Hz position polling provide complementary identity and clock data.
+
+### LMS read-ahead field results, 16 October
+
+The 17:44 ALAC run (owner-stopped early) and 17:53 FLAC album run exposed an LMS
+song-model ordering requirement. LMS sent a successor strm 17–19 ms after STMd,
+without waiting for STMs, and retained at most two tracks beyond the audible
+one. The measured completed successor leads were approximately 198, 446 and
+509 seconds. The old `INSUFFICIENT; worst lead -1 s` included unobserved ends
+and an initial failed source; it did not demonstrate inadequate read-ahead.
+The supplied evidence folder has logs and TSV but no `dryrun-off.md`.
+
+**Queue ordering rule: STMs(N) before STMd(N).** Decoding may run ahead, but
+completion stays attached to N until its explicit audible start. Send a held
+STMd immediately after STMs. LMS associates STMs with the currently streamed
+song: sending STMd first let LMS stream N+1 before STMs(N), making its player
+model run ahead of the audio. Both field runs showed this order and the owner
+observed apparent skipping near track one. The fake SlimProto server now
+models that association and the two-ahead ceiling. Expected successor lead is
+roughly the predecessor's remaining audible duration; qualify that on LMS.
+
+The old startup wait also sealed every album item: it awaited N+1's strm, which
+only arrived after 18–25 seconds of decoding N. Commit the outgoing transition
+from N's own strm settings as soon as its exact count is known. Type zero
+immediately promises no overlap. Crossfade predicts the current period with
+short-track clamping; later contradictory type/period, rate or smart eligibility
+uses the retained-tail policy below and never changes a promised length.
+Unknown counts stay sealed. Target local exact-count FLAC/ALAC startup and STMs
+within two seconds. Hold a configured overlap tail for a late successor until
+the remaining audible deadline minus 100 ms, then log `successor-deadline`.
+With transition zero the normal final reason is `no-transition`.
+
+The initial 17:53 strm arrived immediately after HELO, before owner action;
+its origin remains unconfirmed. It was MP4/ALAC, exact count 2,428,264, with
+2,420,736 frames recorded before a truncated-top-level-box error. The same FLAC
+track later played without faults. The logs contain no MP4 payload, so they
+cannot prove the malformed header bytes. Synthetic regular/trailing-box and
+LMS-style rewritten-seek/partial-mdat fixtures reproduce the EOF failure class.
+Queue EOF accepts complete selected samples despite a retained larger mdat
+length. Drain decoder output before evaluating an error; checking it first
+could discard the final 8,192-frame decoder buffer. An exact short source pads
+at most one second with logged `source-short <n> frames`; larger deficits use
+the item length-fault policy. STMn waits until that occurrence's valid PCM has
+finished playing. The late STMs after occurrence 2's strm was attributed by the
+TSV to occurrence 1, whose buffered audio had survived its premature STMn.
+Queue flush now fences pending starts; zero-frame occurrences cannot send STMs.
+
+STMr has a single emitter, the shared strm-u acknowledgement; DSCO does not
+emit it in either capability. The old logs did not record incoming u commands.
+Queue command logging and the no-unpause regression now distinguish those
+acknowledgements from an unsolicited readiness message.
+
+The dry-run excludes incomplete pairs from its lead verdict, preserves their
+run-end/source-fault/flushed reasons and reports codec and startup delay. A
+separate 1 Hz raw-MAC LMS CLI sampler records playlist index/time/title without
+blocking the simulated audible clock. Sustained index disagreement over two
+seconds fails as `lms-track-mismatch`. Owner runs start at index zero after
+Stop/clear, without shuffle/repeat or playlist edits. See
+[complete four-run commands](../../DEVICE-VERIFICATION.md#queue-mode-phase-2-lms-read-ahead).
+No raw owner evidence is committed and no deployment was performed.
 
 ## 1. Architecture and item representation
 
@@ -181,23 +240,23 @@ invalidate an in-progress file read. A blocked-write test proves producer
 backpressure and reader independence. This supersedes phase 1's serialized
 encoding under the room mutex. No production HTTP route or SOAP action is added.
 
-Transition commitment uses the actual successor descriptor/strm and the core's
-capped transition-frame count, never CLI preference prediction. Before publication,
-known-source pending history can be transferred into a new immutable promised
-asset generation without rewriting FLAC bytes. The unpublished handle is invalidated
-and its waiters are woken. If a successor arrives after 15 s from the track's
-strm, lacks required count information, or its promise would exclude already
-produced PCM, preserve a sealed asset instead. Unknown source counts stay sealed.
-A shorter runtime result than an existing promise is an explicit length fault,
-never silent padding; a longer result carries its residual forward.
+Transition commitment predicts the outgoing mix from the current strm and
+core's capped frame window, without waiting for a successor. Type zero promises
+the complete source immediately. Publication transfers pending history to a new
+immutable promised generation; it invalidates the unpublished handle and wakes
+waiters. A later authoritative successor may disprove the prediction; retain
+any excess tail and preserve the old promise. Unknown source counts stay
+sealed. A short exact source may pad at most one second with an explicit
+`source-short` fault; larger deficits use the length-fault policy. No silent
+padding is normal transition recovery.
 
 Qualify actual LMS successor delivery with the owner-run dry-run documented in
 DEVICE-VERIFICATION.md. Never CLI-skip merely to move the producer ahead.
 
 Preparation still needs approximately 12 s total audio lead and up to 8 s of
 successor prefix ready around 5 s before the current end; these are engineering
-targets to qualify. A 1x source needs initial headroom. Startup deadline remains
-15 s. Metadata-only queue entries may exist before preparation; on an actual
+targets to qualify. A 1x source needs initial headroom. The diagnostic first-item startup target is two seconds for local exact-count
+FLAC/ALAC; the future production request deadline remains 15 seconds. Metadata-only queue entries may exist before preparation; on an actual
 request, select the mapped LMS occurrence and prepare/serve within that deadline.
 The standalone handler waits for future ranges, disconnects on faults/timeouts,
 and does not register a production route. Unknown-count assets remain unpublished
@@ -608,7 +667,7 @@ all prerequisites are already solved. Stream wire fixtures must remain passing.
 
 | Risk/open question | Required test and acceptance |
 |---|---|
-| LMS read-ahead has not yet been qualified on the owner server | Fake SlimProto replay plus real LMS logs: STMd requests ahead without early STMs, playlist advance or double skips. If unavailable, revise the source protocol before claiming seamless queue mode. |
+| LMS read-ahead has not yet been qualified on the owner server | Fake SlimProto replay plus real LMS logs: STMs precedes STMd for each occurrence; LMS playing identity matches audible identity without skips. If unavailable, revise the source protocol before claiming seamless queue mode. |
 | Transition prediction differs from mixer | Core deterministic PCM tests of all transition types/smart/rates/shortage, verify emitted item frame totals and no missing/duplicated mixed frames; fault injection after prefetch. |
 | Exact duration/codec delay errors | PCM/FLAC/MP3/VBR/transcoded fixtures with decoded reference counts; mismatch must never silently trim music or publish mutable headers. |
 | Q9 recovery not known | Owner runs optional `--length-mismatch`: short/long WAV and FLAC, records tail/errors/next join. Keep production on exact committed counts or sealed unknown-count assets regardless of a tolerant speaker. |
