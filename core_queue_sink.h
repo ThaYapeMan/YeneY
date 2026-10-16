@@ -43,7 +43,7 @@ class CoreQueueSink : public yeney::Sink {
     std::deque<uint64_t> descriptorOrder;
     std::deque<yeney::AudibleStart> audibleSignals;
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
-    uint64_t lastEnded = 0, nextIndex = 0;
+    uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
     bool prefixPending = false;
     uint32_t rate = 48000;
     std::string workerFault;
@@ -79,6 +79,7 @@ public:
     std::optional<uint64_t> committedItemFrames(uint64_t) const override;
     bool awaitingPublication(uint64_t) const override;
     uint64_t audibleFrames() const override;
+    uint64_t audibleOccurrence() const;
     void waitIdle();
     std::vector<QueueRecord> snapshot() const;
     double secondsSinceStart() const { return now(); }

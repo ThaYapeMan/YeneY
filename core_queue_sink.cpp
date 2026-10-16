@@ -375,6 +375,7 @@ void CoreQueueSink::advanceAudible(uint64_t frame) {
         if (audibleFrame > r.first + r.prefixFrames) {
             prefixPending = false;
             r.audible = now();
+            audibleSource = audibleId < UINT64_MAX / 2 ? audibleId : UINT64_MAX - audibleId;
             if (audibleId < UINT64_MAX / 2)
                 audibleSignals.push_back({audibleId, r.first + r.prefixFrames});
         }
@@ -400,6 +401,10 @@ bool CoreQueueSink::takeAudibleStart(yeney::AudibleStart &s) {
     audibleSignals.pop_front();
     return true;
 }
+uint64_t CoreQueueSink::audibleOccurrence() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return audibleSource;
+}
 uint64_t CoreQueueSink::audibleFrames() const {
     std::lock_guard<std::mutex> lock(mutex);
     return audibleFrame;
@@ -418,6 +423,7 @@ void CoreQueueSink::flush() {
         std::lock_guard<std::mutex> lock(mutex);
         audibleSignals.clear();
         audibleId = 0;
+        audibleSource = 0;
         prefixPending = false;
         mismatchSince = -1;
     }

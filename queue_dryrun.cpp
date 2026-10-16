@@ -134,9 +134,7 @@ int main(int argc, char **argv) {
                     auto values = queue_audio::pollLms(server);
                     {
                         std::lock_guard<std::mutex> lock(logMutex);
-                        log << "LMS CLI poll stamp="
-                            << sink.secondsSinceStart()
-                            << " audible=" << id;
+                        log << "LMS CLI poll stamp=" << sink.secondsSinceStart() << " audible=" << id;
                         if (values.size() == 3)
                             log << " index=" << values[0] << " time=" << values[1] << " title=" << values[2];
                         else
@@ -208,7 +206,7 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
-            cliActive = active;
+            cliActive = active ? sink.audibleOccurrence() : 0;
             std::vector<CliResult> samples;
             {
                 std::lock_guard<std::mutex> lock(cliMutex);

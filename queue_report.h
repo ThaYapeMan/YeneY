@@ -36,11 +36,20 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
                     break;
                 }
         double end = r.end;
+        bool pendingTail = false;
         for (const auto &tail : rows)
-            if (tail.source.occurrence == UINT64_MAX - r.source.occurrence && tail.end >= 0)
-                end = std::max(end, tail.end);
-        if (i + 1 < rows.size() && rows[i + 1].prefixFrames && rows[i + 1].audible >= 0)
-            end = std::max(end, rows[i + 1].audible);
+            if (tail.source.occurrence == UINT64_MAX - r.source.occurrence) {
+                pendingTail = pendingTail || tail.end < 0;
+                if (tail.end >= 0)
+                    end = std::max(end, tail.end);
+            }
+        if (i + 1 < rows.size() && rows[i + 1].prefixFrames) {
+            pendingTail = pendingTail || rows[i + 1].audible < 0;
+            if (rows[i + 1].audible >= 0)
+                end = std::max(end, rows[i + 1].audible);
+        }
+        if (pendingTail)
+            end = -1;
         const double lead = end >= 0 && next >= 0 ? end - next : -1;
         std::string status;
         if (r.source.occurrence >= UINT64_MAX / 2) {
@@ -86,7 +95,7 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
         }
         table << r.source.occurrence << '\t' << r.source.rate << '\t' << count(r.source.sourceFrames) << '\t'
               << r.strm << '\t' << r.decoded << '\t' << r.stmd << '\t' << next << '\t' << r.audible << '\t'
-              << r.stms << '\t' << r.end << '\t' << lead << '\t' << r.transition << '\t' << r.overlap << '\t'
+              << r.stms << '\t' << end << '\t' << lead << '\t' << r.transition << '\t' << r.overlap << '\t'
               << count(r.promised) << '\t' << r.actual << '\t' << r.prefixFrames << '\t' << r.publication
               << '\t' << r.fault << '\t'
               << (r.source.codec == 'f'   ? "FLAC"

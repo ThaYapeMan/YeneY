@@ -127,16 +127,25 @@ int main() {
         auto rows = sink.snapshot();
         assert(rows.size() == 2 && rows[1].prefixFrames == 300);
         assert(rows[0].actual == 700 && rows[1].actual == 600 && rows[1].first == 700);
-        sink.audibleFrom(2, 700);
+        sink.audibleFrom(1, 0);
+        sink.advanceAudible(1);
+        assert(sink.audibleOccurrence() == 1);
         yeney::AudibleStart a;
+        assert(sink.takeAudibleStart(a));
+        sink.advanceAudible(700);
+        sink.audibleFrom(2, 700);
+        assert(sink.audibleOccurrence() == 1);
         assert(!sink.takeAudibleStart(a));
         sink.advanceAudible(999);
+        assert(sink.audibleOccurrence() == 1);
         assert(!sink.takeAudibleStart(a));
         sink.advanceAudible(1001);
+        assert(sink.audibleOccurrence() == 2);
         assert(sink.takeAudibleStart(a) && a.occurrence == 2 && a.frame == 1000);
-        std::cout << "PASS same-rate tail recovery: successor carries 300 retained "
-                     "frames; incoming STMs "
-                     "waits until the prefix ends\n";
+        std::cout
+            << "PASS same-rate tail recovery: successor carries 300 retained "
+               "frames; incoming STMs "
+               "waits until the prefix ends; LMS checks retain the outgoing source during that prefix\n";
     }
     {
         CoreQueueSink sink("BlockedIO", c, 1);
@@ -275,6 +284,28 @@ int main() {
         assert(fault && !row.storageFault && row.fault.find("length fault") != std::string::npos);
         std::cout
             << "PASS source length fault: source-short beyond policy is not mislabeled as a storage fault\n";
+    }
+    {
+        std::vector<QueueRecord> rows(2);
+        rows[0].source.occurrence = 1;
+        rows[0].end = 20;
+        rows[1].source.occurrence = 2;
+        rows[1].strm = 8;
+        rows[1].prefixFrames = 100;
+        std::ostringstream md, tsv;
+        assert(writeReadAheadReport(rows, md, tsv).pairs == 0);
+        rows[1].audible = 21;
+        auto v = writeReadAheadReport(rows, md, tsv);
+        assert(v.ok && v.pairs == 1 && v.worst == 13);
+        rows[1].prefixFrames = 0;
+        rows.emplace_back();
+        rows[2].source.occurrence = UINT64_MAX - 1;
+        assert(writeReadAheadReport(rows, md, tsv).pairs == 0);
+        rows[2].end = 22;
+        v = writeReadAheadReport(rows, md, tsv);
+        assert(v.ok && v.pairs == 1 && v.worst == 14);
+        std::cout << "PASS retained-tail report: pairs stay incomplete until prefix or continuation ends; "
+                     "audible end includes all retained source PCM\n";
     }
     std::filesystem::remove_all(root);
 }

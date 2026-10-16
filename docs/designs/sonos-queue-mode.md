@@ -119,7 +119,10 @@ acknowledgements from an unsolicited readiness message.
 The dry-run excludes incomplete pairs from its lead verdict, preserves their
 run-end/source-fault/flushed reasons and reports codec and startup delay. A
 separate 1 Hz raw-MAC LMS CLI sampler records playlist index/time/title without
-blocking the simulated audible clock. Sustained index disagreement over two
+blocking the simulated audible clock. During retained predecessor prefixes,
+CLI identity remains the outgoing source until incoming source frames actually
+start. A pair remains incomplete until its retained prefix/continuation ends;
+the reported audible end includes all of that source's PCM. Sustained index disagreement over two
 seconds fails as `lms-track-mismatch`. Owner runs start at index zero after
 Stop/clear, without shuffle/repeat or playlist edits. See
 [complete four-run commands](../../DEVICE-VERIFICATION.md#queue-mode-phase-2-lms-read-ahead).
