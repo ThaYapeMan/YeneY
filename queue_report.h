@@ -89,12 +89,12 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
               << r.stms << '\t' << r.end << '\t' << lead << '\t' << r.transition << '\t' << r.overlap << '\t'
               << count(r.promised) << '\t' << r.actual << '\t' << r.prefixFrames << '\t' << r.publication
               << '\t' << r.fault << '\t'
-              << (r.source.codec == 'f'                            ? "FLAC"
-                  : r.source.codec == 'l'                          ? "ALAC"
-                  : r.source.codec == 'm'                          ? "MP3"
-                  : r.source.codec == 'p' || r.source.codec == 'a' ? "PCM"
-                  : r.source.codec == 'c'                          ? "AAC"
-                                                                   : "unknown")
+              << (r.source.codec == 'f'   ? "FLAC"
+                  : r.source.codec == 'l' ? "ALAC"
+                  : r.source.codec == 'm' ? "MP3"
+                  : r.source.codec == 'p' ? "PCM"
+                  : r.source.codec == 'a' ? "AAC"
+                                          : "unknown")
               << '\t' << (r.audible >= 0 && r.strm >= 0 ? r.audible - r.strm : -1) << '\t' << status << '\t'
               << r.expectedIndex << '\t' << stamps.str() << '\t' << indices.str() << '\t' << times.str()
               << '\t' << titles.str() << '\t'
