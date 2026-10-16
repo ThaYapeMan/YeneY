@@ -47,10 +47,11 @@ void CoreQueueSink::work() {
         } catch (const std::exception &e) {
             std::lock_guard<std::mutex> lock(mutex);
             workerFault = e.what();
+            const bool storage = dynamic_cast<const LengthFault *>(&e) == nullptr;
             for (auto &p : records)
                 if (p.second.item) {
                     p.second.fault = e.what();
-                    p.second.storageFault = true;
+                    p.second.storageFault = p.second.storageFault || storage;
                     p.second.item->cancel(e.what());
                 }
         }

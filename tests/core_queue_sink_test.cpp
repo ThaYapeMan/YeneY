@@ -257,5 +257,24 @@ int main() {
         std::cout << "PASS LMS sampling: boundary tolerance through 2 seconds, sustained mismatch counted "
                      "and fails\n";
     }
+    {
+        CoreQueueSink sink("SourceLengthFault", c, 1);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 1000, 0, 0});
+        sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        std::vector<yeney::Frame> pcm(100, {256, -256});
+        sink.write(pcm.data(), pcm.size(), false);
+        sink.resolvedItemBoundary({1, 0, 100, 0, "no-transition"});
+        bool fault = false;
+        try {
+            sink.waitIdle();
+        } catch (const std::exception &) {
+            fault = true;
+        }
+        auto row = sink.snapshot().front();
+        assert(fault && !row.storageFault && row.fault.find("length fault") != std::string::npos);
+        std::cout
+            << "PASS source length fault: source-short beyond policy is not mislabeled as a storage fault\n";
+    }
     std::filesystem::remove_all(root);
 }
