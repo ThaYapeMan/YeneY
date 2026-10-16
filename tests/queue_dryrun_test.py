@@ -145,6 +145,35 @@ class DryRunTests(unittest.TestCase):
             for source in sources:
                 source.close()
 
+    def test_empty_source_does_not_steal_successor(self):
+        lms = LMS(listener(port=3483))
+        stream = (ROOT/'third_party/yeney-core/tests/fixtures/queue-alac-seek.m4a').read_bytes()
+        sources = [HTTP(stream[:stream.index(b'mdat') + 4]), HTTP(wav(800))]
+        proc = subprocess.Popen([str(ROOT/'yeney-queue-dryrun'), '--server', '127.0.0.1', '--seconds', '3'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            lms.accept()
+            SongQueue(lms, [(sources[0], dict(fmt='l')), (sources[1], dict(rate=8000))])
+            lms.wait('STMu', timeout=5)
+            stdout, stderr = proc.communicate(timeout=6)
+            self.assertEqual(proc.returncode, 0, stderr)
+            self.assertEqual([p['playing_occurrence'] for p in lms.packets if p.get('event') == 'STMs'], [2])
+            path = Path(next(line[8:] for line in stdout.splitlines() if line.startswith('Report: ')))
+            with path.with_suffix('.tsv').open() as data:
+                rows = list(csv.DictReader(data, delimiter='\t'))
+            self.assertEqual(rows[0]['STMs'], '-1')
+            self.assertEqual(rows[0]['audible_start'], '-1')
+            self.assertEqual(int(rows[0]['actual_frames']), 0)
+            self.assertEqual(int(rows[1]['actual_frames']), 800)
+            self.assertGreaterEqual(float(rows[1]['audible_start']), 0)
+            print('PASS empty source bridge recovery: retire unplayed descriptor, no silence-only STMs, successor keeps its own occurrence')
+        finally:
+            if proc.poll() is None:
+                proc.terminate(); proc.communicate(timeout=5)
+            lms.close()
+            for source in sources:
+                source.close()
+
     def test_unknown_counts_seal_without_startup_deadlock(self):
         lms = LMS(listener(port=3483))
         sources = [HTTP(struct.pack('<hh', i, -i)*2400) for i in (17,23)]

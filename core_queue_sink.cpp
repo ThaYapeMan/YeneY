@@ -314,6 +314,9 @@ void CoreQueueSink::finish(const yeney::ItemBoundary &b) {
     {
         std::lock_guard<std::mutex> lock(mutex);
         lastEnded = b.occurrence;
+        if (!r.item)
+            descriptorOrder.erase(std::remove(descriptorOrder.begin(), descriptorOrder.end(), b.occurrence),
+                                  descriptorOrder.end());
         auto &v = records[b.occurrence];
         v.overlap = b.overlap;
         v.transition = b.reason;

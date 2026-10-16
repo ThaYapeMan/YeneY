@@ -105,7 +105,11 @@ at most one second with logged `source-short <n> frames`; larger deficits use
 the item length-fault policy. STMn waits until that occurrence's valid PCM has
 finished playing. The late STMs after occurrence 2's strm was attributed by the
 TSV to occurrence 1, whose buffered audio had survived its premature STMn.
-Queue flush now fences pending starts; zero-frame occurrences cannot send STMs.
+Queue flush now fences pending starts; zero-frame occurrences cannot send STMs
+or manufacture a silence-only padded item. Resolve an unplayed failed source
+and retire its pending descriptor even when a successor is already queued.
+After STMn, suppress the failed source's STMu so it cannot stop the new LMS
+request.
 
 STMr has a single emitter, the shared strm-u acknowledgement; DSCO does not
 emit it in either capability. The old logs did not record incoming u commands.
