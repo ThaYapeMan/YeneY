@@ -376,6 +376,11 @@ void CoreQueueSink::advanceAudible(uint64_t frame) {
         }
     }
 }
+bool CoreQueueSink::awaitingPublication(uint64_t id) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = records.find(id);
+    return it != records.end() && !it->second.promised && it->second.publication == "pending";
+}
 std::optional<uint64_t> CoreQueueSink::committedItemFrames(uint64_t id) const {
     std::lock_guard<std::mutex> lock(mutex);
     auto it = records.find(id);

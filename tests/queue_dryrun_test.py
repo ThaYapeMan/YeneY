@@ -145,6 +145,32 @@ class DryRunTests(unittest.TestCase):
             for source in sources:
                 source.close()
 
+    def test_unknown_counts_seal_without_startup_deadlock(self):
+        lms = LMS(listener(port=3483))
+        sources = [HTTP(struct.pack('<hh', i, -i)*2400) for i in (17,23)]
+        proc = subprocess.Popen([str(ROOT/'yeney-queue-dryrun'), '--server', '127.0.0.1', '--seconds', '3'],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            lms.accept()
+            SongQueue(lms, [(source, dict(rate=8000, transition=1, period=1)) for source in sources])
+            lms.wait('STMu', timeout=5)
+            stdout, stderr = proc.communicate(timeout=6)
+            self.assertEqual(proc.returncode, 0, stderr)
+            path = Path(next(line[8:] for line in stdout.splitlines() if line.startswith('Report: ')))
+            with path.with_suffix('.tsv').open() as data:
+                rows = list(csv.DictReader(data, delimiter='\t'))
+            self.assertEqual([p['playing_occurrence'] for p in lms.packets if p.get('event') == 'STMs'], [1,2])
+            self.assertEqual(sum(int(row['actual_frames']) for row in rows), 4800)
+            self.assertTrue(all(row['publication'] == 'sealed' for row in rows), rows)
+            self.assertTrue(all(row['transition'] == 'sealed-startup' for row in rows), rows)
+            print('PASS unknown-count crossfade startup: sealed publication, explicit zero-bound fallback, all PCM preserved and no protocol deadlock')
+        finally:
+            if proc.poll() is None:
+                proc.terminate(); proc.communicate(timeout=5)
+            lms.close()
+            for source in sources:
+                source.close()
+
     def test_crossfade_deadline_preserves_all_pcm(self):
         lms = LMS(listener(port=3483))
         sources = [HTTP(wav(12000)), HTTP(wav(12000))]

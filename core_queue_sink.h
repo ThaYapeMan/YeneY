@@ -77,9 +77,11 @@ public:
     void advanceAudible(uint64_t cumulativeFrame);
     bool takeAudibleStart(yeney::AudibleStart &) override;
     std::optional<uint64_t> committedItemFrames(uint64_t) const override;
+    bool awaitingPublication(uint64_t) const override;
     uint64_t audibleFrames() const override;
     void waitIdle();
     std::vector<QueueRecord> snapshot() const;
+    double secondsSinceStart() const { return now(); }
     void pause() override;
     void resume() override;
     void stop() override;

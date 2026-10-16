@@ -84,7 +84,10 @@ from N's own strm settings as soon as its exact count is known. Type zero
 immediately promises no overlap. Crossfade predicts the current period with
 short-track clamping; later contradictory type/period, rate or smart eligibility
 uses the retained-tail policy below and never changes a promised length.
-Unknown counts stay sealed. Target local exact-count FLAC/ALAC startup and STMs
+Unknown counts stay sealed. If an unknown-count item cannot start before
+sealing, its available pre-start audible time is zero: resolve the full tail as
+`sealed-startup`, explicitly degrading that overlap rather than deadlocking the
+STMs/STMd/successor exchange. Target local exact-count FLAC/ALAC startup and STMs
 within two seconds. Hold a configured overlap tail for a late successor until
 the remaining audible deadline minus 100 ms, then log `successor-deadline`.
 With transition zero the normal final reason is `no-transition`.

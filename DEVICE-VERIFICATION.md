@@ -498,6 +498,8 @@ The first progressive exact-count FLAC/ALAC item should become audible and send
 STMs within two seconds of its strm. Unknown counts remain sealed. A
 `no-transition` boundary is correct with crossfade off. `successor-deadline`
 means the overlap wait exhausted its audible safety bound; collect the log.
+`sealed-startup` explicitly preserves an unknown-count source's full tail without
+overlap when sealing must precede its first audible start.
 
 The CLI on port 9090 is polled once per second with the literal MAC for playlist
 index, time and title. TSV parallel pipe-separated columns retain all samples;

@@ -135,7 +135,7 @@ int main(int argc, char **argv) {
                     {
                         std::lock_guard<std::mutex> lock(logMutex);
                         log << "LMS CLI poll stamp="
-                            << std::chrono::duration<double>(Clock::now() - start).count()
+                            << sink.secondsSinceStart()
                             << " audible=" << id;
                         if (values.size() == 3)
                             log << " index=" << values[0] << " time=" << values[1] << " title=" << values[2];
@@ -220,7 +220,7 @@ int main(int argc, char **argv) {
                 if (it == rows.end())
                     continue;
                 queue_audio::QueueRecord::LmsSample value;
-                value.stamp = std::chrono::duration<double>(Clock::now() - start).count();
+                value.stamp = sink.secondsSinceStart();
                 if (sample.values.size() == 3) {
                     value.index = sample.values[0];
                     value.time = sample.values[1];
