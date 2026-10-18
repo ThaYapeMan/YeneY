@@ -698,3 +698,28 @@ retained copies, the album→radio gap and cached manual-skip fade-out are owner
 choices now recorded above. Route A remains primary and Sonos native crossfade
 backup only. Device qualification of preparation deadlines, queue actions,
 transition commitment/tail routing and light timing remains required.
+
+
+### 18 October follow-up qualification
+
+The owner's four ALAC/FLAC runs with crossfade off or the standard 10-second
+crossfade reported startup of 0.12–1.04 s, successor leads of 166–274 s and
+441000-frame overlap commitments. Their read-ahead results do not establish LMS
+identity agreement: CLI echoes encoded the MAC, so all audible polls were
+unknown. Responses now decode percent escapes before identity matching and
+values decode once. Reports warn above 10% unknown audible polls and fail with
+`lms-cli-unavailable` if none succeeds. A short ALAC/off run stopped after track
+4 starts must show `lms_matches_audible=true` for every completed occurrence.
+
+A reconnect can resume an earlier playlist automatically. Its headerless FLAC
+seek formerly used sealed publication (observed startup 9.15 s). Queue-only
+metadata resolution now obtains the first frame's original source position and
+STREAMINFO total from a per-session LMS-track-id cache or a metadata-only
+`Range: bytes=0-8191` request to port 9000 `/music/<id>/download`. A shared one-second
+deadline covers CLI identity and HTTP. Indexed `status` queries distinguish
+read-ahead sources from the currently audible track; the first occurrence after
+Stop/flush reads the current playlist index to support resumed entries. If the
+first FLAC follows another codec, the audible occurrence anchors that index;
+uncertain identity keeps sealed publication. Unknown
+identity/count or a deadline retains sealed publication with a reason. The
+download never supplies decoder input. Stream capability does not use this path.

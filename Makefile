@@ -258,6 +258,7 @@ yeney-queue-dryrun: queue_dryrun.cpp core_queue_sink.o libqueueitems.a $(CORE_LI
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread
 
 core-queue-sink-test yeney-queue-dryrun: queue_report.h
+yeney-queue-dryrun: queue_lms_cli.h queue_flac_metadata.h
 
 yeney-queue-dryrun: queue_lms_cli.h
 

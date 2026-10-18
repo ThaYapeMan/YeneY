@@ -2,6 +2,8 @@
 """Real dry-run, real core, fake SlimProto and CLI; localhost only."""
 import csv
 import io
+import http.server
+import time
 from pathlib import Path
 import socket
 import struct
@@ -25,6 +27,117 @@ def wav(frames=24000):
 
 
 class DryRunTests(unittest.TestCase):
+    def test_headerless_flac_metadata(self):
+        fixtures = ROOT/'third_party/yeney-core/tests/fixtures'
+        full = (fixtures/'flac-16-2.flac').read_bytes()
+        fixed = (fixtures/'queue-flac-seek-fixed.flac').read_bytes()
+        variable = (fixtures/'queue-flac-seek-variable.flac').read_bytes()
+        for mode in ('cache', 'http', 'fallback', 'no-id', 'other-track', 'resumed', 'late-flac'):
+            with self.subTest(mode=mode):
+                lms = LMS(listener(port=3483))
+                cli = listener(port=9090)
+                cli.settimeout(.1)
+                done = threading.Event()
+                errors, queries, requests = [], [], []
+                model = None
+                def serve_cli():
+                    while not done.is_set():
+                        try:
+                            conn, _ = cli.accept()
+                        except socket.timeout:
+                            continue
+                        try:
+                            with conn:
+                                conn.settimeout(1)
+                                lines = conn.makefile('rb')
+                                while True:
+                                    query = lines.readline().decode().strip()
+                                    if not query:
+                                        break
+                                    queries.append(query)
+                                    self.assertTrue(query.startswith('02:59:51:54:00:01 '), query)
+                                    key = query.split(' ', 1)[1]
+                                    echo = '02%3A59%3A51%3A54%3A00%3A01 '
+                                    if key.startswith('status '):
+                                        index = key.split()[1]
+                                        track_id = '41' if mode == 'other-track' and index == '0' else '42'
+                                        value = f'{key} playlist_cur_index%3A0 playlist_index%3A{index}'
+                                        if mode != 'no-id': value += f' id%3A{track_id} title%3ATest'
+                                    else:
+                                        index = max(0, model.playing-1) if model else 0
+                                        if mode in ('resumed', 'late-flac'): index += 3
+                                        value = key[:-1] + (str(index) if key.startswith('playlist index') else '0' if key.startswith('time') else 'Seek%20test')
+                                    conn.sendall((echo+value+'\n').encode())
+                        except Exception as error:
+                            if not done.is_set(): errors.append(error)
+                thread = threading.Thread(target=serve_cli)
+                thread.start()
+                class MetadataHandler(http.server.BaseHTTPRequestHandler):
+                    def do_GET(self):
+                        requests.append((self.path, self.headers.get('Range')))
+                        if mode == 'fallback':
+                            # Exceed the entire identity+metadata budget.
+                            time.sleep(1.2)
+                        self.send_response(206)
+                        self.send_header('Content-Range', f'bytes 0-8191/{len(full)}')
+                        self.send_header('Content-Length', '8192')
+                        self.end_headers()
+                        try:
+                            self.wfile.write(full[:8192])
+                        except (BrokenPipeError, ConnectionResetError):
+                            pass
+                    def log_message(self, *_):
+                        pass
+                metadata = http.server.ThreadingHTTPServer(('127.0.0.1', 9000), MetadataHandler)
+                http_thread = threading.Thread(target=metadata.serve_forever)
+                http_thread.start()
+                bodies = [full, fixed, variable] if mode in ('cache', 'other-track') else [fixed, variable]
+                if mode == 'late-flac': bodies.insert(0, wav())
+                sources = [HTTP(body) for body in bodies]
+                proc = subprocess.Popen([str(ROOT/'yeney-queue-dryrun'), '--server', '127.0.0.1', '--seconds', '4'],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    lms.accept()
+                    model = SongQueue(lms, [(source, dict(fmt='p', rate=8000) if mode == 'late-flac' and i == 0 else dict(fmt='f')) for i, source in enumerate(sources)])
+                    lms.wait('STMu', timeout=10)
+                    stdout, stderr = proc.communicate(timeout=12)
+                    self.assertEqual(proc.returncode, 0, stderr)
+                    path = Path(next(line[8:] for line in stdout.splitlines() if line.startswith('Report: ')))
+                    with path.with_suffix('.tsv').open() as data:
+                        rows = list(csv.DictReader(data, delimiter='\t'))
+                    self.assertEqual(len(rows), len(bodies))
+                    for row in rows[1:] if mode in ('cache', 'other-track', 'late-flac') else rows:
+                        self.assertEqual(int(row['actual_frames']), 1616)
+                        if mode != 'late-flac':
+                            self.assertLess(float(row['startup_delay_s']), 2)
+                        self.assertEqual(row['publication'], 'sealed' if mode in ('fallback', 'no-id') else 'progressive')
+                        self.assertEqual(row['exact_frames'], 'unknown' if mode in ('fallback', 'no-id') else '1616')
+                    log = path.with_suffix('.log').read_text()
+                    if mode == 'cache':
+                        self.assertIn('FLAC STREAMINFO cached track_id=42', log)
+                        self.assertIn('FLAC metadata cache track_id=42', log)
+                        self.assertFalse(requests)
+                    elif mode == 'no-id':
+                        self.assertFalse(requests)
+                        self.assertIn('CLI track id unavailable', log)
+                    else:
+                        self.assertEqual(requests[0], ('/music/42/download', 'bytes=0-8191'))
+                        self.assertIn('metadata deadline' if mode == 'fallback' else 'FLAC metadata HTTP range', log)
+                    if mode == 'late-flac':
+                        self.assertTrue(any('status 4 1 tags:' in query for query in queries))
+                        self.assertTrue(any('status 5 1 tags:' in query for query in queries))
+                    if mode == 'resumed':
+                        self.assertTrue(any('status 3 1 tags:' in query for query in queries))
+                        self.assertTrue(any('status 4 1 tags:' in query for query in queries))
+                    self.assertFalse(errors, errors)
+                finally:
+                    if proc.poll() is None:
+                        proc.terminate(); proc.communicate(timeout=5)
+                    done.set(); thread.join(timeout=2); cli.close(); lms.close()
+                    metadata.shutdown(); metadata.server_close(); http_thread.join()
+                    for source in sources: source.close()
+        print('PASS headerless FLAC dry-run: fixed/variable exact remaining 1616; track-id cache, bounded metadata HTTP range and 1 s sealed fallback; audio only from strm')
+
     def test_progressive_start_and_cli(self):
         lms = LMS(listener(port=3483))
         cli = listener(port=9090)

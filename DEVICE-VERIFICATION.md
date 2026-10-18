@@ -504,14 +504,16 @@ overlap when sealing must precede its first audible start.
 
 The CLI on port 9090 is polled once per second with the literal MAC for playlist
 index, time and title. TSV parallel pipe-separated columns retain all samples;
-titles retain LMS percent encoding. `lms_matches_audible` is false when any
+responses and titles are URL-decoded. TSV title values escape tabs, newlines,
+backslashes and pipes. `lms_matches_audible` is false when any
 sample disagrees, true when all samples agree, and unknown without usable CLI
 evidence. More than two seconds of continuous disagreement fails with
 `lms-track-mismatch`; isolated boundary samples are counted but tolerated.
 
 **LMS read-ahead OK** requires at least one completed predecessor/successor pair,
-all completed leads at least 12 seconds, no storage fault and no sustained LMS
-track mismatch. Incomplete rows are reported separately as run-end,
+all completed leads at least 12 seconds, at least one successful audible CLI
+poll, no storage fault and no sustained LMS track mismatch. Incomplete rows are
+reported separately as run-end,
 source-fault or flushed. A source fault is recorded without turning unfinished
 rows into negative leads. These checks do not qualify acoustic gaplessness or
 Sonos controls, which remain later phases.

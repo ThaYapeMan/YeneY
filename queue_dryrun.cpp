@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_queue_sink.h"
+#include "queue_flac_metadata.h"
 #include "queue_lms_cli.h"
 #include "queue_report.h"
 #include "third_party/yeney-core/core/player.h"
@@ -88,6 +89,24 @@ int main(int argc, char **argv) {
         cfg.log = [&](const std::string &s) {
             std::lock_guard<std::mutex> lock(logMutex);
             log << s << std::endl;
+        };
+        queue_audio::FlacMetadata flacMetadata(server, cfg.log);
+        cfg.observeCommand = [&](const yeney::Command &command) {
+            if (command.letter == 'f' || command.letter == 'q')
+                flacMetadata.reset();
+        };
+        cfg.flacSourceInfo = [&](uint64_t id, std::optional<yeney::FlacSourceInfo> info) {
+            auto rows = sink.snapshot();
+            const auto audible = sink.audibleOccurrence();
+            std::optional<uint64_t> audibleIndex;
+            for (const auto &r : rows)
+                if (r.source.occurrence == audible)
+                    audibleIndex = r.expectedIndex;
+            for (const auto &r : rows)
+                if (r.source.occurrence == id)
+                    return flacMetadata.resolve(r.expectedIndex, info, audibleIndex);
+            cfg.log("FLAC metadata sealed fallback: occurrence identity unavailable");
+            return info;
         };
         yeney::Player player(cfg, sink);
         std::signal(SIGINT, stopSignal);
