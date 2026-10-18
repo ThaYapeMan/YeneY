@@ -248,6 +248,7 @@ test: oct12-boundary-test
 # Independent phase 1 library; no playback registration or transport changes.
 queue_route.o queue_item_store.o wav_writer.o: %.o: %.cpp queue_item_store.h wav_writer.h pcm_pack.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
+queue_route.o: queue_route.h
 libqueueitems.a: queue_item_store.o wav_writer.o queue_route.o
 	ar rcs $@ $^
 queue-item-store-test: tests/queue_item_store_test.cpp libqueueitems.a pcm_pack.h
@@ -274,14 +275,14 @@ queue-route-test: tests/queue_route_test.cpp libqueueitems.a upnp/http_server.o 
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $^ -lFLAC -pthread
 test: queue-route-test
 
-queue-metadata-test: tests/queue_metadata_test.cpp upnp/queue_metadata.cpp upnp/xml.cpp
-	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $^
+queue-metadata-test: tests/queue_metadata_test.cpp upnp/queue_metadata.cpp upnp/xml.cpp upnp/queue_metadata.h upnp/soap.h upnp/title_format.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^)
 test: queue-metadata-test
 
-queue-actions-test: tests/queue_actions_test.cpp upnp/queue_actions.cpp
-	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $^
+queue-actions-test: tests/queue_actions_test.cpp upnp/queue_actions.cpp upnp/queue_actions.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^)
 test: queue-actions-test
 
-queue-ownership-test: tests/queue_ownership_test.cpp upnp/queue_ownership.cpp
-	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $^
+queue-ownership-test: tests/queue_ownership_test.cpp upnp/queue_ownership.cpp upnp/queue_ownership.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^)
 test: queue-ownership-test
