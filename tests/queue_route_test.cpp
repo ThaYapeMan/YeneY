@@ -71,6 +71,22 @@ int main() {
         assert(refused);
         route.revoke(2);
         assert(get(url).find("404") != std::string::npos);
+        refused = false;
+        try {
+            route.publish("Study", 2, 3, item);
+        } catch (const std::logic_error &) {
+            refused = true;
+        }
+        assert(refused);
+        Store other("Kitchen", config);
+        auto foreign = other.create({"foreign", 44100, 1, 1});
+        refused = false;
+        try {
+            route.publish("Study", 4, 1, foreign);
+        } catch (const std::invalid_argument &) {
+            refused = true;
+        }
+        assert(refused);
         std::string retained;
         {
             Route temporary("Study", "retained-session");

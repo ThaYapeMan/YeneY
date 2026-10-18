@@ -355,6 +355,7 @@ size_t Store::ramBytes() const {
 Item::Item(std::shared_ptr<StoreState> s, std::shared_ptr<ItemState> i)
     : store(std::move(s)), state(std::move(i)) {}
 const Descriptor &Item::descriptor() const { return state->descriptor; }
+std::string Item::room() const { return store->directory.filename().string(); }
 std::optional<uint64_t> Item::contentLength() const {
     std::lock_guard<std::mutex> lock(store->mutex);
     store->check(*state);

@@ -42,6 +42,7 @@ class Item {
 
 public:
     const Descriptor &descriptor() const;
+    std::string room() const;
     std::optional<uint64_t> contentLength() const;
     uint64_t producedFrames() const;
     void append(const yeney::Frame *, size_t count, bool processed);
