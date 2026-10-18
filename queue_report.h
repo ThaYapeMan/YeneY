@@ -14,6 +14,24 @@ struct ReadAheadVerdict {
 };
 inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &rows, std::ostream &report,
                                              std::ostream &tsv) {
+    auto cell = [](const std::string &text) {
+        std::string out;
+        for (char c : text) {
+            if (c == '\t')
+                out += "\\t";
+            else if (c == '\n')
+                out += "\\n";
+            else if (c == '\r')
+                out += "\\r";
+            else if (c == '|')
+                out += "\\|";
+            else if (c == '\\')
+                out += "\\\\";
+            else
+                out += c;
+        }
+        return out;
+    };
     auto count = [](std::optional<uint64_t> n) { return n ? std::to_string(*n) : "unknown"; };
     std::ostringstream table;
     table << "occurrence\trate\texact_frames\tstrm\tdecode_complete\tSTMd\tnext_"
@@ -26,6 +44,7 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
              "index\tlms_time\tlms_title"
              "\tlms_matches_audible\tmismatched_seconds\n";
     ReadAheadVerdict v;
+    size_t polls = 0, known = 0;
     for (size_t i = 0; i < rows.size(); ++i) {
         const auto &r = rows[i];
         double next = -1;
@@ -86,10 +105,13 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
                 titles << '|';
             }
             const auto &sample = r.lms[j];
+            ++polls;
+            if (sample.matches.has_value())
+                ++known;
             stamps << sample.stamp;
             indices << sample.index;
             times << sample.time;
-            titles << sample.title;
+            titles << cell(sample.title);
             unknown = unknown || !sample.matches;
             mismatch = mismatch || (sample.matches && !*sample.matches);
         }
@@ -116,6 +138,13 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
         v.ok = false;
         v.reasons += " zero-completed-pairs";
     }
+    if (!known) {
+        v.ok = false;
+        v.reasons += " lms-cli-unavailable";
+    }
+    if (polls && (polls - known) * 10 > polls)
+        report << "WARNING: LMS CLI unknown for more than 10% of audible polls (" << polls - known << "/"
+               << polls << ").\n\n";
     tsv << table.str();
     report << "# Queue mode phase 2: LMS read-ahead\n\nPlayer: Queue Test "
               "(YeneY), MAC 02:59:51:54:00:01. No "
@@ -128,7 +157,7 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
            << ". A sustained mismatch >2 s fails with lms-track-mismatch. CLI "
               "values are sampled at 1 Hz; "
               "parallel pipe-separated columns retain every sample. Titles "
-              "retain LMS percent encoding.\n\nReasons:"
+              "are URL-decoded; tabs, newlines, backslashes and pipes are backslash-escaped.\n\nReasons:"
            << (v.reasons.empty() ? " none" : v.reasons) << "\n\n"
            << v.line() << '\n';
     return v;

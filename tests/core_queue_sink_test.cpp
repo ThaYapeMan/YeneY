@@ -195,6 +195,7 @@ int main() {
         std::vector<QueueRecord> records(2);
         records[0].source = {1, 44100, 1000, 0, 0};
         records[0].end = 20;
+        records[0].lms.push_back({1, "0", "1", "Track", true});
         records[1].source = {2, 48000, std::nullopt, 0, 0};
         records[1].strm = 8;
         std::ostringstream md, tsv;
@@ -213,6 +214,20 @@ int main() {
         std::cout << "PASS dry-run report: exact 12-second threshold, worst lead, "
                      "unobserved end and "
                      "empty-run failure; TSV and Markdown verdict\n";
+    }
+    {
+        std::vector<QueueRecord> rows(2);
+        rows[0].end = 30;
+        rows[1].strm = 1;
+        std::ostringstream md, tsv;
+        auto v = writeReadAheadReport(rows, md, tsv);
+        assert(!v.ok && v.reasons.find("lms-cli-unavailable") != std::string::npos);
+        rows[0].lms.push_back({1, "0", "1", "Track", true});
+        rows[0].lms.push_back({2, "", "", "", std::nullopt});
+        md.str("");
+        assert(writeReadAheadReport(rows, md, tsv).ok);
+        assert(md.str().find("WARNING: LMS CLI unknown") != std::string::npos);
+        std::cout << "PASS LMS CLI coverage: zero successful polls fail; >10% unknown warns\n";
     }
     {
         CoreQueueSink sink("EarlySuccessor", c, 1);
@@ -235,6 +250,7 @@ int main() {
             rows[i].strm = i * 20;
         }
         rows[0].end = 40;
+        rows[0].lms.push_back({1, "0", "1", "Track", true});
         rows[1].end = 60;
         rows[2].fault = "source error";
         rows[3].incomplete = "flushed";
@@ -289,6 +305,7 @@ int main() {
         std::vector<QueueRecord> rows(2);
         rows[0].source.occurrence = 1;
         rows[0].end = 20;
+        rows[0].lms.push_back({1, "0", "1", "Track", true});
         rows[1].source.occurrence = 2;
         rows[1].strm = 8;
         rows[1].prefixFrames = 100;

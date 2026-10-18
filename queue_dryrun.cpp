@@ -127,13 +127,19 @@ int main(int argc, char **argv) {
         std::atomic_bool cliStop{false};
         std::thread cli([&] {
             auto next = Clock::now();
+            auto nextRaw = next;
             while (!cliStop) {
                 if (Clock::now() >= next) {
                     next += std::chrono::seconds(1);
                     const auto id = cliActive.load();
-                    auto values = queue_audio::pollLms(server);
+                    std::string raw;
+                    auto values = queue_audio::pollLms(server, 9090, &raw);
                     {
                         std::lock_guard<std::mutex> lock(logMutex);
+                        if (Clock::now() >= nextRaw) {
+                            log << "LMS CLI raw: " << raw << std::endl;
+                            nextRaw = Clock::now() + std::chrono::minutes(1);
+                        }
                         log << "LMS CLI poll stamp=" << sink.secondsSinceStart() << " audible=" << id;
                         if (values.size() == 3)
                             log << " index=" << values[0] << " time=" << values[1] << " title=" << values[2];

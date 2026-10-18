@@ -49,7 +49,7 @@ class DryRunTests(unittest.TestCase):
                                 raise AssertionError(query)
                             index = max(0, model.playing-1) if model else 0
                             value = str(index) if key == 'playlist index' else '1.0' if key == 'time' else f'Track%20{index}'
-                            conn.sendall(f'02:59:51:54:00:01 {key} {value}\n'.encode())
+                            conn.sendall(f'02%3A59%3A51%3A54%3A00%3A01 {key} {value}\n'.encode())
                 except Exception as error:
                     errors.append(error)
         thread = threading.Thread(target=serve_cli)
@@ -74,12 +74,13 @@ class DryRunTests(unittest.TestCase):
                 self.assertLess(float(row['STMs']), float(row['STMd']))
                 self.assertEqual(row['codec'], 'PCM')
                 self.assertEqual(row['lms_matches_audible'], 'true')
+                self.assertIn('Track ', row['lms_title'])
             self.assertEqual([p['playing_occurrence'] for p in lms.packets if p.get('event') == 'STMs'], [1, 2])
             self.assertFalse(any(p.get('event') == 'STMr' for p in lms.packets))
             self.assertGreaterEqual(len(queries), 15)
             self.assertFalse(errors, errors)
             self.assertIn('LMS mismatched seconds: 0', path.read_text())
-            print('PASS real dry-run: progressive audible startup <2 s, STMs before STMd, LMS matches both audible items; raw-MAC CLI at 1 Hz')
+            print('PASS real dry-run: progressive audible startup <2 s, STMs before STMd, LMS matches both audible items; encoded LMS echo decoded; raw-MAC CLI at 1 Hz')
         finally:
             if proc.poll() is None:
                 proc.terminate(); proc.communicate(timeout=5)

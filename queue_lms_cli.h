@@ -11,9 +11,30 @@
 #include <unistd.h>
 #include <vector>
 namespace queue_audio {
+inline std::string decodeLms(const std::string &input) {
+    auto hex = [](char c) -> int {
+        if (c >= '0' && c <= '9')
+            return c - '0';
+        if (c >= 'a' && c <= 'f')
+            return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
+        return -1;
+    };
+    std::string out;
+    for (size_t i = 0; i < input.size(); ++i) {
+        if (input[i] == '%' && i + 2 < input.size() && hex(input[i + 1]) >= 0 && hex(input[i + 2]) >= 0) {
+            out += char(hex(input[i + 1]) * 16 + hex(input[i + 2]));
+            i += 2;
+        } else
+            out += input[i];
+    }
+    return out;
+}
 // Diagnostic-only client. One connection and one deadline cover all three
 // queries; the caller runs this outside the audio clock and core event loop.
-inline std::vector<std::string> pollLms(const std::string &host, unsigned port = 9090) {
+inline std::vector<std::string> pollLms(const std::string &host, unsigned port = 9090,
+                                        std::string *raw = nullptr) {
     addrinfo hints{}, *addresses = nullptr;
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
@@ -56,14 +77,17 @@ inline std::vector<std::string> pollLms(const std::string &host, unsigned port =
         }
     }
     close(fd);
+    if (raw)
+        *raw = response.substr(0, response.find('\n'));
     std::vector<std::string> values;
     size_t at = 0;
     for (const auto &key : keys) {
         auto end = response.find('\n', at);
+        const auto line = decodeLms(response.substr(at, end == std::string::npos ? end : end - at));
         const auto prefix = mac + " " + key + " ";
-        if (end == std::string::npos || response.compare(at, prefix.size(), prefix))
+        if (end == std::string::npos || line.compare(0, prefix.size(), prefix))
             return {};
-        auto value = response.substr(at + prefix.size(), end - at - prefix.size());
+        auto value = line.substr(prefix.size());
         if (!value.empty() && value.back() == '\r')
             value.pop_back();
         values.push_back(value);

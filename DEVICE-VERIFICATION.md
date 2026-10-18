@@ -427,8 +427,8 @@ run_queue() (
 Use the LMS address alone, never append `:9000`. Perform these four separate
 runs. **After each invocation registers the player, while the tool is running,
 press Stop on Queue Test (YeneY) and clear its playlist before loading new
-music.** This prevents a reconnect from resuming an earlier playlist at an
-unknown offset. Start each new playlist at index zero; do not enable shuffle,
+music.** LMS automatically resumes the previous playlist when the test player
+connects, potentially at an offset; Stop and clear are required. Start each new playlist at index zero; do not enable shuffle,
 repeat or edit it during a measurement. The dry-run compares the zero-based
 playlist occurrence sequence after Stop/flush with LMS's displayed index.
 
@@ -439,7 +439,7 @@ playlist occurrence sequence after Stop/flush with LMS's displayed index.
    run_queue alac-off
    ```
 
-2. **ALAC, crossfade 5 s:** start a fresh invocation, stop/clear, enable 5-second
+2. **ALAC, crossfade 10 s:** start a fresh invocation, stop/clear, enable the standard 10-second
    crossfade, load an ALAC playlist from different albums (so the smart album
    rule does not suppress overlap) and press Play.
 
@@ -454,7 +454,7 @@ playlist occurrence sequence after Stop/flush with LMS's displayed index.
    run_queue flac-off
    ```
 
-4. **FLAC, crossfade 5 s:** fresh invocation, stop/clear, enable 5-second
+4. **FLAC, crossfade 10 s:** fresh invocation, stop/clear, enable the standard 10-second
    crossfade, load a FLAC playlist from different albums and press Play.
 
    ```bash
@@ -515,3 +515,21 @@ track mismatch. Incomplete rows are reported separately as run-end,
 source-fault or flushed. A source fault is recorded without turning unfinished
 rows into negative leads. These checks do not qualify acoustic gaplessness or
 Sonos controls, which remain later phases.
+
+For a short CLI verification, use an ALAC album with crossfade off. Start the
+following run, Stop and clear in LMS, then load the album and press Play. Press
+Ctrl-C after track 4 starts. Every completed occurrence must have
+`lms_matches_audible=true`; no successful CLI polls fails with
+`lms-cli-unavailable`, and more than 10% unknown audible polls produces a warning.
+
+```bash
+run_queue alac-cli-check
+```
+
+On the Proxmox host, copy the matched artifacts:
+
+```bash
+pct pull 113 /tmp/dryrun-alac-cli-check.md /tmp/dryrun-alac-cli-check.md
+pct pull 113 /tmp/dryrun-alac-cli-check.tsv /tmp/dryrun-alac-cli-check.tsv
+pct pull 113 /tmp/dryrun-alac-cli-check.log /tmp/dryrun-alac-cli-check.log
+```
