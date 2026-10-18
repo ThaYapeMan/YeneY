@@ -617,24 +617,24 @@ a diagnostic, while playlist identity remains the verdict check. See
 
 Use the **existing per-room systemd environment override**, as described in
 README's Settings section; do not overload `/etc/yeney/rooms` or create a second
-room configuration database. Proposed implemented configuration:
+room configuration database. Phase 3 startup configuration:
 
 ```ini
 # /etc/systemd/system/yeney@Study.service.d/override.conf
 [Service]
-Environment=YENEY_PLAYBACK_MODE=auto
+Environment=YENEY_PLAYBACK_MODE=stream
 Environment=YENEY_QUEUE_DISK_MIB=256
 ```
 
 | Value | Required behavior |
 |---|---|
-| `auto` (default) | Queue for normal finite LMS tracks with reliable rendered length and ready data; stream for radio/live/unknown length, unqualified LMS sync groups, Sonos groups (`group-rate-undecided`), or after queue failure. Crossfade uses route A. |
-| `stream` | Always use today's stream sink and transport behavior. |
-| `queue` | Prefer queue wherever technically possible; endless/unknown-length content, Sonos groups pending rate policy and unqualified sync still use stream with a reason. Do not manufacture a finite length. Failed queue playback uses logged fallback rather than retry loops. |
+| `stream` (default) | Select the existing stream sink and transport behavior. |
+| `auto` | Accepted and logged as `auto-phase4`; select stream until phase 4. |
+| `queue` | Explicit opt-in for a confirmed standalone coordinator only. Grouped coordinators and members select stream with `group-rate-undecided`; incomplete topology selects stream with `coordinator-unconfirmed`. |
 
 Reliable length means a resolved exact rendered count, not just an LMS duration
 field. Sealing can qualify an otherwise uncertain finite source. Invalid setting
-values warn and select `auto`. Settings are read at room startup. `YENEY_QUEUE_DISK_MIB` is a positive integer
+values warn and select `stream`. Empty values are invalid too. Settings are read once at room startup after topology discovery. `YENEY_QUEUE_DISK_MIB` is a positive integer
 in MiB, read when the item store is constructed; invalid or overflowing values
 fail configuration. It has no effect on today's unmodified stream-only playback. These first two phases leave the running production behavior unchanged; once queue implementation
 is qualified and shipped, `auto` is its default. Owners can explicitly select
@@ -762,10 +762,20 @@ are local component tests, not an integrated fake-speaker acceptance suite.
 
 **Phase 3 playback is not implemented or enabled yet.** These components are not
 wired into `runCoreClient` or the room controller. Production remains stream
-only. Outstanding work includes startup mode selection, coordinator-fenced SOAP
+only. Outstanding work includes coordinator-fenced SOAP
 and saved-playlist discovery, published-asset mirroring, speaker-driven core
 audibility, both directions of controls, latched tail-preserving fallback, and
 the unattended device suite with its fake-device integration tests. Do not
 attempt phase 3 device qualification from this checkpoint. The existing owner
 instructions still describe the qualified phase 2 dry-run suite. Its final
 SUITE verdict is now included in both archived `summary.md` and `suite.log`.
+
+
+Phase 3b part 1 implements startup mode selection in the real room startup path.
+Default/stream, auto, invalid values and grouped queue requests use the original
+stream path. A standalone queue request is selected and logged, then exits with
+an explicit controller-unavailable error before LMS HELO or queue mutation. This
+is a temporary runtime guard until part 2 wires the serialized controller; queue
+playback is not available at this checkpoint. Loopback tests compare the exact
+HELO bytes for every stream-selection case and verify the queue guard. No
+physical device steps are authorized by this checkpoint.
