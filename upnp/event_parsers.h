@@ -2,6 +2,7 @@
 #include "speaker_state.h"
 #include "xml.h"
 #include "discovery.h"
+#include <cstdio>
 namespace upnp {
 inline std::string xmlLocalName(const XmlNode& node) {
     const auto colon = node.name.find(':');
@@ -29,6 +30,24 @@ inline bool parseAvTransport(const std::string& body, StateUpdate& result) {
     val("TransportState", u.state); val("TransportStatus", u.status);
     val("CurrentTransportStatus", u.status); val("AVTransportURI", u.uri);
     val("CurrentTrackURI", u.trackUri); val("CurrentTrackDuration", u.duration);
+    if (const auto track = i.child("CurrentTrack")) {
+        const auto text = track->attribute("val");
+        uint64_t value = 0;
+        if (text.empty()) return false;
+        for (char c : text) {
+            if (c < '0' || c > '9' || value > (UINT32_MAX - unsigned(c-'0'))/10) return false;
+            value = value*10 + unsigned(c-'0');
+        }
+        u.trackNumber = uint32_t(value);
+    }
+    if (const auto position = i.child("RelativeTimePosition")) {
+        const auto text = position->attribute("val");
+        unsigned long long h, m, s; char tail;
+        if (sscanf(text.c_str(), "%llu:%llu:%llu%c", &h, &m, &s, &tail) != 3 || m >= 60 || s >= 60 ||
+            h > UINT32_MAX/3600000 || (h*3600+m*60+s)*1000 > UINT32_MAX) return false;
+        u.positionMs = uint32_t((h*3600+m*60+s)*1000);
+        u.positionText = text;
+    }
     if (u.state && (u.state->empty() || u.state->find_first_of("\r\n") != std::string::npos)) return false;
     if (u.status && u.status->find_first_of("\r\n") != std::string::npos) return false;
     if (u.state) u.available = true;

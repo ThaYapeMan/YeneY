@@ -28,7 +28,7 @@ struct StateUpdate {
     std::optional<uint8_t> volume;
     std::optional<Speaker> room;
     std::optional<Group> group;
-    std::optional<uint32_t> positionMs;
+    std::optional<uint32_t> positionMs, trackNumber;
     std::optional<std::string> positionText;
 };
 struct SpeakerState {
@@ -37,7 +37,8 @@ struct SpeakerState {
     uint8_t volume = 0;
     Speaker room;
     Group group;
-    uint32_t positionMs = 0;
+    uint32_t positionMs = 0, trackNumber = 0;
+    bool trackNumberKnown = false;
     std::string positionText;
     bool positionKnown = false;
     Source source = Source::Poll;
@@ -64,11 +65,12 @@ struct SpeakerState {
         put(room, u.room); put(group, u.group);
         if (put(positionMs, u.positionMs)) positionKnown = true;
         put(positionText, u.positionText);
+        if (put(trackNumber, u.trackNumber)) trackNumberKnown = true;
         if (changed) { revision = next; source = u.source; updatedAt = now; }
         return changed;
     }
 private:
-    std::array<uint64_t, 12> events{};
+    std::array<uint64_t, 13> events{};
 };
 // All readers receive a value copy; no state lock is held across I/O.
 class SpeakerStateStore {

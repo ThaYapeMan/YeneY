@@ -56,3 +56,4 @@ field-cold-test
 /core-queue-sink-test
 
 /queue-route-test
+/queue-metadata-test
