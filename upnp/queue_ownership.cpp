@@ -1,0 +1,112 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "queue_ownership.h"
+#include <algorithm>
+#include <exception>
+#include <stdexcept>
+namespace upnp {
+QueueOwnership::QueueOwnership(QueueOwnershipIO callbacks, std::string token)
+    : io(std::move(callbacks)), session(std::move(token)) {
+    if (session.empty() ||
+        session.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") !=
+            std::string::npos)
+        throw std::invalid_argument("invalid queue ownership session");
+}
+bool QueueOwnership::owns(const std::string &uri) const {
+    const auto path = uri.find("/music/queue.wav?");
+    if (path == std::string::npos)
+        return false;
+    auto at = path + 17;
+    while (at < uri.size()) {
+        const auto end = uri.find('&', at);
+        if (uri.substr(at, end == std::string::npos ? end : end - at) == "session=" + session)
+            return true;
+        if (end == std::string::npos)
+            break;
+        at = end + 1;
+    }
+    return false;
+}
+void QueueOwnership::acquire(const std::string &title) {
+    if (held || restoring)
+        throw std::logic_error("queue ownership already held");
+    auto queue = io.browse();
+    const bool foreign =
+        std::any_of(queue.uris.begin(), queue.uris.end(), [&](const auto &u) { return !owns(u); });
+    if (foreign) {
+        if (title.compare(0, 13, "Before YeneY ") != 0)
+            throw std::invalid_argument("invalid queue backup prefix");
+        auto id = io.save(title);
+        auto saved = io.playlists();
+        auto verified = std::find_if(saved.begin(), saved.end(),
+                                     [&](const auto &p) { return p.id == id && p.title == title; });
+        if (id.empty() || verified == saved.end())
+            throw std::runtime_error("queue-backup-unverified");
+        io.log("queue backup id=" + id + " title=" + title);
+        // Verify identity, not just same-minute title. Sort ties by ID to make
+        // retention deterministic without deleting the newly verified backup.
+        saved.erase(
+            std::remove_if(saved.begin(), saved.end(),
+                           [](const auto &p) { return p.title.compare(0, 13, "Before YeneY ") != 0; }),
+            saved.end());
+        std::stable_sort(saved.begin(), saved.end(), [&](const auto &a, const auto &b) {
+            if (a.id == id)
+                return b.id != id;
+            if (b.id == id)
+                return false;
+            return a.created != b.created ? a.created > b.created : a.id > b.id;
+        });
+        for (size_t i = 5; i < saved.size(); ++i)
+            io.deletePlaylist(saved[i].id);
+        auto fresh = io.browse();
+        if (fresh.update != queue.update || fresh.uris != queue.uris)
+            throw std::runtime_error("queue-changed-during-backup");
+    }
+    savedCrossfade = io.crossfade();
+    restoring = true;
+    io.setCrossfade(false);
+    // A single fenced removal preserves the verified backup. The callback must
+    // reject stale UpdateID, and must never substitute RemoveAll on conflict.
+    if (!queue.uris.empty())
+        io.remove(queue.update, 1, queue.uris.size());
+    held = true;
+}
+void QueueOwnership::release() {
+    std::exception_ptr error;
+    if (held) {
+        try {
+            auto queue = io.browse();
+            // Remove owned entries from the back, refreshing UpdateID and URI
+            // identity each time. Foreign inserts cannot shift a later removal.
+            auto remaining = queue.uris.size();
+            for (;;) {
+                size_t last = queue.uris.size();
+                while (last && !owns(queue.uris[last - 1]))
+                    --last;
+                if (!last)
+                    break;
+                size_t first = last - 1;
+                while (first && owns(queue.uris[first - 1]))
+                    --first;
+                if (!remaining--)
+                    throw std::runtime_error("queue-release-did-not-converge");
+                io.remove(queue.update, first + 1, last - first);
+                queue = io.browse();
+            }
+            held = false;
+        } catch (...) {
+            error = std::current_exception();
+        }
+    }
+    if (restoring) {
+        try {
+            io.setCrossfade(savedCrossfade);
+            restoring = false;
+        } catch (...) {
+            if (!error)
+                error = std::current_exception();
+        }
+    }
+    if (error)
+        std::rethrow_exception(error);
+}
+} // namespace upnp
