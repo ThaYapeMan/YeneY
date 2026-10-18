@@ -361,6 +361,8 @@ class SuiteTests(unittest.TestCase):
                         self.assertTrue(out.splitlines()[-1] == 'SUITE OK' if mode == 'good' else out.splitlines()[-1].startswith('SUITE FAILED:'))
                         self.assertIn('SUITE OK' if mode == 'good' else 'SUITE FAILED:', out)
                         archive = self.unpack(folder)
+                        self.assertIn(out.splitlines()[-1], archive['summary.md'])
+                        self.assertIn(out.splitlines()[-1], archive['suite.log'])
                         self.assertIn('summary.md', archive)
                         self.assertIn('manifest.tsv', archive)
                         self.assertIn('suite.log', archive)

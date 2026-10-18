@@ -420,6 +420,13 @@ class Suite:
                 r = self.results[name]
                 out.write('| '+' | '.join(map(cell, (name, r['verdict'], r['startup'], r['lead'], r['overlap'],
                                                     r['matches'], r['faults']+'; '+', '.join(r['reasons']))))+' |\n')
+        failures = [name+': '+', '.join(self.results[name]['reasons']) for name in self.args.only
+                    if self.results[name]['verdict'] != 'LMS read-ahead OK']
+        self.final_line = 'SUITE FAILED: '+'; '.join(failures) if failures else 'SUITE OK'
+        self.failed = bool(failures)
+        with (self.work/'summary.md').open('a') as out:
+            out.write('\n'+self.final_line+'\n')
+        self.log(self.final_line)
         self.log('ARCHIVE '+str(self.work))
         self.stream.flush()
         archive = self.root/(self.work.name+'.tar.gz')
@@ -460,10 +467,8 @@ class Suite:
                 (self.work/'manifest.tsv').write_text('scenario\tposition\ttrack_id\ttitle\talbum_id\talbum\tduration\tcodec\tsamplerate\n')
             self.archive()
             self.stream.close()
-        failures = [name+': '+', '.join(self.results[name]['reasons']) for name in self.args.only
-                    if self.results[name]['verdict'] != 'LMS read-ahead OK']
-        print('SUITE FAILED: '+'; '.join(failures) if failures else 'SUITE OK', flush=True)
-        return 1 if failures else 0
+        print(self.final_line, flush=True)
+        return 1 if self.failed else 0
 
 
 def arguments(argv=None):
