@@ -56,10 +56,22 @@ class CLI:
     def __init__(self, host, log):
         self.host, self.log = host, log
 
+    def assert_isolated(self):
+        words = self.call('syncgroups', '?')
+        if '?' in words:
+            raise SuiteError('cannot verify player sync isolation')
+        for word in words:
+            if word.startswith('sync_members:'):
+                members = set(word.split(':', 1)[1].lower().split(','))
+                if MAC in members and members != {MAC}:
+                    raise SuiteError('test-player-is-synced; refusing group control')
+
     def call(self, *args):
         # Only the dedicated player may be addressed. Global commands are reads.
-        if args[0] != MAC and args[0] not in ('players', 'titles'):
+        if args[0] != MAC and args[0] not in ('players', 'titles', 'syncgroups'):
             raise SuiteError('refusing non-test-player command')
+        if args[0] == MAC and args[-1] != '?':
+            self.assert_isolated()
         encoded = [str(arg) if i == 0 and arg == MAC else quote(str(arg), safe=':,?')
                    for i, arg in enumerate(args)]
         request = ' '.join(encoded)
@@ -280,6 +292,7 @@ class Suite:
         console = (self.work/(name+'.console')).open('w')
         self.owned = False
         try:
+            self.cli.assert_isolated()
             proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                     text=True, start_new_session=True)
             def read_output():

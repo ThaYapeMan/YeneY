@@ -417,7 +417,8 @@ player, cancels LMS's automatic playlist resume with Stop/clear, selects music,
 sets the transitions, loads each playlist, waits for three completed joins,
 stops playback and collects the matched reports. It saves and restores every
 player preference it changes, including on Ctrl-C or an error. Only one suite
-may run at once; an existing dry-run is left alone.
+may run at once; an existing dry-run is left alone. The suite refuses a test
+player synced with other players, before reconnecting or sending controls.
 
 Defaults are four scenarios (`alac-off`, `alac-on`, `flac-off`, `flac-on`), speed
 4 and three joins. Crossfade uses LMS's standard 10 seconds with smart suppression

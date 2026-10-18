@@ -68,8 +68,8 @@ class PatientHTTP(HTTP):
 
 
 class FakeLMS:
-    def __init__(self, real=False, fail_load=False):
-        self.real, self.fail_load = real, fail_load
+    def __init__(self, real=False, fail_load=False, grouped=False):
+        self.real, self.fail_load, self.grouped = real, fail_load, grouped
         self.commands, self.errors, self.sources = [], [], []
         self.prefs = dict(transitionType='3', transitionDuration='7', transitionSmart='1', shuffle='2', repeat='1')
         self.original = self.prefs.copy()
@@ -171,6 +171,9 @@ class FakeLMS:
                 size = min(size, 5)
                 page = self.tracks[start:start+size]
                 return words+['count:'+str(len(self.tracks))]+[f'{k}:{v}' for t in page for k, v in t.items()]
+            if head == 'syncgroups':
+                members = MAC+',aa:bb:cc:dd:ee:ff' if self.grouped else 'aa:bb:cc:dd:ee:ff,bb:cc:dd:ee:ff:00'
+                return words[:-1]+['sync_members:'+members]
             if head == 'players':
                 return words+['count:2', 'playerindex:0', 'playerid:aa:bb:cc:dd:ee:ff', 'connected:1',
                     'playerindex:1', 'playerid:'+MAC, 'name:Queue Test (YeneY)', 'connected:'+str(int(self.connected))]
@@ -370,6 +373,22 @@ class SuiteTests(unittest.TestCase):
                 finally:
                     fake.close()
         print('PASS suite failure handling: success/unknown/error/timeout/SIGINT/load failure exit codes, preference restoration and diagnostic archives')
+
+    def test_synced_player_refused_before_connect(self):
+        fake = FakeLMS(grouped=True)
+        try:
+            with tempfile.TemporaryDirectory() as folder:
+                proc = self.launch(folder, '/nonexistent')
+                out, err = proc.communicate(timeout=5)
+                self.assertEqual(proc.returncode, 1, out+err)
+                self.assertIn('test-player-is-synced', out)
+                self.assertEqual(fake.session_count, 0)
+                self.assertFalse(any(c[0] == MAC for c in fake.commands))
+                self.assertIn('summary.md', self.unpack(folder))
+                self.assertEqual(fake.prefs, fake.original)
+            print('PASS suite sync isolation: grouped test player refused before HELO or mutations; unrelated sync groups left alone')
+        finally:
+            fake.close()
 
     def test_lock_and_install(self):
         import fcntl
