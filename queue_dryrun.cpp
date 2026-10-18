@@ -18,14 +18,15 @@
 #include <thread>
 #include <unistd.h>
 namespace {
-std::atomic_bool stopped{false};
+std::atomic_bool stopped{false}, resetMeasurement{false};
+extern "C" void measureSignal(int) { resetMeasurement = true; }
 extern "C" void stopSignal(int) { stopped = true; }
 } // namespace
 int main(int argc, char **argv) {
     std::string server;
     unsigned seconds = 900;
     double speed = 1;
-    bool keep = false, transcoded = false;
+    bool keep = false, transcoded = false, controlled = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--help") {
@@ -35,7 +36,9 @@ int main(int argc, char **argv) {
                          "LMS. No Sonos or room-service access.\n";
             return 0;
         }
-        if (a == "--transcoded")
+        if (a == "--suite-controlled")
+            controlled = true;
+        else if (a == "--transcoded")
             transcoded = true;
         else if (a == "--keep")
             keep = true;
@@ -124,6 +127,8 @@ int main(int argc, char **argv) {
         yeney::Player player(cfg, sink);
         std::signal(SIGINT, stopSignal);
         std::signal(SIGTERM, stopSignal);
+        if (controlled)
+            std::signal(SIGUSR1, measureSignal);
         std::exception_ptr playerError;
         std::thread core([&] {
             try {
@@ -199,10 +204,35 @@ int main(int argc, char **argv) {
                     thread.join();
             }
         } cliJoin{cli, cliStop};
+        double measurementStart = 0;
+        auto measuredRows = [&] {
+            auto all = sink.snapshot();
+            if (measurementStart > 0) {
+                std::vector<uint64_t> owners;
+                for (const auto &r : all)
+                    if (r.source.occurrence < UINT64_MAX / 2 && r.strm >= measurementStart)
+                        owners.push_back(r.source.occurrence);
+                all.erase(std::remove_if(all.begin(), all.end(),
+                                         [&](const auto &r) {
+                                             if (r.source.occurrence < UINT64_MAX / 2)
+                                                 return r.strm < measurementStart;
+                                             return std::find(owners.begin(), owners.end(),
+                                                              UINT64_MAX - r.source.occurrence) ==
+                                                    owners.end();
+                                         }),
+                          all.end());
+            }
+            return all;
+        };
         size_t reportedJoins = SIZE_MAX;
         auto nextProgress = Clock::now();
         while (!stopped && Clock::now() - start < std::chrono::seconds(seconds)) {
             auto now = Clock::now();
+            if (resetMeasurement.exchange(false)) {
+                measurementStart = sink.secondsSinceStart();
+                reportedJoins = SIZE_MAX;
+                std::cout << "Measurement ready" << std::endl;
+            }
             double dt = std::chrono::duration<double>(now - last).count();
             last = now;
             auto rows = sink.snapshot();
@@ -293,7 +323,7 @@ int main(int argc, char **argv) {
             }
             if (now >= nextProgress) {
                 std::ostringstream md, tsv;
-                auto verdict = queue_audio::writeReadAheadReport(sink.snapshot(), md, tsv, speed);
+                auto verdict = queue_audio::writeReadAheadReport(measuredRows(), md, tsv, speed);
                 if (verdict.pairs != reportedJoins) {
                     reportedJoins = verdict.pairs;
                     std::cout << "Progress: completed_joins=" << reportedJoins << std::endl;
@@ -310,7 +340,7 @@ int main(int argc, char **argv) {
             std::lock_guard<std::mutex> lock(logMutex);
             log << "worker fault: " << e.what() << std::endl;
         }
-        auto rows = sink.snapshot();
+        auto rows = measuredRows();
         // Snapshot before Player shutdown flushes pending assets; timestamps remain
         // explicit.
         stopped = true;

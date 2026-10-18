@@ -28,6 +28,7 @@ clean:
 install: yeney yeney-queue-dryrun
 	install -d -m 0755 /var/lib/yeney
 	install -m 0755 yeney-queue-dryrun /usr/local/bin/yeney-queue-dryrun
+	install -m 0755 scripts/yeney-queue-suite /usr/local/bin/yeney-queue-suite
 	scripts/install-devices.sh
 encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
@@ -104,6 +105,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/player_engine_test.py
 	python3 tests/sonos_queue_probe_test.py
 	python3 tests/queue_dryrun_test.py
+	python3 tests/queue_suite_test.py
 	$(MAKE) -C third_party/yeney-core test
 
 sbstreamer.o sbencoder.o: sbencoder.h

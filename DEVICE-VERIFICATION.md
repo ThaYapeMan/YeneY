@@ -389,15 +389,14 @@ coordinate and this short run is not a lock-time or drift acceptance test.
 No audio/transport change is intended; a physical gap or a cut-off tail needs
 its own follow-up before calling the transition acoustically seamless.
 
-## Queue mode phase 2: LMS read-ahead
+## Queue mode phase 2: unattended read-ahead suite
 
-Owner-run only: no Sonos, room-service or room-configuration access. The extra
-player is **Queue Test (YeneY)**, raw MAC **02:59:51:54:00:01**. Reserve this
-identity for the diagnostic; only one instance may run. Agents never SSH to or
-deploy on LXC 113. Root's PATH there lacks `/usr/local/bin`, so always invoke
-`/usr/local/bin/yeney-queue-dryrun` by its full path.
+The owner runs one command and leaves it unattended. The suite controls only
+**Queue Test (YeneY)**, raw MAC **02:59:51:54:00:01**, and makes no sound. It
+never accesses room configuration, room services or `/var/lib/yeney`. Agents
+must never deploy on LXC 113 or run this suite against a real LMS.
 
-On LXC 113, the owner builds and installs the pushed revision:
+On LXC 113, install the pushed revision using the normal owner installation:
 
 ```bash
 cd /opt/yeney
@@ -407,131 +406,81 @@ make
 sudo make install
 ```
 
-Then define this helper once. It copies all three PID-stamped artifacts
-from the exact invocation whose Report line was captured, never from a wildcard
-or a different run:
+Run the suite using its full path (root's PATH lacks `/usr/local/bin`):
 
 ```bash
-run_queue() (
-    trap ':' INT
-    name="$1"
-    /usr/local/bin/yeney-queue-dryrun --server 192.168.178.23 --seconds 1800 | tee -i "/tmp/dryrun-${name}.console"
-    source_base=$(sed -n 's/^Report: \(.*\)\.md$/\1/p' "/tmp/dryrun-${name}.console")
-    test -n "$source_base" && test -f "${source_base}.md" || return 1
-    cp -- "${source_base}.md" "/tmp/dryrun-${name}.md"
-    cp -- "${source_base}.tsv" "/tmp/dryrun-${name}.tsv"
-    cp -- "${source_base}.log" "/tmp/dryrun-${name}.log"
-)
+/usr/local/bin/yeney-queue-suite --server 192.168.178.23
 ```
 
-Use the LMS address alone, never append `:9000`. Perform these four separate
-runs. **After each invocation registers the player, while the tool is running,
-press Stop on Queue Test (YeneY) and clear its playlist before loading new
-music.** LMS automatically resumes the previous playlist when the test player
-connects, potentially at an offset; Stop and clear are required. Start each new playlist at index zero; do not enable shuffle,
-repeat or edit it during a measurement. The dry-run compares the zero-based
-playlist occurrence sequence after Stop/flush with LMS's displayed index.
+**The owner does not need to touch LMS.** The suite waits for the diagnostic
+player, cancels LMS's automatic playlist resume with Stop/clear, selects music,
+sets the transitions, loads each playlist, waits for three completed joins,
+stops playback and collects the matched reports. It saves and restores every
+player preference it changes, including on Ctrl-C or an error. Only one suite
+may run at once; an existing dry-run is left alone.
 
-1. **ALAC, crossfade off:** run the command below, then stop/clear the test
-   player, disable crossfade, load a local ALAC album and press Play.
+Defaults are four scenarios (`alac-off`, `alac-on`, `flac-off`, `flac-on`), speed
+4 and three joins. Crossfade uses LMS's standard 10 seconds with smart suppression
+disabled. Selection requires local, native 44.1 kHz tracks lasting at least
+60 seconds: an album entirely in the requested codec for each off scenario,
+and tracks from different albums for each on scenario. Native source codec and
+rate are checked in the reports; transcoded playback fails qualification.
+Insufficient library material produces an archived failure rather than a prompt.
 
-   ```bash
-   run_queue alac-off
-   ```
-
-2. **ALAC, crossfade 10 s:** start a fresh invocation, stop/clear, enable the standard 10-second
-   crossfade, load an ALAC playlist from different albums (so the smart album
-   rule does not suppress overlap) and press Play.
-
-   ```bash
-   run_queue alac-on
-   ```
-
-3. **FLAC, crossfade off:** fresh invocation, stop/clear, disable crossfade,
-   load a local FLAC album and press Play.
-
-   ```bash
-   run_queue flac-off
-   ```
-
-4. **FLAC, crossfade 10 s:** fresh invocation, stop/clear, enable the standard 10-second
-   crossfade, load a FLAC playlist from different albums and press Play.
-
-   ```bash
-   run_queue flac-on
-   ```
-
-Use tracks long enough to measure 12 seconds of successor lead. Let at least two
-joins complete in every run. Ctrl-C or the 1,800-second limit ends that invocation
-and writes its Markdown, TSV and log; wait for the helper's copies before
-starting another run. This simulates audibility at 1.0x and makes no sound.
-Observe LMS's displayed track and time as well. Record any unexpected initial
-stream, skip, fault, stall or changed transition setting. Optional WAV/AIFF/MP3
-runs use the same procedure. For known upstream transcoding add `--transcoded`
-to the full-path invocation; MP3 counts remain unknown and publish sealed.
-
-From the Proxmox host copy the fixed, matched names to `/tmp`:
+Optional selection and run controls:
 
 ```bash
-pct pull 113 /tmp/dryrun-alac-off.md /tmp/dryrun-alac-off.md
-pct pull 113 /tmp/dryrun-alac-off.tsv /tmp/dryrun-alac-off.tsv
-pct pull 113 /tmp/dryrun-alac-off.log /tmp/dryrun-alac-off.log
-pct pull 113 /tmp/dryrun-alac-on.md /tmp/dryrun-alac-on.md
-pct pull 113 /tmp/dryrun-alac-on.tsv /tmp/dryrun-alac-on.tsv
-pct pull 113 /tmp/dryrun-alac-on.log /tmp/dryrun-alac-on.log
-pct pull 113 /tmp/dryrun-flac-off.md /tmp/dryrun-flac-off.md
-pct pull 113 /tmp/dryrun-flac-off.tsv /tmp/dryrun-flac-off.tsv
-pct pull 113 /tmp/dryrun-flac-off.log /tmp/dryrun-flac-off.log
-pct pull 113 /tmp/dryrun-flac-on.md /tmp/dryrun-flac-on.md
-pct pull 113 /tmp/dryrun-flac-on.tsv /tmp/dryrun-flac-on.tsv
-pct pull 113 /tmp/dryrun-flac-on.log /tmp/dryrun-flac-on.log
+/usr/local/bin/yeney-queue-suite --server 192.168.178.23 --speed 4 --joins 3 --only alac-off,flac-on
+/usr/local/bin/yeney-queue-suite --server 192.168.178.23 --alac-album 123 --flac-album 456
 ```
 
-Original artifacts are `/tmp/yeney-queue-dryrun-<timestamp>-<pid>.{md,tsv,log}`.
-The temporary FLAC history in `/tmp/yeney-queue-dryrun/QueueTest` is deleted on
-normal exit; `--keep` retains it until the next invocation. Copy retained
-history before another run. Nothing is written to `/var/lib/yeney`.
+For more than three joins, enough eligible tracks and distinct albums must exist.
+The timeout per scenario is the selected durations divided by speed, plus
+120 wall-clock seconds. At speed 4, audio advances four times faster than wall
+time. All original report timestamps, delays and leads are simulated seconds;
+additional wall-clock columns and the speed factor are recorded. STMt elapsed
+follows the simulated sample clock. LMS already receives that accelerated elapsed
+value: the time-display diagnostic divides both LMS time and simulated audible
+elapsed by speed to express their difference in wall seconds. It does not
+multiply LMS's elapsed value a second time. LMS interpolation between updates
+still runs in wall time; track identity is checked separately at 1 Hz.
 
-Report times are monotonic seconds; `-1` means unobserved. Each occurrence
-records wire codec (FLAC/ALAC/AAC/MP3/PCM), strm-to-audible startup delay, decoder
-completion, STMs/STMd, transition, overlap, promised/actual frames and faults.
-The first progressive exact-count FLAC/ALAC item should become audible and send
-STMs within two seconds of its strm. Unknown counts remain sealed. A
-`no-transition` boundary is correct with crossfade off. `successor-deadline`
-means the overlap wait exhausted its audible safety bound; collect the log.
-`sealed-startup` explicitly preserves an unknown-count source's full tail without
-overlap when sealing must precede its first audible start.
+The final line is **SUITE OK** only when every selected scenario reports
+**LMS read-ahead OK**, reaches the requested completed-join count and has
+`lms_matches_audible=true` for every completed occurrence. The suite also rejects
+faults, wrong native codec/rate and missing 441000-frame overlaps in crossfade
+scenarios. Otherwise it exits nonzero and prints **SUITE FAILED:** with scenario
+reasons. Unknown CLI identity cannot pass. These are protocol/queue checks;
+acoustic gaplessness and Sonos controls still require their later device phases.
 
-The CLI on port 9090 is polled once per second with the literal MAC for playlist
-index, time and title. TSV parallel pipe-separated columns retain all samples;
-responses and titles are URL-decoded. TSV title values escape tabs, newlines,
-backslashes and pipes. `lms_matches_audible` is false when any
-sample disagrees, true when all samples agree, and unknown without usable CLI
-evidence. More than two seconds of continuous disagreement fails with
-`lms-track-mismatch`; isolated boundary samples are counted but tolerated.
+The output is `/tmp/yeney-queue-suite-latest.tar.gz`, plus a timestamped copy.
+The archive contains each scenario's matched `.md`, `.tsv`, `.log` and console
+output, `manifest.tsv` with track ids/titles/albums/durations, every CLI request
+and response with timings in `suite.log`, and one results table in `summary.md`.
+Failures and interruptions also produce an archive; missing child artifacts are
+reported explicitly. Original PID-stamped dry-run files remain in `/tmp`.
 
-**LMS read-ahead OK** requires at least one completed predecessor/successor pair,
-all completed leads at least 12 seconds, at least one successful audible CLI
-poll, no storage fault and no sustained LMS track mismatch. Incomplete rows are
-reported separately as run-end,
-source-fault or flushed. A source fault is recorded without turning unfinished
-rows into negative leads. These checks do not qualify acoustic gaplessness or
-Sonos controls, which remain later phases.
-
-For a short CLI verification, use an ALAC album with crossfade off. Start the
-following run, Stop and clear in LMS, then load the album and press Play. Press
-Ctrl-C after track 4 starts. Every completed occurrence must have
-`lms_matches_audible=true`; no successful CLI polls fails with
-`lms-cli-unavailable`, and more than 10% unknown audible polls produces a warning.
+From the Proxmox host, retrieve the single archive:
 
 ```bash
-run_queue alac-cli-check
+pct pull 113 /tmp/yeney-queue-suite-latest.tar.gz /tmp/yeney-queue-suite-latest.tar.gz
 ```
 
-On the Proxmox host, copy the matched artifacts:
+### Manual fallback
+
+Use this only to investigate a failed scenario. Start the tool, then press Stop
+and clear **Queue Test (YeneY)** in LMS before loading music, since LMS resumes
+the previous playlist automatically. Use ALAC or FLAC, crossfade off or the
+standard 10 seconds; on playlists must use different albums. No listening is
+needed for this diagnostic.
 
 ```bash
-pct pull 113 /tmp/dryrun-alac-cli-check.md /tmp/dryrun-alac-cli-check.md
-pct pull 113 /tmp/dryrun-alac-cli-check.tsv /tmp/dryrun-alac-cli-check.tsv
-pct pull 113 /tmp/dryrun-alac-cli-check.log /tmp/dryrun-alac-cli-check.log
+/usr/local/bin/yeney-queue-dryrun --server 192.168.178.23 --seconds 1800 --speed 1
 ```
+
+Ctrl-C writes the exact PID-stamped `.md`, `.tsv` and `.log` whose base appears
+in the tool's `Report:` line; copy those three files together, never mix runs.
+For a short identity check, use ALAC/off and stop after track 4 starts: every
+completed occurrence must have `lms_matches_audible=true`. Unknown counts retain
+sealed publication. More than 10% unknown audible CLI polls warns, and no
+successful audible poll fails with `lms-cli-unavailable`.

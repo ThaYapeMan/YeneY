@@ -596,6 +596,25 @@ implementation until the owner chooses the rate policy.
 
 ## 9. Configuration, mode switching and rollout
 
+**Standing owner-test rule:** every future owner device phase must provide a
+single unattended command that controls its own test setup, restores changed
+settings, and produces one archive with its evidence and verdict. An owner must
+not need to operate LMS or copy individual run artifacts. Listening checks are
+the only manual steps and must be listed separately from automated qualification.
+
+Phase 2 uses `/usr/local/bin/yeney-queue-suite --server <lms>`: four native ALAC/
+FLAC scenarios, crossfade off or 10 seconds, default 4x simulated audibility and
+three completed joins. Acknowledged measurement reset after Stop/clear excludes
+LMS's automatic reconnect resume; the full log retains that prelude. CLI selection,
+preferences and results live in one timestamped archive and
+`/tmp/yeney-queue-suite-latest.tar.gz`. Global library queries are reads; only the
+fixed Queue Test MAC receives commands. The suite verifies native source codecs
+and rates, rather than silently accepting a server conversion. Reports retain
+simulated timestamps with additional wall-clock values. LMS elapsed is already
+seeded by simulated STMt; speed normalization of its time-display difference is
+a diagnostic, while playlist identity remains the verdict check. See
+`DEVICE-VERIFICATION.md` for the one-command owner workflow.
+
 Use the **existing per-room systemd environment override**, as described in
 README's Settings section; do not overload `/etc/yeney/rooms` or create a second
 room configuration database. Proposed implemented configuration:

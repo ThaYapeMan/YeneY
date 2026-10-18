@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Owner-run, isolated Queue Test automation. Python standard library only."""
+import argparse
+import collections
+import csv
+import datetime
+import fcntl
+import math
+import os
+from pathlib import Path
+import queue
+import shutil
+import signal
+import socket
+import subprocess
+import tarfile
+import tempfile
+import threading
+import time
+from urllib.parse import quote, unquote
+
+MAC = '02:59:51:54:00:01'
+SCENARIOS = ('alac-off', 'alac-on', 'flac-off', 'flac-on')
+DRYRUN = '/usr/local/bin/yeney-queue-dryrun'
+
+
+class SuiteError(Exception):
+    pass
+
+
+class Interrupted(SuiteError):
+    pass
+
+
+def tokens(line):
+    # Split BEFORE decoding: an encoded space belongs to a single value.
+    return [unquote(word) for word in line.strip().split()]
+
+
+def records(words, delimiter):
+    result, current = [], None
+    for word in words:
+        key, sep, value = word.partition(':')
+        if not sep:
+            continue
+        if key == delimiter:
+            current = {}
+            result.append(current)
+        if current is not None:
+            current[key] = value
+    return result
+
+
+class CLI:
+    def __init__(self, host, log):
+        self.host, self.log = host, log
+
+    def call(self, *args):
+        # Only the dedicated player may be addressed. Global commands are reads.
+        if args[0] != MAC and args[0] not in ('players', 'titles'):
+            raise SuiteError('refusing non-test-player command')
+        encoded = [str(arg) if i == 0 and arg == MAC else quote(str(arg), safe=':,?')
+                   for i, arg in enumerate(args)]
+        request = ' '.join(encoded)
+        self.log('CLI > ' + request)
+        started = time.monotonic()
+        try:
+            with socket.create_connection((self.host, 9090), timeout=3) as conn:
+                conn.settimeout(3)
+                conn.sendall((request + '\n').encode())
+                response = bytearray()
+                deadline = started + 5
+                while b'\n' not in response:
+                    if time.monotonic() >= deadline or len(response) > 4 * 1024 * 1024:
+                        raise SuiteError('CLI response deadline/size limit')
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        raise SuiteError('CLI closed before response')
+                    response.extend(chunk)
+            raw = bytes(response).split(b'\n', 1)[0].decode('utf-8', errors='replace')
+            self.log(f'CLI < ({time.monotonic()-started:.3f}s) {raw}')
+            decoded = tokens(raw)
+            expected = [str(arg) for arg in args]
+            # A query echoes its parameters but replaces the final question mark.
+            prefix = expected[:-1] if expected[-1] == '?' else expected
+            if decoded[:len(prefix)] != prefix:
+                raise SuiteError('CLI echo mismatch: ' + raw)
+            result = decoded[len(prefix):]
+            if any(word.startswith(('error:', 'badparams:')) for word in result):
+                raise SuiteError('CLI rejected command: ' + raw)
+            return result
+        except (OSError, SuiteError) as error:
+            self.log(f'CLI error ({time.monotonic()-started:.3f}s): {error}')
+            raise SuiteError(str(error)) from error
+
+
+def number(value, default=-1):
+    try:
+        result = float(value)
+        return result if math.isfinite(result) else default
+    except (TypeError, ValueError):
+        return default
+
+
+def codec(track):
+    kind = track.get('type', '').lower()
+    if kind in ('flc', 'flac'):
+        return 'flac'
+    if kind in ('alc', 'alac') or (kind in ('m4a', 'mp4') and track.get('lossless') == '1'):
+        return 'alac'
+    return None
+
+
+def eligible(track):
+    return (track.get('id', '').isdigit() and track.get('album_id', '').isdigit()
+            and number(track.get('duration')) >= 60
+            and number(track.get('samplerate')) in (44100, 44.1)
+            and track.get('remote', '0') == '0' and track.get('url', '').startswith('file://'))
+
+
+def select(cli, scenarios, joins, overrides):
+    tracks, offset, seen = [], 0, set()
+    while True:
+        words = cli.call('titles', offset, 250, 'tags:deloTtixuQ', 'sort:albumtrack')
+        if 'rescan:1' in words:
+            raise SuiteError('library scan in progress; selection is incomplete')
+        page = records(words, 'id')
+        for track in page:
+            if track['id'] in seen:
+                raise SuiteError('library pagination repeated a track id')
+            seen.add(track['id'])
+        tracks.extend(page)
+        totals = [int(w[6:]) for w in words if w.startswith('count:') and w[6:].isdigit()]
+        offset += len(page)
+        if not page and totals and offset < totals[0]:
+            raise SuiteError('library pagination ended before count')
+        if not page or (totals and offset >= totals[0]):
+            break
+        if offset > 1000000:
+            raise SuiteError('library pagination limit')
+    albums = collections.defaultdict(list)
+    for track in tracks:
+        albums[track.get('album_id', '')].append(track)
+    count = max(4, joins + 1)
+    chosen = {}
+    for kind in ('alac', 'flac'):
+        if not any(s.startswith(kind) for s in scenarios):
+            continue
+        if kind + '-off' in scenarios:
+            candidates = [overrides[kind]] if overrides.get(kind) else sorted(albums, key=lambda x: (len(x), x))
+            for album in candidates:
+                group = albums.get(album, [])
+                good = [t for t in group if eligible(t)]
+                if group and all(codec(t) == kind for t in group) and len(good) >= count:
+                    chosen[kind + '-off'] = good[:count]
+                    break
+            if kind + '-off' not in chosen:
+                raise SuiteError(f'no all-{kind.upper()} album with {count} eligible tracks' +
+                                 (f' (override {overrides[kind]})' if overrides.get(kind) else ''))
+        if kind + '-on' in scenarios:
+            distinct = {}
+            for track in tracks:
+                if codec(track) == kind and eligible(track):
+                    distinct.setdefault(track['album_id'], track)
+            if len(distinct) < count:
+                raise SuiteError(f'need {count} different albums with eligible {kind.upper()} tracks')
+            chosen[kind + '-on'] = list(distinct.values())[:count]
+    return chosen
+
+
+def assess(path, scenario, joins):
+    with path.with_suffix('.tsv').open(newline='') as stream:
+        rows = list(csv.DictReader(stream, delimiter='\t'))
+    completed = [r for r in rows if r['pair_status'] == 'completed']
+    audible = [r for r in rows if number(r['audible_start']) >= 0]
+    counts = collections.Counter(r['lms_matches_audible'] for r in completed)
+    faults = [r['fault'] for r in rows if r['fault']]
+    reasons = []
+    if 'LMS read-ahead OK' not in path.read_text():
+        reasons.append('read-ahead-insufficient')
+    if len(completed) < joins:
+        reasons.append('too-few-completed-joins')
+    if any(r['lms_matches_audible'] != 'true' for r in completed):
+        reasons.append('lms-audible-not-true')
+    if any(r['codec'].lower() != scenario.split('-')[0] or r['rate'] != '44100' for r in audible):
+        reasons.append('non-native-codec-or-rate')
+    if faults:
+        reasons.append('source-or-storage-fault')
+    overlaps = sorted({r['overlap_frames'] for r in rows if int(r['overlap_frames'])})
+    if scenario.endswith('-on') and '441000' not in overlaps:
+        reasons.append('missing-10s-overlap')
+    return dict(verdict='LMS read-ahead OK' if not reasons else 'FAILED', reasons=reasons,
+                startup=audible[0]['startup_delay_s'] if audible else 'unknown',
+                lead=min((number(r['successor_lead_s']) for r in completed), default=-1),
+                overlap=','.join(overlaps) or '0',
+                matches='/'.join(str(counts[key]) for key in ('true', 'false', 'unknown')),
+                faults='; '.join(faults) or 'none')
+
+
+class Suite:
+    def __init__(self, args, dryrun=DRYRUN, root=Path('/tmp'), ready_timeout=30,
+                 timeout_bonus=120, finish_timeout=20):
+        self.args, self.dryrun, self.root = args, str(dryrun), Path(root)
+        self.ready_timeout, self.timeout_bonus, self.finish_timeout = ready_timeout, timeout_bonus, finish_timeout
+        self.started = time.monotonic()
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')
+        self.work = Path(tempfile.mkdtemp(prefix=f'yeney-queue-suite-{stamp}-', dir=self.root))
+        self.stream = (self.work/'suite.log').open('w', buffering=1)
+        self.cli = CLI(args.server, self.log)
+        self.results, self.saved = {}, {}
+        self.interrupted = False
+        self.owned = False
+
+    def log(self, text):
+        self.stream.write(f'{time.monotonic()-self.started:.3f}s {text}\n')
+
+    def check(self):
+        if self.interrupted:
+            raise Interrupted('interrupted')
+
+    def connected(self):
+        offset = 0
+        while True:
+            words = self.cli.call('players', offset, 100)
+            page = records(words, 'playerindex')
+            if any(p.get('playerid', '').lower() == MAC and p.get('connected') == '1' for p in page):
+                return True
+            if len(page) < 100:
+                return False
+            offset += len(page)
+
+    def save_set(self, name, value):
+        if name not in self.saved:
+            answer = self.cli.call(MAC, 'playerpref', name, '?')
+            if len(answer) != 1 or answer[0] == '?':
+                raise SuiteError('cannot save player preference ' + name)
+            self.saved[name] = answer[0]
+        self.cli.call(MAC, 'playerpref', name, value)
+        if self.cli.call(MAC, 'playerpref', name, '?') != [str(value)]:
+            raise SuiteError('player preference did not stick: ' + name)
+
+    def clean_player(self):
+        errors = []
+        for command in (('stop',), ('playlist', 'clear')):
+            try:
+                self.cli.call(MAC, *command)
+            except SuiteError as error:
+                errors.append(str(error))
+        return errors
+
+    def restore(self):
+        errors = []
+        for name, value in reversed(list(self.saved.items())):
+            # Retry even after a lost response: the setting may have been applied.
+            for attempt in range(3):
+                try:
+                    self.cli.call(MAC, 'playerpref', name, value)
+                    if self.cli.call(MAC, 'playerpref', name, '?') != [value]:
+                        raise SuiteError('restore verification failed')
+                    break
+                except SuiteError as error:
+                    self.log(f'restore {name} attempt {attempt+1}: {error}')
+            else:
+                errors.append('preference-restore-' + name)
+        self.saved.clear()
+        return errors
+
+    def scenario(self, name, tracks):
+        self.check()
+        timeout = sum(number(t['duration']) for t in tracks)/self.args.speed + self.timeout_bonus
+        command = [self.dryrun, '--server', self.args.server, '--speed', str(self.args.speed), '--suite-controlled',
+                   '--seconds', str(max(1, math.ceil(timeout + self.ready_timeout + self.finish_timeout)))]
+        self.log(f'SCENARIO {name} speed={self.args.speed} timeout_wall={timeout:.3f}s command={command!r}')
+        events = queue.Queue()
+        report = None
+        proc = None
+        error = None
+        cleanup_errors = []
+        console = (self.work/(name+'.console')).open('w')
+        self.owned = False
+        try:
+            proc = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                    text=True, start_new_session=True)
+            def read_output():
+                for line in proc.stdout:
+                    console.write(line)
+                    console.flush()
+                    events.put(line.strip())
+            reader = threading.Thread(target=read_output, daemon=True)
+            reader.start()
+            deadline = time.monotonic()+self.ready_timeout
+            while True:
+                self.check()
+                while not events.empty():
+                    line = events.get_nowait()
+                    self.log(name+' '+line)
+                    if line.startswith('Report: '):
+                        report = Path(line[8:])
+                        # The Report line proves that this child owns the dry-run lock.
+                        self.owned = True
+                if proc.poll() is not None:
+                    raise SuiteError('dry-run exited during readiness')
+                if report and self.connected():
+                    break
+                if time.monotonic() >= deadline:
+                    raise SuiteError('player-connect-timeout')
+                time.sleep(.1)
+            cleanup_errors.extend(self.clean_player())
+            if cleanup_errors:
+                raise SuiteError('initial Stop/clear failed')
+            self.save_set('transitionType', '1' if name.endswith('-on') else '0')
+            if name.endswith('-on'):
+                self.save_set('transitionDuration', '10')
+                self.save_set('transitionSmart', '0')
+            # These affect ordering but are preferences too: always restore them.
+            self.save_set('shuffle', '0')
+            self.save_set('repeat', '0')
+            # Exclude automatic reconnect playback from this scenario's measurement.
+            proc.send_signal(signal.SIGUSR1)
+            measurement_deadline = time.monotonic()+self.ready_timeout
+            while True:
+                self.check()
+                try:
+                    line = events.get(timeout=.1)
+                    self.log(name+' '+line)
+                    if line == 'Measurement ready': break
+                except queue.Empty:
+                    pass
+                if proc.poll() is not None or time.monotonic() >= measurement_deadline:
+                    raise SuiteError('measurement-readiness-timeout')
+            self.cli.call(MAC, 'playlistcontrol', 'cmd:load',
+                          'track_id:'+','.join(track['id'] for track in tracks))
+            self.cli.call(MAC, 'play')
+            deadline = time.monotonic()+timeout
+            while True:
+                self.check()
+                reached = False
+                while not events.empty():
+                    line = events.get_nowait()
+                    self.log(name+' '+line)
+                    if line.startswith('Progress: completed_joins='):
+                        reached = int(line.split('=', 1)[1]) >= self.args.joins
+                if reached:
+                    break
+                if proc.poll() is not None:
+                    raise SuiteError('dry-run-exited-before-joins')
+                if time.monotonic() >= deadline:
+                    raise SuiteError('scenario-timeout')
+                time.sleep(.1)
+        except (SuiteError, OSError, ValueError) as exc:
+            error = str(exc)
+            self.log(name+' ERROR '+error)
+        finally:
+            if self.owned:
+                cleanup_errors.extend(self.clean_player())
+                cleanup_errors.extend(self.restore())
+            if proc:
+                if proc.poll() is None:
+                    proc.send_signal(signal.SIGINT)
+                    try:
+                        proc.wait(timeout=self.finish_timeout)
+                    except subprocess.TimeoutExpired:
+                        error = (error+'; ' if error else '')+'dry-run-shutdown-timeout'
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            proc.kill(); proc.wait()
+                reader.join(timeout=2)
+                proc.stdout.close()
+                if proc.returncode:
+                    cleanup_errors.append('dry-run-exit-'+str(proc.returncode))
+            console.close()
+            if report:
+                for suffix in ('.md', '.tsv', '.log'):
+                    source = report.with_suffix(suffix)
+                    if source.is_file():
+                        shutil.copyfile(source, self.work/(name+suffix))
+                    else:
+                        cleanup_errors.append('missing-artifact-'+suffix)
+            self.owned = False
+        try:
+            result = assess(self.work/(name+'.md'), name, self.args.joins)
+        except (OSError, KeyError, ValueError) as exc:
+            result = dict(verdict='FAILED', startup='unknown', lead=-1, overlap='unknown',
+                          matches='0/0/0', faults=str(exc), reasons=['report-unavailable'])
+        result['reasons'].extend(([error] if error else [])+cleanup_errors)
+        if result['reasons']:
+            result['verdict'] = 'FAILED'
+        self.results[name] = result
+        self.log(name+' RESULT '+repr(result))
+
+    def archive(self):
+        for name in self.args.only:
+            if name not in self.results:
+                self.results[name] = dict(verdict='NOT RUN', startup='unknown', lead=-1,
+                    overlap='unknown', matches='0/0/0', faults='none', reasons=['not-run'])
+        def cell(value):
+            return str(value).replace('|', '\\|').replace('\n', ' ')
+        with (self.work/'summary.md').open('w') as out:
+            out.write(f'# Queue suite\n\nSpeed: {self.args.speed}; required completed joins: {self.args.joins}. '
+                      'Delays and leads are simulated seconds. Match counts are completed occurrences: true/false/unknown.\n\n')
+            out.write('| scenario | verdict | first startup delay | minimum successor lead | overlap frames | lms_matches_audible true/false/unknown | faults |\n')
+            out.write('|---|---|---|---|---|---|---|\n')
+            for name in self.args.only:
+                r = self.results[name]
+                out.write('| '+' | '.join(map(cell, (name, r['verdict'], r['startup'], r['lead'], r['overlap'],
+                                                    r['matches'], r['faults']+'; '+', '.join(r['reasons']))))+' |\n')
+        self.log('ARCHIVE '+str(self.work))
+        self.stream.flush()
+        archive = self.root/(self.work.name+'.tar.gz')
+        with tarfile.open(archive, 'w:gz') as pack:
+            for path in sorted(self.work.iterdir()):
+                pack.add(path, arcname=path.name)
+        latest = self.root/'yeney-queue-suite-latest.tar.gz'
+        with tempfile.NamedTemporaryFile(dir=self.root, prefix='yeney-queue-suite-latest-', delete=False) as staged:
+            temporary = Path(staged.name)
+            with archive.open('rb') as source:
+                shutil.copyfileobj(source, staged)
+        os.replace(temporary, latest)
+        print('Archive: '+str(latest), flush=True)
+
+    def run(self):
+        try:
+            chosen = select(self.cli, self.args.only, self.args.joins,
+                            {'alac': self.args.alac_album, 'flac': self.args.flac_album})
+            with (self.work/'manifest.tsv').open('w', newline='') as out:
+                writer = csv.writer(out, delimiter='\t')
+                writer.writerow(('scenario', 'position', 'track_id', 'title', 'album_id', 'album', 'duration', 'codec', 'samplerate'))
+                for name in self.args.only:
+                    for i, t in enumerate(chosen[name]):
+                        writer.writerow((name, i, t['id'], t.get('title', ''), t['album_id'], t.get('album', ''),
+                                         t['duration'], codec(t), t['samplerate']))
+            for name in self.args.only:
+                self.scenario(name, chosen[name])
+                if self.interrupted or any(reason.startswith('preference-restore-') for reason in self.results[name]['reasons']):
+                    break
+        except (SuiteError, OSError, ValueError) as error:
+            self.log('SUITE ERROR '+str(error))
+            for name in self.args.only:
+                self.results.setdefault(name, dict(verdict='FAILED', startup='unknown', lead=-1,
+                    overlap='unknown', matches='0/0/0', faults='none', reasons=[str(error)]))
+        finally:
+            # Even selection failures get a manifest and a diagnostic archive.
+            if not (self.work/'manifest.tsv').exists():
+                (self.work/'manifest.tsv').write_text('scenario\tposition\ttrack_id\ttitle\talbum_id\talbum\tduration\tcodec\tsamplerate\n')
+            self.archive()
+            self.stream.close()
+        failures = [name+': '+', '.join(self.results[name]['reasons']) for name in self.args.only
+                    if self.results[name]['verdict'] != 'LMS read-ahead OK']
+        print('SUITE FAILED: '+'; '.join(failures) if failures else 'SUITE OK', flush=True)
+        return 1 if failures else 0
+
+
+def arguments(argv=None):
+    parser = argparse.ArgumentParser(prog='/usr/local/bin/yeney-queue-suite', description=__doc__)
+    parser.add_argument('--server', required=True)
+    parser.add_argument('--speed', type=float, default=4)
+    parser.add_argument('--joins', type=int, default=3)
+    parser.add_argument('--only', default=','.join(SCENARIOS))
+    parser.add_argument('--alac-album')
+    parser.add_argument('--flac-album')
+    args = parser.parse_args(argv)
+    args.only = args.only.split(',')
+    if (not args.server or ':' in args.server or not math.isfinite(args.speed) or args.speed <= 0
+            or args.joins < 1 or len(set(args.only)) != len(args.only)
+            or any(name not in SCENARIOS for name in args.only)
+            or any(value is not None and not value.isdigit() for value in (args.alac_album, args.flac_album))):
+        parser.error('invalid server, speed, joins, scenario or album id')
+    return args
+
+
+def main(argv=None, *, dryrun=DRYRUN, root=Path('/tmp'), **timings):
+    args = arguments(argv)
+    lock = os.open(Path(root)/'yeney-queue-suite.lock', os.O_RDWR|os.O_CREAT|os.O_CLOEXEC|os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(lock)
+        print('SUITE FAILED: another suite is running', flush=True)
+        return 1
+    suite = Suite(args, dryrun=dryrun, root=root, **timings)
+    old = {}
+    def interrupt(signum, frame):
+        suite.interrupted = True  # Do not interrupt preference restoration.
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            old[sig] = signal.signal(sig, interrupt)
+        return suite.run()
+    finally:
+        for sig, handler in old.items():
+            signal.signal(sig, handler)
+        os.close(lock)
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except (OSError, SuiteError) as error:
+        print('SUITE FAILED: '+str(error), flush=True)
+        raise SystemExit(1)
