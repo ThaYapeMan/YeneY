@@ -4,10 +4,12 @@
 #include <cmath>
 namespace queue_audio {
 double CoreQueueSink::now() const {
-    return std::chrono::duration<double>(std::chrono::steady_clock::now() - epoch).count();
+    return std::chrono::duration<double>(std::chrono::steady_clock::now() - epoch).count() * clockSpeed;
 }
-CoreQueueSink::CoreQueueSink(const std::string &room, Config c, double seconds)
-    : store(room, c), budget(seconds) {
+CoreQueueSink::CoreQueueSink(const std::string &room, Config c, double seconds, double speed)
+    : store(room, c), budget(seconds), clockSpeed(speed) {
+    if (!std::isfinite(speed) || speed <= 0)
+        throw std::invalid_argument("invalid queue clock speed");
     if (!std::isfinite(seconds) || seconds < 1 || seconds > 600)
         throw std::invalid_argument("invalid queue job seconds");
     worker = std::thread([this] { work(); });
@@ -356,7 +358,7 @@ void CoreQueueSink::recordLms(uint64_t id, QueueRecord::LmsSample sample) {
     std::lock_guard<std::mutex> lock(mutex);
     auto &r = records.at(id);
     if (sample.matches && !*sample.matches) {
-        r.mismatchedSeconds += 1;
+        r.mismatchedSeconds += clockSpeed;
         if (mismatchSince < 0)
             mismatchSince = sample.stamp;
         r.mismatchRun = sample.stamp - mismatchSince;

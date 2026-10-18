@@ -6,12 +6,14 @@
 #include "third_party/yeney-core/core/player.h"
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <csignal>
 #include <ctime>
 #include <fcntl.h>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <sys/file.h>
 #include <thread>
 #include <unistd.h>
@@ -22,11 +24,12 @@ extern "C" void stopSignal(int) { stopped = true; }
 int main(int argc, char **argv) {
     std::string server;
     unsigned seconds = 900;
+    double speed = 1;
     bool keep = false, transcoded = false;
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--help") {
-            std::cout << "yeney-queue-dryrun --server <ip> [--seconds 900] "
+            std::cout << "yeney-queue-dryrun --server <ip> [--seconds 900] [--speed 1.0] "
                          "[--keep] [--transcoded]\nOwner-run only; select Queue Test "
                          "(YeneY) in "
                          "LMS. No Sonos or room-service access.\n";
@@ -40,7 +43,17 @@ int main(int argc, char **argv) {
             server = argv[++i];
         else if (a.rfind("--server=", 0) == 0)
             server = a.substr(9);
-        else if (a == "--seconds" && i + 1 < argc) {
+        else if (a == "--speed" && i + 1 < argc) {
+            try {
+                std::string value = argv[++i];
+                size_t used = 0;
+                speed = std::stod(value, &used);
+                if (used != value.size() || !std::isfinite(speed) || speed <= 0)
+                    return 2;
+            } catch (...) {
+                return 2;
+            }
+        } else if (a == "--seconds" && i + 1 < argc) {
             try {
                 std::string value = argv[++i];
                 if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos)
@@ -78,7 +91,7 @@ int main(int argc, char **argv) {
     try {
         queue_audio::Config storage;
         storage.root = "/tmp/yeney-queue-dryrun";
-        queue_audio::CoreQueueSink sink("QueueTest", storage);
+        queue_audio::CoreQueueSink sink("QueueTest", storage, 30, speed);
         storeOpened = true;
         yeney::Config cfg;
         cfg.server = server;
@@ -130,7 +143,7 @@ int main(int argc, char **argv) {
         } joinOnExit{core};
         std::cout << "Play an album to Queue Test (YeneY), first crossfade off, "
                      "then on.\nReport: "
-                  << base << ".md\n";
+                  << base << ".md" << std::endl;
         using Clock = std::chrono::steady_clock;
         auto start = Clock::now(), last = start;
         double progress = 0;
@@ -139,10 +152,12 @@ int main(int argc, char **argv) {
         struct CliResult {
             uint64_t id;
             std::vector<std::string> values;
+            double elapsed, stamp;
         };
         std::mutex cliMutex;
         std::vector<CliResult> cliResults;
         std::atomic<uint64_t> cliActive{0};
+        std::atomic<double> cliElapsed{0};
         std::atomic_bool cliStop{false};
         std::thread cli([&] {
             auto next = Clock::now();
@@ -151,6 +166,7 @@ int main(int argc, char **argv) {
                 if (Clock::now() >= next) {
                     next += std::chrono::seconds(1);
                     const auto id = cliActive.load();
+                    const double elapsed = cliElapsed.load(), stamp = sink.secondsSinceStart();
                     std::string raw;
                     auto values = queue_audio::pollLms(server, 9090, &raw);
                     {
@@ -168,7 +184,7 @@ int main(int argc, char **argv) {
                     }
                     if (id && id == cliActive.load()) {
                         std::lock_guard<std::mutex> lock(cliMutex);
-                        cliResults.push_back({id, std::move(values)});
+                        cliResults.push_back({id, std::move(values), elapsed, stamp});
                     }
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -183,6 +199,8 @@ int main(int argc, char **argv) {
                     thread.join();
             }
         } cliJoin{cli, cliStop};
+        size_t reportedJoins = SIZE_MAX;
+        auto nextProgress = Clock::now();
         while (!stopped && Clock::now() - start < std::chrono::seconds(seconds)) {
             auto now = Clock::now();
             double dt = std::chrono::duration<double>(now - last).count();
@@ -217,7 +235,7 @@ int main(int argc, char **argv) {
                 if (r.source.occurrence != active)
                     continue;
                 if (!sink.isPaused())
-                    progress += dt * r.source.rate;
+                    progress += dt * speed * r.source.rate;
                 const uint64_t total = (*length - 44) / 6, available = r.item->producedFrames();
                 if (progress > available)
                     progress = available; // real underrun, never advance through absent PCM
@@ -231,7 +249,15 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
-            cliActive = active ? sink.audibleOccurrence() : 0;
+            const auto audibleId = active ? sink.audibleOccurrence() : 0;
+            for (const auto &r : rows)
+                if (r.source.occurrence == audibleId && r.source.rate) {
+                    const auto frame = sink.audibleFrames();
+                    cliElapsed = frame > r.first + r.prefixFrames
+                                     ? double(frame - r.first - r.prefixFrames) / r.source.rate
+                                     : 0;
+                }
+            cliActive = audibleId;
             std::vector<CliResult> samples;
             {
                 std::lock_guard<std::mutex> lock(cliMutex);
@@ -243,11 +269,19 @@ int main(int argc, char **argv) {
                 if (it == rows.end())
                     continue;
                 queue_audio::QueueRecord::LmsSample value;
-                value.stamp = sink.secondsSinceStart();
+                value.stamp = sample.stamp;
+                value.audibleElapsed = sample.elapsed;
                 if (sample.values.size() == 3) {
                     value.index = sample.values[0];
                     value.time = sample.values[1];
                     value.title = sample.values[2];
+                    try {
+                        size_t used = 0;
+                        double displayed = std::stod(value.time, &used);
+                        if (used == value.time.size() && std::isfinite(displayed))
+                            value.timeErrorWall = (displayed - sample.elapsed) / speed;
+                    } catch (...) {
+                    }
                     value.matches = value.index == std::to_string(it->expectedIndex);
                 }
                 sink.recordLms(sample.id, value);
@@ -256,6 +290,15 @@ int main(int argc, char **argv) {
                     << " expected_index=" << it->expectedIndex << " index=" << value.index
                     << " time=" << value.time << " title=" << value.title << " lms_matches_audible="
                     << (value.matches ? (*value.matches ? "true" : "false") : "unknown") << std::endl;
+            }
+            if (now >= nextProgress) {
+                std::ostringstream md, tsv;
+                auto verdict = queue_audio::writeReadAheadReport(sink.snapshot(), md, tsv, speed);
+                if (verdict.pairs != reportedJoins) {
+                    reportedJoins = verdict.pairs;
+                    std::cout << "Progress: completed_joins=" << reportedJoins << std::endl;
+                }
+                nextProgress = now + std::chrono::milliseconds(100);
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
@@ -278,7 +321,8 @@ int main(int argc, char **argv) {
             log << "worker fault: " << e.what() << '\n';
         }
         std::ofstream tsv(base + ".tsv"), report(base + ".md");
-        auto verdict = queue_audio::writeReadAheadReport(rows, report, tsv);
+        auto verdict =
+            queue_audio::writeReadAheadReport(rows, report, tsv, speed, sink.wallSecondsSinceStart());
         std::cout << verdict.line() << "; worst lead " << verdict.worst << " s\n";
         if (playerError)
             std::rethrow_exception(playerError);

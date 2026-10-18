@@ -167,8 +167,8 @@ class DryRunTests(unittest.TestCase):
                     errors.append(error)
         thread = threading.Thread(target=serve_cli)
         thread.start()
-        sources = [HTTP(wav()), HTTP(wav())]
-        proc = subprocess.Popen([str(ROOT/'yeney-queue-dryrun'), '--server', '127.0.0.1', '--seconds', '8'],
+        sources = [HTTP(wav(128000)), HTTP(wav(128000))]
+        proc = subprocess.Popen([str(ROOT/'yeney-queue-dryrun'), '--server', '127.0.0.1', '--seconds', '10', '--speed', '4'],
                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             lms.accept()
@@ -193,6 +193,13 @@ class DryRunTests(unittest.TestCase):
             self.assertGreaterEqual(len(queries), 15)
             self.assertFalse(errors, errors)
             self.assertIn('LMS mismatched seconds: 0', path.read_text())
+            self.assertIn('Progress: completed_joins=1', stdout)
+            self.assertIn('LMS read-ahead OK', path.read_text())
+            self.assertAlmostEqual(float(rows[0]['audible_end']) / 4, float(rows[0]['audible_end_wall']), places=3)
+            self.assertGreater(float(rows[0]['audible_end'])-float(rows[0]['audible_start']), 15)
+            self.assertLess(float(rows[0]['audible_end_wall'])-float(rows[0]['audible_start_wall']), 4.2)
+            self.assertTrue(any(p.get('event') == 'STMt' and p['elapsed'] > 10000 for p in lms.packets))
+            print('PASS accelerated queue clock: 4x PCM audibility, simulated STMt elapsed, dual report clocks and live completed-join progress')
             print('PASS real dry-run: progressive audible startup <2 s, STMs before STMd, LMS matches both audible items; encoded LMS echo decoded; raw-MAC CLI at 1 Hz')
         finally:
             if proc.poll() is None:

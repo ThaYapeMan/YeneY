@@ -21,6 +21,7 @@ struct QueueRecord {
         double stamp;
         std::string index, time, title;
         std::optional<bool> matches;
+        double audibleElapsed = -1, timeErrorWall = -1;
     };
     std::vector<LmsSample> lms;
     double mismatchedSeconds = 0, mismatchRun = 0;
@@ -38,7 +39,7 @@ class CoreQueueSink : public yeney::Sink {
     std::deque<Job> jobs;
     std::thread worker;
     bool closing = false, busy = false, paused = false;
-    double staged = 0, budget, mismatchSince = -1;
+    double staged = 0, budget, mismatchSince = -1, clockSpeed;
     std::map<uint64_t, QueueRecord> records;
     std::deque<uint64_t> descriptorOrder;
     std::deque<yeney::AudibleStart> audibleSignals;
@@ -57,7 +58,7 @@ class CoreQueueSink : public yeney::Sink {
     void finish(const yeney::ItemBoundary &);
 
 public:
-    explicit CoreQueueSink(const std::string &room, Config config, double seconds = 30);
+    explicit CoreQueueSink(const std::string &room, Config config, double seconds = 30, double speed = 1);
     ~CoreQueueSink() override;
     bool decodeAhead() const override { return true; }
     uint32_t maxSampleRate() const override { return 192000; }
@@ -83,6 +84,7 @@ public:
     void waitIdle();
     std::vector<QueueRecord> snapshot() const;
     double secondsSinceStart() const { return now(); }
+    double wallSecondsSinceStart() const { return now() / clockSpeed; }
     void pause() override;
     void resume() override;
     void stop() override;

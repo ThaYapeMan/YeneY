@@ -13,7 +13,7 @@ struct ReadAheadVerdict {
     std::string line() const { return ok ? "LMS read-ahead OK" : "LMS read-ahead INSUFFICIENT"; }
 };
 inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &rows, std::ostream &report,
-                                             std::ostream &tsv) {
+                                             std::ostream &tsv, double speed = 1, double wallSeconds = -1) {
     auto cell = [](const std::string &text) {
         std::string out;
         for (char c : text) {
@@ -42,7 +42,9 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
              "frames\tpublication\tfault\tcodec\tstartup_delay_s"
              "\tpair_status\texpected_lms_index\tlms_poll_stamp\tlms_playlist_"
              "index\tlms_time\tlms_title"
-             "\tlms_matches_audible\tmismatched_seconds\n";
+             "\tlms_matches_audible\tmismatched_seconds\tspeed\tstrm_wall\taudible_start_wall\taudible_end_"
+             "wall\tdecode_complete_wall\tSTMd_wall\tnext_strm_wall\tSTMs_wall\tsuccessor_lead_wall_"
+             "s\tstartup_delay_wall_s\tlms_audible_elapsed_s\tlms_time_error_wall_s\n";
     ReadAheadVerdict v;
     size_t polls = 0, known = 0;
     for (size_t i = 0; i < rows.size(); ++i) {
@@ -95,7 +97,7 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
             v.reasons += " lms-track-mismatch";
         }
         v.mismatchedSeconds += r.mismatchedSeconds;
-        std::ostringstream stamps, indices, times, titles;
+        std::ostringstream stamps, indices, times, titles, elapsed, errors;
         bool unknown = r.lms.empty(), mismatch = false;
         for (size_t j = 0; j < r.lms.size(); ++j) {
             if (j) {
@@ -103,6 +105,8 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
                 indices << '|';
                 times << '|';
                 titles << '|';
+                elapsed << '|';
+                errors << '|';
             }
             const auto &sample = r.lms[j];
             ++polls;
@@ -112,6 +116,8 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
             indices << sample.index;
             times << sample.time;
             titles << cell(sample.title);
+            elapsed << sample.audibleElapsed;
+            errors << sample.timeErrorWall;
             unknown = unknown || !sample.matches;
             mismatch = mismatch || (sample.matches && !*sample.matches);
         }
@@ -132,7 +138,13 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
               << (mismatch  ? "false"
                   : unknown ? "unknown"
                             : "true")
-              << '\t' << r.mismatchedSeconds << '\n';
+              << '\t' << r.mismatchedSeconds << '\t' << speed << '\t' << (r.strm < 0 ? -1 : r.strm / speed)
+              << '\t' << (r.audible < 0 ? -1 : r.audible / speed) << '\t' << (end < 0 ? -1 : end / speed)
+              << '\t' << (r.decoded < 0 ? -1 : r.decoded / speed) << '\t'
+              << (r.stmd < 0 ? -1 : r.stmd / speed) << '\t' << (next < 0 ? -1 : next / speed) << '\t'
+              << (r.stms < 0 ? -1 : r.stms / speed) << '\t' << (lead < 0 ? -1 : lead / speed) << '\t'
+              << (r.audible >= 0 && r.strm >= 0 ? (r.audible - r.strm) / speed : -1) << '\t' << elapsed.str()
+              << '\t' << errors.str() << '\n';
     }
     if (!v.pairs) {
         v.ok = false;
@@ -145,10 +157,14 @@ inline ReadAheadVerdict writeReadAheadReport(const std::vector<QueueRecord> &row
     if (polls && (polls - known) * 10 > polls)
         report << "WARNING: LMS CLI unknown for more than 10% of audible polls (" << polls - known << "/"
                << polls << ").\n\n";
+    report << "Speed factor: " << speed << "; wall-clock duration: " << wallSeconds << " s.\n\n"
+           << "LMS time is compared with simulated audible elapsed; both are divided by speed for the "
+              "lms_time_error_wall_s diagnostic. STMt already carries simulated elapsed; multiplying "
+              "LMS time again would count speed twice. LMS interpolates between updates in wall time.\n\n";
     tsv << table.str();
     report << "# Queue mode phase 2: LMS read-ahead\n\nPlayer: Queue Test "
               "(YeneY), MAC 02:59:51:54:00:01. No "
-              "Sonos.\n\nTimes are monotonic seconds from sink creation; -1 "
+              "Sonos.\n\nTimes are simulated monotonic seconds from sink creation; -1 "
               "means unobserved, not "
               "zero.\n\n```tsv\n"
            << table.str() << "```\n\nSuccessor pairs: " << v.pairs << "; worst lead: " << v.worst
