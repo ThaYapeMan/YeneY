@@ -2,6 +2,7 @@
 #pragma once
 #include "soap.h"
 #include <functional>
+#include <cstdint>
 namespace upnp {
 // Serialized coordinator-only action boundary. The caller supplies a transport
 // bound to its coordinator lease, never a member speaker.
