@@ -37,15 +37,15 @@ int main() {
     assert(parseAvTransport(wrap("<Event><InstanceID val='0'/></Event>"), u) && !u.state && !u.uri);
     assert(!parseRenderingControl(wrap("<Event><InstanceID val='0'><Volume channel='Master' val='101'/></InstanceID></Event>"), u));
     std::cout << "PASS: AVTransport, RenderingControl and topology golden parsers; malformed, absent, metadata-only and wrong-instance deltas\n";
-    assert(parseAvTransport(wrap("<Event><InstanceID val='0'><CurrentTrack val='3'/><CurrentTrackURI val='owned-3'/><RelativeTimePosition val='0:01:02'/></InstanceID></Event>"), u));
+    assert(parseAvTransport(wrap("<Event><InstanceID val='0'><CurrentTrack val='3'/><CurrentTrackURI val='owned-3'/><RelativeTimePosition val='0:01:02'/></InstanceID></Event>"), u, true));
     assert(u.trackNumber == 3 && u.trackUri == "owned-3" && u.positionMs == 62000);
     SpeakerState queueState; queueState.apply(u, StateClock::now());
     StateUpdate stale; stale.startedRevision = 0; stale.trackNumber = 2; stale.trackUri = "owned-2"; stale.positionMs = 1000;
     queueState.apply(stale, StateClock::now());
     assert(queueState.trackNumberKnown && queueState.trackNumber == 3 && queueState.trackUri == "owned-3" && queueState.positionMs == 62000);
     for (const auto bad : {"-1", "4294967296", "3x", ""})
-        assert(!parseAvTransport(wrap("<Event><InstanceID val='0'><CurrentTrack val='"+std::string(bad)+"'/></InstanceID></Event>"), u));
-    assert(!parseAvTransport(wrap("<Event><InstanceID val='0'><RelativeTimePosition val='0:99:00'/></InstanceID></Event>"), u));
+        assert(!parseAvTransport(wrap("<Event><InstanceID val='0'><CurrentTrack val='"+std::string(bad)+"'/></InstanceID></Event>"), u, true));
+    assert(!parseAvTransport(wrap("<Event><InstanceID val='0'><RelativeTimePosition val='0:99:00'/></InstanceID></Event>"), u, true));
     std::cout << "PASS queue GENA identity: TrackNumber/URI/RelTime retained together, stale polls fenced, invalid ordinals rejected\n";
     SpeakerState state; const auto t = StateClock::time_point{};
     StateUpdate start; start.state = "STOPPED"; state.apply(start, t);

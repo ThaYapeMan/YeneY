@@ -8,13 +8,9 @@ namespace queue_audio {
 // One instance belongs to one room and one process session. Readers retain
 // immutable assets independently; revoking an epoch prevents new readers.
 class Route {
-    const std::string room, session;
-    mutable std::mutex mutex;
-    struct Entry {
-        uint64_t epoch, revision;
-        std::shared_ptr<Item> item;
-    };
-    std::map<std::string, Entry> entries;
+    struct State;
+    std::shared_ptr<State> state;
+    static bool serve(const std::shared_ptr<State> &, upnp::StreamRequest &);
 
 public:
     Route(std::string room, std::string session);

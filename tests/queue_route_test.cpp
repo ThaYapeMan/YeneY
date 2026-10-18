@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_route.h"
 #include "upnp/http_server.h"
+#include <arpa/inet.h>
 #include <cassert>
 #include <future>
 #include <iostream>
+#include <sys/socket.h>
 #include <unistd.h>
 using namespace queue_audio;
 int main() {
@@ -69,6 +71,39 @@ int main() {
         assert(refused);
         route.revoke(2);
         assert(get(url).find("404") != std::string::npos);
+        std::string retained;
+        {
+            Route temporary("Study", "retained-session");
+            temporary.registerWith(server);
+            retained = temporary.publish("Study", 4, 1, item);
+        }
+        auto request = [&](const std::string &method, const std::string &range) {
+            int fd = socket(AF_INET, SOCK_STREAM, 0);
+            assert(fd >= 0);
+            sockaddr_in address{};
+            address.sin_family = AF_INET;
+            address.sin_port = htons(server.port());
+            address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            assert(!connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)));
+            timeval timeout{3, 0};
+            setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+            const auto wire =
+                method + " " + retained + " HTTP/1.1\r\nHost: localhost\r\nRange: " + range + "\r\n\r\n";
+            assert(send(fd, wire.data(), wire.size(), MSG_NOSIGNAL) == ssize_t(wire.size()));
+            std::string response;
+            char bytes[8192];
+            ssize_t n;
+            while ((n = recv(fd, bytes, sizeof(bytes), 0)) > 0)
+                response.append(bytes, n);
+            assert(n == 0);
+            close(fd);
+            return response;
+        };
+        auto network = request("GET", "bytes=45-103");
+        assert(network.substr(network.find("\r\n\r\n") + 4) == body.substr(45, 59));
+        auto head = request("HEAD", "bytes=-17");
+        assert(head.find("206 Partial Content") != std::string::npos &&
+               head.size() == head.find("\r\n\r\n") + 4);
         server.shutdown();
     }
     std::filesystem::remove_all(temp);

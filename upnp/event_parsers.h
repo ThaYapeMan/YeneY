@@ -20,7 +20,7 @@ inline bool lastChangeInstance(const std::string& body, XmlNode& instance) {
     }
     return false;
 }
-inline bool parseAvTransport(const std::string& body, StateUpdate& result) {
+inline bool parseAvTransport(const std::string& body, StateUpdate& result, bool queueFields = false) {
     XmlNode i;
     if (!lastChangeInstance(body, i)) return false;
     StateUpdate u; u.source = Source::Event;
@@ -30,7 +30,7 @@ inline bool parseAvTransport(const std::string& body, StateUpdate& result) {
     val("TransportState", u.state); val("TransportStatus", u.status);
     val("CurrentTransportStatus", u.status); val("AVTransportURI", u.uri);
     val("CurrentTrackURI", u.trackUri); val("CurrentTrackDuration", u.duration);
-    if (const auto track = i.child("CurrentTrack")) {
+    if (const auto track = queueFields ? i.child("CurrentTrack") : nullptr) {
         const auto text = track->attribute("val");
         uint64_t value = 0;
         if (text.empty()) return false;
@@ -40,7 +40,7 @@ inline bool parseAvTransport(const std::string& body, StateUpdate& result) {
         }
         u.trackNumber = uint32_t(value);
     }
-    if (const auto position = i.child("RelativeTimePosition")) {
+    if (const auto position = queueFields ? i.child("RelativeTimePosition") : nullptr) {
         const auto text = position->attribute("val");
         unsigned long long h, m, s; char tail;
         if (sscanf(text.c_str(), "%llu:%llu:%llu%c", &h, &m, &s, &tail) != 3 || m >= 60 || s >= 60 ||

@@ -10,47 +10,59 @@ bool token(const std::string &s) {
                std::string::npos;
 }
 } // namespace
-Route::Route(std::string r, std::string s) : room(std::move(r)), session(std::move(s)) {
-    if (room.empty() || !token(session))
+struct Route::State {
+    const std::string room, session;
+    std::mutex mutex;
+    struct Entry {
+        uint64_t epoch, revision;
+        std::shared_ptr<Item> item;
+    };
+    std::map<std::string, Entry> entries;
+    State(std::string room, std::string session) : room(std::move(room)), session(std::move(session)) {}
+};
+Route::Route(std::string r, std::string s) {
+    if (r.empty() || !token(s))
         throw std::invalid_argument("invalid queue route owner");
+    state = std::make_shared<State>(std::move(r), std::move(s));
 }
 void Route::registerWith(upnp::StreamServer &server) {
-    // Capture shared room state in the production owner; destroy the HTTP
-    // listener before the route. Existing stream routes are unaffected.
+    // Each connection retains room state, even if the controller is released.
+    // Revocation fences new readers while existing readers retain their asset.
     server.registerStream("queue", "/music/queue.wav", "YeneY queue", "audio/wav", "",
-                          [this](upnp::StreamRequest &r) { return serve(r); });
+                          [held = state](upnp::StreamRequest &r) { return serve(held, r); });
 }
 std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t revision,
                            const std::shared_ptr<Item> &item) {
-    if (owner != room || !item || !item->contentLength() || !token(item->descriptor().occurrence))
+    if (owner != state->room || !item || !item->contentLength() || !token(item->descriptor().occurrence))
         throw std::invalid_argument("queue route ownership or unpublished item");
     const auto id = item->descriptor().occurrence;
     const auto key = std::to_string(epoch) + "/" + id + "/" + std::to_string(revision);
-    std::lock_guard<std::mutex> lock(mutex);
-    auto inserted = entries.emplace(key, Entry{epoch, revision, item});
+    std::lock_guard<std::mutex> lock(state->mutex);
+    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, item});
     if (!inserted.second && inserted.first->second.item != item)
         throw std::logic_error("immutable queue URL reused");
-    return "/music/queue.wav?session=" + session + "&epoch=" + std::to_string(epoch) + "&item=" + id +
+    return "/music/queue.wav?session=" + state->session + "&epoch=" + std::to_string(epoch) + "&item=" + id +
            "&revision=" + std::to_string(revision);
 }
 void Route::revoke(uint64_t epoch) {
-    std::lock_guard<std::mutex> lock(mutex);
-    for (auto i = entries.begin(); i != entries.end();) {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    for (auto i = state->entries.begin(); i != state->entries.end();) {
         if (i->second.epoch == epoch)
-            i = entries.erase(i);
+            i = state->entries.erase(i);
         else
             ++i;
     }
 }
-bool Route::serve(upnp::StreamRequest &r) {
+bool Route::serve(upnp::StreamRequest &r) { return serve(state, r); }
+bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
     if (r.path() != "/music/queue.wav")
         return false;
     std::shared_ptr<Item> item;
-    if (r.parameter("session") == session) {
+    if (r.parameter("session") == state->session) {
         const auto key = r.parameter("epoch") + "/" + r.parameter("item") + "/" + r.parameter("revision");
-        std::lock_guard<std::mutex> lock(mutex);
-        auto i = entries.find(key);
-        if (i != entries.end())
+        std::lock_guard<std::mutex> lock(state->mutex);
+        auto i = state->entries.find(key);
+        if (i != state->entries.end())
             item = i->second.item;
     }
     if (!item) {
