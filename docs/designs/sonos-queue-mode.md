@@ -742,3 +742,30 @@ first FLAC follows another codec, the audible occurrence anchors that index;
 uncertain identity keeps sealed publication. Unknown
 identity/count or a deadline retains sealed publication with a reason. The
 download never supplies decoder input. Stream capability does not use this path.
+
+
+### Phase 3 implementation checkpoint
+
+Phase 2 is field-qualified by the owner's 18 October unattended suite at bridge
+`f4ce585`, core `7f244e5`: four ALAC/FLAC scenarios passed with transitions off
+or 10 seconds, LMS identity matched 12/12 completed occurrences, startup was
+about one second and successor leads were at least 57 seconds.
+
+The phase 3 support code now includes a separately registered finite WAV route
+with room/session/epoch/revision checks, independent readers and retained handler
+lifetime; native WAV music-track DIDL; optional queue-only TrackNumber/RelTime
+event fields with stale-poll fencing; isolated queue SOAP action builders; and
+a callback-driven queue ownership policy. Ownership tests verify SaveQueue
+identity before mutation, retain five prefixed backups, preserve foreign entries
+on release and restore native crossfade after a failed fenced removal. These
+are local component tests, not an integrated fake-speaker acceptance suite.
+
+**Phase 3 playback is not implemented or enabled yet.** These components are not
+wired into `runCoreClient` or the room controller. Production remains stream
+only. Outstanding work includes startup mode selection, coordinator-fenced SOAP
+and saved-playlist discovery, published-asset mirroring, speaker-driven core
+audibility, both directions of controls, latched tail-preserving fallback, and
+the unattended device suite with its fake-device integration tests. Do not
+attempt phase 3 device qualification from this checkpoint. The existing owner
+instructions still describe the qualified phase 2 dry-run suite. Its final
+SUITE verdict is now included in both archived `summary.md` and `suite.log`.
