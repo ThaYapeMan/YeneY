@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -42,6 +42,7 @@ test: export YENEY_TIMING_LOCKED_EVERY_S = 5
 test: export YENEY_AUDIBLE_OFFSET_MS = 0
 test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	./queue-route-test
 	./queue-item-store-test
 	./core-queue-sink-test
 	YENEY_TIMING_PROBE=1 YENEY_TIMING_PUBLISH=1 ./timing-tap-test
@@ -242,9 +243,9 @@ oct12-boundary-test: tests/oct12_boundary_test.cpp core_sonos.cpp core_sonos.h p
 test: oct12-boundary-test
 
 # Independent phase 1 library; no playback registration or transport changes.
-queue_item_store.o wav_writer.o: %.o: %.cpp queue_item_store.h wav_writer.h pcm_pack.h
+queue_route.o queue_item_store.o wav_writer.o: %.o: %.cpp queue_item_store.h wav_writer.h pcm_pack.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
-libqueueitems.a: queue_item_store.o wav_writer.o
+libqueueitems.a: queue_item_store.o wav_writer.o queue_route.o
 	ar rcs $@ $^
 queue-item-store-test: tests/queue_item_store_test.cpp libqueueitems.a pcm_pack.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $< libqueueitems.a -lFLAC -pthread
@@ -265,3 +266,7 @@ yeney-queue-dryrun: queue_lms_cli.h queue_flac_metadata.h
 yeney-queue-dryrun: queue_lms_cli.h
 
 test: yeney-queue-dryrun
+
+queue-route-test: tests/queue_route_test.cpp libqueueitems.a upnp/http_server.o upnp/gena.o upnp/xml.o upnp/discovery.o upnp/http.o
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $^ -lFLAC -pthread
+test: queue-route-test

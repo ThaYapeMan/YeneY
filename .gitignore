@@ -54,3 +54,5 @@ field-cold-test
 
 /yeney-queue-dryrun
 /core-queue-sink-test
+
+/queue-route-test
