@@ -178,8 +178,8 @@ class Suite:
                 raise SuiteError('invalid LMS playlist position/time')
             self.source = None  # Preserve the existing playlist byte-for-byte.
         else:
-            favorites = records(self.cli.call('favorites','items','0','100'), 'id')
-            choices = [f for f in favorites if f.get('type') == 'audio' and f.get('url','').startswith(('http://','https://'))]
+            favorites = records(self.cli.call('favorites','items','0','100','want_url:1'), 'id')
+            choices = [f for f in favorites if f.get('hasitems','0') == '0' and f.get('url','').startswith(('http://','https://'))]
             if choices:
                 self.source = ('playlist','play',choices[0]['url'])
             else:

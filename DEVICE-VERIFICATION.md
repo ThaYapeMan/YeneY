@@ -546,7 +546,9 @@ and services are not changed.
 
 The runner plays the existing LMS playlist with temporary repeat-all for
 continuous playback. If it is empty, it chooses an HTTP audio radio favorite;
-if none exists, it loads the first saved LMS playlist. With none of these
+if none exists, it loads the first saved LMS playlist. Favorite lookup explicitly
+requests `want_url:1`, as required by the
+[LMS Favorites CLI](https://preview.lyrion.org/reference/cli/favorites/). With none of these
 available it reports failure without changing playback/configuration. It leaves
 volume and shuffle settings alone. The original playlist contents, repeat,
 index, source time, and play/pause/stop state are restored after the test; a

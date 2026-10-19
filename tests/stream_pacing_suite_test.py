@@ -32,7 +32,8 @@ class FakeCLI:
         if args[0]=='syncgroups':
             return ['syncgroups','sync_members:'+MAC+(',11:22:33:44:55:66' if self.synced else '')]
         if args[0]=='favorites':
-            return ['id:1','type:audio','url:http://127.0.0.1/radio'] if self.favorite else []
+            assert args[-1]=='want_url:1'
+            return ['id:1','hasitems:0','url:http://127.0.0.1/radio'] if self.favorite else []
         if args[0]=='playlists': return ['id:12']
         assert args[0]==MAC, args
         cmd=args[1:]

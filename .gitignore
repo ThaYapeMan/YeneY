@@ -74,3 +74,5 @@ field-cold-test
 /encoded-backpressure-test
 
 /stream-pacing-encoder-test
+
+/stream-metrics-lifetime-test

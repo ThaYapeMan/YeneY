@@ -80,5 +80,8 @@ public:
         return true;
     }
 };
-inline StreamMetrics &streamMetrics() { static StreamMetrics metrics; return metrics; }
+// Core may call exit() from its worker while HTTP/main threads and earlier
+// atexit handlers still sample counters. Keep this bounded registry alive until
+// process termination, independent of static destructor ordering.
+inline StreamMetrics &streamMetrics() { static auto *metrics = new StreamMetrics; return *metrics; }
 }
