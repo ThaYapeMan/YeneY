@@ -11,8 +11,8 @@ inline bool streamPacingSonos() {
     static const bool sonos = [] {
         const char *s = std::getenv("YENEY_STREAM_PACING");
         if (s && std::strcmp(s,"wall") && std::strcmp(s,"sonos"))
-            std::fprintf(stderr,"YENEY_STREAM_PACING invalid; using wall (valid: wall|sonos)\n");
-        return s && !std::strcmp(s,"sonos");
+            std::fprintf(stderr,"YENEY_STREAM_PACING invalid; using sonos (valid: wall|sonos)\n");
+        return !s || std::strcmp(s,"wall") != 0;
     }();
     return sonos;
 }

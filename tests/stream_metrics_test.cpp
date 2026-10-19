@@ -13,6 +13,7 @@ int main() {
     assert(m.tick(60000)); assert(!m.tick(61000)); assert(!m.tick(119999)); assert(m.tick(120000));
     std::string path = "/tmp/stream-pacing-" + bridge::StreamMetrics::hex("fixture") + ".json";
     std::ifstream f(path); std::string line; std::getline(f,line);
+    assert(line.find(bridge::streamPacingSonos() ? "\"mode\":\"sonos\"" : "\"mode\":\"wall\"") != std::string::npos);
     assert(line.find("\"overwrites\":3") != std::string::npos);
     assert(line.find("\"lead_ms\":1000.000") != std::string::npos);
     unlink(path.c_str());

@@ -488,9 +488,11 @@ successful audible poll fails with `lms-cli-unavailable`.
 
 ## Stream pacing selection and measurements
 
-Stream pacing defaults to `YENEY_STREAM_PACING=wall`. A room service may opt in
-with `Environment=YENEY_STREAM_PACING=sonos` in its systemd drop-in; restart that
-room to apply it. Invalid values warn and use `wall`. Sonos pacing enables the
+Stream pacing defaults to `YENEY_STREAM_PACING=sonos`. To opt out per room, run
+`sudo systemctl edit 'yeney@Study'`, add
+`Environment=YENEY_STREAM_PACING=wall` under `[Service]`, and restart only that
+room with `sudo systemctl restart 'yeney@Study'`. Invalid values warn and use
+`sonos`. Sonos pacing enables the
 existing timing estimator, uses the per-UDN drift prior until a fresh fit locks,
 and slews phase corrections at at most 1% without resetting the encoder clock.
 It targets start lead + 500 ms inside the start lead .. start lead + 1000 ms band.
@@ -587,5 +589,14 @@ pct pull 113 /tmp/yeney-stream-pacing-latest.tar.gz /tmp/yeney-stream-pacing-lat
 
 Agents test this runner only with mocked service/CLI operations and loopback
 protocol fixtures. They never execute it against a real LMS or speaker or deploy
-to container 113. The default remains `wall`; switching it requires a later task
-and an owner-reported `PACING OK`.
+to container 113.
+
+On 19 October 2026, the owner qualified Study on bridge `5a686ad` with
+`/usr/local/bin/yeney-stream-pacing-suite --room Study --hours 2`: **PACING OK**.
+The run collected 720 samples at 10-second intervals over one connection, with
+719/720 samples locked, zero overwrites and zero drops. Qualified lead was
+1406–1499 ms, with a 1452 ms median in both hours; measured drift was about
+11.5 ppm. This result supports making Sonos-clock pacing the default.
+
+Other rooms can be qualified with
+`/usr/local/bin/yeney-stream-pacing-suite --room <room> --hours 2`.

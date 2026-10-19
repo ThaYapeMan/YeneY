@@ -234,6 +234,7 @@ and uses the default.
 
 | Setting | Values | Default |
 |---|---|---|
+| `YENEY_STREAM_PACING` | `sonos`: follow the Sonos clock · `wall`: legacy host clock opt-out | `sonos` |
 | `YENEY_AUDIO` | `24/48`: 24-bit FLAC at the source's 44.1/48 kHz rate · `16/44`: legacy 16-bit/44.1 kHz | `24/48` |
 | `YENEY_TITLE_FORMAT` | `artist-title`: "artist - title" · `title`: title only | `artist-title` |
 | `YENEY_STREAM_CONTENT` | `structured`, `plain` or `off`: the radio-text field for other controllers | `structured` |
@@ -248,6 +249,20 @@ and uses the default.
 | `YENEY_LMS_POSITION_FROM_MODEL` | `1`: continuous locked-clock LMS position; `0`: RelTime-only. Requires an active timing probe model. | 1 |
 | `YENEY_TIMING_PUBLISH` | `1`: publish the LampaStream timing contract and core audio tap, only with TIMING_PROBE | off |
 | `YENEY_AUDIBLE_OFFSET_MS` | -500–500 ms acoustic calibration, added to published audible times | `0` |
+
+On 19 October 2026, the owner qualified Study on bridge `5a686ad` with
+`/usr/local/bin/yeney-stream-pacing-suite --room Study --hours 2`: **PACING OK**.
+The run collected 720 samples at 10-second intervals over one connection, with
+719/720 samples locked, zero overwrites and zero drops. Qualified lead was
+1406–1499 ms, with a 1452 ms median in both hours; measured drift was about
+11.5 ppm. This result supports making Sonos-clock pacing the default.
+
+To opt out for a room, add `Environment=YENEY_STREAM_PACING=wall` under
+`[Service]` in that room's systemd override (for example,
+`sudo systemctl edit 'yeney@Study'`), then restart that room. Invalid values
+warn and use `sonos`. Other rooms can be qualified with
+`/usr/local/bin/yeney-stream-pacing-suite --room <room> --hours 2`; see
+[device verification](DEVICE-VERIFICATION.md#unattended-owner-stream-pacing-qualification).
 
 The details of each setting are in [How YeneY works](docs/how-it-works.md).
 

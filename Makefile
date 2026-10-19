@@ -34,6 +34,7 @@ install: yeney yeney-queue-dryrun
 encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
+# Preserve the legacy wire fixtures explicitly; settings tests also exercise the unset default.
 test: export YENEY_STREAM_PACING = wall
 test: export YENEY_PLAYBACK_MODE = stream
 test: export YENEY_START_LEAD_MS = 0
