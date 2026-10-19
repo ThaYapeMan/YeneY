@@ -22,6 +22,7 @@ public:
                                std::shared_ptr<HttpServer> server = {});
     ~OwnSpeakerControl() override;
     void shutdownEvents();
+    void queueEvents(GenaHandler);
     bool discover(const std::string&, const std::string& = {}) override;
     std::vector<std::string> discoverRooms(const std::string& = {}) override;
     std::vector<Speaker> discoverRoomDetails(const std::string& = {}) override;
@@ -53,6 +54,8 @@ private:
     MonitorPolicy monitor;
     std::string monitorLog;
     std::function<void()> eventCallback;
+    GenaHandler queueObserver;
+    std::mutex queueObserverMutex;
     std::shared_ptr<HttpServer> eventServer;
     std::unique_ptr<Subscriptions> subscriptions;
     std::atomic<bool> timingStop{false};

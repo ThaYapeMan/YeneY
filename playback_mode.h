@@ -3,7 +3,7 @@
 #include "upnp/speaker_control.h"
 #include <string>
 namespace bridge {
-// Enable only after part 6 completes controlled fallback and room integration.
+// Enable only after part 7 qualifies the real binary against fake Sonos/LMS.
 inline constexpr bool queuePlaybackReady = false;
 enum class PlaybackMode { Stream, Queue };
 struct PlaybackSelection {

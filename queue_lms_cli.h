@@ -36,7 +36,7 @@ inline std::string decodeLms(const std::string &input) {
 // one bounded attempt. Bind this to ControllerOptions::lmsControl at room
 // start.
 inline bool controlLms(const std::string &host, const std::string &mac, const std::string &command,
-                       unsigned port = 9090) {
+                       unsigned port = 9090, std::string *reply = nullptr) {
     if (mac.size() != 17 || command.find_first_of("\r\n") != std::string::npos)
         return false;
     for (size_t i = 0; i < mac.size(); ++i)
@@ -73,7 +73,8 @@ inline bool controlLms(const std::string &host, const std::string &mac, const st
             if (n <= 0)
                 break;
             response.append(bytes, n);
-            if (response.find('\n') != std::string::npos || response.size() > 4096)
+            if (response.find('\n') != std::string::npos ||
+                response.size() > (reply ? 16 * 1024 * 1024 : 4096))
                 break;
         }
     }
@@ -84,6 +85,10 @@ inline bool controlLms(const std::string &host, const std::string &mac, const st
     auto line = decodeLms(response.substr(0, end));
     if (!line.empty() && line.back() == '\r')
         line.pop_back();
+    if (reply) {
+        *reply = response.substr(0, end);
+        return line.compare(0, mac.size() + 1, mac + " ") == 0;
+    }
     return line == mac + " " + command;
 }
 // Diagnostic-only client. One connection and one deadline cover all three

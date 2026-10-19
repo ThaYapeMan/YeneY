@@ -65,6 +65,10 @@ void OwnSpeakerControl::apply(StateUpdate update) {
         printf("yeney: group room=%s coordinator=%s members=%s\n", logValue(after.room.name).c_str(),
             logValue(after.group.name).c_str(), logValue(groupDescription(after.room)).c_str());
 }
+void OwnSpeakerControl::queueEvents(GenaHandler handler) {
+    std::lock_guard<std::mutex> lock(queueObserverMutex);
+    queueObserver = std::move(handler);
+}
 bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
     auto update = event.update;
     update.source = Source::Event;
@@ -79,6 +83,12 @@ bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
     if (debugEvents) printf("yeney: event service=%s TransportState=%s seq=%u\n",
         serviceName(event.service), logValue(state.snapshot().transport.state).c_str(), event.sequence);
     if (eventCallback) eventCallback();
+    GenaHandler observer;
+    {
+        std::lock_guard<std::mutex> lock(queueObserverMutex);
+        observer = queueObserver;
+    }
+    if (observer) observer(event);
     return true;
 }
 Speaker OwnSpeakerControl::speaker() const { return state.snapshot().room; }

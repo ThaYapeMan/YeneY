@@ -752,13 +752,13 @@ Phase 2 is field-qualified by the owner's 18 October unattended suite at bridge
 or 10 seconds, LMS identity matched 12/12 completed occurrences, startup was
 about one second and successor leads were at least 57 seconds.
 
-**Phase 3b parts 1–5 are done. Parts 6–8 remain.** Production stays on the
+**Phase 3b parts 1–6 are done. Parts 7–8 remain.** Production stays on the
 normal stream path, including eligible standalone `queue` requests: startup logs
 `selected=stream reason=queue-unavailable` once and continues through HELO and
 ordinary stream playback. The previous fatal opt-in guard is removed. Grouped
 rooms retain `group-rate-undecided`. `bridge::queuePlaybackReady` in
 `playback_mode.h` is the single production readiness constant; it must remain
-false until part 6 completes controlled fallback and connects the room runtime. There is no command-line or environment bypass. The controller
+false until part 7 qualifies the real binary against fake Sonos/LMS and opens explicit `queue`. There is no command-line or environment bypass. The controller
 fixture alone compiles with `YENEY_QUEUE_CONTROLLER_TEST`; installed programs do
 not use it. No owner device steps are available yet.
 
@@ -940,7 +940,72 @@ and each foreign-action category with exact preservation
 of foreign entries and one release/request. The fixture joins its core thread
 before destroying the controller so late command echoes cannot outlive it.
 
-Remaining: part 6 controlled, latched stream fallback and active room status; part 7 the complete
-end-to-end audible fake-Sonos acceptance suite; part 8 final phase 3 status and
+Remaining: part 7 the complete end-to-end audible fake-Sonos acceptance suite
+through the real `yeney` binary and opening explicit `queue`; part 8 final phase 3 status and
 device-verification documentation. The unattended physical device suite follows
 in phase 3c. Agents never run against real LMS or speakers or deploy on LXC 113.
+
+
+### Phase 3b part 6: controlled fallback and guarded room runtime
+
+`RoomMode` owns `prepare → active → drain → handoff → active(stream)`.
+Preparation has a 15-second deadline starting at LMS play, not idle service startup. Foreign control, preparation timeout,
+SOAP error, length/storage fault and coordinator/group changes each latch one
+fallback per playback session. A valid current finite item drains at the speaker,
+with only its future entries removed. Projected position and HTTP progress cannot
+end the drain: confirmed RelTime/end or transport stop is required. An unusable
+current asset or foreign control stops only an exact owned URI, confirms Stop,
+and preserves the last confirmed LMS source position. A failed/unconfirmed Stop
+waits for confirmed end, without repeated Stop or an early URI switch. Group
+lease loss never grants playback commands to the old coordinator; its restricted
+cleanup policy still permits exact-owned removals and CrossfadeMode restoration.
+
+Cleanup precedes selecting the existing `CoreSonosSink`/stream transport. Queue
+URLs are revoked even if cleanup fails. Open immutable HTTP bodies may finish;
+they cannot generate speaker evidence or change the new sink. `ModeSink` fences
+PCM/descriptors with a generation. The core's opt-in generation change cancels
+its old HTTP producer, decoder, queued PCM and audible callbacks, flushes the
+selected sink and publishes its new sample-rate capability before readiness.
+The room then issues one raw-MAC CLI continuation at the confirmed playlist
+position/source time (or the successor at a completed finite boundary). No CLI
+retry loop runs. The gap is measured from the confirmed queue endpoint to the
+first confirmed playing stream URI; it includes the one-second evidence poll
+resolution. A stream session remains latched until explicit LMS `q`, a new `s`,
+and a fresh standalone-coordinator readiness check.
+
+`yeney.cpp` constructs `QueueRoom` only for an eligible queue selection. It owns
+the finite HTTP route/controller, queue sink, stream sink and mode router. Its
+worker acquires production CLI playlist snapshots, validates their complete
+count/index, decodes fields and preserves occurrence tokens across edits. Missing
+future assets remain unpublished placeholders. Duplicate edits whose identity
+cannot be resolved fail closed. Metadata/CLI/SOAP work stays off the audio thread.
+The closed `queuePlaybackReady` constant still makes every production `queue`
+request select the original stream client with `queue-unavailable`; no environment
+or command-line bypass exists. Default stream sinks use generation zero and never
+enter the core handoff branch. HTTP constants, stream URLs and stream transport
+ordering are unchanged.
+
+Room diagnostics and the existing pacing JSON expose requested/active mode,
+state/reason, occurrence/epoch/generation, ownership, mirrored successors, last
+fallback, latch and handoff gap. Selection and transitions log room/coordinator,
+mode/reason, occurrence/epoch, old/new rate, promised/actual frames and gap. The
+stream rate remains unknown until confirmed rather than assuming a source rate.
+
+`room-mode-test` covers all triggers, readiness/session latch, blocked Stop,
+generation fencing, snapshot tokens and JSON status. `tests/queue_mode_test.py`
+uses the real controller, finite HTTP/store and loopback SOAP/CLI to verify one
+release/handoff per reason, an intact tail, index/time continuation, URL revocation
+and late reads/events. Core speaker tests exercise generation reset, capability
+publication and subsequent stream playback without duplicate audible starts.
+Existing app/LMS control and closed-guard stream wire fixtures remain required.
+These boundary tests do not replace part 7's acceptance through the real binary.
+
+
+Part 6 validation also requires `LAMPASTREAM_CHECKOUT=/path/to/LampaStream make test`.
+The checkout must have origin `ThaYapeMan/LampaStream` and stays read-only;
+`PYTHONDONTWRITEBYTECODE=1` prevents import cache writes there. The real SHM
+consumer test uses `require_v1=True`, and must print its source path and
+`PASS cross-repo LampaStream SHM consumer (require_v1=True)`. A missing explicit
+checkout or import dependency fails rather than skipping. Dependencies, if
+needed, belong in a virtual environment under `/tmp`, never in the checkout or
+system Python. A skipped consumer is not an accepted validation result.

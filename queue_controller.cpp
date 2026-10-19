@@ -73,7 +73,7 @@ struct QueueController::Impl {
         }
     };
     Expected ownState, echoState, echoToken, echoTime, echoRun;
-    bool fallbackSent = false, cleaning = false;
+    bool fallbackSent = false, cleaning = false, draining = false;
     uint32_t expectedUpdate = 0, observedMs = 0;
     uint64_t echoRunOccurrence = 0, ownStateOccurrence = 0;
     uint64_t observedAt = 0;
@@ -83,6 +83,14 @@ struct QueueController::Impl {
             return;
         fallbackSent = true; // latch before cleanup or host callbacks can fail
         log("foreign-control detail=" + detail);
+        if (options.managedFallback) {
+            draining = true;
+            options.fallbackRequest(detail == "group-rate-undecided"                  ? "coordinator-change"
+                                    : detail.find("unconfirmed") != std::string::npos ? "preparation-timeout"
+                                    : detail.find("soap") != std::string::npos        ? "soap-error"
+                                                                                      : "foreign-control");
+            return;
+        }
         cleaning = true;
         try {
             release("foreign-control");
@@ -103,7 +111,7 @@ struct QueueController::Impl {
         return false;
     }
     bool validateOwned() {
-        if (!appControl())
+        if (!appControl() || draining)
             return true;
         try {
             coordinator.verifyLease();
@@ -295,7 +303,7 @@ struct QueueController::Impl {
             return; // TRANSITIONING is not proof of an audible start
         const auto now = nowMs();
         bool appSeek = false;
-        if (appControl() && audibleIndex != SIZE_MAX) {
+        if (appControl() && !draining && audibleIndex != SIZE_MAX) {
             if ((newItem || supersededTarget) && !commanded) {
                 const auto &old = plan[audibleIndex];
                 const auto duration =
@@ -424,6 +432,13 @@ struct QueueController::Impl {
             lastFrames = std::max(lastFrames, uint64_t(p.ms) * plan[index].item->descriptor().rate / 1000);
         speakerState = next;
         confirmedAt = std::chrono::steady_clock::now();
+        if (options.confirmed) {
+            const auto &a = plan[index];
+            options.confirmed({epoch, a.occurrence, uint64_t(p.ms) * a.item->descriptor().rate / 1000,
+                               (*a.item->contentLength() - 44) / 6, a.item->producedFrames(),
+                               a.item->descriptor().rate, p.ms + a.sourceOriginMs,
+                               unsigned(urls.size() - index - 1), next});
+        }
         advance();
     }
     void advance() {
@@ -595,6 +610,24 @@ struct QueueController::Impl {
         } catch (...) {
         }
         log("fault=" + message);
+        if (options.managedFallback && active) {
+            if (!fallbackSent) {
+                fallbackSent = true;
+                draining = true;
+                const auto reason = message.find("length") != std::string::npos ||
+                                            message.find("frame count") != std::string::npos
+                                        ? "length-fault"
+                                    : message.find("quota") != std::string::npos ||
+                                            message.find("history") != std::string::npos ||
+                                            message.find("store") != std::string::npos
+                                        ? "storage-fault"
+                                    : message.find("unconfirmed") != std::string::npos ? "preparation-timeout"
+                                    : message.find("group") != std::string::npos       ? "coordinator-change"
+                                                                                       : "soap-error";
+                options.fallbackRequest(reason);
+            }
+            return;
+        }
         if (appControl() && active) {
             foreign(message);
             return;
@@ -611,7 +644,19 @@ struct QueueController::Impl {
         if (fallbackSent && !active)
             return;
         active = false;
-        ownership.release();
+        if (options.managedFallback)
+            cleaning = true;
+        try {
+            ownership.release();
+        } catch (...) {
+            cleaning = false;
+            draining = false;
+            if (epoch)
+                route.revoke(epoch);
+            throw;
+        }
+        cleaning = false;
+        draining = false;
         if (epoch)
             route.revoke(epoch);
         plan.clear();
@@ -876,6 +921,14 @@ struct QueueController::Impl {
     void pump() {
         if (!active)
             return;
+        if (draining) {
+            if (options.audiblePosition && started && std::chrono::steady_clock::now() >= pollAt) {
+                pollAt = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+                confirm();
+            }
+            advance();
+            return;
+        }
         while (urls.size() < plan.size()) {
             auto &asset = plan[urls.size()];
             if (!asset.item)
@@ -978,6 +1031,28 @@ std::future<void> QueueController::lmsSeek(uint64_t epoch, uint32_t ms) {
     return impl->post([p = impl.get(), epoch, ms] {
         p->checkEpoch(epoch);
         p->seek(ms);
+    });
+}
+std::future<void> QueueController::freeze(uint64_t epoch) {
+    return impl->post([p = impl.get(), epoch] {
+        p->checkEpoch(epoch);
+        auto position = p->readPosition();
+        if (!p->ownedUris.count(position.uri))
+            return;
+        p->actions.stop();
+        if (p->coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}})
+                .response.value("CurrentTransportState") != "STOPPED")
+            throw std::runtime_error("queue-stop-unconfirmed");
+    });
+}
+std::future<void> QueueController::drain(uint64_t epoch) {
+    return impl->post([p = impl.get(), epoch] {
+        p->checkEpoch(epoch);
+        p->draining = true;
+        if (p->audibleIndex != SIZE_MAX) {
+            p->removeFuture(p->audibleIndex + 1);
+            p->plan.resize(p->audibleIndex + 1);
+        }
     });
 }
 std::future<void> QueueController::release(std::string reason) {

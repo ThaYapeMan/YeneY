@@ -1,7 +1,7 @@
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
-OBJS = core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
+OBJS = queue_room.o room_mode.o core_queue_sink.o core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
 all: yeney libqueueitems.a yeney-queue-dryrun
 
@@ -16,13 +16,13 @@ yeney.o: obsolete_player.h playback_mode.h
 core_sonos.o: %.o: %.cpp
 	g++ -std=c++17 -g -O3 -Wall -Wextra -Ithird_party/yeney-core -c -o $@ $<
 
-yeney: $(OBJS) $(CORE_LIB)
+yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 	g++ -g -o $@ $^ \
 		-lFLAC++ -lFLAC -lcrypto \
 		-lpthread
 
 clean:
-	rm -f stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f queue-mode-fixture room-mode-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -53,6 +53,8 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/stream_pacing_setting_test.py
 	./stream-metrics-test
 	python3 tests/stream_pacing_suite_test.py
+	python3 tests/queue_mode_test.py
+	./room-mode-test
 	./queue-position-test
 	python3 tests/queue_audible_test.py
 	python3 tests/queue_lms_control_test.py
@@ -363,3 +365,20 @@ test: stream-pacing-encoder-test
 stream-metrics-lifetime-test: tests/stream_metrics_lifetime_test.cpp stream_metrics.h
 	g++ -std=c++17 -g -O1 -Wall -Wextra -fsanitize=address -fno-omit-frame-pointer -I. -pthread -o $@ $<
 test: stream-metrics-lifetime-test
+
+queue_room.o: queue_room.cpp queue_room.h room_mode.h mode_sink.h queue_playlist.h queue_lms_cli.h queue_controller.h core_queue_sink.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ queue_room.cpp
+room_mode.o: room_mode.cpp room_mode.h playback_mode.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ room_mode.cpp
+
+room-mode-test: tests/room_mode_test.cpp room_mode.o room_mode.h mode_sink.h queue_playlist.h stream_metrics.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -pthread -o $@ $< room_mode.o
+test: room-mode-test
+
+queue-mode-fixture: tests/queue_controller_fixture.cpp room_mode.o queue_controller.cpp libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP)
+	g++ -std=c++17 -g -O2 -Wall -Wextra -DMODE_FIXTURE -DYENEY_QUEUE_CONTROLLER_TEST -I. -o $@ $< room_mode.o queue_controller.cpp $(filter-out queue_controller.o,$(QUEUE_CONTROLLER_OBJS)) libqueueitems.a $(QUEUE_TEST_UPNP) -lFLAC -pthread
+test: queue-mode-fixture
+
+$(OBJS): room_mode.h
+core_shm.o: third_party/yeney-core/core/sink.h
+stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test: room_mode.h

@@ -16,6 +16,11 @@ struct QueueAsset {
     upnp::QueueMetadata metadata;
     std::chrono::steady_clock::time_point strmAt{};
 };
+struct ConfirmedItem {
+    uint64_t epoch = 0, occurrence = 0, frame = 0, promised = 0, actual = 0;
+    uint32_t rate = 0, sourceMs = 0, ahead = 0;
+    yeney::PlaybackState state = yeney::PlaybackState::Stopped;
+};
 struct ControllerOptions {
     upnp::Speaker room;
     std::string session, httpBase;
@@ -33,6 +38,8 @@ struct ControllerOptions {
     // lmsControl returns only after a decoded CLI acknowledgement; never retry.
     std::function<bool(const std::string &)> lmsControl;
     std::function<void(const std::string &)> fallbackRequest;
+    bool managedFallback = false; // room mode owns drain/release/handoff
+    std::function<void(const ConfirmedItem &)> confirmed;
     double deviceRatePrior = 1;               // qualified device rate; phase is never carried
     std::function<std::string()> backupTitle; // default local time, minute precision
 };
@@ -67,6 +74,8 @@ public:
                                   std::vector<QueueAsset>, bool select = false);
     std::future<void> lmsCommand(uint64_t epoch, char command);
     std::future<void> lmsSeek(uint64_t epoch, uint32_t sourceMs);
+    std::future<void> freeze(uint64_t epoch);
+    std::future<void> drain(uint64_t epoch);
     std::future<void> release(std::string reason = "stop");
     // Forward only SID/coordinator-validated AVTransport notifications from the
     // room's existing subscription owner. Capture epoch when receiving, not

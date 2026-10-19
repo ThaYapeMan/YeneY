@@ -76,3 +76,6 @@ field-cold-test
 /stream-pacing-encoder-test
 
 /stream-metrics-lifetime-test
+
+/room-mode-test
+/queue-mode-fixture

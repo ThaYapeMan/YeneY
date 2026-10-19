@@ -37,6 +37,7 @@ unsigned get_squeezebox_stream_id(void);
 }
 
 #include "playback_mode.h"
+#include "queue_room.h"
 #include <algorithm>
 #include <atomic>
 #include <arpa/inet.h>
@@ -63,6 +64,7 @@ const char* findOption(int argc, char** argv, const std::string& option);
 
 std::shared_ptr<upnp::StreamServer> gStreamServer;
 std::shared_ptr<upnp::SpeakerControl> gPlayer;
+bridge::QueueRoom* gQueueRoom = nullptr;
 uint8_t gMac[6];
 std::atomic<bool> gEvent{true};
 static std::string gServer;
@@ -500,7 +502,10 @@ static bool sendLmsCommand(const std::string& server, const uint8_t* mac, const 
 // LMS connection is torn down (e.g. process shutdown).
 static void runPlayerClient(const char* server, std::string playerName)
 {
-    runCoreClient(server, gMac, playerName.c_str());
+    if (gQueueRoom)
+        bridge::runQueueCoreClient(server, gMac, playerName.c_str(), *gQueueRoom);
+    else
+        runCoreClient(server, gMac, playerName.c_str());
     printf("player client thread stopped\n");
 }
 
@@ -713,6 +718,10 @@ void refreshStatus(bridge::Status& status)
 {
     status.update();
     std::string transportState = status.getTransportState();
+    if (auto* mode = bridge::roomMode(); mode && mode->status().active == "queue") {
+        if (status.changed()) status.print();
+        return;
+    }
 
     if (ourStreamStarted.load() && !stream_just_restarted()) {
         ObserveDeviceTransport(transportState);
@@ -736,9 +745,10 @@ void runBridgeLoop(bridge::Status& status)
 
     for (;;) {
         bridge::streamMetrics().tick();
-        dispatchStreamStart();
-
-        pollSonosPosition();
+        if (!gQueueRoom || !gQueueRoom->queueActive()) {
+            dispatchStreamStart();
+            pollSonosPosition();
+        }
 
         const bool eventPending = gEvent.exchange(false);
         const auto pollInterval = gPlayer->pollIntervalMs();
@@ -959,6 +969,20 @@ int main(int argc, char** argv)
             "restart with a reachable server to enable metadata and relay.\n");
     }
 
+    if (playback.selected == bridge::PlaybackMode::Queue) {
+        char rawMac[18];
+        snprintf(rawMac, sizeof rawMac, "%02x:%02x:%02x:%02x:%02x:%02x",
+            gMac[0], gMac[1], gMac[2], gMac[3], gMac[4], gMac[5]);
+        gQueueRoom = new bridge::QueueRoom(selectedSpeaker, gStreamServer,
+            std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer), playback, gServer, rawMac, gMac,
+            [] { return SqueezeBoxURL(streamId.load()); });
+    } else {
+        static auto* mode = new bridge::RoomMode(selectedSpeaker.name, selectedSpeaker.coordinator,
+            playback, bridge::RoomMode::Hooks{{}, {}, {}, [](const std::string& line) {
+                printf("yeney: %s\n", line.c_str());
+            }});
+        bridge::setRoomMode(mode);
+    }
     static StopTimer stopTimer;
     std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(), std::string(room) + " (Sonos)");
 

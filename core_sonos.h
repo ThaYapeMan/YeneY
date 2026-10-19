@@ -48,6 +48,7 @@ public:
     ~CoreSonosSink() override;
     void command(const yeney::Command&);
     uint32_t maxSampleRate() const override;
+    unsigned outputRate() const { std::lock_guard<std::mutex> lock(mutex); return streamRate; }
     void trackBoundary(uint64_t, const yeney::Format&, bool) override;
     size_t write(const yeney::Frame*, size_t) override;
     size_t write(const yeney::Frame*, size_t, bool processed) override;
