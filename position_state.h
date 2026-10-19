@@ -9,6 +9,21 @@
 class ConnectionPosition {
 public:
     void allowZeroStart() { allowZero = true; }
+    // Queue-only anchor: identity and PLAYING are already confirmed by SOAP.
+    // No HTTP connection, PCM submission or 1.1-second stream lease is involved.
+    void item(unsigned id, uint32_t ms, uint32_t rate, uint64_t now, uint64_t frozen = 0) {
+        reset(id);
+        anchored = hadAudio = heardPosition = zeroObserved = true;
+        relative = ms; observed = started = now;
+        reportTime = now; reportFrames = std::max(double(frozen), double(ms) * rate / 1000);
+        lastAudible = uint64_t(reportFrames);
+    }
+    void itemPoll(uint32_t ms, uint64_t now) {
+        if (!anchored || ms < relative) return;
+        if (ms != relative) observed = now;
+        relative = ms;
+    }
+
     // An eligible current-stream probe is fresh evidence, unlike a leased
     // normal zero. Seed only the explicit rate-change reporting coordinate.
     void startZero(double time) {

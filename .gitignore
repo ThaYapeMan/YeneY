@@ -65,3 +65,6 @@ field-cold-test
 /libqueuecontroller.a
 /queue-controller-fixture
 /queue-controller-guard-test
+
+/queue-audible-fixture
+/queue-position-test

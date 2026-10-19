@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_controller.h"
 #include "playback_mode.h"
+#include "position_state.h"
 #include "upnp/queue_coordinator.h"
 #include <algorithm>
+#include <cmath>
 #include <condition_variable>
 #include <ctime>
 #include <deque>
@@ -58,6 +60,155 @@ struct QueueController::Impl {
     std::set<std::string> ownedUris;
     ControllerStatus report;
     std::thread worker;
+    ConnectionPosition position;
+    size_t audibleIndex = SIZE_MAX;
+    unsigned clockEpoch = 0;
+    yeney::PlaybackState speakerState = yeney::PlaybackState::Stopped;
+    uint64_t lastFrames = 0;
+    std::chrono::steady_clock::time_point pollAt{}, confirmedAt{};
+    std::map<std::string, uint32_t> sequences;
+    static uint64_t nowMs() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
+    void ignored(const std::string &reason) { log("speaker ignored reason=" + reason); }
+    size_t ownedIndex(const std::string &uri) const {
+        auto it = std::find(urls.begin(), urls.end(), uri);
+        return it == urls.end() ? SIZE_MAX : size_t(it - urls.begin());
+    }
+    static uint32_t decimal(const std::string &text) {
+        uint64_t n = 0;
+        if (text.empty())
+            throw std::runtime_error("queue-position-invalid");
+        for (char c : text) {
+            if (c < '0' || c > '9' || n > (UINT32_MAX - unsigned(c - '0')) / 10)
+                throw std::runtime_error("queue-position-invalid");
+            n = n * 10 + unsigned(c - '0');
+        }
+        return uint32_t(n);
+    }
+    struct Reading {
+        std::string uri, state;
+        uint32_t track, ms;
+    };
+    Reading readPosition() {
+        auto p = actions.position().response;
+        auto time = p.value("RelTime");
+        unsigned long long h, m, s;
+        char tail;
+        if (sscanf(time.c_str(), "%llu:%llu:%llu%c", &h, &m, &s, &tail) != 3 || h > UINT32_MAX / 3600000 ||
+            m >= 60 || s >= 60 || (h * 3600 + m * 60 + s) * 1000 > UINT32_MAX)
+            throw std::runtime_error("queue-position-invalid");
+        return {p.value("TrackURI"), "", decimal(p.value("Track")), uint32_t((h * 3600 + m * 60 + s) * 1000)};
+    }
+    void confirm(const upnp::StateUpdate *event = nullptr) {
+        if (!active || !started || !options.audiblePosition)
+            return;
+        auto first = readPosition();
+        auto state = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}})
+                         .response.value("CurrentTransportState");
+        auto p = readPosition(); // reject identity/state races across the SOAP pair
+        if (first.uri != p.uri || first.track != p.track || first.ms != p.ms) {
+            ignored("position-race");
+            return;
+        }
+        auto index = ownedIndex(p.uri);
+        if (index == SIZE_MAX || p.track != index + 1) {
+            ignored("foreign-or-revoked-uri");
+            return;
+        }
+        if (event &&
+            ((event->trackUri && *event->trackUri != p.uri) ||
+             (event->trackNumber && *event->trackNumber != p.track) ||
+             (event->positionMs && *event->positionMs != p.ms) || (event->state && *event->state != state))) {
+            ignored("event-position-disagreement");
+            return;
+        }
+        if (audibleIndex != SIZE_MAX && index < audibleIndex) {
+            ignored("older-item");
+            return;
+        }
+        const bool newItem = index != audibleIndex;
+        if (newItem && state != "PLAYING") {
+            ignored("not-playing");
+            return;
+        }
+        yeney::PlaybackState next;
+        if (state == "PLAYING")
+            next = yeney::PlaybackState::Playing;
+        else if (state == "PAUSED_PLAYBACK")
+            next = yeney::PlaybackState::Paused;
+        else if (state == "STOPPED")
+            next = yeney::PlaybackState::Stopped;
+        else
+            return; // TRANSITIONING is not proof of an audible start
+        const auto now = nowMs();
+        if (newItem) {
+            audibleIndex = index;
+            lastFrames = 0;
+            position.item(++clockEpoch, p.ms, plan[index].item->descriptor().rate, now);
+            const auto at = plan[index].strmAt;
+            log("audible occurrence=" + std::to_string(plan[index].occurrence) + " track=" +
+                std::to_string(p.track) + " RelTime=" + std::to_string(p.ms) + " strm_to_audible_s=" +
+                (at.time_since_epoch().count()
+                     ? std::to_string(
+                           std::chrono::duration<double>(std::chrono::steady_clock::now() - at).count())
+                     : "unknown"));
+        } else {
+            // Resume reanchors the frozen position; paused wall time is excluded.
+            if (speakerState != yeney::PlaybackState::Playing && next == yeney::PlaybackState::Playing)
+                position.item(++clockEpoch, p.ms, plan[index].item->descriptor().rate, now, lastFrames);
+            else
+                position.itemPoll(p.ms, now);
+        }
+        if (next != yeney::PlaybackState::Playing)
+            lastFrames = std::max(lastFrames, uint64_t(p.ms) * plan[index].item->descriptor().rate / 1000);
+        speakerState = next;
+        confirmedAt = std::chrono::steady_clock::now();
+        advance();
+    }
+    void advance() {
+        if (!active || audibleIndex == SIZE_MAX || !options.audiblePosition)
+            return;
+        // Stop projecting if position evidence is lost; never invent ongoing
+        // playback after a disconnected speaker. Ordinary polls refresh at 1 Hz.
+        if (std::chrono::steady_clock::now() - confirmedAt > std::chrono::seconds(2))
+            return;
+        const auto &asset = plan[audibleIndex];
+        auto frames = lastFrames;
+        if (speakerState == yeney::PlaybackState::Playing)
+            frames = position.smoothFrames(asset.item->descriptor().rate, double(nowMs()), false, 0,
+                                           options.deviceRatePrior);
+        frames = std::min((*asset.item->contentLength() - 44) / 6, std::max(lastFrames, frames));
+        lastFrames = frames;
+        options.audiblePosition(asset.occurrence, frames, speakerState);
+    }
+    void notify(uint64_t receivedEpoch, const upnp::GenaEvent &event) {
+        if (!active || receivedEpoch != epoch) {
+            ignored("stale-epoch");
+            return;
+        }
+        if (event.service != upnp::Service::AVTransport)
+            return;
+        upnp::StateUpdate update;
+        if (!upnp::parseAvTransport(event.body, update, true)) {
+            ignored("invalid-event");
+            return;
+        }
+        if (update.trackUri && ownedIndex(*update.trackUri) == SIZE_MAX) {
+            ignored("foreign-or-revoked-uri");
+            return;
+        }
+        auto prior = sequences.find(event.sid);
+        if (prior != sequences.end() &&
+            (event.sequence == prior->second || uint32_t(event.sequence - prior->second) > INT32_MAX)) {
+            ignored("stale-sequence");
+            return;
+        }
+        sequences[event.sid] = event.sequence;
+        confirm(&update);
+    }
     upnp::QueueOwnershipIO ownershipIO() {
         upnp::QueueOwnershipIO io;
         io.browse = [this] { return coordinator.browse(); };
@@ -90,6 +241,8 @@ struct QueueController::Impl {
           route(options.room.name, options.session), coordinator(options.room, options.log),
           actions([this](const auto &name, const auto &args) { return coordinator.transport(name, args); }),
           ownership(ownershipIO(), options.session) {
+        if (!std::isfinite(options.deviceRatePrior) || options.deviceRatePrior <= 0)
+            throw std::invalid_argument("queue-invalid-device-rate");
         if (!server || options.httpBase.compare(0, 7, "http://") || options.httpBase.back() == '/')
             throw std::invalid_argument("queue-invalid-http-base");
         upnp::HttpUrl base;
@@ -199,6 +352,10 @@ struct QueueController::Impl {
         urls.clear();
         ownedUris.clear();
         started = false;
+        audibleIndex = SIZE_MAX;
+        lastFrames = 0;
+        sequences.clear();
+        speakerState = yeney::PlaybackState::Stopped;
         publishStatus(reason);
         log("release reason=" + reason);
     }
@@ -285,6 +442,11 @@ struct QueueController::Impl {
                 started = true;
             }
         }
+        if (options.audiblePosition && started && std::chrono::steady_clock::now() >= pollAt) {
+            pollAt = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+            confirm();
+        }
+        advance();
     }
 };
 QueueController::QueueController(ControllerOptions options, std::shared_ptr<upnp::StreamServer> server) {
@@ -311,6 +473,9 @@ std::future<void> QueueController::update(uint64_t epoch, std::vector<QueueAsset
 }
 std::future<void> QueueController::release(std::string reason) {
     return impl->post([p = impl.get(), reason = std::move(reason)] { p->release(reason); });
+}
+std::future<void> QueueController::notify(uint64_t epoch, upnp::GenaEvent event) {
+    return impl->post([p = impl.get(), epoch, event = std::move(event)] { p->notify(epoch, event); });
 }
 ControllerStatus QueueController::status() const {
     std::lock_guard<std::mutex> lock(impl->mutex);

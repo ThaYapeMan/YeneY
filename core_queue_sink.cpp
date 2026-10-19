@@ -80,12 +80,14 @@ std::vector<QueueRecord> CoreQueueSink::snapshot() const {
 }
 void CoreQueueSink::coreEvent(const std::string &event, uint64_t id, uint64_t) {
     const double stamp = now();
+    const auto receivedAt = std::chrono::steady_clock::now();
     enqueue([=] {
         std::lock_guard<std::mutex> lock(mutex);
         auto &r = records[id];
         r.source.occurrence = id;
         if (event == "strm") {
             r.strm = stamp;
+            r.strmAt = receivedAt;
             r.expectedIndex = nextIndex++;
         } else if (event.rfind("codec:", 0) == 0 && event.size() == 7)
             r.source.codec = event[6];
@@ -346,6 +348,79 @@ void CoreQueueSink::audibleFrom(uint64_t id, uint64_t frame) {
     lock.unlock();
     enqueue([this] { protectItems(); });
 }
+void CoreQueueSink::useSpeakerClock() {
+    std::lock_guard<std::mutex> lock(mutex);
+    speakerClock = true;
+}
+bool CoreQueueSink::speakerDriven() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return speakerClock;
+}
+void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::PlaybackState state) {
+    std::unique_lock<std::mutex> lock(mutex);
+    const auto it = records.find(id);
+    if (!speakerClock || it == records.end() || !it->second.item)
+        return;
+    auto &r = it->second;
+    // A confirmed start still needs actual source PCM, not silence-only output.
+    const auto produced = r.item->producedFrames();
+    if (produced <= r.prefixFrames)
+        return;
+    const bool changed = audibleId != id;
+    if (changed && state != yeney::PlaybackState::Playing)
+        return;
+    if (changed) {
+        audibleId = id;
+        audibleFrame = r.first;
+        speakerState.reset();
+        prefixPending = true;
+    }
+    frame = std::min(frame, r.promised.value_or(produced));
+    audibleFrame = std::max(audibleFrame, std::min(r.first + frame, submitted));
+    if (frame >= r.prefixFrames) {
+        if (prefixPending) {
+            prefixPending = false;
+            r.audible = now();
+            const auto source = id < UINT64_MAX / 2 ? id : UINT64_MAX - id;
+            if (source != audibleSource) {
+                if (audibleSource && records[audibleSource].end < 0)
+                    records[audibleSource].end = now();
+                speakerElapsed = 0;
+            }
+            audibleSource = source;
+            if (id < UINT64_MAX / 2)
+                audibleSignals.push_back({id, r.first + r.prefixFrames, true});
+        }
+        const auto sourceFrames =
+            id < UINT64_MAX / 2 ? frame - r.prefixFrames : audibleFrame - records.at(audibleSource).first;
+        const auto elapsed = uint32_t(std::min<uint64_t>(UINT32_MAX, sourceFrames * 1000 / r.source.rate));
+        speakerElapsed = std::max(speakerElapsed.value_or(0), elapsed);
+    } else if (audibleSource) {
+        const auto &old = records.at(audibleSource);
+        speakerElapsed =
+            uint32_t(std::min<uint64_t>(UINT32_MAX, (audibleFrame - old.first) * 1000 / old.source.rate));
+    }
+    if (audibleSource && speakerState != state) {
+        speakerState = state;
+        speakerStates.push_back({audibleSource, state});
+    }
+    paused = state != yeney::PlaybackState::Playing;
+    lock.unlock();
+    if (changed)
+        enqueue([this] { protectItems(); });
+}
+bool CoreQueueSink::takeAudibleState(yeney::AudibleState &state) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (speakerStates.empty())
+        return false;
+    state = speakerStates.front();
+    speakerStates.pop_front();
+    return true;
+}
+std::optional<uint32_t> CoreQueueSink::audibleElapsedMs(uint64_t occurrence) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return occurrence == audibleSource ? speakerElapsed : std::nullopt;
+}
 bool CoreQueueSink::isPaused() const {
     std::lock_guard<std::mutex> lock(mutex);
     return paused;
@@ -424,6 +499,9 @@ void CoreQueueSink::flush() {
     {
         std::lock_guard<std::mutex> lock(mutex);
         audibleSignals.clear();
+        speakerStates.clear();
+        speakerElapsed.reset();
+        speakerState.reset();
         audibleId = 0;
         audibleSource = 0;
         prefixPending = false;

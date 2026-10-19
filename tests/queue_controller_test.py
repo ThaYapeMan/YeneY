@@ -49,6 +49,8 @@ class Coordinator(ThreadingHTTPServer):
                             date=f'2026-10-18T12:{i:02}:00Z') for i in range(7)]
         self.update, self.saved_update, self.next_id = 20, 1, 9
         self.crossfade, self.playing, self.uri = True, False, ''
+        self.position = dict(Track='0', TrackURI='', RelTime='00:00:00')
+        self.transport_state = 'STOPPED'
         self.requests, self.errors, self.snapshots = [], [], {}
         self.fail_save = self.hide_save = self.race_add = self.ignore_crossfade = self.race_page = False
         self.last_save, self.verified_save = None, False
@@ -156,6 +158,8 @@ class Handler(BaseHTTPRequestHandler):
             assert item['title'].startswith('Before YeneY ') and s.verified_save
             s.saved.remove(item); s.saved_update += 1
             return {}, None
+        if action == 'GetPositionInfo': return dict(s.position), None
+        if action == 'GetTransportInfo': return {'CurrentTransportState': s.transport_state}, None
         if action == 'GetCrossfadeMode': return {'CrossfadeMode': int(s.crossfade)}, None
         if action == 'SetCrossfadeMode':
             assert s.verified_save
@@ -194,10 +198,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Driver:
-    def __init__(self, coordinator):
+    def __init__(self, coordinator, fixture='queue-controller-fixture', extra=()):
         self.tmp = tempfile.TemporaryDirectory(prefix='yeney-controller-')
         self.log = open(Path(self.tmp.name)/'controller.log', 'w+')
-        self.proc = subprocess.Popen([str(ROOT/'queue-controller-fixture'), self.tmp.name, str(coordinator.server_port)],
+        self.proc = subprocess.Popen([str(ROOT/fixture), self.tmp.name, str(coordinator.server_port), *map(str, extra)],
                                      stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True,
                                      env=dict(os.environ, YENEY_TITLE_FORMAT='artist-title'))
         self.lines = queue.Queue()

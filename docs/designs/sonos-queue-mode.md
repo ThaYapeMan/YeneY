@@ -456,11 +456,12 @@ The owner accepts this cached fade-out on manual skip. Strict live manual-skip f
 would need a new transition-specific asset and a controlled handoff, which cannot
 undo audio already started by an app action. Do not promise both instantly.
 
-`position_state.h` and `sonos-position.cpp` currently model a single stream;
-queue mode needs explicit occurrence epochs and separation of HTTP progress from
-audible progress. A constant-rate virtual timeline can later preserve clock
-phase across proven seamless joins; do not assume it before validation. Frequent
-phase resets can leave short tracks unlocked despite a good rate prior.
+`sonos-position.cpp` retains the single-stream model. The guarded queue controller
+reuses `ConnectionPosition` from `position_state.h` with explicit per-item anchors
+and speaker observations, independently of HTTP progress. A constant-rate virtual
+timeline can later preserve clock phase across proven seamless joins; do not
+assume it before validation. Frequent phase resets can leave short tracks unlocked
+despite a good rate prior.
 
 The audio tap must publish the actual post-gain, post-mix, post-conversion PCM
 heard from the item, including both tracks during overlap. Spooling whole tracks
@@ -751,14 +752,13 @@ Phase 2 is field-qualified by the owner's 18 October unattended suite at bridge
 or 10 seconds, LMS identity matched 12/12 completed occurrences, startup was
 about one second and successor leads were at least 57 seconds.
 
-**Phase 3b parts 1 and 2 are done. Parts 3–8 remain.** Production stays on the
+**Phase 3b parts 1–3 are done. Parts 4–8 remain.** Production stays on the
 normal stream path, including eligible standalone `queue` requests: startup logs
 `selected=stream reason=queue-unavailable` once and continues through HELO and
 ordinary stream playback. The previous fatal opt-in guard is removed. Grouped
 rooms retain `group-rate-undecided`. `bridge::queuePlaybackReady` in
 `playback_mode.h` is the single production readiness constant; it must remain
-false until part 3 supplies speaker-confirmed audible signalling and connects
-the room runtime. There is no command-line or environment bypass. The controller
+false until part 6 completes controlled fallback and connects the room runtime. There is no command-line or environment bypass. The controller
 fixture alone compiles with `YENEY_QUEUE_CONTROLLER_TEST`; installed programs do
 not use it. No owner device steps are available yet.
 
@@ -770,8 +770,7 @@ core callbacks. Stable shared item handles are watched every 50 ms; sealed
 items wait for their actual count, progressive items use their committed count,
 and an unpublished predecessor cannot be skipped. Repeated updates do not add
 an asset twice, published prefixes cannot be rewritten, and stale epochs cannot
-release the current session. No core audible callback is made by the controller
-or HTTP readers.
+release the current session. HTTP readers never make core audible callbacks.
 
 The queue-only SOAP adapter discovers advertised AVTransport, Queue,
 ContentDirectory and topology endpoints on the verified coordinator. Before
@@ -803,12 +802,51 @@ paths. The fake reader uses a 40x test clock, 3.5-second prefetch leads, bursts
 paced at up to 9x, unaligned and suffix ranges, and reconnects. Separate real
 `yeney`/fake-LMS checks compare guarded queue and stream HELO packets, encoded
 FLAC bodies, source HTTP requests and transport SOAP bytes (normalizing only the
-fresh per-process session token). These are preparation and delivery tests,
-not audible playback qualification.
+fresh per-process session token). These preparation/delivery checks remain
+separate from the speaker-evidence acceptance tests below.
 
-Remaining: part 3 speaker-confirmed audible starts and per-item elapsed; part 4
-LMS control/edit reconciliation; part 5 Sonos-app control mapping; part 6
-controlled, latched stream fallback and active room status; part 7 the complete
+Part 3 adds speaker-confirmed audible starts behind the same production guard.
+The subscription owner forwards SID/coordinator-validated AVTransport events,
+with the epoch captured on receipt, to the serialized controller. Queue-field
+parsing retains TrackNumber, TrackURI and RelTime without changing stream GENA
+parsing. Exact registered URLs, current epoch and increasing notification
+sequence fence stale, revoked and foreign observations; a delayed earlier item
+cannot become current again. Every candidate is checked with GetPositionInfo,
+GetTransportInfo and a second GetPositionInfo. URI, track number and RelTime must
+agree across that read bracket and with fields present in the event. Only
+PLAYING after the controller's Play can start a new item. TRANSITIONING,
+publication, HTTP reads and decoder progress cannot start it. Independent
+one-second SOAP polling recovers a missed notification using the same checks.
+The start log includes occurrence, speaker track/RelTime and strm-to-audible delay.
+
+Each confirmed item resets ConnectionPosition's phase at its own native rate.
+The host supplies a qualified device-rate prior (unity until available); this
+prior persists across items, not the preceding item's offset. The worker advances
+between floored RelTime readings every 50 ms, never backwards, capped at the
+immutable rendered length. Evidence older than two seconds is not projected.
+Pause/stop freeze this clock without releasing the queue; resume excludes paused
+wall time while retaining within-item phase. Incoming mixed overlap starts at
+zero and counts once. CoreQueueSink removes any retained predecessor prefix
+before signaling the incoming source and suppresses source starts with no PCM.
+Confirmed zero is a distinct core signal, so no fictitious first PCM frame is
+needed. The core emits STMs before its held STMd; only the SlimProto boundary
+uses the existing 1 ms interpolation sentinel. Elapsed overrides are occurrence
+specific, preventing an asynchronous next-item update from resetting the old
+item's timer. Speaker pause, resume and stop emit STMp, STMr and STMu respectively;
+queue completion is speaker driven, not inferred from decode drain.
+
+Loopback acceptance tests run a real core Player and CoreQueueSink with the real
+controller, store and finite listener against fake SOAP/GENA and the phase 2 LMS
+song-queue model. They check native 44.1/48 kHz and mixed-rate joins, rendered
+10-second crossfades, exactly one STMs per confirmed change followed by STMd,
+LMS identity at every join, moving zero-based monotonic/capped elapsed, pause and
+resume, STOPPED retaining ownership, missed GENA polling, and stale/foreign/
+revoked evidence. Separate deterministic tests verify phase reset/rate-prior
+carry and prefix/source-zero safeguards. Room integration remains guarded;
+this does not qualify physical playback or complete LMS control/fallback.
+
+Remaining: part 4 LMS control/edit reconciliation; part 5 Sonos-app control
+mapping; part 6 controlled, latched stream fallback and active room status; part 7 the complete
 end-to-end audible fake-Sonos acceptance suite; part 8 final phase 3 status and
 device-verification documentation. The unattended physical device suite follows
 in phase 3c. Agents never run against real LMS or speakers or deploy on LXC 113.

@@ -3,7 +3,7 @@
 #include "upnp/speaker_control.h"
 #include <string>
 namespace bridge {
-// Enable only after part 3 supplies speaker-confirmed audible signalling.
+// Enable only after part 6 completes controlled fallback and room integration.
 inline constexpr bool queuePlaybackReady = false;
 enum class PlaybackMode { Stream, Queue };
 struct PlaybackSelection {

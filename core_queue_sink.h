@@ -11,6 +11,7 @@
 namespace queue_audio {
 struct QueueRecord {
     yeney::TrackDescriptor source;
+    std::chrono::steady_clock::time_point strmAt{};
     uint64_t expectedIndex = 0;
     double strm = -1, decoded = -1, stmd = -1, audible = -1, stms = -1, end = -1;
     uint64_t first = 0, actual = 0, overlap = 0, prefixFrames = 0;
@@ -43,6 +44,10 @@ class CoreQueueSink : public yeney::Sink {
     std::map<uint64_t, QueueRecord> records;
     std::deque<uint64_t> descriptorOrder;
     std::deque<yeney::AudibleStart> audibleSignals;
+    std::deque<yeney::AudibleState> speakerStates;
+    bool speakerClock = false;
+    std::optional<yeney::PlaybackState> speakerState;
+    std::optional<uint32_t> speakerElapsed;
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
     uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
     bool prefixPending = false;
@@ -73,6 +78,13 @@ public:
     // clock.
     void audibleFrom(uint64_t occurrence, uint64_t firstFrame);
     bool isPaused() const;
+    // Enable before starting the player. Only the controller calls this path,
+    // after speaker identity/position confirmation; never an HTTP reader.
+    void useSpeakerClock();
+    void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
+    bool speakerDriven() const override;
+    bool takeAudibleState(yeney::AudibleState &) override;
+    std::optional<uint32_t> audibleElapsedMs(uint64_t occurrence) const override;
     void audibleEnd(uint64_t occurrence);
     void recordLms(uint64_t occurrence, QueueRecord::LmsSample sample);
     void advanceAudible(uint64_t cumulativeFrame);

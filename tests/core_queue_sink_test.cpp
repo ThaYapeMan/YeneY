@@ -142,6 +142,21 @@ int main() {
         sink.advanceAudible(1001);
         assert(sink.audibleOccurrence() == 2);
         assert(sink.takeAudibleStart(a) && a.occurrence == 2 && a.frame == 1000);
+        sink.useSpeakerClock();
+        sink.speakerPosition(1, 0, yeney::PlaybackState::Playing);
+        assert(sink.takeAudibleStart(a));
+        sink.speakerPosition(1, 700, yeney::PlaybackState::Playing);
+        sink.speakerPosition(2, 0, yeney::PlaybackState::Playing);
+        assert(sink.audibleOccurrence() == 1 && !sink.takeAudibleStart(a));
+        assert(sink.audibleElapsedMs(1) == 87);
+        sink.speakerPosition(2, 299, yeney::PlaybackState::Paused);
+        assert(sink.audibleOccurrence() == 1 && !sink.takeAudibleStart(a));
+        assert(sink.audibleElapsedMs(1) == 124);
+        sink.speakerPosition(2, 300, yeney::PlaybackState::Playing);
+        assert(sink.takeAudibleStart(a) && a.frame == 1000 && a.confirmed);
+        assert(sink.audibleElapsedMs(2) == 0 && !sink.audibleElapsedMs(1));
+        std::cout << "PASS speaker retained prefix: old source clock advances through prefix, incoming "
+                     "confirmed start and zero only at source boundary\n";
         std::cout
             << "PASS same-rate tail recovery: successor carries 300 retained "
                "frames; incoming STMs "
@@ -323,6 +338,37 @@ int main() {
         assert(v.ok && v.pairs == 1 && v.worst == 14);
         std::cout << "PASS retained-tail report: pairs stay incomplete until prefix or continuation ends; "
                      "audible end includes all retained source PCM\n";
+    }
+    {
+        CoreQueueSink sink("SpeakerZero", c, 1);
+        sink.useSpeakerClock();
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 48000, 1000, 0, 0});
+        sink.trackBoundary(0, {48000, 24, 2, false}, false);
+        sink.waitIdle();
+        sink.speakerPosition(1, 0, yeney::PlaybackState::Playing);
+        yeney::AudibleStart start;
+        assert(!sink.takeAudibleStart(start)); // no source frames yet
+        std::vector<yeney::Frame> pcm(1000, {256, -256});
+        sink.write(pcm.data(), pcm.size(), false);
+        sink.waitIdle();
+        sink.speakerPosition(1, 0, yeney::PlaybackState::Playing);
+        assert(sink.takeAudibleStart(start) && start.occurrence == 1 && start.confirmed);
+        assert(sink.audibleFrames() == 0 && sink.audibleElapsedMs(1) == 0);
+        assert(!sink.audibleElapsedMs(2)); // elapsed belongs to this occurrence only
+        sink.speakerPosition(1, 960, yeney::PlaybackState::Playing);
+        assert(sink.audibleElapsedMs(1) == 20);
+        sink.speakerPosition(1, 480, yeney::PlaybackState::Paused);
+        assert(sink.audibleElapsedMs(1) == 20);
+        sink.speakerPosition(1, 1000000, yeney::PlaybackState::Playing);
+        assert(sink.audibleFrames() == 1000 && sink.audibleElapsedMs(1) == 20);
+        assert(!sink.takeAudibleStart(start));
+        sink.flush();
+        sink.waitIdle();
+        yeney::AudibleState state;
+        assert(!sink.takeAudibleState(state) && !sink.audibleElapsedMs(1));
+        std::cout << "PASS speaker sink: confirmed zero keeps internal zero, source frames required, no "
+                     "duplicate starts, occurrence-local monotonic capped elapsed, flush fences state\n";
     }
     std::filesystem::remove_all(root);
 }

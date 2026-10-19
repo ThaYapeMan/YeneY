@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -43,6 +43,8 @@ test: export YENEY_TIMING_LOCKED_EVERY_S = 5
 test: export YENEY_AUDIBLE_OFFSET_MS = 0
 test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	./queue-position-test
+	python3 tests/queue_audible_test.py
 	./queue-controller-guard-test
 	python3 tests/queue_controller_test.py
 	python3 tests/queue_guard_stream_test.py
@@ -315,3 +317,13 @@ queue-controller-fixture: tests/queue_controller_fixture.cpp queue_controller.cp
 queue-controller-guard-test: tests/queue_controller_guard_test.cpp queue_controller.h libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP)
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $< libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP) -lFLAC -pthread
 test: queue-controller-fixture queue-controller-guard-test
+
+queue_controller.o: position_state.h upnp/event_parsers.h
+queue-audible-fixture: tests/queue_audible_fixture.cpp queue_controller.cpp queue_controller.h position_state.h core_queue_sink.o libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP) $(CORE_LIB)
+	g++ -std=c++17 -g -O2 -Wall -Wextra -DYENEY_QUEUE_CONTROLLER_TEST -I. -pthread -o $@ $< queue_controller.cpp core_queue_sink.o $(filter-out queue_controller.o,$(QUEUE_CONTROLLER_OBJS)) libqueueitems.a $(QUEUE_TEST_UPNP) $(CORE_LIB) -lFLAC
+
+test: queue-audible-fixture
+
+queue-position-test: tests/queue_position_test.cpp position_state.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
+test: queue-position-test

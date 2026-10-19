@@ -15,5 +15,5 @@ int main() {
     }
     assert(guarded && server->resource("queue").uri.empty());
     std::cout
-        << "PASS queue controller production guard: no controller or finite route activation before part 3\n";
+        << "PASS queue controller production guard: no controller or finite route activation before part 6\n";
 }
