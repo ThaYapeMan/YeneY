@@ -752,7 +752,7 @@ Phase 2 is field-qualified by the owner's 18 October unattended suite at bridge
 or 10 seconds, LMS identity matched 12/12 completed occurrences, startup was
 about one second and successor leads were at least 57 seconds.
 
-**Phase 3b parts 1–3 are done. Parts 4–8 remain.** Production stays on the
+**Phase 3b parts 1–4 are done. Parts 5–8 remain.** Production stays on the
 normal stream path, including eligible standalone `queue` requests: startup logs
 `selected=stream reason=queue-unavailable` once and continues through HELO and
 ordinary stream playback. The previous fatal opt-in guard is removed. Grouped
@@ -788,7 +788,7 @@ The finite route and 3a DIDL are used for each published asset. Every append use
 AddMultipleURIsToQueue with one URI and a freshly observed UpdateID, followed by
 a confirming queue snapshot. The queue transport URI is set once, and Play is
 sent once, when the first item is ready. Later publications only extend the
-queue; Sonos owns the joins. Stop, mode-change and destructor/service-shutdown
+queue; Sonos owns the joins. Explicit session-end, mode-change and destructor/service-shutdown
 release remove only exact asset URLs registered by this controller, preserving
 foreign entries (including URLs that merely copy a session parameter). Release
 revokes the epoch for new HTTP readers; existing readers retain their assets.
@@ -845,8 +845,46 @@ revoked evidence. Separate deterministic tests verify phase reset/rate-prior
 carry and prefix/source-zero safeguards. Room integration remains guarded;
 this does not qualify physical playback or complete LMS control/fallback.
 
-Remaining: part 4 LMS control/edit reconciliation; part 5 Sonos-app control
-mapping; part 6 controlled, latched stream fallback and active room status; part 7 the complete
+Part 4 adds the guarded LMS control boundary. `Sink::queueCommand` is an
+opt-in, nonblocking SlimProto hook; stream sinks retain their existing path.
+The host supplies authoritative LMS playlist snapshots with revision and stable
+occurrence tokens to `lmsPlaylist`, distinguishes a user selection from decoder
+read-ahead, and posts p/u/q/f through `lmsCommand`. Native Pause/Play/Stop target
+the coordinator. q/f acknowledge the flush without discarding the owned assets;
+only speaker evidence emits playback state. Initial play selects TRACK_NR before
+Play. Explicit position/next/previous selects a prepared asset and reconstructs
+its successors. Cached mixed intros are retained and logged on manual selection.
+A cached backward selection first seeks, confirms its target, then trims its
+future, so it cannot remove the still-audible item. Re-added assets receive a new
+URL revision when their occurrence already appears in retained queue history.
+Core retains bounded track identity for cached revisits, emits one STMs per
+confirmed identity change, and does not repeat an already emitted STMd.
+
+`lmsSeek` accepts source milliseconds only from LMS. A target inside the current
+asset's produced prefix uses REL_TIME, floored to the SOAP adapter's whole-second
+resolution, and reanchors the speaker clock after confirmation. Other targets
+request a fresh rendered occurrence through the host preparation callback, use a
+new URL and TRACK_NR, and retain the requested source-time origin for LMS elapsed.
+The callback must return promptly; an unpublished asset can be filled through
+subsequent host updates. `CoreQueueSink::beginRender` excludes the old decoder
+run's predecessor tail from an independent seek/history re-render. It does not
+change a cached item's committed mixed intro. Missing/evicted history explicitly
+requests preparation rather than reading failed storage. HTTP Range never calls
+these controls.
+
+Playlist add/delete/move/clear snapshots rebuild only entries after a freshly
+confirmed audible URI/ordinal, with UpdateID fencing and read-back verification.
+Deleting the audible occurrence or clearing retains its asset until session end;
+new future assets follow it. Identical snapshots do not mutate the queue. Every
+rebuild logs the LMS revision, occurrence token and retained/cached decision.
+The part 3 loopback fake now models Seek/Pause/Stop; the new LMS control suite
+uses real SlimProto/core status packets, cached selections, a ten-second pause,
+independent re-renders, future edits, and identity checks after each action.
+The fixture supplies the authoritative playlist/seek state at the host boundary;
+production LMS snapshot acquisition and room runtime wiring remain in part 6,
+behind the unchanged production guard. No room enables queue playback yet.
+
+Remaining: part 5 Sonos-app control mapping; part 6 controlled, latched stream fallback and active room status; part 7 the complete
 end-to-end audible fake-Sonos acceptance suite; part 8 final phase 3 status and
 device-verification documentation. The unattended physical device suite follows
 in phase 3c. Agents never run against real LMS or speakers or deploy on LXC 113.

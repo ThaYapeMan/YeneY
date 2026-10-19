@@ -4,6 +4,7 @@
 #include "third_party/yeney-core/core/player.h"
 #include "upnp/http_server.h"
 #include <atomic>
+#include <algorithm>
 #include <iostream>
 #include <poll.h>
 #include <sstream>
@@ -23,10 +24,38 @@ int main(int argc, char **argv) {
     options.session = "audible-test-session";
     options.httpBase = "http://127.0.0.1:" + std::to_string(server->port());
     options.log = [](const std::string &s) { std::cerr << s << std::endl; };
+    options.reanchor = [&](uint64_t id, uint32_t ms) { sink.reanchorSpeaker(id, ms); };
     options.audiblePosition = [&](uint64_t id, uint64_t frame, yeney::PlaybackState state) {
         sink.speakerPosition(id, frame, state);
     };
+    std::atomic_uint64_t prepared{0};
+    options.prepare = [&](uint64_t, uint32_t) {
+        for (const auto &r : sink.snapshot())
+            if (r.source.occurrence == prepared && r.item) {
+                queue_audio::QueueAsset a;
+                a.occurrence = prepared.load();
+                a.item = r.item;
+                a.metadata.title = "Title & " + std::to_string(prepared.load());
+                a.metadata.artist = "Artist <one>";
+                a.metadata.album = "Album & fixture";
+                return a;
+            }
+        throw std::runtime_error("fixture preparation missing");
+    };
     auto controller = std::make_unique<queue_audio::QueueController>(options, server);
+    std::atomic_bool consumeStart{false};
+    sink.onQueueCommand([&](char command, uint32_t) {
+        if (command == 's' && consumeStart) {
+            consumeStart = false;
+            controller->lmsCommand(1, command);
+            return true;
+        }
+        if (command == 'p' || command == 'u' || command == 'q' || command == 'f') {
+            controller->lmsCommand(1, command);
+            return true;
+        }
+        return false;
+    });
     std::mutex eventMutex;
     upnp::GenaEvent lastEvent;
     server->setNotifyHandler([&](const upnp::GenaEvent &event) {
@@ -49,9 +78,9 @@ int main(int argc, char **argv) {
     std::atomic_bool done{false};
     yeney::Player player(config, sink);
     std::thread core([&] { player.run(done); });
-    bool playing = false, released = false;
+    bool playing = false, released = false, manual = false;
     auto sync = [&] {
-        if (released)
+        if (released || manual)
             return;
         std::vector<queue_audio::QueueAsset> plan;
         for (const auto &r : sink.snapshot()) {
@@ -84,7 +113,48 @@ int main(int argc, char **argv) {
             std::string line;
             if (!std::getline(std::cin, line) || line == "EXIT")
                 break;
-            if (line == "RELEASE") {
+            if (line == "NEWRENDER") {
+                sink.beginRender();
+            } else if (line.rfind("READYITEM ", 0) == 0) {
+                const auto id = std::stoull(line.substr(10));
+                bool ready = false;
+                for (const auto &r : sink.snapshot())
+                    if (r.source.occurrence == id && r.decoded >= 0 && r.item && r.item->contentLength()) ready = true;
+                std::cout << "ITEM " << ready << std::endl;
+                continue;
+            } else if (line.rfind("PLAN ", 0) == 0 || line.rfind("SELECT ", 0) == 0) {
+                manual = true;
+                std::istringstream input(line);
+                std::string kind;
+                uint64_t revision, current, id;
+                input >> kind >> revision >> current;
+                std::vector<queue_audio::QueueAsset> assets;
+                auto records = sink.snapshot();
+                while (input >> id) {
+                    auto it = std::find_if(records.begin(), records.end(), [&](const auto &r) {
+                        return r.source.occurrence == id;
+                    });
+                    if (it == records.end()) throw std::runtime_error("fixture unknown occurrence");
+                    queue_audio::QueueAsset a;
+                    a.occurrence = id;
+                    a.item = it->item;
+                    a.mixedIntro = it->source.transition == 1;
+                    a.metadata.title = "Title & " + std::to_string(id);
+                    a.metadata.artist = "Artist <one>";
+                    a.metadata.album = "Album & fixture";
+                    assets.push_back(a);
+                }
+                controller->lmsPlaylist(1, revision, current, assets, kind == "SELECT").get();
+                consumeStart = kind == "SELECT";
+            } else if (line.rfind("SEEK ", 0) == 0) {
+                controller->lmsSeek(1, std::stoul(line.substr(5))).get();
+            } else if (line.rfind("PREPARED ", 0) == 0) {
+                prepared = std::stoull(line.substr(9));
+            } else if (line.rfind("EVICT ", 0) == 0) {
+                auto id = std::stoull(line.substr(6));
+                for (const auto &r : sink.snapshot())
+                    if (r.source.occurrence == id) r.item->cancel("item history evicted; LMS re-render required");
+            } else if (line == "RELEASE") {
                 released = true;
                 controller->release().get();
             } else if (line == "STALE") {

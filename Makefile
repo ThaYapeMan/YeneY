@@ -45,6 +45,7 @@ test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	./queue-position-test
 	python3 tests/queue_audible_test.py
+	python3 tests/queue_lms_control_test.py
 	./queue-controller-guard-test
 	python3 tests/queue_controller_test.py
 	python3 tests/queue_guard_stream_test.py

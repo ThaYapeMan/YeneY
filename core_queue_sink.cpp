@@ -191,7 +191,12 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             std::lock_guard<std::mutex> lock(mutex);
             tailPlaying = tail.item && audibleId == tail.source.occurrence;
         }
-        if (tail.item && tail.source.rate == f.rate && !tailPlaying) {
+        if (freshRender && tail.item) {
+            tail.item->cancel("independent LMS render excludes predecessor tail");
+            std::lock_guard<std::mutex> lock(mutex);
+            records.erase(UINT64_MAX - lastEnded);
+        }
+        if (!freshRender && tail.item && tail.source.rate == f.rate && !tailPlaying) {
             const auto count = tail.item->producedFrames();
             auto reader = tail.item->reader(44);
             char bytes[6];
@@ -221,6 +226,7 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             std::lock_guard<std::mutex> lock(mutex);
             records[id].item = item;
         }
+        freshRender = false;
         std::optional<yeney::TrackDescriptor> successor;
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -348,6 +354,18 @@ void CoreQueueSink::audibleFrom(uint64_t id, uint64_t frame) {
     lock.unlock();
     enqueue([this] { protectItems(); });
 }
+void CoreQueueSink::beginRender() { enqueue([this] { freshRender = true; }); }
+void CoreQueueSink::onQueueCommand(std::function<bool(char, uint32_t)> handler) {
+    commandHandler = std::move(handler);
+}
+bool CoreQueueSink::queueCommand(char command, uint32_t value) {
+    return commandHandler && commandHandler(command, value);
+}
+void CoreQueueSink::reanchorSpeaker(uint64_t id, uint32_t origin) {
+    std::lock_guard<std::mutex> lock(mutex);
+    speakerElapsed.reset();
+    records.at(id).sourceOriginMs = origin;
+}
 void CoreQueueSink::useSpeakerClock() {
     std::lock_guard<std::mutex> lock(mutex);
     speakerClock = true;
@@ -393,7 +411,7 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
         }
         const auto sourceFrames =
             id < UINT64_MAX / 2 ? frame - r.prefixFrames : audibleFrame - records.at(audibleSource).first;
-        const auto elapsed = uint32_t(std::min<uint64_t>(UINT32_MAX, sourceFrames * 1000 / r.source.rate));
+        const auto elapsed = uint32_t(std::min<uint64_t>(UINT32_MAX, uint64_t(r.sourceOriginMs) + sourceFrames * 1000 / r.source.rate));
         speakerElapsed = std::max(speakerElapsed.value_or(0), elapsed);
     } else if (audibleSource) {
         const auto &old = records.at(audibleSource);

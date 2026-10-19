@@ -54,7 +54,17 @@ struct QueueController::Impl {
     std::condition_variable changed;
     std::deque<Job> jobs;
     bool closing = false, active = false, started = false;
-    uint64_t epoch = 0, lastEpoch = 0;
+    uint64_t epoch = 0, lastEpoch = 0, playlistRevision = 0;
+    uint64_t target = 0, pendingSent = 0;
+    bool rebuildAfterConfirm = false;
+    std::optional<uint32_t> seekAnchor;
+    std::vector<QueueAsset> playlist, pendingFuture;
+    std::map<uint64_t, QueueAsset> history;
+    static uint64_t token(const QueueAsset &a) { return a.token ? a.token : a.occurrence; }
+    static bool available(const QueueAsset &a) {
+        try { return a.item && a.item->contentLength().has_value(); }
+        catch (const std::exception &) { return false; }
+    }
     std::vector<QueueAsset> plan;
     std::vector<std::string> urls;
     std::set<std::string> ownedUris;
@@ -125,11 +135,20 @@ struct QueueController::Impl {
             ignored("event-position-disagreement");
             return;
         }
-        if (audibleIndex != SIZE_MAX && index < audibleIndex) {
+        if (target && plan[index].occurrence != target) {
+            ignored("pending-target");
+            return;
+        }
+        if (!target && audibleIndex != SIZE_MAX && index < audibleIndex) {
             ignored("older-item");
             return;
         }
+        const bool commanded = target != 0;
         const bool newItem = index != audibleIndex;
+        if (seekAnchor && (p.ms / 1000 != *seekAnchor / 1000)) {
+            ignored("pending-seek");
+            return;
+        }
         if (newItem && state != "PLAYING") {
             ignored("not-playing");
             return;
@@ -144,7 +163,19 @@ struct QueueController::Impl {
         else
             return; // TRANSITIONING is not proof of an audible start
         const auto now = nowMs();
-        if (newItem) {
+        if (newItem || commanded || seekAnchor) {
+            if (rebuildAfterConfirm) {
+                removeFuture(index + 1);
+                plan.resize(index + 1);
+                plan.insert(plan.end(), pendingFuture.begin(), pendingFuture.end());
+                pendingFuture.clear();
+                rebuildAfterConfirm = false;
+                log("rebuild confirmed-target future=" + std::to_string(plan.size() - index - 1));
+            }
+            target = 0;
+            seekAnchor.reset();
+            if (options.reanchor)
+                options.reanchor(plan[index].occurrence, plan[index].sourceOriginMs);
             audibleIndex = index;
             lastFrames = 0;
             position.item(++clockEpoch, p.ms, plan[index].item->descriptor().rate, now);
@@ -349,6 +380,12 @@ struct QueueController::Impl {
         if (epoch)
             route.revoke(epoch);
         plan.clear();
+        playlist.clear();
+        history.clear();
+        playlistRevision = target = pendingSent = 0;
+        seekAnchor.reset();
+        pendingFuture.clear();
+        rebuildAfterConfirm = false;
         urls.clear();
         ownedUris.clear();
         started = false;
@@ -381,6 +418,7 @@ struct QueueController::Impl {
                                [&](const auto &a) { return a.occurrence == current; });
         if (at == assets.end())
             throw std::invalid_argument("queue-current-occurrence-missing");
+        auto complete = assets;
         assets.erase(assets.begin(), at);
         if (active && next == epoch) {
             setPlan(std::move(assets));
@@ -390,6 +428,9 @@ struct QueueController::Impl {
             throw StaleEpoch();
         release("new-play");
         epoch = lastEpoch = next;
+        playlist = complete;
+        playlistRevision = 1;
+        for (const auto &a : complete) history[token(a)] = a;
         setPlan(std::move(assets));
         auto title = options.backupTitle ? options.backupTitle() : backupName();
         const auto saved = coordinator.playlists();
@@ -402,11 +443,155 @@ struct QueueController::Impl {
         publishStatus("owned");
         log("ownership acquired");
     }
+    void checkEpoch(uint64_t received) {
+        if (!active || received != epoch)
+            throw StaleEpoch();
+    }
+    void removeFuture(size_t keep) {
+        auto before = coordinator.browse();
+        if (before.uris != urls)
+            throw std::runtime_error("queue-changed-while-owned");
+        if (urls.size() > keep) {
+            actions.remove(before.update, unsigned(keep + 1), unsigned(urls.size() - keep));
+            auto expected = std::vector<std::string>(urls.begin(), urls.begin() + keep);
+            auto after = coordinator.browse();
+            if (after.uris != expected || after.update == before.update)
+                throw std::runtime_error("queue-rebuild-unconfirmed");
+            urls = std::move(expected);
+        }
+    }
+    void reconcile(uint64_t revision, uint64_t current, std::vector<QueueAsset> assets, bool select) {
+        if (!revision || revision < playlistRevision)
+            throw StaleEpoch();
+        std::set<uint64_t> seen;
+        if (assets.size() > 60000)
+            throw std::invalid_argument("queue-invalid-window");
+        for (const auto &a : assets) {
+            if (!token(a) || !a.occurrence || !seen.insert(token(a)).second)
+                throw std::invalid_argument("queue-invalid-occurrence");
+        }
+        if (!select && revision == playlistRevision && assets.size() == playlist.size() &&
+            std::equal(assets.begin(), assets.end(), playlist.begin(), [&](const auto &a, const auto &b) {
+                return token(a) == token(b) && a.occurrence == b.occurrence &&
+                       a.revision == b.revision && a.item == b.item;
+            }))
+            return;
+        for (const auto &a : plan)
+            history[token(a)] = a;
+        for (auto &a : assets) {
+            auto old = history.find(token(a));
+            if (!a.item && old != history.end() && available(old->second))
+                a = old->second;
+        }
+        auto chosen = std::find_if(assets.begin(), assets.end(),
+                                  [&](const auto &a) { return token(a) == current; });
+        if (select && chosen == assets.end())
+            throw std::invalid_argument("queue-current-occurrence-missing");
+        if (select && !available(*chosen)) {
+            if (!options.prepare)
+                throw std::runtime_error("queue-preparation-unavailable");
+            auto prepared = options.prepare(current, 0);
+            prepared.token = current;
+            *chosen = std::move(prepared);
+            log("prepare token=" + std::to_string(current) + " reason=history-missing");
+        }
+        playlist = assets;
+        playlistRevision = revision;
+        if (!select) {
+            // Confirm the audible identity immediately before future-only mutation.
+            auto p = readPosition();
+            auto index = ownedIndex(p.uri);
+            if (index == SIZE_MAX || p.track != index + 1 ||
+                (audibleIndex != SIZE_MAX && index != audibleIndex))
+                throw std::runtime_error("queue-rebuild-unsafe-position");
+            const auto audibleToken = token(plan[index]);
+            auto next = std::find_if(assets.begin(), assets.end(),
+                                    [&](const auto &a) { return token(a) == audibleToken; });
+            std::vector<QueueAsset> future;
+            if (next != assets.end())
+                future.assign(std::next(next), assets.end());
+            else if (chosen != assets.end())
+                future.assign(chosen, assets.end()); // LMS supplies the successor after deleting current
+            else
+                future = assets; // clear never removes the audible asset
+            removeFuture(index + 1);
+            plan.resize(index + 1);
+            plan.insert(plan.end(), future.begin(), future.end());
+            log("rebuild revision=" + std::to_string(revision) + " audible-token=" +
+                std::to_string(audibleToken) + " future=" + std::to_string(future.size()));
+            return;
+        }
+        // Keep the audible item and all history before it. The prepared target
+        // is appended if it was removed, retaining the immutable cached intro.
+        auto old = std::find_if(plan.begin(), plan.begin() + urls.size(), [&](const auto &a) {
+            return a.occurrence == chosen->occurrence && a.item == chosen->item;
+        });
+        const bool cached = old != plan.begin() + urls.size();
+        pendingFuture.clear();
+        rebuildAfterConfirm = false;
+        seekAnchor.reset();
+        if (cached) {
+            pendingFuture.assign(std::next(chosen), assets.end());
+            rebuildAfterConfirm = true;
+        } else {
+            size_t keep = audibleIndex == SIZE_MAX ? urls.size() : audibleIndex + 1;
+            removeFuture(keep);
+            plan.resize(keep);
+            plan.insert(plan.end(), chosen, assets.end());
+        }
+        target = chosen->occurrence;
+        pendingSent = 0;
+        log("rebuild revision=" + std::to_string(revision) + " select-token=" + std::to_string(current) +
+            " cached=" + std::to_string(cached) + " mixed-intro=" + std::to_string(chosen->mixedIntro));
+    }
+    void command(char command) {
+        if (command == 'p') actions.pause();
+        else if (command == 'u') actions.play();
+        else if (command == 'q' || command == 'f') {
+            target = pendingSent = 0;
+            pendingFuture.clear();
+            rebuildAfterConfirm = false;
+            seekAnchor.reset();
+            actions.stop();
+        }
+        else if (command != 's') throw std::invalid_argument("queue-invalid-command");
+        // s identity is supplied by lmsPlaylist, never inferred from read-ahead.
+        log("LMS strm=" + std::string(1, command) + " ownership=retained");
+        pollAt = {};
+    }
+    void seek(uint32_t ms) {
+        if (audibleIndex == SIZE_MAX)
+            throw std::runtime_error("queue-no-audible-item");
+        auto &a = plan[audibleIndex];
+        if (ms >= a.sourceOriginMs && available(a) &&
+            uint64_t(ms - a.sourceOriginMs) * a.item->descriptor().rate / 1000 < a.item->producedFrames()) {
+            const auto relative = (ms - a.sourceOriginMs) / 1000;
+            actions.seekTime(std::to_string(relative / 3600) + ":" +
+                             std::to_string(relative / 60 % 60) + ":" + std::to_string(relative % 60));
+            seekAnchor = relative * 1000;
+            log("seek token=" + std::to_string(token(a)) + " source-ms=" + std::to_string(ms) + " history=retained");
+        } else {
+            if (!options.prepare)
+                throw std::runtime_error("queue-preparation-unavailable");
+            auto replacement = options.prepare(token(a), ms);
+            if (!replacement.occurrence || replacement.occurrence == a.occurrence)
+                throw std::runtime_error("queue-seek-requires-new-occurrence");
+            replacement.token = token(a);
+            replacement.sourceOriginMs = ms;
+            auto assets = playlist;
+            auto it = std::find_if(assets.begin(), assets.end(), [&](const auto &x) { return token(x) == token(a); });
+            if (it == assets.end()) throw std::runtime_error("queue-seek-item-removed");
+            *it = replacement;
+            reconcile(playlistRevision, token(a), std::move(assets), true);
+            log("seek source-ms=" + std::to_string(ms) + " history=rerender new-occurrence=" + std::to_string(replacement.occurrence));
+        }
+        pollAt = {};
+    }
     void pump() {
         if (!active)
             return;
         while (urls.size() < plan.size()) {
-            const auto &asset = plan[urls.size()];
+            auto &asset = plan[urls.size()];
             if (!asset.item)
                 break;
             auto length = asset.item->contentLength();
@@ -419,6 +604,9 @@ struct QueueController::Impl {
                 throw std::runtime_error("queue-changed-while-owned");
             auto metadata = asset.metadata;
             metadata.session = options.session;
+            for (size_t i = 0; i < urls.size(); ++i)
+                if (plan[i].occurrence == asset.occurrence && plan[i].revision >= asset.revision)
+                    asset.revision = plan[i].revision + 1;
             metadata.url =
                 options.httpBase + route.publish(options.room.name, epoch, asset.revision, asset.item);
             metadata.size = *length;
@@ -438,8 +626,19 @@ struct QueueController::Impl {
                 " revision=" + std::to_string(asset.revision));
             if (!started) {
                 actions.selectQueue(options.room.uuid);
+                actions.seekTrack(1);
                 actions.play();
                 started = true;
+            }
+        }
+        if (target && pendingSent != target) {
+            auto it = std::find_if(plan.begin(), plan.begin() + urls.size(),
+                                   [&](const auto &a) { return a.occurrence == target; });
+            if (it != plan.begin() + urls.size()) {
+                actions.seekTrack(unsigned(it - plan.begin() + 1));
+                actions.play();
+                // Keep target as an evidence fence, but issue the action once.
+                pendingSent = target;
             }
         }
         if (options.audiblePosition && started && std::chrono::steady_clock::now() >= pollAt) {
@@ -470,6 +669,19 @@ std::future<void> QueueController::update(uint64_t epoch, std::vector<QueueAsset
             throw StaleEpoch();
         p->setPlan(std::move(assets));
     });
+}
+std::future<void> QueueController::lmsPlaylist(uint64_t epoch, uint64_t revision, uint64_t current,
+                                                std::vector<QueueAsset> assets, bool select) {
+    return impl->post([p = impl.get(), epoch, revision, current, assets = std::move(assets), select]() mutable {
+        p->checkEpoch(epoch);
+        p->reconcile(revision, current, std::move(assets), select);
+    });
+}
+std::future<void> QueueController::lmsCommand(uint64_t epoch, char command) {
+    return impl->post([p = impl.get(), epoch, command] { p->checkEpoch(epoch); p->command(command); });
+}
+std::future<void> QueueController::lmsSeek(uint64_t epoch, uint32_t ms) {
+    return impl->post([p = impl.get(), epoch, ms] { p->checkEpoch(epoch); p->seek(ms); });
 }
 std::future<void> QueueController::release(std::string reason) {
     return impl->post([p = impl.get(), reason = std::move(reason)] { p->release(reason); });

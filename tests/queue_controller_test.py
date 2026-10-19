@@ -191,9 +191,24 @@ class Handler(BaseHTTPRequestHandler):
         if action == 'SetAVTransportURI':
             assert a['CurrentURI'] == 'x-rincon-queue:RINCON_TEST#0' and s.items
             s.uri = a['CurrentURI']; return {}, None
+        if action == 'Seek':
+            if a['Unit'] == 'TRACK_NR':
+                track = int(a['Target'])
+                assert 1 <= track <= len(s.items)
+                s.position = dict(Track=str(track), TrackURI=s.items[track-1]['uri'], RelTime='00:00:00')
+            else:
+                assert a['Unit'] == 'REL_TIME'
+                s.position['RelTime'] = ':'.join(f'{int(v):02}' for v in a['Target'].split(':'))
+            return {}, None
+        if action in ('Pause', 'Stop'):
+            s.transport_state = 'PAUSED_PLAYBACK' if action == 'Pause' else 'STOPPED'
+            return {}, None
         if action == 'Play':
             assert s.uri == 'x-rincon-queue:RINCON_TEST#0' and not s.crossfade
-            s.playing = True; return {}, None
+            s.playing = True
+            if getattr(s, 'follow_controls', False):
+                s.transport_state = 'PLAYING'
+            return {}, None
         raise AssertionError((service, action, a))
 
 

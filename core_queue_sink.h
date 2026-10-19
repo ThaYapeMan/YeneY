@@ -13,6 +13,7 @@ struct QueueRecord {
     yeney::TrackDescriptor source;
     std::chrono::steady_clock::time_point strmAt{};
     uint64_t expectedIndex = 0;
+    uint32_t sourceOriginMs = 0;
     double strm = -1, decoded = -1, stmd = -1, audible = -1, stms = -1, end = -1;
     uint64_t first = 0, actual = 0, overlap = 0, prefixFrames = 0;
     std::optional<uint64_t> promised;
@@ -46,11 +47,12 @@ class CoreQueueSink : public yeney::Sink {
     std::deque<yeney::AudibleStart> audibleSignals;
     std::deque<yeney::AudibleState> speakerStates;
     bool speakerClock = false;
+    std::function<bool(char, uint32_t)> commandHandler;
     std::optional<yeney::PlaybackState> speakerState;
     std::optional<uint32_t> speakerElapsed;
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
     uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
-    bool prefixPending = false;
+    bool prefixPending = false, freshRender = false;
     uint32_t rate = 48000;
     std::string workerFault;
     std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
@@ -81,6 +83,13 @@ public:
     // Enable before starting the player. Only the controller calls this path,
     // after speaker identity/position confirmation; never an HTTP reader.
     void useSpeakerClock();
+    // Bind before Player::run. The handler enqueues work and must not wait.
+    void onQueueCommand(std::function<bool(char, uint32_t)>);
+    bool queueCommand(char, uint32_t) override;
+    // Before an LMS re-render/seek run: do not carry an old outgoing tail
+    // into the independently selected asset. Cached mixed intros are untouched.
+    void beginRender();
+    void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
     bool speakerDriven() const override;
     bool takeAudibleState(yeney::AudibleState &) override;

@@ -9,6 +9,9 @@
 namespace queue_audio {
 struct QueueAsset {
     uint64_t occurrence = 0, revision = 1;
+    uint64_t token = 0; // stable LMS playlist occurrence; defaults to occurrence
+    uint32_t sourceOriginMs = 0;
+    bool mixedIntro = false;
     std::shared_ptr<Item> item; // may be null until the decoder creates it
     upnp::QueueMetadata metadata;
     std::chrono::steady_clock::time_point strmAt{};
@@ -20,6 +23,10 @@ struct ControllerOptions {
     // Receives only confirmed speaker identity/position, on the controller worker.
     // Bind to CoreQueueSink::speakerPosition before the player is started.
     std::function<void(uint64_t, uint64_t, yeney::PlaybackState)> audiblePosition;
+    // Nonblocking host preparation: return a fresh occurrence/URL for a missing
+    // asset or seek; item may be pending and supplied by a later LMS snapshot.
+    std::function<QueueAsset(uint64_t, uint32_t)> prepare;
+    std::function<void(uint64_t, uint32_t)> reanchor;
     double deviceRatePrior = 1;               // qualified device rate; phase is never carried
     std::function<std::string()> backupTitle; // default local time, minute precision
 };
@@ -46,6 +53,13 @@ public:
     // the playlist has them. Unpublished entries remain pending in queue order.
     std::future<void> play(uint64_t epoch, uint64_t current, std::vector<QueueAsset>);
     std::future<void> update(uint64_t epoch, std::vector<QueueAsset>);
+    // Authoritative LMS playlist snapshot, including stable duplicate tokens.
+    // A higher revision edits future entries only. select is explicit user intent,
+    // unlike decoder read-ahead s. current is a token, never a Sonos ordinal.
+    std::future<void> lmsPlaylist(uint64_t epoch, uint64_t revision, uint64_t current,
+                                  std::vector<QueueAsset>, bool select = false);
+    std::future<void> lmsCommand(uint64_t epoch, char command);
+    std::future<void> lmsSeek(uint64_t epoch, uint32_t sourceMs);
     std::future<void> release(std::string reason = "stop");
     // Forward only SID/coordinator-validated AVTransport notifications from the
     // room's existing subscription owner. Capture epoch when receiving, not later.
