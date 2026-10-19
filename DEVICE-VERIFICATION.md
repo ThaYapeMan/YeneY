@@ -485,3 +485,24 @@ For a short identity check, use ALAC/off and stop after track 4 starts: every
 completed occurrence must have `lms_matches_audible=true`. Unknown counts retain
 sealed publication. More than 10% unknown audible CLI polls warns, and no
 successful audible poll fails with `lms-cli-unavailable`.
+
+## Stream pacing selection and measurements
+
+Stream pacing defaults to `YENEY_STREAM_PACING=wall`. A room service may opt in
+with `Environment=YENEY_STREAM_PACING=sonos` in its systemd drop-in; restart that
+room to apply it. Invalid values warn and use `wall`. Sonos pacing enables the
+existing timing estimator, uses the per-UDN drift prior until a fresh fit locks,
+and slews phase corrections at at most 1% without resetting the encoder clock.
+It targets start lead + 500 ms inside the start lead .. start lead + 1000 ms band.
+The lead band applies after initial fill, while the speaker consumes normally;
+no sender can maintain a lower bound during a disconnected or stopped speaker.
+The start-lead zero case keeps the legacy 250 ms allowance in `wall` mode.
+
+Room status includes cumulative overwritten/dropped packet counts, blocking
+socket-send residence time (calls lasting at least 1 ms), encoded and estimated
+audible milliseconds, and their difference. Active non-zero diagnostics log at
+most once per minute. `/var/lib/yeney/stream-pacing-<hex UTF-8 room name>.json`
+is atomically refreshed once per second, including PID and monotonic timestamp;
+counters survive track changes/reconnects and reset on service restart. Measuring
+lead does not steer the audible reporting clock. Socket time includes time in a
+failed/timed-out send; it is an estimate of backpressure, not a kernel queue meter.

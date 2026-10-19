@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
+#include "stream_pacing.h"
+#include "start_lead.h"
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -46,7 +48,8 @@ public:
         if (us >= 1000) { socketBlockedUs += us; ++socketBlockedCalls; }
     }
     void print(const StreamMeasurement &s) {
-        printf("Stream pacing: overwrites=%llu dropped=%llu socket_backpressure_ms=%.3f encoded_ms=%.3f audible_ms=%.3f lead_ms=%.3f valid=%d\n",
+        printf("Stream pacing: mode=%s start_lead_ms=%u overwrites=%llu dropped=%llu socket_backpressure_ms=%.3f encoded_ms=%.3f audible_ms=%.3f lead_ms=%.3f valid=%d\n",
+            streamPacingSonos() ? "sonos" : "wall", yeney_start_lead_ms(),
             (unsigned long long)overwrites.load(), (unsigned long long)dropped.load(),
             socketBlockedUs.load()/1000., s.encodedMs, s.audibleMs, s.encodedMs-s.audibleMs, s.valid);
     }
@@ -61,8 +64,8 @@ public:
             // Rename a complete snapshot; readers never see a partial JSON file.
             auto temporary = path + "." + std::to_string(getpid()) + ".tmp";
             if (FILE *f = fopen(temporary.c_str(), "w")) {
-                fprintf(f, "{\"pid\":%d,\"monotonic_ms\":%llu,\"overwrites\":%llu,\"dropped\":%llu,\"socket_backpressure_ms\":%.3f,\"socket_backpressure_calls\":%llu,\"encoded_ms\":%.3f,\"audible_ms\":%.3f,\"lead_ms\":%.3f,\"valid\":%s}\n",
-                    getpid(), (unsigned long long)now, (unsigned long long)overwrites.load(),
+                fprintf(f, "{\"mode\":\"%s\",\"start_lead_ms\":%u,\"pid\":%d,\"monotonic_ms\":%llu,\"overwrites\":%llu,\"dropped\":%llu,\"socket_backpressure_ms\":%.3f,\"socket_backpressure_calls\":%llu,\"encoded_ms\":%.3f,\"audible_ms\":%.3f,\"lead_ms\":%.3f,\"valid\":%s}\n",
+                    streamPacingSonos() ? "sonos" : "wall", yeney_start_lead_ms(), getpid(), (unsigned long long)now, (unsigned long long)overwrites.load(),
                     (unsigned long long)dropped.load(), socketBlockedUs.load()/1000.,
                     (unsigned long long)socketBlockedCalls.load(), s.encodedMs, s.audibleMs,
                     s.encodedMs-s.audibleMs, s.valid ? "true" : "false");

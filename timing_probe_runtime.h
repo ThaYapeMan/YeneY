@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include "timing_brackets.h"
+#include "stream_pacing.h"
 #include "timing_drift_state.h"
 #include "timing_channel.h"
 #include "timing_probe.h"
@@ -25,7 +26,7 @@ inline bool enabled() {
             printf("yeney: setting key=YENEY_TIMING_PROBE invalid=%s fallback=0\n", s);
         return s && !strcmp(s, "1");
     }();
-    return on;
+    return bridge::streamPacingSonos() || on;
 }
 // Extra settings are deliberately not inspected while the probe is disabled.
 inline bool rawEnabled() {

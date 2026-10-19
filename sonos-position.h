@@ -37,6 +37,8 @@ void set_sonos_position_ms(uint64_t token, uint32_t ms);
 uint64_t get_sonos_position_frames(uint32_t sample_rate);
 // Audible coordinate: excludes PCM discarded by a reconnect before playback.
 uint64_t get_sonos_audible_frames(uint32_t sample_rate);
+// Encoder pacing view: fresh locked fit, otherwise the per-UDN prior rate.
+int sonos_stream_clock(unsigned stream, uint32_t rate, double *frame, double *scale);
 // Read-only diagnostic view; never steers the reporting clock.
 uint64_t estimate_sonos_audible_frames(uint32_t sample_rate);
 

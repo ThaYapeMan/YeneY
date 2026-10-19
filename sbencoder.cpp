@@ -263,6 +263,9 @@ int SBEncoder::write(const char* data, int len, unsigned timeout, const std::fun
     const std::function<bool()>& interrupted)
 {
     const bool limited = timeout != 0;
+    const bool sonos = streamPacingSonos();
+    const int requested = len;
+    int accepted = 0;
 
     for (;;) {
         if (interrupted && interrupted()) return 0;
@@ -288,10 +291,30 @@ int SBEncoder::write(const char* data, int len, unsigned timeout, const std::fun
         const uint64_t firstRead = m_firstReadAtMs.load();
         const uint64_t playedMs = firstRead ? get_sb_time_ms() - firstRead : 0;
 
+        if (sonos && len > 0) {
+            auto clock = m_clock ? m_clock() : StreamClock{};
+            double played = m_pacer.update(get_sb_time_ms(), firstRead, clock, yeney_is_paused());
+            double allowance = StreamPacer::ceiling(played, yeney_start_lead_ms()) -
+                double(m_pcmBytesAccepted.load()/m_bytesPerFrame)*1000/m_sampleRate;
+            auto frames = uint64_t(std::max(0., allowance)*m_sampleRate/1000);
+            if (!yeney_is_paused() && frames) {
+                int count = int(std::min<uint64_t>({frames, uint64_t(len/m_bytesPerFrame), uint64_t(kSamplesPerChunk)}))*m_bytesPerFrame;
+                if (!count) return accepted;
+                std::lock_guard<std::mutex> lock(m_writeMutex);
+                if (cancelled() || responseEnded() || producerRetired() || m_phase != Phase::Encoding) return 0;
+                if (!m_pcmBytesAccepted && firstPcm) firstPcm();
+                m_pcmBytesAccepted += count;
+                if (encodePcm(data,count) != count) return 0;
+                data += count; len -= count; accepted += count;
+                if (!len) return requested;
+                continue;
+            }
+        }
+
         // The same per-encoder clock covers the initial burst and steady
         // delivery. Checking before accepting a whole batch bounds overshoot
         // to one producer batch. Gapless writes keep this clock and allowance.
-        if (!yeney_is_paused() && encodedMs < playedMs + (yeney_start_lead_ms() ? yeney_start_lead_ms() : kMaxEncodeLeadMs)) {
+        if (!sonos && !yeney_is_paused() && encodedMs < playedMs + (yeney_start_lead_ms() ? yeney_start_lead_ms() : kMaxEncodeLeadMs)) {
             std::lock_guard<std::mutex> lock(m_writeMutex);
             if (cancelled() || responseEnded() || producerRetired() || m_phase != Phase::Encoding)
                 return 0;

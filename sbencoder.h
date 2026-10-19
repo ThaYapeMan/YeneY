@@ -15,6 +15,7 @@
 
 #include "upnp/encoded_buffer.h"
 #include "encoded_history.h"
+#include "stream_pacing.h"
 
 #include <atomic>
 #include <functional>
@@ -78,6 +79,8 @@ public:
     bool hasAudio() const { return m_producedAudio.load(); }
 
     std::atomic<uint64_t> frameOrigin{0};
+    void pacingClock(std::function<StreamClock()> reader) { m_clock = std::move(reader); }
+    bool hasAcceptedPcm() const { return m_pcmBytesAccepted.load() != 0; }
     unsigned sampleRate() const { return m_sampleRate; }
     uint64_t encodedAudioMs() const { return m_encodedFrames.load() * 1000 / m_sampleRate; }
     EncodedHistory history;
@@ -107,7 +110,9 @@ private:
     std::atomic<bool> m_producedAudio{false};
     std::mutex m_writeMutex;
     std::atomic<uint64_t> m_firstReadAtMs;  // set on the first successful read()
-    uint64_t m_pcmBytesAccepted;            // running total handed to the encoder
+    StreamPacer m_pacer;
+    std::function<StreamClock()> m_clock;
+    std::atomic<uint64_t> m_pcmBytesAccepted;            // running total handed to the encoder
     int m_bytesPerFrame;
     int m_sampleBits;
     unsigned m_sampleRate = 44100;

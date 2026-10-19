@@ -25,6 +25,7 @@
 #include "sonos-position.h"
 #include "sonos-status.h"
 #include "stream_metrics.h"
+#include "stream_pacing.h"
 #include "stop_debounce.h"
 #include "stream_session.h"
 #include "audio_mode.h"
@@ -927,6 +928,8 @@ int main(int argc, char** argv)
     if (!gPlayer->discover(room, ip ? ip : "")) return EXIT_FAILURE;
     const auto selectedSpeaker = gPlayer->speaker();
     bridge::streamMetrics().configure(selectedSpeaker.name);
+    printf("yeney: stream pacing room=%s selected=%s\n", upnp::logValue(selectedSpeaker.name).c_str(),
+        bridge::streamPacingSonos() ? "sonos" : "wall");
     const auto playback = bridge::selectPlaybackMode(std::getenv("YENEY_PLAYBACK_MODE"), selectedSpeaker);
     if (playback.invalid)
         printf("yeney: invalid YENEY_PLAYBACK_MODE='%s'; using stream\n", upnp::logValue(playback.requested).c_str());

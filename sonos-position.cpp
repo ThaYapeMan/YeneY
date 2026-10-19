@@ -104,3 +104,12 @@ uint64_t estimate_sonos_audible_frames(uint32_t rate) {
     }
     return copy.audibleFrames(rate);
 }
+
+int sonos_stream_clock(unsigned stream, uint32_t rate, double *frame, double *scale) {
+    std::lock_guard<std::mutex> lock(positionMutex);
+    auto &d = timing_probe::diagnostics();
+    *scale = d.priorScale();
+    *frame = 0;
+    return position.streamId() == stream &&
+        d.lmsPosition(stream, position.measurementBase(), rate, *frame, *scale);
+}
