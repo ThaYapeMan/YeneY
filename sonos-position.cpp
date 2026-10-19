@@ -96,10 +96,11 @@ int sonos_position_audio_started() {
 uint64_t estimate_sonos_audible_frames(uint32_t rate) {
     std::lock_guard<std::mutex> lock(positionMutex);
     auto copy = position;
-    if (timing_probe::enabled() && timing_probe::lmsPositionFromModel()) {
+    if (timing_probe::enabled() && (bridge::streamPacingSonos() || timing_probe::lmsPositionFromModel())) {
         auto &d = timing_probe::diagnostics();
         double frame = 0, scale = d.priorScale(), rel = NAN, at = NAN;
         bool fit = d.lmsPosition(copy.streamId(), copy.measurementBase(), rate, frame, scale, &rel, &at);
+        if (bridge::streamPacingSonos() && fit) return uint64_t(frame);
         return copy.smoothFrames(rate, timing_probe::clockSeconds()*1000, fit, frame, scale, rel, at);
     }
     return copy.audibleFrames(rate);
@@ -110,6 +111,9 @@ int sonos_stream_clock(unsigned stream, uint32_t rate, double *frame, double *sc
     auto &d = timing_probe::diagnostics();
     *scale = d.priorScale();
     *frame = 0;
-    return position.streamId() == stream &&
-        d.lmsPosition(stream, position.measurementBase(), rate, *frame, *scale);
+    double fittedScale = *scale;
+    bool locked = position.streamId() == stream &&
+        d.lmsPosition(stream, position.measurementBase(), rate, *frame, fittedScale);
+    if (locked) *scale = fittedScale;
+    return locked;
 }

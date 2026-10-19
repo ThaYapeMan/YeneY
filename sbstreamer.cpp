@@ -97,12 +97,14 @@ static void activateRequest(const std::shared_ptr<StreamRequest>& request, bool 
     sonos_position_connection(request->stream, request->id);
     activeRequest = request;
     g_enc = request->encoder;
-    streamMetrics().encoder([weak = std::weak_ptr<SBEncoder>(g_enc)] {
+    streamMetrics().encoder([weak = std::weak_ptr<SBEncoder>(g_enc), connection = request->id] {
         auto enc = weak.lock();
         if (!enc) return StreamMeasurement{};
         const auto rate = enc->sampleRate();
+        double frame = 0, scale = 1;
+        bool locked = streamPacingSonos() && sonos_stream_clock(enc->streamId(),rate,&frame,&scale);
         return StreamMeasurement{double(enc->frameOrigin.load())*1000/rate + enc->encodedAudioMs(),
-            double(estimate_sonos_audible_frames(rate))*1000/rate, enc->hasAudio() && !enc->responseEnded()};
+            double(estimate_sonos_audible_frames(rate))*1000/rate, enc->hasAudio() && !enc->responseEnded(), connection, locked};
     });
     auto weak = std::weak_ptr<SBEncoder>(g_enc);
     g_enc->pacingClock([weak] {

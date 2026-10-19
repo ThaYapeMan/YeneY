@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Owner-run stream pacing qualification. No remote shell or deployment."""
+import argparse
+import csv
+import fcntl
+import json
+import math
+import os
+from pathlib import Path
+import re
+import signal
+import socket
+import subprocess
+import tarfile
+import tempfile
+import time
+from urllib.parse import quote, unquote
+
+
+class SuiteError(Exception):
+    pass
+
+
+def records(words, key):
+    result = []
+    for word in words:
+        name, sep, value = word.partition(':')
+        if name == key:
+            result.append({})
+        if sep and result:
+            result[-1][name] = value
+    return result
+
+
+class SnapshotPending(SuiteError):
+    pass
+
+
+class CLI:
+    def __init__(self, host, log):
+        self.host, self.log = host, log
+
+    def call(self, *args):
+        request = ' '.join(quote(str(a), safe=':,?') for a in args)
+        self.log('CLI > '+request)
+        with socket.create_connection((self.host, 9090), timeout=3) as connection:
+            connection.settimeout(3)
+            connection.sendall((request+'\n').encode())
+            response = bytearray()
+            deadline = time.monotonic()+5
+            while b'\n' not in response:
+                if len(response) > 4*1024*1024 or time.monotonic() >= deadline:
+                    raise SuiteError('LMS CLI response limit')
+                part = connection.recv(65536)
+                if not part:
+                    raise SuiteError('LMS CLI closed before response')
+                response.extend(part)
+        words = [unquote(w) for w in response.decode().splitlines()[0].split()]
+        # Verify the echo before accepting a query result or mutation.
+        if words[:len(args)] != list(map(str,args)):
+            # Queries replace the trailing '?' with their value.
+            if args[-1] != '?' or words[:len(args)-1] != list(map(str,args[:-1])):
+                raise SuiteError('LMS CLI echo mismatch')
+        self.log('CLI < '+' '.join(words))
+        return words
+
+
+class Backend:
+    def __init__(self, log):
+        self.log = log
+
+    def run(self, *args):
+        self.log('RUN '+' '.join(args))
+        p = subprocess.run(args, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+        self.log(p.stdout)
+        if p.returncode:
+            raise SuiteError('command failed: '+' '.join(args))
+        return p.stdout.strip()
+
+    now = staticmethod(time.monotonic)
+    sleep = staticmethod(time.sleep)
+
+
+class Suite:
+    def __init__(self, room, server, hours=2, *, backend=None, cli=None,
+                 unit_root=Path('/etc/systemd/system'), state_root=Path('/var/lib/yeney'),
+                 output=Path('/tmp'), executable='/opt/yeney/yeney'):
+        self.room, self.server, self.hours = room, server, hours
+        self.unit_root, self.state_root, self.output = Path(unit_root), Path(state_root), Path(output)
+        self.executable = executable
+        self.output.mkdir(parents=True, exist_ok=True)
+        self.work = Path(tempfile.mkdtemp(prefix='yeney-stream-pacing-', dir=self.output))
+        self.logfile = (self.work/'commands.log').open('w')
+        self.backend = backend or Backend(self.log)
+        self.cli = cli or CLI(server, self.log)
+        self.errors, self.samples = [], []
+        self.override = self.playback = False
+        self.dropin = None
+        self.mac = self.unit = None
+        self.before = {}
+        self.started = int(time.time())
+
+    def log(self, message):
+        self.logfile.write(str(message)+'\n'); self.logfile.flush()
+
+    def isolated(self):
+        text = self.backend.run(self.executable, '--list-rooms', '--details')
+        rows = [line.split('\t') for line in text.splitlines()]
+        rooms = [r for r in rows if len(r) == 5 and r[0] == self.room]
+        if len(rooms) != 1 or rooms[0][3] != self.room or rooms[0][4] != self.room:
+            raise SuiteError('room grouped or standalone topology unverified')
+        words = self.cli.call('syncgroups', '?')
+        if '?' in words:
+            raise SuiteError('LMS sync isolation unverified')
+        for word in words:
+            if word.startswith('sync_members:'):
+                members = set(word.partition(':')[2].lower().split(','))
+                if self.mac and self.mac.lower() in members and members != {self.mac.lower()}:
+                    raise SuiteError('LMS player is synced; refusing group control')
+
+    def player(self):
+        players = records(self.cli.call('players','0','999'), 'playerindex')
+        matches = [p for p in players if p.get('name') == self.room+' (Sonos)' and p.get('connected') == '1']
+        if len(matches) != 1 or not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', matches[0].get('playerid','')):
+            raise SuiteError('exact connected LMS room player missing or ambiguous')
+        mac = matches[0]['playerid']
+        if self.mac and self.mac.lower() != mac.lower():
+            raise SuiteError('LMS player identity changed')
+        return mac
+
+    def query(self, *args):
+        return self.cli.call(self.mac, *args, '?')[-1]
+
+    def mutate(self, *args):
+        self.isolated()
+        return self.cli.call(self.mac, *args)
+
+    def restart(self):
+        self.backend.run('systemctl','daemon-reload')
+        self.backend.run('systemctl','restart',self.unit)
+
+    def connected(self):
+        deadline = self.backend.now()+30
+        while True:
+            try:
+                self.player()
+                pid = int(self.backend.run('systemctl','show',self.unit,'-p','MainPID','--value'))
+                if pid > 0:
+                    return pid
+            except (SuiteError, ValueError):
+                pass
+            if self.backend.now() >= deadline:
+                raise SuiteError('room service/player did not reconnect')
+            self.backend.sleep(1)
+
+    def setup(self):
+        if (not self.room or any(c in self.room for c in '\r\n\0=') or
+                not self.server or any(c.isspace() or c in ':\0' for c in self.server)):
+            raise SuiteError('invalid room or server')
+        if not math.isfinite(self.hours) or not 0 < self.hours <= 168:
+            raise SuiteError('hours must be positive and at most 168')
+        self.unit = self.backend.run('systemd-escape','--template=yeney@.service','--',self.room)
+        if not self.unit.startswith('yeney@') or not self.unit.endswith('.service') or '/' in self.unit or '\n' in self.unit:
+            raise SuiteError('invalid escaped service unit')
+        self.backend.run('systemctl','is-active','--quiet',self.unit)
+        self.mac = self.player()
+        self.isolated()  # No mutation, including drop-in creation, before both checks.
+        self.before = dict(index=self.query('playlist','index'), time=self.query('time'),
+                           repeat=self.query('playlist','repeat'), mode=self.query('mode'),
+                           tracks=int(self.query('playlist','tracks')),
+                           environment=self.backend.run('systemctl','show',self.unit,'-p','Environment','--value'))
+        if self.before['repeat'] not in ('0','1','2') or self.before['mode'] not in ('play','pause','stop'):
+            raise SuiteError('unrecognized LMS playback state')
+        if self.before['tracks']:
+            index, elapsed = int(self.before['index']), float(self.before['time'])
+            if not 0 <= index < self.before['tracks'] or not math.isfinite(elapsed) or elapsed < 0:
+                raise SuiteError('invalid LMS playlist position/time')
+            self.source = None  # Preserve the existing playlist byte-for-byte.
+        else:
+            favorites = records(self.cli.call('favorites','items','0','100'), 'id')
+            choices = [f for f in favorites if f.get('type') == 'audio' and f.get('url','').startswith(('http://','https://'))]
+            if choices:
+                self.source = ('playlist','play',choices[0]['url'])
+            else:
+                playlists = records(self.cli.call('playlists','0','100'), 'id')
+                if not playlists:
+                    raise SuiteError('no existing playlist, playable radio favorite, or saved playlist')
+                self.source = ('playlistcontrol','cmd:load','playlist_id:'+playlists[0]['id'])
+        (self.work/'before.json').write_text(json.dumps(self.before,indent=2)+'\n')
+        directory = self.unit_root/(self.unit+'.d')
+        if self.unit_root.is_symlink() or directory.is_symlink():
+            raise SuiteError('refusing symlinked service drop-in directory')
+        directory.mkdir(parents=True,exist_ok=True)
+        self.dropin = directory/'pacing-suite.conf'
+        # Exclusive creation preserves any existing owner configuration.
+        with self.dropin.open('x') as f:
+            self.override = True
+            text = '[Service]\nEnvironment=YENEY_STREAM_PACING=sonos\n'
+            f.write(text)
+            (self.work/'pacing-suite.conf').write_text(text)
+        self.playback = True  # A failed restart may still have affected LMS playback.
+        self.restart()
+        self.pid = self.connected()
+        self.mutate('playlist','repeat','2')
+        if self.source:
+            self.mutate(*self.source)
+        self.mutate('play')
+
+    def sample(self):
+        self.isolated()
+        pid = int(self.backend.run('systemctl','show',self.unit,'-p','MainPID','--value'))
+        if pid != self.pid:
+            raise SuiteError('room service restarted during measurement')
+        path = self.state_root/('stream-pacing-'+self.room.encode().hex()+'.json')
+        raw = path.read_text()
+        (self.work/'latest-diagnostic.json').write_text(raw)
+        self.log('SNAPSHOT '+raw.strip())
+        s = json.loads(raw)
+        age = self.backend.now()-s['monotonic_ms']/1000
+        if s['pid'] != pid or not 0 <= age <= 20:
+            raise SnapshotPending('stale or wrong-process diagnostic snapshot')
+        if s['mode'] != 'sonos':
+            raise SuiteError('non-sonos diagnostic snapshot')
+        for key in ('lead_ms','encoded_ms','audible_ms','socket_backpressure_ms'):
+            if not math.isfinite(s[key]):
+                raise SuiteError('non-finite '+key)
+        if s['overwrites'] or s['dropped']:
+            raise SuiteError('encoded packets lost')
+        if self.samples and any(s[k] < self.samples[-1][k] for k in ('overwrites','dropped','socket_backpressure_ms','socket_backpressure_calls')):
+            raise SuiteError('diagnostic counters decreased')
+        if self.query('mode') != 'play':
+            raise SuiteError('LMS playback stopped or paused')
+        return s
+
+    def measure(self):
+        start = self.backend.now()
+        until = start+self.hours*3600
+        due, connection, changed = start, None, start
+        qualified = 0
+        while self.backend.now() <= until:
+            # Missing snapshots are tolerated only during the initial startup.
+            try:
+                s = self.sample()
+            except (OSError, json.JSONDecodeError, SnapshotPending):
+                if self.backend.now()-start >= 30:
+                    raise SuiteError('diagnostic snapshot unavailable')
+                self.backend.sleep(1)
+                continue
+            if s['connection_id'] != connection:
+                connection, changed = s['connection_id'], self.backend.now()
+            elapsed = self.backend.now()-start
+            s = dict(s, elapsed_s=round(elapsed,3), qualified=False)
+            self.samples.append(s)
+            if self.backend.now()-changed >= 120:
+                if not s['valid'] or not s['locked']:
+                    raise SuiteError('no active stream with a locked timing fit after warmup')
+                if not s['start_lead_ms'] <= s['lead_ms'] <= s['start_lead_ms']+1000:
+                    raise SuiteError('encoded lead outside configured band')
+                s['qualified'] = True
+                qualified += 1
+            self.log('SAMPLE '+json.dumps(s,sort_keys=True))
+            with (self.work/'samples.jsonl').open('a') as f:
+                f.write(json.dumps(s,sort_keys=True)+'\n')
+            due += 10
+            self.backend.sleep(max(0,min(due,until+0.001)-self.backend.now()))
+        needed = max(1, int(max(0,self.hours*3600-120)/10*.5))
+        if qualified < needed:
+            raise SuiteError('insufficient qualified samples (warmup/reconnect coverage)')
+
+    def cleanup(self):
+        def attempt(name, fn):
+            try:
+                return fn()
+            except Exception as error:
+                self.errors.append(name+': '+str(error)); self.log(self.errors[-1])
+        if self.playback:
+            attempt('stop test playback',lambda:self.mutate('stop'))
+        if self.override:
+            attempt('remove pacing override',lambda:self.dropin.unlink())
+            def restore_service():
+                self.backend.run('systemctl','daemon-reload')
+                try:
+                    self.isolated()
+                except Exception:
+                    self.backend.run('systemctl','stop',self.unit)
+                    raise SuiteError('room no longer verified standalone; service stopped, safe restart deferred')
+                self.backend.run('systemctl','restart',self.unit)
+            attempt('restore room service',restore_service)
+        if self.playback:
+            def restore():
+                self.connected()
+                if not self.before['tracks']:
+                    self.mutate('playlist','clear')
+                self.mutate('playlist','repeat',self.before['repeat'])
+                if self.before['tracks']:
+                    self.mutate('playlist','index',self.before['index'])
+                    self.mutate('time',self.before['time'])
+                self.mutate(*(('pause','1') if self.before['mode']=='pause' else (self.before['mode'],)))
+                for key, query in [('mode',('mode',)),('repeat',('playlist','repeat')),('tracks',('playlist','tracks'))]:
+                    if self.query(*query) != str(self.before[key]):
+                        raise SuiteError('LMS restoration unconfirmed: '+key)
+                if self.before['tracks'] and self.query('playlist','index') != self.before['index']:
+                    raise SuiteError('LMS restoration unconfirmed: playlist index')
+            attempt('restore LMS playback',restore)
+        if self.override and self.before:
+            def environment():
+                current = self.backend.run('systemctl','show',self.unit,'-p','Environment','--value')
+                if current != self.before['environment']:
+                    raise SuiteError('effective room environment differs from original')
+                self.backend.run('systemctl','is-active','--quiet',self.unit)
+            attempt('verify restored room',environment)
+        if self.unit:
+            def journal():
+                text = self.backend.run('journalctl','-u',self.unit,'--since','@'+str(self.started),'--no-pager','-o','short-iso')
+                (self.work/'journal.log').write_text(text+'\n')
+            attempt('archive room journal',journal)
+
+    def execute(self):
+        try:
+            self.setup(); self.measure()
+        except (Exception, KeyboardInterrupt) as error:
+            self.errors.append(str(error) or 'interrupted')
+        finally:
+            signal.signal(signal.SIGINT,signal.SIG_IGN)
+            signal.signal(signal.SIGTERM,signal.SIG_IGN)
+            self.cleanup()
+        verdict = 'PACING FAILED: '+'; '.join(dict.fromkeys(self.errors)) if self.errors else 'PACING OK'
+        (self.work/'result.txt').write_text(verdict+'\n')
+        if self.samples:
+            fields = sorted({k for s in self.samples for k in s})
+            with (self.work/'samples.csv').open('w',newline='') as f:
+                writer = csv.DictWriter(f,fieldnames=fields);writer.writeheader();writer.writerows(self.samples)
+        self.logfile.close()
+        archive = self.output/'yeney-stream-pacing-latest.tar.gz'
+        fd, temporary = tempfile.mkstemp(prefix='pacing-archive-',suffix='.tar.gz',dir=self.output)
+        os.close(fd)
+        try:
+            with tarfile.open(temporary,'w:gz') as tar:
+                tar.add(self.work,arcname='yeney-stream-pacing')
+            os.replace(temporary,archive)
+        except Exception as error:
+            self.errors.append('archive write failed: '+str(error))
+            verdict = 'PACING FAILED: '+'; '.join(dict.fromkeys(self.errors))
+            try:
+                (self.work/'result.txt').write_text(verdict+'\n')
+            except OSError:
+                pass
+        finally:
+            if os.path.exists(temporary): os.unlink(temporary)
+        print(archive)
+        print(verdict,flush=True)
+        return 1 if self.errors else 0
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--room',required=True)
+    parser.add_argument('--server',required=True)
+    parser.add_argument('--hours',type=float,default=2)
+    args = parser.parse_args()
+    suite = Suite(args.room,args.server,args.hours)
+    if os.geteuid() != 0:
+        suite.errors.append('run as root to manage the selected room service')
+        # setup must not run without privileges, but still produce an archive.
+        suite.setup = lambda: (_ for _ in ()).throw(SuiteError('root required'))
+    def interrupted(number, _):
+        # A second signal cannot interrupt configuration restoration.
+        signal.signal(signal.SIGINT,signal.SIG_IGN)
+        signal.signal(signal.SIGTERM,signal.SIG_IGN)
+        raise SuiteError('interrupted by signal '+str(number))
+    signal.signal(signal.SIGINT,interrupted)
+    signal.signal(signal.SIGTERM,interrupted)
+    # One transaction per room. Lock files are never deleted while in use.
+    lock = suite.output/('yeney-stream-pacing-'+args.room.encode().hex()+'.lock')
+    try:
+        fd = os.open(lock,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
+        held = os.fdopen(fd,'w')
+        fcntl.flock(held,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except OSError as error:
+        suite.errors.append('lock: '+str(error))
+        suite.setup = lambda: None
+        suite.measure = lambda: None
+        return suite.execute()
+    with held:
+        return suite.execute()
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

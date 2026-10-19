@@ -14,7 +14,7 @@ inline uint64_t streamMonoMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-struct StreamMeasurement { double encodedMs = 0, audibleMs = 0; bool valid = false; };
+struct StreamMeasurement { double encodedMs = 0, audibleMs = 0; bool valid = false; uint64_t connection = 0; bool locked = false; };
 // One room per process. Totals survive reconnects and stream changes; a pid
 // identifies restarts. No measurement influences admission or transport.
 class StreamMetrics {
@@ -64,11 +64,12 @@ public:
             // Rename a complete snapshot; readers never see a partial JSON file.
             auto temporary = path + "." + std::to_string(getpid()) + ".tmp";
             if (FILE *f = fopen(temporary.c_str(), "w")) {
-                fprintf(f, "{\"mode\":\"%s\",\"start_lead_ms\":%u,\"pid\":%d,\"monotonic_ms\":%llu,\"overwrites\":%llu,\"dropped\":%llu,\"socket_backpressure_ms\":%.3f,\"socket_backpressure_calls\":%llu,\"encoded_ms\":%.3f,\"audible_ms\":%.3f,\"lead_ms\":%.3f,\"valid\":%s}\n",
+                fprintf(f, "{\"mode\":\"%s\",\"start_lead_ms\":%u,\"pid\":%d,\"monotonic_ms\":%llu,\"overwrites\":%llu,\"dropped\":%llu,\"socket_backpressure_ms\":%.3f,\"socket_backpressure_calls\":%llu,\"encoded_ms\":%.3f,\"audible_ms\":%.3f,\"lead_ms\":%.3f,\"valid\":%s,\"connection_id\":%llu,\"locked\":%s}\n",
                     streamPacingSonos() ? "sonos" : "wall", yeney_start_lead_ms(), getpid(), (unsigned long long)now, (unsigned long long)overwrites.load(),
                     (unsigned long long)dropped.load(), socketBlockedUs.load()/1000.,
                     (unsigned long long)socketBlockedCalls.load(), s.encodedMs, s.audibleMs,
-                    s.encodedMs-s.audibleMs, s.valid ? "true" : "false");
+                    s.encodedMs-s.audibleMs, s.valid ? "true" : "false",
+                    (unsigned long long)s.connection, s.locked ? "true" : "false");
                 if (fclose(f) == 0) rename(temporary.c_str(), path.c_str());
                 unlink(temporary.c_str());
             }

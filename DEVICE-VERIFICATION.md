@@ -526,3 +526,64 @@ reservoir to stress the 256-slot limit within four hours. It does not claim
 that default FLAC packets have 1 ms duration or predict the physical time until
 a particular speaker's socket fills. A real FLAC encoder test additionally
 checks that frame admission follows the injected clock and stays inside the band.
+
+## Unattended owner stream-pacing qualification
+
+After the owner has installed the pushed build, run **as root in the deployment
+container**, while Study is a standalone room and its LMS player is not synced:
+
+```sh
+/usr/local/bin/yeney-stream-pacing-suite --room Study --server 192.168.178.23 --hours 2
+```
+
+The installed `/usr/local/bin/yeney-stream-pacing-suite` refuses unverified or
+grouped Sonos topology and LMS sync groups. It requires the selected room service
+to be active, resolves exactly `Study (Sonos)` through the LMS CLI, and locks only
+that room. It creates only that unit's `pacing-suite.conf`, containing
+`Environment=YENEY_STREAM_PACING=sonos`, reloads systemd, and restarts that unit.
+It refuses to replace an existing file with that name. Other room configuration
+and services are not changed.
+
+The runner plays the existing LMS playlist with temporary repeat-all for
+continuous playback. If it is empty, it chooses an HTTP audio radio favorite;
+if none exists, it loads the first saved LMS playlist. With none of these
+available it reports failure without changing playback/configuration. It leaves
+volume and shuffle settings alone. The original playlist contents, repeat,
+index, source time, and play/pause/stop state are restored after the test; a
+playlist loaded into an originally empty player is cleared again.
+
+Every ten seconds it samples the atomic room diagnostic file and checks room
+isolation, service PID, snapshot age, packet-loss counters and LMS playback.
+Each new connection gets 120 seconds for startup/clock acquisition. Afterwards,
+a valid locked fit and lead in `start lead .. start lead + 1000 ms` are required.
+At least half of the post-startup sampling opportunities must qualify; continual
+reconnects cannot produce a false pass. Socket backpressure is recorded but does
+not alone fail the test. Missing/stale diagnostics, packet loss, loss of lock,
+lead violations, stopped playback or a service restart fail it.
+
+On completion, Ctrl-C, SIGTERM, or error, cleanup removes its own drop-in,
+reloads systemd, restarts only the selected service, restores LMS playback and
+checks the original effective service environment. Cleanup attempts continue
+if one restoration operation fails, and report every failure. If the room is
+externally grouped during the test, the runner refuses further LMS mutations;
+configuration cleanup still runs, and the selected service is stopped instead
+of restarted into group playback. Safe service/playback restoration is explicitly
+reported as deferred until isolation is restored. Cleanup is protected from a
+second interrupt.
+
+The terminal ends with exactly `PACING OK` or `PACING FAILED: <reasons>`. The same
+verdict is in `result.txt` inside `/tmp/yeney-stream-pacing-latest.tar.gz`, together
+with ten-second JSONL/CSV samples, original playback state, room journal and
+command transcript. The working evidence directory is retained in `/tmp`.
+The supported duration is greater than zero and at most 168 hours.
+
+On the **Proxmox host**, retrieve the archive with this single command:
+
+```sh
+pct pull 113 /tmp/yeney-stream-pacing-latest.tar.gz /tmp/yeney-stream-pacing-latest.tar.gz
+```
+
+Agents test this runner only with mocked service/CLI operations and loopback
+protocol fixtures. They never execute it against a real LMS or speaker or deploy
+to container 113. The default remains `wall`; switching it requires a later task
+and an owner-reported `PACING OK`.
