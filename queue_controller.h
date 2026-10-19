@@ -20,13 +20,19 @@ struct ControllerOptions {
     upnp::Speaker room;
     std::string session, httpBase;
     std::function<void(const std::string &)> log;
-    // Receives only confirmed speaker identity/position, on the controller worker.
-    // Bind to CoreQueueSink::speakerPosition before the player is started.
+    // Receives only confirmed speaker identity/position, on the controller
+    // worker. Bind to CoreQueueSink::speakerPosition before the player is
+    // started.
     std::function<void(uint64_t, uint64_t, yeney::PlaybackState)> audiblePosition;
     // Nonblocking host preparation: return a fresh occurrence/URL for a missing
     // asset or seek; item may be pending and supplied by a later LMS snapshot.
     std::function<QueueAsset(uint64_t, uint32_t)> prepare;
     std::function<void(uint64_t, uint32_t)> reanchor;
+    // Part 5 host boundary. A fallbackRequest enables app reconciliation.
+    // Bind both before use; execution stays on the worker.
+    // lmsControl returns only after a decoded CLI acknowledgement; never retry.
+    std::function<bool(const std::string &)> lmsControl;
+    std::function<void(const std::string &)> fallbackRequest;
     double deviceRatePrior = 1;               // qualified device rate; phase is never carried
     std::function<std::string()> backupTitle; // default local time, minute precision
 };
@@ -54,15 +60,17 @@ public:
     std::future<void> play(uint64_t epoch, uint64_t current, std::vector<QueueAsset>);
     std::future<void> update(uint64_t epoch, std::vector<QueueAsset>);
     // Authoritative LMS playlist snapshot, including stable duplicate tokens.
-    // A higher revision edits future entries only. select is explicit user intent,
-    // unlike decoder read-ahead s. current is a token, never a Sonos ordinal.
+    // A higher revision edits future entries only. select is explicit user
+    // intent, unlike decoder read-ahead s. current is a token, never a Sonos
+    // ordinal.
     std::future<void> lmsPlaylist(uint64_t epoch, uint64_t revision, uint64_t current,
                                   std::vector<QueueAsset>, bool select = false);
     std::future<void> lmsCommand(uint64_t epoch, char command);
     std::future<void> lmsSeek(uint64_t epoch, uint32_t sourceMs);
     std::future<void> release(std::string reason = "stop");
     // Forward only SID/coordinator-validated AVTransport notifications from the
-    // room's existing subscription owner. Capture epoch when receiving, not later.
+    // room's existing subscription owner. Capture epoch when receiving, not
+    // later.
     std::future<void> notify(uint64_t epoch, upnp::GenaEvent);
     ControllerStatus status() const;
 };

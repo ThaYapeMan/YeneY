@@ -752,7 +752,7 @@ Phase 2 is field-qualified by the owner's 18 October unattended suite at bridge
 or 10 seconds, LMS identity matched 12/12 completed occurrences, startup was
 about one second and successor leads were at least 57 seconds.
 
-**Phase 3b parts 1–4 are done. Parts 5–8 remain.** Production stays on the
+**Phase 3b parts 1–5 are done. Parts 6–8 remain.** Production stays on the
 normal stream path, including eligible standalone `queue` requests: startup logs
 `selected=stream reason=queue-unavailable` once and continues through HELO and
 ordinary stream playback. The previous fatal opt-in guard is removed. Grouped
@@ -884,7 +884,63 @@ The fixture supplies the authoritative playlist/seek state at the host boundary;
 production LMS snapshot acquisition and room runtime wiring remain in part 6,
 behind the unchanged production guard. No room enables queue playback yet.
 
-Remaining: part 5 Sonos-app control mapping; part 6 controlled, latched stream fallback and active room status; part 7 the complete
+Part 5 adds app reconciliation on the serialized controller worker. A host binds
+`ControllerOptions::lmsControl` to `controlLms(host, rawMac, command)` (port 9090
+by default), and `fallbackRequest(reason)` to the part 6 fallback boundary.
+The CLI adapter sends a raw MAC, decodes percent-encoded replies, requires an
+exact acknowledgement, and makes one attempt with a one-second socket deadline.
+No production room is connected to these callbacks yet.
+
+Before interpreting a position/state observation, the controller verifies the
+standalone lease, queue URI list **and UpdateID**, selected queue source, NORMAL
+play mode and disabled CrossfadeMode. It brackets GetTransportInfo with matching
+GetPositionInfo readings and rejects GENA disagreement or stale SID sequences.
+Own target/seek fences and expected transport states acknowledge YeneY commands;
+matching LMS echoes consume separate state, occurrence-token and source-time
+expectations (five-second deadlines). A correlated retained decoder run consumes
+one ordered `strm f`/`s` pair, fenced by the audible occurrence; the host retains
+the asset instead of decoding that echo. Fresh seeks authorize a one-shot core
+`takeQueueRefetch` before starting the new decoder. Only a speaker-driven,
+decode-ahead sink can cancel an unfinished producer without flushing prepared
+assets or clearing track/audible history. Its incomplete old asset is invalidated
+and cannot be mistaken for reusable complete history. Default sinks keep their
+existing destructive-start behavior. Preparation has a 15-second publication
+deadline, followed by the five-second transport acknowledgement deadline. A fresh, SOAP-confirmed contrary app event
+supersedes an older pending LMS intent. An unconfirmed own intent expires into
+foreign-control rather than waiting forever.
+
+Confirmed app pause/play forwards `pause 1`/`play`; an adjacent prepared owned
+item maps its stable token through the authoritative playlist to `playlist index`.
+A successor at the rendered end (1.5-second RelTime quantization allowance) is a
+natural handoff and does not send an extra CLI skip. Other non-adjacent or unmapped
+jumps release ownership. Within-item RelTime discontinuities over 1.5 seconds,
+or any changed position while paused, forward `time` with the asset's source
+origin. The produced-history check retains the existing URL and reanchors the
+audible clock for cached seeks, including backward seeks. A target within the
+item but beyond its produced prefix uses the part 4 nonblocking preparation
+boundary, a new occurrence/URL and confirmed TRACK_NR; the old item's reported
+seek time is never used as evidence for that new asset. HTTP Range
+never participates. Echoed playlist selections still reconcile simultaneous LMS
+playlist edits, without seeking the speaker again.
+
+Queue edits, revision-only changes, mode/source/topology changes, foreign items,
+unmapped stop/jumps, seeks outside the item and CLI acknowledgement
+failures latch one `foreign-control` request per epoch. Release refreshes queue
+identity and UpdateID for every exact-owned removal and restores CrossfadeMode.
+After a grouping change only these cleanup actions may address the originally
+verified device without the playback lease; no transport playback command gains
+that exception. Cleanup failure is logged, URLs are revoked, and no retry loop
+runs. Part 6 implements the requested fallback; this part only calls the boundary.
+
+`tests/queue_app_control_test.py` uses the part 3 real core/SlimProto fixture,
+loopback Sonos SOAP/GENA and a loopback CLI server returning encoded replies.
+It checks app controls, history seeks, identity and echo counts, own commands,
+rapid contrary actions, a held four-second prefix followed by a fresh seek,
+and each foreign-action category with exact preservation
+of foreign entries and one release/request. The fixture joins its core thread
+before destroying the controller so late command echoes cannot outlive it.
+
+Remaining: part 6 controlled, latched stream fallback and active room status; part 7 the complete
 end-to-end audible fake-Sonos acceptance suite; part 8 final phase 3 status and
 device-verification documentation. The unattended physical device suite follows
 in phase 3c. Agents never run against real LMS or speakers or deploy on LXC 113.

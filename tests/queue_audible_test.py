@@ -24,15 +24,15 @@ def wav(rate, seconds=24):
 
 
 class Harness:
-    def __init__(self, rates=(44100, 44100, 44100), fade=False):
+    def __init__(self, rates=(44100, 44100, 44100), fade=False, cli_port=None, source_options=None):
         self.sonos = Coordinator()
         self.lms = LMS()
-        self.driver = Driver(self.sonos, 'queue-audible-fixture', [self.lms.listener.getsockname()[1]])
+        self.driver = Driver(self.sonos, 'queue-audible-fixture', [self.lms.listener.getsockname()[1]] + ([] if cli_port is None else [cli_port]))
         self.lms.accept()
         self.sources = []
         def sources():
-            for rate in rates:
-                source = HTTP(wav(rate)); self.sources.append(source)
+            for i, rate in enumerate(rates):
+                source = HTTP(wav(rate), **((source_options or {}).get(i, {}))); self.sources.append(source)
                 yield source, dict(fmt='p', rate=rate, transition=int(fade), period=10 if fade else 0)
         self.model = SongQueue(self.lms, sources())
         self.errors, self.stopped = [], False

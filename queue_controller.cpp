@@ -55,15 +55,89 @@ struct QueueController::Impl {
     std::deque<Job> jobs;
     bool closing = false, active = false, started = false;
     uint64_t epoch = 0, lastEpoch = 0, playlistRevision = 0;
-    uint64_t target = 0, pendingSent = 0;
-    bool rebuildAfterConfirm = false;
+    uint64_t target = 0, pendingSent = 0, intentDeadline = 0;
+    bool rebuildAfterConfirm = false, awaitingFreshSeek = false;
     std::optional<uint32_t> seekAnchor;
+    struct Expected {
+        std::string value;
+        uint64_t until = 0;
+        bool take(const std::string &v) {
+            if (until < nowMs() || value != v)
+                return false;
+            until = 0;
+            return true;
+        }
+        void set(std::string v) {
+            value = std::move(v);
+            until = nowMs() + 5000;
+        }
+    };
+    Expected ownState, echoState, echoToken, echoTime, echoRun;
+    bool fallbackSent = false, cleaning = false;
+    uint32_t expectedUpdate = 0, observedMs = 0;
+    uint64_t echoRunOccurrence = 0, ownStateOccurrence = 0;
+    uint64_t observedAt = 0;
+    bool appControl() const { return bool(options.fallbackRequest); }
+    void foreign(const std::string &detail) {
+        if (!active || fallbackSent)
+            return;
+        fallbackSent = true; // latch before cleanup or host callbacks can fail
+        log("foreign-control detail=" + detail);
+        cleaning = true;
+        try {
+            release("foreign-control");
+        } catch (const std::exception &e) {
+            active = false;
+            route.revoke(epoch);
+            publishStatus("foreign-control", e.what());
+            log("release failed " + std::string(e.what()));
+        }
+        cleaning = false;
+        options.fallbackRequest("foreign-control");
+    }
+    bool forward(const std::string &command) {
+        log("app LMS command=" + command);
+        if (options.lmsControl && options.lmsControl(command))
+            return true;
+        foreign("lms-acknowledgement-failed");
+        return false;
+    }
+    bool validateOwned() {
+        if (!appControl())
+            return true;
+        try {
+            coordinator.verifyLease();
+            auto q = coordinator.browse();
+            if (q.uris != urls || q.update != expectedUpdate) {
+                foreign("queue-revision");
+                return false;
+            }
+            if (actions.media().response.value("CurrentURI") !=
+                "x-rincon-queue:" + options.room.uuid + "#0") {
+                foreign("source");
+                return false;
+            }
+            if (coordinator.transport("GetTransportSettings", {{"InstanceID", "0"}})
+                        .response.value("PlayMode") != "NORMAL" ||
+                actions.crossfade().response.value("CrossfadeMode") != "0") {
+                foreign("play-mode");
+                return false;
+            }
+        } catch (const std::exception &e) {
+            foreign(e.what());
+            return false;
+        }
+        return true;
+    }
     std::vector<QueueAsset> playlist, pendingFuture;
     std::map<uint64_t, QueueAsset> history;
     static uint64_t token(const QueueAsset &a) { return a.token ? a.token : a.occurrence; }
     static bool available(const QueueAsset &a) {
-        try { return a.item && a.item->contentLength().has_value(); }
-        catch (const std::exception &) { return false; }
+        try {
+            return a.item && a.item->contentLength().has_value();
+        } catch (const std::exception &) {
+            return false;
+        }
     }
     std::vector<QueueAsset> plan;
     std::vector<std::string> urls;
@@ -115,6 +189,8 @@ struct QueueController::Impl {
     void confirm(const upnp::StateUpdate *event = nullptr) {
         if (!active || !started || !options.audiblePosition)
             return;
+        if (!validateOwned())
+            return;
         auto first = readPosition();
         auto state = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}})
                          .response.value("CurrentTransportState");
@@ -123,9 +199,19 @@ struct QueueController::Impl {
             ignored("position-race");
             return;
         }
+        if (appControl()) {
+            const auto q = coordinator.browse();
+            if (q.uris != urls || q.update != expectedUpdate) {
+                foreign("queue-revision-during-evidence");
+                return;
+            }
+        }
         auto index = ownedIndex(p.uri);
         if (index == SIZE_MAX || p.track != index + 1) {
-            ignored("foreign-or-revoked-uri");
+            if (appControl())
+                foreign("foreign-item");
+            else
+                ignored("foreign-or-revoked-uri");
             return;
         }
         if (event &&
@@ -135,21 +221,66 @@ struct QueueController::Impl {
             ignored("event-position-disagreement");
             return;
         }
+        bool supersededTarget = false;
         if (target && plan[index].occurrence != target) {
-            ignored("pending-target");
-            return;
+            if (appControl() && event) {
+                // A fresh matching event supersedes an older LMS intention.
+                supersededTarget = true;
+                target = pendingSent = 0;
+                pendingFuture.clear();
+                rebuildAfterConfirm = false;
+            } else {
+                if (appControl() && nowMs() > intentDeadline)
+                    foreign("unconfirmed-target");
+                else
+                    ignored("pending-target");
+                return;
+            }
         }
-        if (!target && audibleIndex != SIZE_MAX && index < audibleIndex) {
+        if (!appControl() && !target && audibleIndex != SIZE_MAX && index < audibleIndex) {
             ignored("older-item");
             return;
         }
         const bool commanded = target != 0;
         const bool newItem = index != audibleIndex;
-        if (seekAnchor && (p.ms / 1000 != *seekAnchor / 1000)) {
-            ignored("pending-seek");
-            return;
+        const bool progressingOwnSeek =
+            appControl() && seekAnchor && p.ms >= *seekAnchor &&
+            uint64_t(p.ms) <= uint64_t(*seekAnchor) + nowMs() + 6000 - intentDeadline;
+        if (seekAnchor && (p.ms / 1000 != *seekAnchor / 1000) && !progressingOwnSeek) {
+            if (appControl() && event)
+                seekAnchor.reset();
+            else {
+                if (appControl() && nowMs() > intentDeadline)
+                    foreign("unconfirmed-seek");
+                else
+                    ignored("pending-seek");
+                return;
+            }
         }
         if (newItem && state != "PLAYING") {
+            if (appControl() && ownStateOccurrence == plan[index].occurrence && ownState.take(state)) {
+                // Stop/pause can overtake confirmation of our own TRACK_NR.
+                // Anchor the selected item without inventing an audible start;
+                // CoreQueueSink waits for PLAYING before reporting its identity.
+                audibleIndex = index;
+                lastFrames = 0;
+                if (options.reanchor)
+                    options.reanchor(plan[index].occurrence, plan[index].sourceOriginMs);
+                position.item(++clockEpoch, p.ms, plan[index].item->descriptor().rate, nowMs());
+                speakerState =
+                    state == "STOPPED" ? yeney::PlaybackState::Stopped : yeney::PlaybackState::Paused;
+                confirmedAt = std::chrono::steady_clock::now();
+                advance();
+                return;
+            }
+            if (appControl() && ownState.until && nowMs() > ownState.until) {
+                foreign("unconfirmed-state");
+                return;
+            }
+            if (appControl() && state != "TRANSITIONING" && audibleIndex != SIZE_MAX) {
+                foreign("ambiguous-paused-item");
+                return;
+            }
             ignored("not-playing");
             return;
         }
@@ -163,7 +294,102 @@ struct QueueController::Impl {
         else
             return; // TRANSITIONING is not proof of an audible start
         const auto now = nowMs();
-        if (newItem || commanded || seekAnchor) {
+        bool appSeek = false;
+        if (appControl() && audibleIndex != SIZE_MAX) {
+            if ((newItem || supersededTarget) && !commanded) {
+                const auto &old = plan[audibleIndex];
+                const auto duration =
+                    (*old.item->contentLength() - 44) / 6 * 1000 / old.item->descriptor().rate;
+                const auto projected =
+                    observedMs + (speakerState == yeney::PlaybackState::Playing ? now - observedAt : 0);
+                const bool natural = !supersededTarget && index == audibleIndex + 1 &&
+                                     projected + 1500 >= duration && p.ms <= 1000;
+                if (!natural) {
+                    if ((!supersededTarget && index + 1 != audibleIndex && index != audibleIndex + 1) ||
+                        !available(plan[index])) {
+                        foreign("ambiguous-item-jump");
+                        return;
+                    }
+                    auto at = std::find_if(playlist.begin(), playlist.end(),
+                                           [&](const auto &a) { return token(a) == token(plan[index]); });
+                    if (at == playlist.end() ||
+                        std::count_if(playlist.begin(), playlist.end(),
+                                      [&](const auto &a) { return token(a) == token(plan[index]); }) != 1) {
+                        foreign("unmapped-token");
+                        return;
+                    }
+                    echoToken.set(std::to_string(token(*at)));
+                    echoRun.set("f");
+                    echoRunOccurrence = plan[index].occurrence;
+                    if (!forward("playlist index " + std::to_string(at - playlist.begin())))
+                        return;
+                    log("app skip token=" + std::to_string(token(*at)) +
+                        " mixed-intro=" + std::to_string(plan[index].mixedIntro));
+                }
+            }
+            const bool contrary = event && ownState.until >= now && ownState.value != state;
+            const bool own = ownState.take(state);
+            if (contrary)
+                ownState.until = 0;
+            if (!event && ownState.until && !own && ownState.value != state) {
+                if (now > ownState.until)
+                    foreign("unconfirmed-state");
+                else
+                    ignored("pending-state");
+                return;
+            }
+            if ((next != speakerState || contrary) && !own && !commanded) {
+                if (next == yeney::PlaybackState::Stopped) {
+                    foreign("unmapped-stop");
+                    return;
+                }
+                echoState.set(next == yeney::PlaybackState::Paused ? "p" : "u");
+                if (!forward(next == yeney::PlaybackState::Paused ? "pause 1" : "play"))
+                    return;
+            }
+            if (!newItem && !commanded && !seekAnchor && observedAt) {
+                const int64_t projected =
+                    observedMs + (speakerState == yeney::PlaybackState::Playing ? now - observedAt : 0);
+                const auto difference = int64_t(p.ms) - projected;
+                appSeek = std::abs(difference) > 1500 ||
+                          (speakerState != yeney::PlaybackState::Playing && p.ms != observedMs);
+                if (appSeek) {
+                    const auto &a = plan[index];
+                    const auto frame = uint64_t(p.ms) * a.item->descriptor().rate / 1000;
+                    if (frame >= (*a.item->contentLength() - 44) / 6) {
+                        foreign("seek-outside-item");
+                        return;
+                    }
+                    const bool retained = frame < a.item->producedFrames();
+                    const auto original = a.occurrence;
+                    if (uint64_t(p.ms) + a.sourceOriginMs > UINT32_MAX) {
+                        foreign("unmapped-source-time");
+                        return;
+                    }
+                    const auto sourceMs = p.ms + a.sourceOriginMs;
+                    if (!forward("time " + std::to_string(sourceMs / 1000)))
+                        return;
+                    if (!retained) {
+                        // The CLI refetch supplies a new occurrence through the
+                        // existing nonblocking preparation/snapshot boundary.
+                        seek(sourceMs);
+                        awaitingFreshSeek = true;
+                        echoTime.set(std::to_string(sourceMs));
+                        echoRun.set("f");
+                        echoRunOccurrence = original;
+                        log("app seek history=rerender source-ms=" + std::to_string(sourceMs));
+                        return; // old item/time is not evidence for the new asset
+                    }
+                    echoTime.set(std::to_string(sourceMs));
+                    echoRun.set("f");
+                    echoRunOccurrence = original;
+                }
+            }
+        } else if (appControl())
+            ownState.take(state);
+        observedMs = p.ms;
+        observedAt = now;
+        if (newItem || commanded || seekAnchor || appSeek) {
             if (rebuildAfterConfirm) {
                 removeFuture(index + 1);
                 plan.resize(index + 1);
@@ -173,6 +399,7 @@ struct QueueController::Impl {
                 log("rebuild confirmed-target future=" + std::to_string(plan.size() - index - 1));
             }
             target = 0;
+            awaitingFreshSeek = false;
             seekAnchor.reset();
             if (options.reanchor)
                 options.reanchor(plan[index].occurrence, plan[index].sourceOriginMs);
@@ -200,7 +427,7 @@ struct QueueController::Impl {
         advance();
     }
     void advance() {
-        if (!active || audibleIndex == SIZE_MAX || !options.audiblePosition)
+        if (!active || awaitingFreshSeek || audibleIndex == SIZE_MAX || !options.audiblePosition)
             return;
         // Stop projecting if position evidence is lost; never invent ongoing
         // playback after a disconnected speaker. Ordinary polls refresh at 1 Hz.
@@ -227,7 +454,7 @@ struct QueueController::Impl {
             ignored("invalid-event");
             return;
         }
-        if (update.trackUri && ownedIndex(*update.trackUri) == SIZE_MAX) {
+        if (!appControl() && update.trackUri && ownedIndex(*update.trackUri) == SIZE_MAX) {
             ignored("foreign-or-revoked-uri");
             return;
         }
@@ -270,7 +497,9 @@ struct QueueController::Impl {
     Impl(ControllerOptions opts, std::shared_ptr<upnp::StreamServer> http)
         : options(std::move(opts)), server(std::move(http)), lease(options.room.uuid),
           route(options.room.name, options.session), coordinator(options.room, options.log),
-          actions([this](const auto &name, const auto &args) { return coordinator.transport(name, args); }),
+          actions([this](const auto &name, const auto &args) {
+              return cleaning ? coordinator.releaseTransport(name, args) : coordinator.transport(name, args);
+          }),
           ownership(ownershipIO(), options.session) {
         if (!std::isfinite(options.deviceRatePrior) || options.deviceRatePrior <= 0)
             throw std::invalid_argument("queue-invalid-device-rate");
@@ -366,6 +595,10 @@ struct QueueController::Impl {
         } catch (...) {
         }
         log("fault=" + message);
+        if (appControl() && active) {
+            foreign(message);
+            return;
+        }
         try {
             release("fault");
         } catch (const std::exception &e) {
@@ -375,6 +608,8 @@ struct QueueController::Impl {
         publishStatus("fault", message);
     }
     void release(const std::string &reason) {
+        if (fallbackSent && !active)
+            return;
         active = false;
         ownership.release();
         if (epoch)
@@ -386,6 +621,7 @@ struct QueueController::Impl {
         seekAnchor.reset();
         pendingFuture.clear();
         rebuildAfterConfirm = false;
+        awaitingFreshSeek = false;
         urls.clear();
         ownedUris.clear();
         started = false;
@@ -427,10 +663,14 @@ struct QueueController::Impl {
         if (!next || next <= lastEpoch)
             throw StaleEpoch();
         release("new-play");
+        fallbackSent = false;
+        observedAt = 0;
+        ownState = echoState = echoToken = echoTime = echoRun = {};
         epoch = lastEpoch = next;
         playlist = complete;
         playlistRevision = 1;
-        for (const auto &a : complete) history[token(a)] = a;
+        for (const auto &a : complete)
+            history[token(a)] = a;
         setPlan(std::move(assets));
         auto title = options.backupTitle ? options.backupTitle() : backupName();
         const auto saved = coordinator.playlists();
@@ -439,6 +679,7 @@ struct QueueController::Impl {
         while (std::any_of(saved.begin(), saved.end(), [&](const auto &p) { return p.title == title; }))
             title = base + " (" + std::to_string(++suffix) + ")";
         ownership.acquire(title);
+        expectedUpdate = coordinator.browse().update;
         active = true;
         publishStatus("owned");
         log("ownership acquired");
@@ -449,7 +690,7 @@ struct QueueController::Impl {
     }
     void removeFuture(size_t keep) {
         auto before = coordinator.browse();
-        if (before.uris != urls)
+        if (before.uris != urls || (appControl() && before.update != expectedUpdate))
             throw std::runtime_error("queue-changed-while-owned");
         if (urls.size() > keep) {
             actions.remove(before.update, unsigned(keep + 1), unsigned(urls.size() - keep));
@@ -457,10 +698,12 @@ struct QueueController::Impl {
             auto after = coordinator.browse();
             if (after.uris != expected || after.update == before.update)
                 throw std::runtime_error("queue-rebuild-unconfirmed");
+            expectedUpdate = after.update;
             urls = std::move(expected);
         }
     }
-    void reconcile(uint64_t revision, uint64_t current, std::vector<QueueAsset> assets, bool select) {
+    void reconcile(uint64_t revision, uint64_t current, std::vector<QueueAsset> assets, bool select,
+                   bool alreadyPrepared = false) {
         if (!revision || revision < playlistRevision)
             throw StaleEpoch();
         std::set<uint64_t> seen;
@@ -470,24 +713,29 @@ struct QueueController::Impl {
             if (!token(a) || !a.occurrence || !seen.insert(token(a)).second)
                 throw std::invalid_argument("queue-invalid-occurrence");
         }
+        if (select && echoToken.take(std::to_string(current))) {
+            select = false; // retain any simultaneous authoritative playlist edit
+            log("echo suppressed LMS playlist token=" + std::to_string(current));
+        }
         if (!select && revision == playlistRevision && assets.size() == playlist.size() &&
             std::equal(assets.begin(), assets.end(), playlist.begin(), [&](const auto &a, const auto &b) {
-                return token(a) == token(b) && a.occurrence == b.occurrence &&
-                       a.revision == b.revision && a.item == b.item;
+                return token(a) == token(b) && a.occurrence == b.occurrence && a.revision == b.revision &&
+                       a.item == b.item;
             }))
             return;
         for (const auto &a : plan)
             history[token(a)] = a;
         for (auto &a : assets) {
             auto old = history.find(token(a));
-            if (!a.item && old != history.end() && available(old->second))
+            if ((!alreadyPrepared || token(a) != current) && !a.item && old != history.end() &&
+                available(old->second))
                 a = old->second;
         }
-        auto chosen = std::find_if(assets.begin(), assets.end(),
-                                  [&](const auto &a) { return token(a) == current; });
+        auto chosen =
+            std::find_if(assets.begin(), assets.end(), [&](const auto &a) { return token(a) == current; });
         if (select && chosen == assets.end())
             throw std::invalid_argument("queue-current-occurrence-missing");
-        if (select && !available(*chosen)) {
+        if (select && !alreadyPrepared && !available(*chosen)) {
             if (!options.prepare)
                 throw std::runtime_error("queue-preparation-unavailable");
             auto prepared = options.prepare(current, 0);
@@ -495,6 +743,8 @@ struct QueueController::Impl {
             *chosen = std::move(prepared);
             log("prepare token=" + std::to_string(current) + " reason=history-missing");
         }
+        if (select)
+            echoRun.until = 0;
         playlist = assets;
         playlistRevision = revision;
         if (!select) {
@@ -506,12 +756,13 @@ struct QueueController::Impl {
                 throw std::runtime_error("queue-rebuild-unsafe-position");
             const auto audibleToken = token(plan[index]);
             auto next = std::find_if(assets.begin(), assets.end(),
-                                    [&](const auto &a) { return token(a) == audibleToken; });
+                                     [&](const auto &a) { return token(a) == audibleToken; });
             std::vector<QueueAsset> future;
             if (next != assets.end())
                 future.assign(std::next(next), assets.end());
             else if (chosen != assets.end())
-                future.assign(chosen, assets.end()); // LMS supplies the successor after deleting current
+                future.assign(chosen,
+                              assets.end()); // LMS supplies the successor after deleting current
             else
                 future = assets; // clear never removes the audible asset
             removeFuture(index + 1);
@@ -541,35 +792,67 @@ struct QueueController::Impl {
         }
         target = chosen->occurrence;
         pendingSent = 0;
+        intentDeadline = nowMs() + 15000; // publication/refetch precedes the five-second SOAP acknowledgement
         log("rebuild revision=" + std::to_string(revision) + " select-token=" + std::to_string(current) +
             " cached=" + std::to_string(cached) + " mixed-intro=" + std::to_string(chosen->mixedIntro));
     }
     void command(char command) {
-        if (command == 'p') actions.pause();
-        else if (command == 'u') actions.play();
+        if ((command == 'f' || command == 's') && audibleIndex != SIZE_MAX &&
+            plan[audibleIndex].occurrence == echoRunOccurrence && echoRun.take(std::string(1, command))) {
+            if (command == 'f')
+                echoRun.set("s");
+            log("echo suppressed LMS retained-run=" + std::string(1, command));
+            return;
+        }
+        if (echoState.take(std::string(1, command))) {
+            log("echo suppressed LMS strm=" + std::string(1, command));
+            return;
+        }
+        if (command != 's')
+            echoRun.until = 0;
+        ownStateOccurrence =
+            target ? target
+                   : (audibleIndex != SIZE_MAX ? plan[audibleIndex].occurrence : plan.front().occurrence);
+        if (command == 'p')
+            ownState.set("PAUSED_PLAYBACK");
+        else if (command == 'u')
+            ownState.set("PLAYING");
+        else if (command == 'q' || command == 'f')
+            ownState.set("STOPPED");
+        if (command == 'p')
+            actions.pause();
+        else if (command == 'u')
+            actions.play();
         else if (command == 'q' || command == 'f') {
             target = pendingSent = 0;
             pendingFuture.clear();
             rebuildAfterConfirm = false;
             seekAnchor.reset();
             actions.stop();
-        }
-        else if (command != 's') throw std::invalid_argument("queue-invalid-command");
+        } else if (command != 's')
+            throw std::invalid_argument("queue-invalid-command");
         // s identity is supplied by lmsPlaylist, never inferred from read-ahead.
         log("LMS strm=" + std::string(1, command) + " ownership=retained");
         pollAt = {};
     }
     void seek(uint32_t ms) {
+        if (echoTime.take(std::to_string(ms))) {
+            log("echo suppressed LMS time=" + std::to_string(ms));
+            return;
+        }
+        echoRun.until = 0;
         if (audibleIndex == SIZE_MAX)
             throw std::runtime_error("queue-no-audible-item");
         auto &a = plan[audibleIndex];
         if (ms >= a.sourceOriginMs && available(a) &&
             uint64_t(ms - a.sourceOriginMs) * a.item->descriptor().rate / 1000 < a.item->producedFrames()) {
             const auto relative = (ms - a.sourceOriginMs) / 1000;
-            actions.seekTime(std::to_string(relative / 3600) + ":" +
-                             std::to_string(relative / 60 % 60) + ":" + std::to_string(relative % 60));
+            actions.seekTime(std::to_string(relative / 3600) + ":" + std::to_string(relative / 60 % 60) +
+                             ":" + std::to_string(relative % 60));
             seekAnchor = relative * 1000;
-            log("seek token=" + std::to_string(token(a)) + " source-ms=" + std::to_string(ms) + " history=retained");
+            intentDeadline = nowMs() + 5000;
+            log("seek token=" + std::to_string(token(a)) + " source-ms=" + std::to_string(ms) +
+                " history=retained");
         } else {
             if (!options.prepare)
                 throw std::runtime_error("queue-preparation-unavailable");
@@ -579,11 +862,14 @@ struct QueueController::Impl {
             replacement.token = token(a);
             replacement.sourceOriginMs = ms;
             auto assets = playlist;
-            auto it = std::find_if(assets.begin(), assets.end(), [&](const auto &x) { return token(x) == token(a); });
-            if (it == assets.end()) throw std::runtime_error("queue-seek-item-removed");
+            auto it = std::find_if(assets.begin(), assets.end(),
+                                   [&](const auto &x) { return token(x) == token(a); });
+            if (it == assets.end())
+                throw std::runtime_error("queue-seek-item-removed");
             *it = replacement;
-            reconcile(playlistRevision, token(a), std::move(assets), true);
-            log("seek source-ms=" + std::to_string(ms) + " history=rerender new-occurrence=" + std::to_string(replacement.occurrence));
+            reconcile(playlistRevision, token(a), std::move(assets), true, true);
+            log("seek source-ms=" + std::to_string(ms) +
+                " history=rerender new-occurrence=" + std::to_string(replacement.occurrence));
         }
         pollAt = {};
     }
@@ -600,7 +886,7 @@ struct QueueController::Impl {
             if (asset.item->descriptor().occurrence != std::to_string(asset.occurrence))
                 throw std::invalid_argument("queue-asset-occurrence-mismatch");
             auto before = coordinator.browse();
-            if (before.uris != urls)
+            if (before.uris != urls || (appControl() && before.update != expectedUpdate))
                 throw std::runtime_error("queue-changed-while-owned");
             auto metadata = asset.metadata;
             metadata.session = options.session;
@@ -620,6 +906,7 @@ struct QueueController::Impl {
             if (result.response.value("NumTracksAdded") != "1" || after.uris != expected ||
                 after.update == before.update)
                 throw std::runtime_error("queue-enqueue-unconfirmed");
+            expectedUpdate = after.update;
             urls = std::move(expected);
             publishStatus("mirroring");
             log("mirrored occurrence=" + std::to_string(asset.occurrence) +
@@ -627,6 +914,7 @@ struct QueueController::Impl {
             if (!started) {
                 actions.selectQueue(options.room.uuid);
                 actions.seekTrack(1);
+                ownState.set("PLAYING");
                 actions.play();
                 started = true;
             }
@@ -636,9 +924,11 @@ struct QueueController::Impl {
                                    [&](const auto &a) { return a.occurrence == target; });
             if (it != plan.begin() + urls.size()) {
                 actions.seekTrack(unsigned(it - plan.begin() + 1));
+                ownState.set("PLAYING");
                 actions.play();
                 // Keep target as an evidence fence, but issue the action once.
                 pendingSent = target;
+                intentDeadline = nowMs() + 5000;
             }
         }
         if (options.audiblePosition && started && std::chrono::steady_clock::now() >= pollAt) {
@@ -671,17 +961,24 @@ std::future<void> QueueController::update(uint64_t epoch, std::vector<QueueAsset
     });
 }
 std::future<void> QueueController::lmsPlaylist(uint64_t epoch, uint64_t revision, uint64_t current,
-                                                std::vector<QueueAsset> assets, bool select) {
-    return impl->post([p = impl.get(), epoch, revision, current, assets = std::move(assets), select]() mutable {
-        p->checkEpoch(epoch);
-        p->reconcile(revision, current, std::move(assets), select);
-    });
+                                               std::vector<QueueAsset> assets, bool select) {
+    return impl->post(
+        [p = impl.get(), epoch, revision, current, assets = std::move(assets), select]() mutable {
+            p->checkEpoch(epoch);
+            p->reconcile(revision, current, std::move(assets), select);
+        });
 }
 std::future<void> QueueController::lmsCommand(uint64_t epoch, char command) {
-    return impl->post([p = impl.get(), epoch, command] { p->checkEpoch(epoch); p->command(command); });
+    return impl->post([p = impl.get(), epoch, command] {
+        p->checkEpoch(epoch);
+        p->command(command);
+    });
 }
 std::future<void> QueueController::lmsSeek(uint64_t epoch, uint32_t ms) {
-    return impl->post([p = impl.get(), epoch, ms] { p->checkEpoch(epoch); p->seek(ms); });
+    return impl->post([p = impl.get(), epoch, ms] {
+        p->checkEpoch(epoch);
+        p->seek(ms);
+    });
 }
 std::future<void> QueueController::release(std::string reason) {
     return impl->post([p = impl.get(), reason = std::move(reason)] { p->release(reason); });

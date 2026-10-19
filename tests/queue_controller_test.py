@@ -51,6 +51,7 @@ class Coordinator(ThreadingHTTPServer):
         self.crossfade, self.playing, self.uri = True, False, ''
         self.position = dict(Track='0', TrackURI='', RelTime='00:00:00')
         self.transport_state = 'STOPPED'
+        self.play_mode = 'NORMAL'
         self.requests, self.errors, self.snapshots = [], [], {}
         self.fail_save = self.hide_save = self.race_add = self.ignore_crossfade = self.race_page = False
         self.last_save, self.verified_save = None, False
@@ -158,6 +159,8 @@ class Handler(BaseHTTPRequestHandler):
             assert item['title'].startswith('Before YeneY ') and s.verified_save
             s.saved.remove(item); s.saved_update += 1
             return {}, None
+        if action == 'GetMediaInfo': return {'CurrentURI': s.uri}, None
+        if action == 'GetTransportSettings': return {'PlayMode': s.play_mode}, None
         if action == 'GetPositionInfo': return dict(s.position), None
         if action == 'GetTransportInfo': return {'CurrentTransportState': s.transport_state}, None
         if action == 'GetCrossfadeMode': return {'CrossfadeMode': int(s.crossfade)}, None

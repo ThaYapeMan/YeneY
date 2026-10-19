@@ -56,6 +56,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	./queue-position-test
 	python3 tests/queue_audible_test.py
 	python3 tests/queue_lms_control_test.py
+	python3 tests/queue_app_control_test.py
 	./queue-controller-guard-test
 	python3 tests/queue_controller_test.py
 	python3 tests/queue_guard_stream_test.py
@@ -330,7 +331,7 @@ queue-controller-guard-test: tests/queue_controller_guard_test.cpp queue_control
 test: queue-controller-fixture queue-controller-guard-test
 
 queue_controller.o: position_state.h upnp/event_parsers.h
-queue-audible-fixture: tests/queue_audible_fixture.cpp queue_controller.cpp queue_controller.h position_state.h core_queue_sink.o libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP) $(CORE_LIB)
+queue-audible-fixture: tests/queue_audible_fixture.cpp queue_lms_cli.h queue_controller.cpp queue_controller.h position_state.h core_queue_sink.o libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP) $(CORE_LIB)
 	g++ -std=c++17 -g -O2 -Wall -Wextra -DYENEY_QUEUE_CONTROLLER_TEST -I. -pthread -o $@ $< queue_controller.cpp core_queue_sink.o $(filter-out queue_controller.o,$(QUEUE_CONTROLLER_OBJS)) libqueueitems.a $(QUEUE_TEST_UPNP) $(CORE_LIB) -lFLAC
 
 test: queue-audible-fixture

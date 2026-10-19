@@ -99,6 +99,10 @@ void CoreQueueSink::coreEvent(const std::string &event, uint64_t id, uint64_t) {
             r.fault = event.substr(6);
         else if (event == "STMs")
             r.stms = stamp;
+        else if (event == "queue-refetch" && r.item) {
+            r.incomplete = "superseded by queue seek";
+            r.item->cancel("queue seek superseded incomplete production; LMS re-render required");
+        }
     });
 }
 void CoreQueueSink::protectItems() {
@@ -354,7 +358,10 @@ void CoreQueueSink::audibleFrom(uint64_t id, uint64_t frame) {
     lock.unlock();
     enqueue([this] { protectItems(); });
 }
-void CoreQueueSink::beginRender() { enqueue([this] { freshRender = true; }); }
+void CoreQueueSink::beginRender() {
+    refetchRequested = true;
+    enqueue([this] { freshRender = true; });
+}
 void CoreQueueSink::onQueueCommand(std::function<bool(char, uint32_t)> handler) {
     commandHandler = std::move(handler);
 }
@@ -411,7 +418,8 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
         }
         const auto sourceFrames =
             id < UINT64_MAX / 2 ? frame - r.prefixFrames : audibleFrame - records.at(audibleSource).first;
-        const auto elapsed = uint32_t(std::min<uint64_t>(UINT32_MAX, uint64_t(r.sourceOriginMs) + sourceFrames * 1000 / r.source.rate));
+        const auto elapsed = uint32_t(
+            std::min<uint64_t>(UINT32_MAX, uint64_t(r.sourceOriginMs) + sourceFrames * 1000 / r.source.rate));
         speakerElapsed = std::max(speakerElapsed.value_or(0), elapsed);
     } else if (audibleSource) {
         const auto &old = records.at(audibleSource);

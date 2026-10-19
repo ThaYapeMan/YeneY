@@ -2,6 +2,7 @@
 #pragma once
 #include <algorithm>
 #include <arpa/inet.h>
+#include <cctype>
 #include <chrono>
 #include <fcntl.h>
 #include <netdb.h>
@@ -30,6 +31,60 @@ inline std::string decodeLms(const std::string &input) {
             out += input[i];
     }
     return out;
+}
+// Queue control adapter. Raw MAC on the wire, decoded exact acknowledgement,
+// one bounded attempt. Bind this to ControllerOptions::lmsControl at room
+// start.
+inline bool controlLms(const std::string &host, const std::string &mac, const std::string &command,
+                       unsigned port = 9090) {
+    if (mac.size() != 17 || command.find_first_of("\r\n") != std::string::npos)
+        return false;
+    for (size_t i = 0; i < mac.size(); ++i)
+        if (i % 3 == 2 ? mac[i] != ':' : !std::isxdigit(static_cast<unsigned char>(mac[i])))
+            return false;
+    addrinfo hints{}, *addresses = nullptr;
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &addresses))
+        return false;
+    int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+    if (fd < 0) {
+        freeaddrinfo(addresses);
+        return false;
+    }
+    connect(fd, addresses->ai_addr, addresses->ai_addrlen);
+    freeaddrinfo(addresses);
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+    const auto request = mac + " " + command + "\n";
+    std::string response;
+    size_t sent = 0;
+    while (std::chrono::steady_clock::now() < deadline) {
+        pollfd p{fd, short(sent < request.size() ? POLLOUT : POLLIN), 0};
+        if (poll(&p, 1, 20) <= 0)
+            continue;
+        if (sent < request.size()) {
+            auto n = send(fd, request.data() + sent, request.size() - sent, MSG_NOSIGNAL);
+            if (n <= 0)
+                break;
+            sent += n;
+        } else {
+            char bytes[1024];
+            auto n = recv(fd, bytes, sizeof(bytes), 0);
+            if (n <= 0)
+                break;
+            response.append(bytes, n);
+            if (response.find('\n') != std::string::npos || response.size() > 4096)
+                break;
+        }
+    }
+    close(fd);
+    auto end = response.find('\n');
+    if (end == std::string::npos)
+        return false;
+    auto line = decodeLms(response.substr(0, end));
+    if (!line.empty() && line.back() == '\r')
+        line.pop_back();
+    return line == mac + " " + command;
 }
 // Diagnostic-only client. One connection and one deadline cover all three
 // queries; the caller runs this outside the audio clock and core event loop.

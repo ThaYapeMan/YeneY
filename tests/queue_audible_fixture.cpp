@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_queue_sink.h"
 #include "queue_controller.h"
+#include "queue_lms_cli.h"
 #include "third_party/yeney-core/core/player.h"
 #include "upnp/http_server.h"
-#include <atomic>
 #include <algorithm>
+#include <atomic>
 #include <iostream>
 #include <poll.h>
 #include <sstream>
 #include <thread>
 int main(int argc, char **argv) {
-    if (argc != 4)
+    if (argc != 4 && argc != 5)
         return 2;
     (void)upnp::titleFormat();
     queue_audio::Config storage;
@@ -40,8 +41,22 @@ int main(int argc, char **argv) {
                 a.metadata.album = "Album & fixture";
                 return a;
             }
+        if (argc == 5 && prepared) {
+            queue_audio::QueueAsset a;
+            a.occurrence = prepared.load();
+            return a; // decoder/refetch will supply the pending immutable item
+        }
         throw std::runtime_error("fixture preparation missing");
     };
+    if (argc == 5) {
+        const auto port = unsigned(std::stoul(argv[4]));
+        options.lmsControl = [port](const std::string &command) {
+            return queue_audio::controlLms("127.0.0.1", "02:59:51:54:00:01", command, port);
+        };
+        options.fallbackRequest = [](const std::string &reason) {
+            std::cerr << "FALLBACK " << reason << std::endl;
+        };
+    }
     auto controller = std::make_unique<queue_audio::QueueController>(options, server);
     std::atomic_bool consumeStart{false};
     sink.onQueueCommand([&](char command, uint32_t) {
@@ -80,7 +95,7 @@ int main(int argc, char **argv) {
     std::thread core([&] { player.run(done); });
     bool playing = false, released = false, manual = false;
     auto sync = [&] {
-        if (released || manual)
+        if (released || manual || (playing && !controller->status().active))
             return;
         std::vector<queue_audio::QueueAsset> plan;
         for (const auto &r : sink.snapshot()) {
@@ -119,7 +134,8 @@ int main(int argc, char **argv) {
                 const auto id = std::stoull(line.substr(10));
                 bool ready = false;
                 for (const auto &r : sink.snapshot())
-                    if (r.source.occurrence == id && r.decoded >= 0 && r.item && r.item->contentLength()) ready = true;
+                    if (r.source.occurrence == id && r.decoded >= 0 && r.item && r.item->contentLength())
+                        ready = true;
                 std::cout << "ITEM " << ready << std::endl;
                 continue;
             } else if (line.rfind("PLAN ", 0) == 0 || line.rfind("SELECT ", 0) == 0) {
@@ -131,10 +147,10 @@ int main(int argc, char **argv) {
                 std::vector<queue_audio::QueueAsset> assets;
                 auto records = sink.snapshot();
                 while (input >> id) {
-                    auto it = std::find_if(records.begin(), records.end(), [&](const auto &r) {
-                        return r.source.occurrence == id;
-                    });
-                    if (it == records.end()) throw std::runtime_error("fixture unknown occurrence");
+                    auto it = std::find_if(records.begin(), records.end(),
+                                           [&](const auto &r) { return r.source.occurrence == id; });
+                    if (it == records.end())
+                        throw std::runtime_error("fixture unknown occurrence");
                     queue_audio::QueueAsset a;
                     a.occurrence = id;
                     a.item = it->item;
@@ -146,14 +162,44 @@ int main(int argc, char **argv) {
                 }
                 controller->lmsPlaylist(1, revision, current, assets, kind == "SELECT").get();
                 consumeStart = kind == "SELECT";
+            } else if (line.rfind("SUPPLY ", 0) == 0) {
+                manual = true;
+                std::istringstream input(line.substr(7));
+                uint64_t supplied, token, id;
+                uint32_t origin;
+                input >> supplied >> token >> origin;
+                std::vector<queue_audio::QueueAsset> assets;
+                for (; input >> id;) {
+                    for (const auto &r : sink.snapshot())
+                        if (r.source.occurrence == id) {
+                            queue_audio::QueueAsset a;
+                            a.occurrence = id;
+                            a.item = r.item;
+                            if (id == supplied) {
+                                a.token = token;
+                                a.sourceOriginMs = origin;
+                            }
+                            a.metadata.title = "Title & " + std::to_string(id);
+                            a.metadata.artist = "Artist <one>";
+                            a.metadata.album = "Album & fixture";
+                            assets.push_back(a);
+                        }
+                }
+                controller->update(1, assets).get();
+            } else if (line.rfind("COMMAND ", 0) == 0) {
+                controller->lmsCommand(1, line.at(8)).get();
             } else if (line.rfind("SEEK ", 0) == 0) {
                 controller->lmsSeek(1, std::stoul(line.substr(5))).get();
+                if (argc == 5)
+                    consumeStart = true; // retained CLI refetch, host identity confirmed
+
             } else if (line.rfind("PREPARED ", 0) == 0) {
                 prepared = std::stoull(line.substr(9));
             } else if (line.rfind("EVICT ", 0) == 0) {
                 auto id = std::stoull(line.substr(6));
                 for (const auto &r : sink.snapshot())
-                    if (r.source.occurrence == id) r.item->cancel("item history evicted; LMS re-render required");
+                    if (r.source.occurrence == id)
+                        r.item->cancel("item history evicted; LMS re-render required");
             } else if (line == "RELEASE") {
                 released = true;
                 controller->release().get();
@@ -173,9 +219,9 @@ int main(int argc, char **argv) {
         done = true;
     }
     server->setNotifyHandler({});
-    controller.reset();
     done = true;
-    core.join();
+    core.join(); // no command callback may outlive the controller
+    controller.reset();
     server->shutdown();
     std::cout << "BYE" << std::endl;
 }

@@ -24,6 +24,11 @@ public:
     explicit QueueCoordinator(Speaker, std::function<void(const std::string &)> = {},
                               unsigned timeoutMs = 2000);
     SoapResult transport(const std::string &, const SoapArguments &);
+    void verifyLease() { fence(); }
+    // Cleanup stays on the originally verified device after a grouping change.
+    // Only exact owned removals and restoring crossfade may bypass the play
+    // lease.
+    SoapResult releaseTransport(const std::string &, const SoapArguments &);
     QueueSnapshot browse();
     std::vector<SavedQueue> playlists();
     void destroyPlaylist(const std::string &id);

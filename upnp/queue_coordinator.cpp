@@ -105,7 +105,8 @@ SoapResult QueueCoordinator::raw(const std::string &service, const std::string &
     discover();
     const auto &endpoint = services.at(service);
     std::string body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
-                       "<s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:" +
+                       "<s:Envelope "
+                       "xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\"><s:Body><u:" +
                        action + " xmlns:u=\"" + endpoint.urn + "\">";
     for (const auto &a : args)
         body += "<" + a.first + ">" + xmlEscape(a.second) + "</" + a.first + ">";
@@ -136,6 +137,11 @@ SoapResult QueueCoordinator::transport(const std::string &action, const SoapArgu
     // Queries do not mutate; all queue/transport writes recheck the lease.
     if (action.compare(0, 3, "Get"))
         fence();
+    return raw("AVTransport", action, args);
+}
+SoapResult QueueCoordinator::releaseTransport(const std::string &action, const SoapArguments &args) {
+    if (action != "RemoveTrackRangeFromQueue" && action != "SetCrossfadeMode" && action != "GetCrossfadeMode")
+        throw std::logic_error("queue-invalid-release-action");
     return raw("AVTransport", action, args);
 }
 QueueSnapshot QueueCoordinator::browse() {
