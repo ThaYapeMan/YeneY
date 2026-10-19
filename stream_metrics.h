@@ -75,7 +75,7 @@ public:
         }
         if (now-lastLog < 60000 || (!overwrites && !dropped && !socketBlockedUs && (!s.valid || s.encodedMs == s.audibleMs))) return false;
         lastLog = now;
-        printf("yeney: stream-pacing room_hex=%s ", roomHex.c_str()); print(s);
+        printf("yeney: stream-pacing room_hex=%s reason=%s ", roomHex.c_str(), dropped ? "reader-stalled" : "sample"); print(s);
         return true;
     }
 };

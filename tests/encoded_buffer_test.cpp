@@ -11,7 +11,7 @@ static void packet(EncodedBuffer& buffer, const char* value) {
     buffer.freePacket(p);
 }
 int main() {
-    EncodedBuffer buffer(3);
+    EncodedBuffer buffer(3, {}, std::chrono::milliseconds(20));
     assert(buffer.bytesAvailable() == 0 && !buffer.read());
     assert(buffer.write("", 0) == 0 && !buffer.read());
     assert(buffer.write("abc", 3) == 3);
@@ -25,14 +25,14 @@ int main() {
     assert(!buffer.read());
     for (const auto value : {"one", "two", "three", "four"})
         assert(buffer.write(value, std::strlen(value)) == int(std::strlen(value)));
-    packet(buffer, "four"); // overwritten read slot is returned first
-    packet(buffer, "two");
+    packet(buffer, "two"); // bounded stalled-reader drop removes only the oldest
+    packet(buffer, "three");
     auto held = buffer.read();
-    assert(held && held->size == 5);
+    assert(held && held->size == 4);
     buffer.clear();
     assert(!buffer.read() && buffer.bytesAvailable() == 0);
     assert(buffer.write("new", 3) == 3);
-    assert(std::memcmp(held->data, "three", 5) == 0);
+    assert(std::memcmp(held->data, "four", 4) == 0);
     buffer.freePacket(held);
     packet(buffer, "new");
     buffer.freePacket(nullptr);
@@ -49,5 +49,5 @@ int main() {
         for (unsigned i = 0; i + 1 < bits / 8; ++i) p[i] = char(0xff);
         assert(upnp::littleEndianSample(p, bits) == (int64_t(1) << (bits - 1)) - 1);
     }
-    std::cout << "PASS: packet capacity, full overwrite, FIFO wrap, empty reads, clear with held packet, signed unaligned little-endian samples\n";
+    std::cout << "PASS: packet capacity, bounded oldest drop, FIFO wrap, empty reads, clear with held packet, signed unaligned little-endian samples\n";
 }

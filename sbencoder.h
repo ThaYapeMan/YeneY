@@ -84,7 +84,7 @@ public:
     unsigned sampleRate() const { return m_sampleRate; }
     uint64_t encodedAudioMs() const { return m_encodedFrames.load() * 1000 / m_sampleRate; }
     EncodedHistory history;
-    void useHistoryReader() { m_historyReader.store(true); if (m_phase == Phase::Closing) close(); }
+    void useHistoryReader() { m_historyReader.store(true); m_encodedRing->clear(); if (m_phase == Phase::Closing) close(); }
     bool historyFinished() const { return m_phase == Phase::Closed; }
     unsigned streamId() const { return m_streamId; }
 
@@ -96,7 +96,8 @@ private:
         Closed,
     };
 
-    int encodePcm(const char* data, int len);
+    int encodePcm(const char* data, int len, const std::function<bool()> &interrupted = {});
+    std::function<bool()> m_writeInterrupted;
     int pendingEncodedBytes() const;
     int acceptEncodedBytes(const char* data, int len);
     int drainEncodedBytes(char* data, int maxlen);

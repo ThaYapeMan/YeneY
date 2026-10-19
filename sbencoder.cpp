@@ -12,7 +12,6 @@
 
 #include "sbencoder.h"
 #include "start_lead.h"
-#include <set>
 
 #include <chrono>
 #include <cstdio>
@@ -82,20 +81,13 @@ SBEncoder::SBEncoder(unsigned streamId)
     , m_pendingPacketConsumed(0)
     , m_flac(nullptr)
 {
-    m_encodedRing = new upnp::EncodedBuffer(kEncodedRingCapacity, [streamId](int capacity) {
-        // Reconnects create another encoder for the same stream. Log only once
-        // across those encoders; retain IDs only for streams that overflowed.
-        static std::mutex mutex;
-        static std::set<unsigned> warnedStreams;
-        std::lock_guard<std::mutex> lock(mutex);
-        if (warnedStreams.insert(streamId).second)
-            printf("encoded buffer: overwrote oldest packet, capacity %d packets\n", capacity);
-    });
+    m_encodedRing = new upnp::EncodedBuffer(kEncodedRingCapacity);
     m_flac = new WriteBridge(this);
 }
 
 SBEncoder::~SBEncoder()
 {
+    m_cancelled = true;
     m_flac->finish();
     delete m_flac;
     delete[] m_interleaveBuf;
@@ -175,6 +167,7 @@ int SBEncoder::drainEncodedBytes(char* data, int maxlen)
     int n = (maxlen < available) ? maxlen : available;
     memcpy(data, m_pendingPacket->data + m_pendingPacketConsumed, n);
     m_pendingPacketConsumed += n;
+    if (n) m_encodedRing->readerProgress();
     if (m_pendingPacketConsumed >= m_pendingPacket->size) {
         m_encodedRing->freePacket(m_pendingPacket);
         m_pendingPacket = nullptr;
@@ -185,11 +178,15 @@ int SBEncoder::drainEncodedBytes(char* data, int maxlen)
 int SBEncoder::acceptEncodedBytes(const char* data, int len)
 {
     history.append(data, len);
-    return m_historyReader.load() ? len : m_encodedRing->write(data, len);
+    return m_historyReader.load() ? len : m_encodedRing->write(data, len, [this] {
+        return cancelled() || responseEnded() || producerRetired() || (m_writeInterrupted && m_writeInterrupted());
+    });
 }
 
-int SBEncoder::encodePcm(const char* data, int len)
+int SBEncoder::encodePcm(const char* data, int len, const std::function<bool()> &interrupted)
 {
+    m_writeInterrupted = interrupted;
+    struct Reset { std::function<bool()> &callback; ~Reset() { callback = {}; } } reset{m_writeInterrupted};
     int samplesLeft = len / m_bytesPerFrame;
     while (samplesLeft > 0) {
         int chunk = (samplesLeft > kSamplesPerChunk) ? kSamplesPerChunk : samplesLeft;
@@ -201,7 +198,7 @@ int SBEncoder::encodePcm(const char* data, int len)
             break;
         samplesLeft -= chunk;
     }
-    return len;
+    return len - samplesLeft*m_bytesPerFrame;
 }
 
 FLAC__StreamEncoderWriteStatus SBEncoder::WriteBridge::write_callback(
@@ -304,7 +301,7 @@ int SBEncoder::write(const char* data, int len, unsigned timeout, const std::fun
                 if (cancelled() || responseEnded() || producerRetired() || m_phase != Phase::Encoding) return 0;
                 if (!m_pcmBytesAccepted && firstPcm) firstPcm();
                 m_pcmBytesAccepted += count;
-                if (encodePcm(data,count) != count) return 0;
+                if (encodePcm(data,count,interrupted) != count) return 0;
                 data += count; len -= count; accepted += count;
                 if (!len) return requested;
                 continue;
@@ -320,7 +317,7 @@ int SBEncoder::write(const char* data, int len, unsigned timeout, const std::fun
                 return 0;
             if (!m_pcmBytesAccepted && firstPcm) firstPcm();
             m_pcmBytesAccepted += len;
-            return encodePcm(data, len);
+            return encodePcm(data, len, interrupted);
         }
 
         if (limited && !yeney_is_paused()) {

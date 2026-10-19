@@ -506,3 +506,12 @@ is atomically refreshed once per second, including PID and monotonic timestamp;
 counters survive track changes/reconnects and reset on service restart. Measuring
 lead does not steer the audible reporting clock. Socket time includes time in a
 failed/timed-out send; it is an estimate of backpressure, not a kernel queue meter.
+
+The encoded ring remains **256 packets**, independently of packet byte size.
+Both pacing modes now backpressure a full ring; normal wall-mode wire fixtures
+remain unchanged. Only five seconds without reader progress permits dropping
+one oldest unsent packet, counted as `dropped` and logged with
+`reason=reader-stalled` on the minute diagnostic. Partial reads count as progress.
+Held packets remain valid across `clear()` until `freePacket()`. Cancellation
+interrupts a blocked writer within its 20 ms polling interval; history recovery
+can clear the unused ring without invalidating an already-held packet.
