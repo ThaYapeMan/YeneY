@@ -515,3 +515,14 @@ one oldest unsent packet, counted as `dropped` and logged with
 Held packets remain valid across `clear()` until `freePacket()`. Cancellation
 interrupts a blocked writer within its 20 ms polling interval; history recovery
 can clear the unused ring without invalidating an already-held packet.
+
+Deterministic pacing tests run four simulated hours at +100, 0 and -100 ppm,
+with both zero and 1000 ms start lead. They exercise acquisition, loss and
+reacquisition using the production pacer and encoded ring. A separate local
+fixture retains the old replace-on-full algorithm to reproduce the historical
+wall-clock underrun/overflow failure; production wall mode now backpressures.
+The transport simulation uses 1 ms virtual packets and a separate device/socket
+reservoir to stress the 256-slot limit within four hours. It does not claim
+that default FLAC packets have 1 ms duration or predict the physical time until
+a particular speaker's socket fills. A real FLAC encoder test additionally
+checks that frame admission follows the injected clock and stays inside the band.

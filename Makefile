@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -44,6 +44,8 @@ test: export YENEY_TIMING_LOCKED_EVERY_S = 5
 test: export YENEY_AUDIBLE_OFFSET_MS = 0
 test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	YENEY_STREAM_PACING=sonos YENEY_START_LEAD_MS=1000 ./stream-pacing-encoder-test
+	./encoded-backpressure-test
 	./stream-pacing-test
 	python3 tests/stream_pacing_setting_test.py
 	./stream-metrics-test
@@ -341,6 +343,14 @@ test: stream-metrics-test
 
 sbencoder.o sbstreamer.o yeney.o sonos-position.o upnp/own_speaker_control.o core_sonos.o: stream_pacing.h
 
-stream-pacing-test: tests/stream_pacing_test.cpp stream_pacing.h timing_probe_runtime.h
-	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
+stream-pacing-test: tests/stream_pacing_test.cpp stream_pacing.h timing_probe_runtime.h upnp/encoded_buffer.cpp stream_metrics.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $< upnp/encoded_buffer.cpp
 test: stream-pacing-test
+
+encoded-backpressure-test: tests/encoded_backpressure_test.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h stream_metrics.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ tests/encoded_backpressure_test.cpp upnp/encoded_buffer.cpp
+test: encoded-backpressure-test
+
+stream-pacing-encoder-test: tests/stream_pacing_encoder_test.cpp sbencoder.cpp sbencoder.h stream_pacing.h stream_metrics.h upnp/encoded_buffer.cpp
+	g++ -std=c++17 -O2 -Wall -Wextra -DSBENCODER_TEST -I. -pthread -o $@ tests/stream_pacing_encoder_test.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC
+test: stream-pacing-encoder-test
