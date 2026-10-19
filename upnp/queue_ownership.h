@@ -15,6 +15,7 @@ struct SavedQueue {
 };
 struct QueueOwnershipIO {
     std::function<QueueSnapshot()> browse;
+    std::function<bool(const std::string &)> owned; // optional exact room-controller identity
     std::function<std::vector<SavedQueue>()> playlists;
     std::function<std::string(const std::string &)> save;
     std::function<void(const std::string &)> deletePlaylist;

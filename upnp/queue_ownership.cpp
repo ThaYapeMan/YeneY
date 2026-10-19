@@ -12,6 +12,8 @@ QueueOwnership::QueueOwnership(QueueOwnershipIO callbacks, std::string token)
         throw std::invalid_argument("invalid queue ownership session");
 }
 bool QueueOwnership::owns(const std::string &uri) const {
+    if (io.owned)
+        return io.owned(uri);
     const auto path = uri.find("/music/queue.wav?");
     if (path == std::string::npos)
         return false;
@@ -53,10 +55,29 @@ void QueueOwnership::acquire(const std::string &title) {
                 return b.id != id;
             if (b.id == id)
                 return false;
-            return a.created != b.created ? a.created > b.created : a.id > b.id;
+            if (a.created != b.created)
+                return a.created > b.created;
+            auto sequence = [](const std::string &id) {
+                const auto colon = id.rfind(':');
+                const auto number = id.substr(colon == std::string::npos ? 0 : colon + 1);
+                if (number.empty() || number.size() > 19 ||
+                    number.find_first_not_of("0123456789") != std::string::npos)
+                    return uint64_t(0);
+                return uint64_t(std::stoull(number));
+            };
+            auto left = sequence(a.id), right = sequence(b.id);
+            return left != right ? left > right : a.id > b.id;
         });
-        for (size_t i = 5; i < saved.size(); ++i)
-            io.deletePlaylist(saved[i].id);
+        for (size_t i = 5; i < saved.size(); ++i) {
+            const auto fresh = io.playlists();
+            const auto &victim = saved[i];
+            auto verified = std::find_if(fresh.begin(), fresh.end(), [&](const auto &p) {
+                return p.id == victim.id && p.title == victim.title && p.created == victim.created;
+            });
+            if (verified == fresh.end())
+                throw std::runtime_error("queue-backup-identity-changed");
+            io.deletePlaylist(victim.id);
+        }
         auto fresh = io.browse();
         if (fresh.update != queue.update || fresh.uris != queue.uris)
             throw std::runtime_error("queue-changed-during-backup");

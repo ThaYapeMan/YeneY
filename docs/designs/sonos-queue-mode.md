@@ -630,7 +630,7 @@ Environment=YENEY_QUEUE_DISK_MIB=256
 |---|---|
 | `stream` (default) | Select the existing stream sink and transport behavior. |
 | `auto` | Accepted and logged as `auto-phase4`; select stream until phase 4. |
-| `queue` | Explicit opt-in for a confirmed standalone coordinator only. Grouped coordinators and members select stream with `group-rate-undecided`; incomplete topology selects stream with `coordinator-unconfirmed`. |
+| `queue` | A confirmed standalone coordinator currently selects stream with `queue-unavailable` until part 3 is complete. Grouped coordinators and members select stream with `group-rate-undecided`; incomplete topology selects stream with `coordinator-unconfirmed`. |
 
 Reliable length means a resolved exact rendered count, not just an LMS duration
 field. Sealing can qualify an otherwise uncertain finite source. Invalid setting
@@ -751,31 +751,64 @@ Phase 2 is field-qualified by the owner's 18 October unattended suite at bridge
 or 10 seconds, LMS identity matched 12/12 completed occurrences, startup was
 about one second and successor leads were at least 57 seconds.
 
-The phase 3 support code now includes a separately registered finite WAV route
-with room/session/epoch/revision checks, independent readers and retained handler
-lifetime; native WAV music-track DIDL; optional queue-only TrackNumber/RelTime
-event fields with stale-poll fencing; isolated queue SOAP action builders; and
-a callback-driven queue ownership policy. Ownership tests verify SaveQueue
-identity before mutation, retain five prefixed backups, preserve foreign entries
-on release and restore native crossfade after a failed fenced removal. These
-are local component tests, not an integrated fake-speaker acceptance suite.
+**Phase 3b parts 1 and 2 are done. Parts 3–8 remain.** Production stays on the
+normal stream path, including eligible standalone `queue` requests: startup logs
+`selected=stream reason=queue-unavailable` once and continues through HELO and
+ordinary stream playback. The previous fatal opt-in guard is removed. Grouped
+rooms retain `group-rate-undecided`. `bridge::queuePlaybackReady` in
+`playback_mode.h` is the single production readiness constant; it must remain
+false until part 3 supplies speaker-confirmed audible signalling and connects
+the room runtime. There is no command-line or environment bypass. The controller
+fixture alone compiles with `YENEY_QUEUE_CONTROLLER_TEST`; installed programs do
+not use it. No owner device steps are available yet.
 
-**Phase 3 playback is not implemented or enabled yet.** These components are not
-wired into `runCoreClient` or the room controller. Production remains stream
-only. Outstanding work includes coordinator-fenced SOAP
-and saved-playlist discovery, published-asset mirroring, speaker-driven core
-audibility, both directions of controls, latched tail-preserving fallback, and
-the unattended device suite with its fake-device integration tests. Do not
-attempt phase 3 device qualification from this checkpoint. The existing owner
-instructions still describe the qualified phase 2 dry-run suite. Its final
-SUITE verdict is now included in both archived `summary.md` and `suite.log`.
+`QueueController` owns one serialized worker and an exclusive in-process room
+lease. The host forwards LMS play intent with an epoch, current occurrence and
+ordered current/future assets (current plus at least three successors when they
+exist). Its asynchronous `play`, `update` and `release` API keeps SOAP away from
+core callbacks. Stable shared item handles are watched every 50 ms; sealed
+items wait for their actual count, progressive items use their committed count,
+and an unpublished predecessor cannot be skipped. Repeated updates do not add
+an asset twice, published prefixes cannot be rewritten, and stale epochs cannot
+release the current session. No core audible callback is made by the controller
+or HTTP readers.
 
+The queue-only SOAP adapter discovers advertised AVTransport, Queue,
+ContentDirectory and topology endpoints on the verified coordinator. Before
+mutations it rechecks the standalone lease. Queue and saved-playlist browsing
+are paginated and revision checked. Takeover verifies the assigned SaveQueue
+identity before any destructive queue operation, retains the five newest
+`Before YeneY` backups, and preserves other saved playlists. Ordering uses
+creation dates or the timestamp in our backup title, with numeric saved-queue
+IDs breaking same-minute ties; unknown ordering fails safely. Same-minute title
+collisions get a numbered suffix rather than replacing a saved playlist. Deletion
+rechecks saved identity, title and creation order. CrossfadeMode is saved, forced
+off and read back; release restores and confirms the saved value.
 
-Phase 3b part 1 implements startup mode selection in the real room startup path.
-Default/stream, auto, invalid values and grouped queue requests use the original
-stream path. A standalone queue request is selected and logged, then exits with
-an explicit controller-unavailable error before LMS HELO or queue mutation. This
-is a temporary runtime guard until part 2 wires the serialized controller; queue
-playback is not available at this checkpoint. Loopback tests compare the exact
-HELO bytes for every stream-selection case and verify the queue guard. No
-physical device steps are authorized by this checkpoint.
+The finite route and 3a DIDL are used for each published asset. Every append uses
+AddMultipleURIsToQueue with one URI and a freshly observed UpdateID, followed by
+a confirming queue snapshot. The queue transport URI is set once, and Play is
+sent once, when the first item is ready. Later publications only extend the
+queue; Sonos owns the joins. Stop, mode-change and destructor/service-shutdown
+release remove only exact asset URLs registered by this controller, preserving
+foreign entries (including URLs that merely copy a session parameter). Release
+revokes the epoch for new HTTP readers; existing readers retain their assets.
+
+Loopback tests run the real controller/store/finite HTTP listener against a fake
+Sonos coordinator. They cover verified and failed backups, five-backup retention,
+name collisions, crossfade confirmation/restoration, progressive/sealed and
+not-yet-created assets, current plus three successors, single transport setup,
+UpdateID conflicts, grouped-room refusal, stale updates and all three release
+paths. The fake reader uses a 40x test clock, 3.5-second prefetch leads, bursts
+paced at up to 9x, unaligned and suffix ranges, and reconnects. Separate real
+`yeney`/fake-LMS checks compare guarded queue and stream HELO packets, encoded
+FLAC bodies, source HTTP requests and transport SOAP bytes (normalizing only the
+fresh per-process session token). These are preparation and delivery tests,
+not audible playback qualification.
+
+Remaining: part 3 speaker-confirmed audible starts and per-item elapsed; part 4
+LMS control/edit reconciliation; part 5 Sonos-app control mapping; part 6
+controlled, latched stream fallback and active room status; part 7 the complete
+end-to-end audible fake-Sonos acceptance suite; part 8 final phase 3 status and
+device-verification documentation. The unattended physical device suite follows
+in phase 3c. Agents never run against real LMS or speakers or deploy on LXC 113.

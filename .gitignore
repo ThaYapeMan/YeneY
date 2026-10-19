@@ -61,3 +61,7 @@ field-cold-test
 /queue-ownership-test
 
 /playback-mode-test
+
+/libqueuecontroller.a
+/queue-controller-fixture
+/queue-controller-guard-test

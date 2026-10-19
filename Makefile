@@ -22,7 +22,7 @@ yeney: $(OBJS) $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -43,6 +43,9 @@ test: export YENEY_TIMING_LOCKED_EVERY_S = 5
 test: export YENEY_AUDIBLE_OFFSET_MS = 0
 test: export YENEY_TIMING_STALE_S = 60
 test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	./queue-controller-guard-test
+	python3 tests/queue_controller_test.py
+	python3 tests/queue_guard_stream_test.py
 	./playback-mode-test
 	python3 tests/playback_mode_test.py
 	./queue-ownership-test
@@ -293,3 +296,22 @@ test: queue-ownership-test
 playback-mode-test: tests/playback_mode_test.cpp playback_mode.h upnp/speaker_control.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $<
 test: playback-mode-test
+
+QUEUE_CONTROLLER_OBJS = queue_controller.o upnp/queue_coordinator.o upnp/queue_actions.o upnp/queue_ownership.o upnp/queue_metadata.o
+queue_controller.o: queue_controller.cpp queue_controller.h playback_mode.h queue_route.h queue_item_store.h upnp/queue_coordinator.h upnp/queue_ownership.h upnp/queue_metadata.h upnp/queue_actions.h upnp/stream_server.h
+upnp/queue_coordinator.o: upnp/queue_coordinator.cpp upnp/queue_coordinator.h playback_mode.h upnp/queue_actions.h upnp/queue_ownership.h upnp/http.h upnp/soap.h upnp/xml.h upnp/discovery.h
+upnp/queue_actions.o: upnp/queue_actions.cpp upnp/queue_actions.h upnp/soap.h upnp/xml.h
+upnp/queue_ownership.o: upnp/queue_ownership.cpp upnp/queue_ownership.h
+upnp/queue_metadata.o: upnp/queue_metadata.cpp upnp/queue_metadata.h upnp/soap.h upnp/title_format.h upnp/xml.h
+$(QUEUE_CONTROLLER_OBJS):
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
+libqueuecontroller.a: $(QUEUE_CONTROLLER_OBJS)
+	ar rcs $@ $^
+all: libqueuecontroller.a
+
+QUEUE_TEST_UPNP = upnp/http_server.o upnp/gena.o upnp/xml.o upnp/http.o upnp/soap.o upnp/discovery.o
+queue-controller-fixture: tests/queue_controller_fixture.cpp queue_controller.cpp queue_controller.h libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP)
+	g++ -std=c++17 -g -O2 -Wall -Wextra -DYENEY_QUEUE_CONTROLLER_TEST -I. -o $@ tests/queue_controller_fixture.cpp queue_controller.cpp $(filter-out queue_controller.o,$(QUEUE_CONTROLLER_OBJS)) libqueueitems.a $(QUEUE_TEST_UPNP) -lFLAC -pthread
+queue-controller-guard-test: tests/queue_controller_guard_test.cpp queue_controller.h libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP)
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $< libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP) -lFLAC -pthread
+test: queue-controller-fixture queue-controller-guard-test

@@ -85,7 +85,7 @@ try:
     cases = [(None, 'solo', 'default-stream'), ('stream', 'solo', 'configured-stream'),
              ('auto', 'solo', 'auto-phase4'), ('invalid', 'solo', 'invalid-setting'),
              ('', 'solo', 'invalid-setting'), ('queue', 'coordinator', 'group-rate-undecided'),
-             ('queue', 'member', 'group-rate-undecided'), ('queue', 'solo', 'queue-opt-in')]
+             ('queue', 'member', 'group-rate-undecided'), ('queue', 'solo', 'queue-unavailable')]
     reference = None
     for mode, group, reason in cases:
         server.group, server.actions = group, []
@@ -101,40 +101,25 @@ try:
                                         '--server=127.0.0.1:'+str(lms.getsockname()[1])],
                                        env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
             try:
-                if reason == 'queue-opt-in':
+                connection, _ = lms.accept()
+                with connection:
+                    connection.settimeout(3)
+                    header = receive(connection, 8)
+                    assert header[:4] == b'HELO', header
+                    hello = header+receive(connection, int.from_bytes(header[4:], 'big'))
+                    if reference is None:
+                        reference = hello
+                    assert hello == reference, (mode, group, hello, reference)
+                    process.send_signal(signal.SIGTERM)
                     try:
                         output = process.communicate(timeout=20)[0]
                     except subprocess.TimeoutExpired as error:
                         raise AssertionError((mode, group, error.output)) from error
-                    assert process.returncode == 1, output
-                    lms.settimeout(.1)
-                    try:
-                        unexpected, _ = lms.accept()
-                    except socket.timeout:
-                        pass
-                    else:
-                        unexpected.close()
-                        raise AssertionError('queue unavailable must stop before HELO')
-                    assert 'queue controller is not wired yet' in output, output
-                else:
-                    connection, _ = lms.accept()
-                    with connection:
-                        connection.settimeout(3)
-                        header = receive(connection, 8)
-                        assert header[:4] == b'HELO', header
-                        hello = header+receive(connection, int.from_bytes(header[4:], 'big'))
-                        if reference is None:
-                            reference = hello
-                        assert hello == reference, (mode, group, hello, reference)
-                        process.send_signal(signal.SIGTERM)
-                        try:
-                            output = process.communicate(timeout=20)[0]
-                        except subprocess.TimeoutExpired as error:
-                            raise AssertionError((mode, group, error.output)) from error
-                        assert process.returncode == 0, output
-                selected = 'queue' if reason == 'queue-opt-in' else 'stream'
+                    assert process.returncode == 0, output
+                selected = 'stream'
                 assert f'selected={selected} reason={reason}' in output, output
                 assert output.count('playback selection room=') == 1, output
+                assert 'queue playback unavailable:' not in output, output
                 assert ('invalid YENEY_PLAYBACK_MODE=' in output) == (reason == 'invalid-setting'), output
                 assert set(server.actions) <= {'GetZoneGroupState', 'GetTransportInfo', 'GetVolume',
                                                'GetPositionInfo', 'GetMediaInfo'}, server.actions
@@ -142,7 +127,7 @@ try:
                 if process.poll() is None:
                     process.kill()
                     process.communicate(timeout=5)
-    print('PASS playback mode startup: actual yeney, default/stream/auto/invalid/grouped byte-identical HELO, one selection log, standalone queue stops before LMS or queue mutation')
+    print('PASS playback mode startup: actual yeney, default/stream/auto/invalid/grouped/guarded queue byte-identical HELO, one startup log, no queue mutation')
 finally:
     server.shutdown()
     server.server_close()

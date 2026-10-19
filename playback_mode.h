@@ -3,6 +3,8 @@
 #include "upnp/speaker_control.h"
 #include <string>
 namespace bridge {
+// Enable only after part 3 supplies speaker-confirmed audible signalling.
+inline constexpr bool queuePlaybackReady = false;
 enum class PlaybackMode { Stream, Queue };
 struct PlaybackSelection {
     std::string requested, reason;
@@ -11,7 +13,8 @@ struct PlaybackSelection {
 };
 // The caller reads the room environment once, after topology discovery. No I/O
 // or cached global setting here: topology and configuration remain explicit.
-inline PlaybackSelection selectPlaybackMode(const char *value, const upnp::Speaker &speaker) {
+inline PlaybackSelection selectPlaybackMode(const char *value, const upnp::Speaker &speaker,
+                                            bool ready = queuePlaybackReady) {
     PlaybackSelection result;
     result.requested = value ? value : "stream";
     if (result.requested == "stream") {
@@ -28,6 +31,8 @@ inline PlaybackSelection selectPlaybackMode(const char *value, const upnp::Speak
                speaker.coordinator != speaker.name || speaker.members.size() != 1 ||
                speaker.members.front() != speaker.name) {
         result.reason = "coordinator-unconfirmed";
+    } else if (!ready) {
+        result.reason = "queue-unavailable";
     } else {
         result.selected = PlaybackMode::Queue;
         result.reason = "queue-opt-in";

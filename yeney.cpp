@@ -930,12 +930,6 @@ int main(int argc, char** argv)
     printf("yeney: playback selection room=%s coordinator=%s requested=%s selected=%s reason=%s\n",
            upnp::logValue(selectedSpeaker.name).c_str(), upnp::logValue(selectedSpeaker.coordinator).c_str(),
            upnp::logValue(playback.requested).c_str(), bridge::playbackModeName(playback.selected), playback.reason.c_str());
-    // Part 1 selects the policy. Until the serialized queue runtime is wired,
-    // reject this opt-in before HELO rather than silently playing via stream.
-    if (playback.selected == bridge::PlaybackMode::Queue) {
-        fprintf(stderr, "yeney: queue playback unavailable: queue controller is not wired yet\n");
-        return EXIT_FAILURE;
-    }
     static bridge::SBStreamer streamer;
     streamer.registerWith(*gStreamServer);
 
