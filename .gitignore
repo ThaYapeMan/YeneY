@@ -68,3 +68,7 @@ field-cold-test
 
 /queue-audible-fixture
 /queue-position-test
+
+/stream-metrics-test
+/stream-pacing-test
+/encoded-backpressure-test

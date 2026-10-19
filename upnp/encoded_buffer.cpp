@@ -1,4 +1,5 @@
 #include "encoded_buffer.h"
+#include "../stream_metrics.h"
 #include <cassert>
 #include <cstring>
 #include <mutex>
@@ -41,6 +42,7 @@ int EncodedBuffer::write(const char* p, int n) {
     std::lock_guard<std::mutex> lock(impl->mutex);
     auto& slot = impl->slots[impl->writer];
     if (slot) {
+        ++bridge::streamMetrics().overwrites;
         Impl::release(slot);
         if (!impl->warned) {
             impl->warned = true;

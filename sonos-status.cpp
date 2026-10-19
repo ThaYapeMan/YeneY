@@ -13,6 +13,7 @@
 #include "sonos-status.h"
 #include "speaker_uri.h"
 #include "stream_session.h"
+#include "stream_metrics.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -98,6 +99,7 @@ size_t Status::hash()
 
 void Status::print()
 {
+    streamMetrics().print(streamMetrics().sample());
     const std::string border(97, '-');
     int nameField = static_cast<int>(border.length()) - static_cast<int>(m_zoneName.length()) - 5;
     if (nameField < 0)

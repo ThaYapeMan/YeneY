@@ -1,5 +1,6 @@
 #include "stale_stream.h"
 #include "http_server.h"
+#include "../stream_metrics.h"
 #include "timing.h"
 #include <algorithm>
 #include <atomic>
@@ -131,7 +132,12 @@ struct Socket {
     }
     bool send(const char* bytes, size_t size) {
         while (size) {
+            const auto began = std::chrono::steady_clock::now();
             const auto n = ::send(fd, bytes, size, MSG_NOSIGNAL);
+            const int error = errno;
+            bridge::streamMetrics().socketWait(std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::steady_clock::now() - began).count());
+            errno = error;
             if (n < 0 && errno == EINTR) continue;
             if (n <= 0) { if (errno == EPIPE || errno == ECONNRESET) ended = 2; return false; }
             sentBytes += n; bytes += n; size -= n;

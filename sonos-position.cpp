@@ -92,3 +92,15 @@ int sonos_position_audio_started() {
         (position.needsStartEvidence() ? timing_probe::diagnostics().playbackConfirmed(position.streamId())
                                       : timing_probe::diagnostics().heardAudio(position.streamId())));
 }
+
+uint64_t estimate_sonos_audible_frames(uint32_t rate) {
+    std::lock_guard<std::mutex> lock(positionMutex);
+    auto copy = position;
+    if (timing_probe::enabled() && timing_probe::lmsPositionFromModel()) {
+        auto &d = timing_probe::diagnostics();
+        double frame = 0, scale = d.priorScale(), rel = NAN, at = NAN;
+        bool fit = d.lmsPosition(copy.streamId(), copy.measurementBase(), rate, frame, scale, &rel, &at);
+        return copy.smoothFrames(rate, timing_probe::clockSeconds()*1000, fit, frame, scale, rel, at);
+    }
+    return copy.audibleFrames(rate);
+}

@@ -19,6 +19,7 @@
 #include "stream_close_log.h"
 
 #include "sbencoder.h"
+#include "stream_metrics.h"
 #include "stream_debug.h"
 #include "audio_mode.h"
 #include <map>
@@ -96,6 +97,13 @@ static void activateRequest(const std::shared_ptr<StreamRequest>& request, bool 
     sonos_position_connection(request->stream, request->id);
     activeRequest = request;
     g_enc = request->encoder;
+    streamMetrics().encoder([weak = std::weak_ptr<SBEncoder>(g_enc)] {
+        auto enc = weak.lock();
+        if (!enc) return StreamMeasurement{};
+        const auto rate = enc->sampleRate();
+        return StreamMeasurement{double(enc->frameOrigin.load())*1000/rate + enc->encodedAudioMs(),
+            double(estimate_sonos_audible_frames(rate))*1000/rate, enc->hasAudio() && !enc->responseEnded()};
+    });
     canonicalEncoder = g_enc;
     canonicalRestartTag = request->restartTag;
     if (promoted && deferCloseLog) closeLog.observe(request->stream);
@@ -213,6 +221,7 @@ int encode_squeezebox_audio_cancellable(const char* data, int len, uint64_t firs
         }
         if (enc && enc->streamId() == stream && !enc->cancelled() && !enc->responseEnded() && !enc->producerRetired()) {
             int written = enc->write(data, len, SBSTREAMER_TIMEOUT, [=] {
+                enc->frameOrigin = firstFrame;
                 sonos_position_pcm(stream, requestId, firstFrame);
             }, [=] { return cancelled() || !sonos_output_running(); });
             if (written == len) {
