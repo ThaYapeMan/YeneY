@@ -265,8 +265,13 @@ stream mode with reason `group-rate-undecided`; an unconfirmed coordinator uses
 `coordinator-unconfirmed`. `auto` still uses stream. Queue mode owns only its
 prepared entries, maps LMS and unambiguous app controls, and falls back once to
 stream for the playback session when ownership or finite playback fails.
-Whole-list mirroring and the group rate policy remain open. Phase 3c unattended
-device qualification follows; see [queue mode status](docs/designs/sonos-queue-mode.md#phase-3-implementation-checkpoint).
+Whole-list mirroring and the group rate policy remain open. Owners can qualify
+a standalone room with `/usr/local/bin/yeney-queue-device-suite`; use the
+[unattended systemd-run procedure](DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
+to survive an SSH disconnect. It restores the room configuration and LMS state,
+archives SOAP/LMS/status and read-only WebSocket evidence, and prints a device
+verdict separately from WebSocket precision. Physical qualification remains
+pending the owner result; see [queue mode status](docs/designs/sonos-queue-mode.md#phase-3-implementation-checkpoint).
 
 On 19 October 2026, the owner qualified Study on bridge `5a686ad` with
 `/usr/local/bin/yeney-stream-pacing-suite --room Study --hours 2`: **PACING OK**.

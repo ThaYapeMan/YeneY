@@ -761,8 +761,9 @@ Explicit `YENEY_PLAYBACK_MODE=queue` now enables owned queue playback on a confi
 standalone coordinator. `stream` remains the default; `auto` still selects stream
 and logs `auto-phase4`. Grouped coordinators and members select stream with
 `group-rate-undecided`; incomplete standalone identity selects stream with
-`coordinator-unconfirmed`. There are no new owner device steps yet: the phase 3c
-unattended device suite follows this implementation acceptance.
+`coordinator-unconfirmed`. The phase 3c owner suite is now available as
+`/usr/local/bin/yeney-queue-device-suite`; physical qualification still requires
+an owner-returned result.
 
 Queue mode prepares finite native-rate assets, mirrors the prepared future window,
 backs up and takes ownership of the coordinator queue, and uses speaker-confirmed
@@ -1078,3 +1079,29 @@ Production limits remain standalone rooms only, explicit queue opt-in, and a
 bounded prepared window/history budget. Whole-list mirroring, `auto` selection
 and the group rate policy remain open. Phase 3c will provide unattended physical
 device qualification; this completion records loopback acceptance only.
+
+### Phase 3c: unattended physical-device runner
+
+`/usr/local/bin/yeney-queue-device-suite` controls only a verified standalone room
+and its raw-MAC LMS player. It saves the full playlist/state/preferences, verifies
+a named Before YeneY backup and its ordered contents, uses a room-only queue
+drop-in, and runs real-time ALAC/FLAC album joins, standard 10 s crossfade, optional
+44.1/48 kHz joins, LMS controls and stop/play re-arming. SOAP, LMS and process-fresh
+room JSON are sampled at 1 Hz; strict queue/identity/start/seek/continuity criteria
+and service-stop release checks produce a separate physical qualification verdict.
+The implementation remains unqualified on hardware until the owner reports it.
+
+A standard-library TLS WebSocket sampler polls only getPlaybackStatus at 5 Hz,
+with a 60 s reference after removing the queue drop-in in normal stream mode.
+Per-mode presence, quantization, RTT, continuous per-item fit residuals and
+RelTime start differences are archived. Errors and inflated error payloads are
+reported unavailable and cannot fail device qualification or alter production
+clocking. Sonos-app and acoustic checks remain optional human observations.
+
+The runner holds compatible suite locks, restores on SIGINT/SIGHUP/SIGTERM/error,
+retains timestamped/latest archives and verifies the original room environment
+and LMS state. The documented systemd-run invocation survives an SSH disconnect.
+Loopback CLI/SlimProto/SOAP/systemd/status and self-signed TLS WebSocket tests
+exercise these transactions; they are not an owner device run. See
+[device verification](../../DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
+for installation, the full command paths and the Proxmox archive pull.
