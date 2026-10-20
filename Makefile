@@ -30,6 +30,8 @@ install: yeney yeney-queue-dryrun
 	install -m 0755 yeney-queue-dryrun /usr/local/bin/yeney-queue-dryrun
 	install -m 0755 scripts/yeney-queue-suite /usr/local/bin/yeney-queue-suite
 	install -m 0755 scripts/yeney-stream-pacing-suite /usr/local/bin/yeney-stream-pacing-suite
+	install -m 0755 scripts/yeney-queue-device-suite /usr/local/bin/yeney-queue-device-suite
+	install -m 0644 scripts/yeney_queue_ws.py /usr/local/bin/yeney_queue_ws.py
 	scripts/install-devices.sh
 encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
@@ -54,6 +56,8 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/stream_pacing_setting_test.py
 	./stream-metrics-test
 	python3 tests/stream_pacing_suite_test.py
+	python3 tests/queue_device_suite_test.py
+	python3 tests/queue_device_ws_test.py
 	YENEY_ACCEPTANCE_BINARY=$(CURDIR)/yeney python3 tests/queue_binary_test.py
 	python3 tests/queue_mode_test.py
 	./room-mode-test
