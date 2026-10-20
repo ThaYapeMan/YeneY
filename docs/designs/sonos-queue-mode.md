@@ -1161,7 +1161,7 @@ resumes the already received HTTP start internally; readiness never sends
 | Evidence/state | YeneY response | LMS StreamingController meaning |
 |---|---|---|
 | New TCP connection | Exactly one HELO; no HELO for an epoch/readiness change | `playerReconnect` may invoke `_Continue`, restarting a source; never use it as an internal reset |
-| `strm q`, including repeated idle stops | Acknowledge flush/stop; keep queue ownership | Stop/flush before a selection is normal; it does not authorize YeneY to select an LMS track |
+| `strm q`, including repeated idle stops | Acknowledge STMf and confirm speaker Stop; keep queue ownership, without unsolicited STMu | STMu is an underrun, not the acknowledgement of an LMS-issued stop. Stop/flush before a selection is normal; it does not authorize YeneY to select an LMS track |
 | `strm s` while idle/stopped/preparing | Accept/adopt its producer or cached selection, with no CLI command | LMS has already selected and streamed the song |
 | `strm f` canceling a speculative future producer | Acknowledge flush; discard an unmapped deleted successor and retain the audible transport | LMS can cancel a removed prefetched song without stopping its playing song |
 | Cached selection | STMc, actual HTTP/RESP handshake, discard encoded body and retain existing PCM; no decoder reopen | LMS clears its connecting state only after RESP |

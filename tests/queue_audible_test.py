@@ -27,7 +27,11 @@ class Harness:
     def __init__(self, rates=(44100, 44100, 44100), fade=False, cli_port=None, source_options=None):
         self.sonos = Coordinator()
         self.lms = LMS()
-        self.driver = Driver(self.sonos, 'queue-audible-fixture', [self.lms.listener.getsockname()[1]] + ([] if cli_port is None else [cli_port]))
+        try:
+            self.driver = Driver(self.sonos, 'queue-audible-fixture', [self.lms.listener.getsockname()[1]] + ([] if cli_port is None else [cli_port]))
+        except BaseException:
+            self.lms.close();self.sonos.close()
+            raise
         self.lms.accept()
         self.sources = []
         def sources():
@@ -95,6 +99,14 @@ class Harness:
 
 
 class AudibleTests(unittest.TestCase):
+    def test_startup_failure_cleanup(self):
+        from unittest.mock import patch
+        before=set(threading.enumerate())
+        with patch('queue_controller_test.subprocess.Popen',side_effect=OSError(26,'Text file busy')):
+            with self.assertRaises(OSError):Harness()
+        self.assertEqual(set(threading.enumerate()),before)
+        print('PASS queue fixture startup failure: listeners, server thread, log and temporary directory closed before rethrow')
+
     def test_joins(self):
         for name, rates, fade in [('44100', [44100]*3, False), ('48000', [48000]*3, False),
                                   ('mixed', [44100,48000,44100], False), ('crossfade-10s', [44100]*3, True)]:

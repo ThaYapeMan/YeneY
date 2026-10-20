@@ -219,9 +219,13 @@ class Driver:
     def __init__(self, coordinator, fixture='queue-controller-fixture', extra=()):
         self.tmp = tempfile.TemporaryDirectory(prefix='yeney-controller-')
         self.log = open(Path(self.tmp.name)/'controller.log', 'w+')
-        self.proc = subprocess.Popen([str(ROOT/fixture), self.tmp.name, str(coordinator.server_port), *map(str, extra)],
-                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True,
-                                     env=dict(os.environ, YENEY_TITLE_FORMAT='artist-title'))
+        try:
+            self.proc = subprocess.Popen([str(ROOT/fixture), self.tmp.name, str(coordinator.server_port), *map(str, extra)],
+                                         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log, text=True,
+                                         env=dict(os.environ, YENEY_TITLE_FORMAT='artist-title'))
+        except BaseException:
+            self.log.close();self.tmp.cleanup()
+            raise
         self.lines = queue.Queue()
         self.reader = threading.Thread(target=lambda: [self.lines.put(line.rstrip()) for line in self.proc.stdout], daemon=True)
         self.reader.start()

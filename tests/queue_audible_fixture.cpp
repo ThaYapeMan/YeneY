@@ -62,7 +62,9 @@ int main(int argc, char **argv) {
     sink.onQueueCommand([&](char command, uint32_t) {
         if (command == 's' && consumeStart) {
             consumeStart = false;
+            sink.restartCached();
             controller->lmsCommand(1, command);
+            sink.confirmCachedStart();
             return true;
         }
         if (command == 'p' || command == 'u' || command == 'q' || command == 'f') {
@@ -130,6 +132,16 @@ int main(int argc, char **argv) {
                 break;
             if (line == "NEWRENDER") {
                 sink.beginRender();
+            } else if (line.rfind("COMPLETEITEM ", 0) == 0) {
+                const auto id = std::stoull(line.substr(13));
+                bool ready = false;
+                for (const auto &r : sink.snapshot())
+                    if (r.source.occurrence == id && r.item) {
+                        auto length = r.item->contentLength();
+                        ready = length && r.item->producedFrames() >= (*length - 44) / 6;
+                    }
+                std::cout << "ITEM " << ready << std::endl;
+                continue;
             } else if (line.rfind("READYITEM ", 0) == 0) {
                 const auto id = std::stoull(line.substr(10));
                 bool ready = false;

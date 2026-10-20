@@ -40,13 +40,16 @@ class Controls(unittest.TestCase):
         h.model.streaming = current
         count = len(h.packets('STMs'))
         decoded_starts = len(h.packets('STMc'))
+        boundaries = Path(h.driver.log.name).read_text().count('boundary frame=')
         h.driver.command(f'SELECT {revision} {current} '+' '.join(map(str, ids)))
-        # The new strm is the wire echo of the explicit LMS playlist selection;
-        # cached bytes must prevent opening/re-decoding this source.
-        h.lms.strm('s')
+        # A cached run still performs the real LMS HTTP/RESP handshake,
+        # without decoding/replacing its retained PCM.
+        source = HTTP(wav(44100, 1)); h.sources.append(source)
+        h.lms.strm('s',source,fmt='p',rate=44100)
         h.until(lambda: len(h.packets('STMs')) == count+1)
         self.identity(h, current, asset)
-        self.assertEqual(len(h.packets('STMc')), decoded_starts)
+        self.assertEqual(len(h.packets('STMc')), decoded_starts+1)
+        self.assertEqual(Path(h.driver.log.name).read_text().count('boundary frame='),boundaries)
         time.sleep(.15)
         self.assertEqual(len(h.packets('STMs')), count+1)
 
@@ -83,7 +86,7 @@ class Controls(unittest.TestCase):
             self.select(h,2,3,ids) # retained previous; no decoder request
             self.select(h,2,1,ids) # play position 0
             self.select(h,2,3,ids) # play middle
-            self.assertEqual(len(h.packets('STMd')), reported)
+            h.until(lambda: len(h.packets('STMd')) == reported+3)
             log = Path(h.driver.log.name).read_text()
             self.assertIn('cached=1 mixed-intro=1', log)
             print('PASS LMS play position 0/middle, manual next/previous cached 10 s mixed intro: matching audible identity, one STMs per selection, no double advance')
@@ -141,12 +144,14 @@ class Controls(unittest.TestCase):
                 h.driver.command(f'PLAN {revision} {current} '+' '.join(map(str,edited)))
                 self.assertEqual(len(h.sonos.actions('AddMultipleURIsToQueue')), added)
             print('PASS LMS playlist add/delete/move/clear: token-based future-only rebuilds, audible URI retained, no transport skip')
-            h.lms.strm('q'); h.until(lambda: len(h.packets('STMu')) == 1)
+            stops=len(h.sonos.actions('Stop'));underruns=len(h.packets('STMu'))
+            h.lms.strm('q'); h.until(lambda: len(h.sonos.actions('Stop'))>stops and h.sonos.transport_state=='STOPPED')
+            self.assertEqual(len(h.packets('STMu')),underruns)
             self.assertTrue(h.items()); self.assertFalse(h.sonos.crossfade)
             self.identity(h,3,6)
             h.lms.strm('f'); time.sleep(.2)
-            self.assertEqual(len(h.packets('STMu')),1)
-            print('PASS LMS stop/flush: Stop retains ownership, speaker-confirmed STMu once, no double advance')
+            self.assertEqual(len(h.packets('STMu')),underruns)
+            print('PASS LMS stop/flush: Stop retains ownership, confirmed Stop/STMf without an unsolicited underrun, no double advance')
         finally: h.close()
 
 

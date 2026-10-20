@@ -46,6 +46,7 @@ class AppControls(unittest.TestCase):
         h.wait_items(1); h.state(1)
         h.until(lambda: len(h.packets('STMs')) == 1)
         h.wait_items(2)
+        h.until(lambda: h.driver.command('COMPLETEITEM 2','ITEM')=='ITEM 1')
         h.model.sources = iter(()); h.model.ready = False
         h.driver.command('PLAN 2 1 1 2')
         return h, cli
@@ -74,12 +75,13 @@ class AppControls(unittest.TestCase):
             h.until(lambda: len(h.packets('STMs')) == starts+1)
             h.driver.command(f'SELECT 2 {item} 1 2')
             echoes = self.log(h).count('echo suppressed LMS retained-run=s')
-            h.lms.strm('f'); h.lms.strm('s')
+            source=HTTP(wav(44100,1));h.sources.append(source)
+            h.lms.strm('q');h.lms.strm('s',source,fmt='p',rate=44100)
             h.until(lambda: self.log(h).count('echo suppressed LMS retained-run=s') == echoes+1)
             self.identity(h,item)
             time.sleep(.15)
-            self.assertEqual(len(h.packets('STMs')),starts+1)
-            self.assertEqual(len(h.packets('STMc')),decoded)
+            h.until(lambda: len(h.packets('STMs'))==starts+2)
+            self.assertEqual(len(h.packets('STMc')),decoded+1)
             self.assertEqual(len(h.sonos.actions('Seek')),seeks)
         starts = len(h.packets('STMs')); seeks = len(h.sonos.actions('Seek'))
         urls = [i['uri'] for i in h.items()]
@@ -89,18 +91,19 @@ class AppControls(unittest.TestCase):
             h.until(lambda: cli.commands[-1] == f'time {seconds}')
             h.driver.command(f'SEEK {seconds*1000}')
             echoes = self.log(h).count('echo suppressed LMS retained-run=s')
-            h.lms.strm('f'); h.lms.strm('s')
+            source=HTTP(wav(44100,1));h.sources.append(source)
+            h.lms.strm('q');h.lms.strm('s',source,fmt='p',rate=44100)
             h.until(lambda: self.log(h).count('echo suppressed LMS retained-run=s') == echoes+1)
             h.until(lambda: seconds*1000 <= h.elapsed() < seconds*1000+1000)
             self.identity(h,1)
         self.assertEqual([i['uri'] for i in h.items()],urls)
-        self.assertEqual(len(h.packets('STMc')),decoded)
+        self.assertEqual(len(h.packets('STMc')),decoded+2)
         self.assertEqual(len(h.sonos.actions('Seek')),seeks)
         self.assertEqual(len(h.sonos.actions('Stop')),0)
-        self.assertEqual(len(h.packets('STMs')),starts)
+        h.until(lambda: len(h.packets('STMs'))==starts+2)
         self.assertEqual(cli.commands,['pause 1','play','playlist index 1','playlist index 0','time 6','time 2'])
         self.assertNotIn('FALLBACK',self.log(h))
-        print('PASS Sonos app pause/resume, next/previous, forward/backward history seek: raw-MAC decoded CLI acknowledgements, matching LMS/audible identity, cached URLs, no echo SOAP or duplicate STMs')
+        print('PASS Sonos app pause/resume, next/previous, forward/backward history seek: raw-MAC decoded CLI acknowledgements, matching LMS/audible identity, cached URLs, no echo SOAP, one STMs per acknowledged LMS run')
 
     def test_own_commands_and_race(self):
         h, cli = self.start()
@@ -142,7 +145,8 @@ class AppControls(unittest.TestCase):
         seeks = len(h.sonos.actions('Seek'))
         cli.tokens = [2,1]
         h.driver.command('SELECT 3 2 2 1') # echoed selection plus newer LMS order
-        h.lms.strm('f'); h.lms.strm('s')
+        source=HTTP(wav(44100,1));h.sources.append(source)
+        h.lms.strm('q');h.lms.strm('s',source,fmt='p',rate=44100)
         h.wait_items(3)
         h.state(1)
         self.identity(h,1)
