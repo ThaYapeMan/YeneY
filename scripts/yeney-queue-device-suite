@@ -276,7 +276,15 @@ class Suite(PACING['Suite']):
 
     @staticmethod
     def entries_equal(a,b):
-        return len(a)==len(b) and all((x['id']==y['id'] if y.get('id') else CLI.same(x.get('url',''),y.get('url',''))) for x,y in zip(a,b))
+        def remote(entry):
+            url=entry.get('url','')
+            return entry.get('id','').startswith('-') or (bool(url) and urlsplit(url).scheme.lower()!='file')
+        def equal(actual,expected):
+            # LMS assigns a new negative ID when a remote URL is loaded again.
+            if remote(actual) or remote(expected) or not expected.get('id'):
+                return CLI.same(actual.get('url',''),expected.get('url',''))
+            return actual.get('id')==expected['id']
+        return len(a)==len(b) and all(equal(x,y) for x,y in zip(a,b))
 
     def lms_ready(self,entries,mode=None,queue=False,deadline=None):
         deadline=self.backend.now()+60 if deadline is None else deadline

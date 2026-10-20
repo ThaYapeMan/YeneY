@@ -51,6 +51,21 @@ def fixture():
 
 
 class Tests(unittest.TestCase):
+    def test_remote_playlist_identity_uses_url(self):
+        url='podcast://https://plus.bnr.nl/episode.mp3'
+        old=dict(id='-95857229938624',url=url)
+        new=dict(id='-95857240133448',url=url)
+        self.assertTrue(m.Suite.entries_equal([new],[old]))
+        self.assertFalse(m.Suite.entries_equal([dict(new,url=url+'?different')],[old]))
+        for url in ('https://radio.invalid/live','podcast://https://plus.bnr.nl/episode.mp3'):
+            self.assertTrue(m.Suite.entries_equal([dict(id='2',url=url)],[dict(id='1',url=url)]))
+        self.assertTrue(m.Suite.entries_equal([dict(id='-2',url='file:///temporary')],[dict(id='-1',url='file:///temporary')]))
+        self.assertFalse(m.Suite.entries_equal([dict(id='2',url='file:///local.flac')],[dict(id='1',url='file:///local.flac')]))
+        other=dict(id='-3',url=url+'?other')
+        self.assertFalse(m.Suite.entries_equal([other,new],[old,other]))
+        self.assertFalse(m.Suite.entries_equal([new,new],[old]))
+        print('PASS queue device remote restore: field podcast IDs -95857229938624/-95857240133448 match by URL; remote schemes ignore IDs, changed URLs/order and local IDs remain checked')
+
     def test_slow_load_2_and_20_seconds(self):
         with fixture() as f:
             tracks=f.model.library[:4]
