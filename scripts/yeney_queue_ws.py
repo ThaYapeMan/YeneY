@@ -119,14 +119,17 @@ def analyze(rows, joins):
     """Reject impossible/out-of-order values; never promote an error to precision."""
     result={}
     for mode in ('queue','stream'):
-        valid=[]; reasons=[]; last=None; segment=0
+        valid=[]; observed=[]; reasons=[]; last=None; segment=0
         for row in (r for r in rows if r.get('mode')==mode):
             if row.get('error'):
                 reasons.append(row['error']);last=None;segment+=1;continue
             v=row.get('positionMillis'); previous=row.get('previousPositionMillis')
             if (not isinstance(v,(int,float)) or isinstance(v,bool) or not math.isfinite(v) or
-                    v<0 or v>7*24*3600*1000 or row.get('itemId') in (None,'')):
+                    v<0 or v>7*24*3600*1000):
                 reasons.append('missing or implausible position/item');last=None;segment+=1;continue
+            observed.append(row)
+            if row.get('itemId') in (None,''):
+                reasons.append('position present but itemId unavailable');last=None;segment+=1;continue
             # previousPositionMillis is recorded, never substituted for an invalid current position.
             if previous is not None and (not isinstance(previous,(int,float)) or not math.isfinite(previous) or abs(v-previous)>7*24*3600*1000):
                 reasons.append('implausible previousPositionMillis');last=None;segment+=1;continue
@@ -135,10 +138,10 @@ def analyze(rows, joins):
                 segment+=1
             item=dict(row,segment=segment)
             valid.append(item);last=row
-        whole=sum(v['positionMillis']%1000==0 for v in valid)/len(valid) if valid else None
+        whole=sum(v['positionMillis']%1000==0 for v in observed)/len(observed) if observed else None
         buckets={}
-        for v in valid:
-            buckets.setdefault(int(v['midpoint']),set()).add((v['itemId'],v['positionMillis']))
+        for v in observed:
+            buckets.setdefault(int(v['midpoint']),set()).add((str(v.get('itemId')),v['positionMillis']))
         fits={}; residuals=[]
         for v in valid:
             if v.get('playbackState') not in ('PLAYBACK_STATE_PLAYING','PLAYING'):continue
@@ -165,11 +168,11 @@ def analyze(rows, joins):
         if not residuals:reasons.append('insufficient moving samples for a position fit')
         verdict=('unavailable' if not valid or not residuals else
                  'sub-second' if percentile(residuals,.95)<30 and whole<.1 else 'whole seconds')
-        result[mode]=dict(position_present=bool(valid),samples=len(valid),whole_second_share=whole,
+        result[mode]=dict(position_present=bool(observed),samples=len(observed),whole_second_share=whole,
                           distinct_values_per_second={str(k):len(v) for k,v in buckets.items()},
                           distinct_per_second_median=statistics.median(map(len,buckets.values())) if buckets else None,
-                          round_trip_median_ms=statistics.median([(v['receive']-v['send'])*1000 for v in valid]) if valid else None,
-                          round_trip_p95_ms=percentile([(v['receive']-v['send'])*1000 for v in valid],.95),
+                          round_trip_median_ms=statistics.median([(v['receive']-v['send'])*1000 for v in observed]) if observed else None,
+                          round_trip_p95_ms=percentile([(v['receive']-v['send'])*1000 for v in observed],.95),
                           residual_median_ms=statistics.median(residuals) if residuals else None,
                           residual_p95_ms=percentile(residuals,.95),residual_max_ms=max(residuals) if residuals else None,
                           fits=fit_rows,item_starts=starts,reasons=sorted(set(reasons)),verdict=verdict)
