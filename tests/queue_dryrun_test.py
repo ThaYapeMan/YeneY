@@ -277,6 +277,9 @@ class DryRunTests(unittest.TestCase):
         try:
             lms.accept()
             SongQueue(lms, [(sources[0], dict(fmt='l')), (sources[1], dict(rate=8000))])
+            lms.wait('DSCO');lms.timer()
+            self.assertFalse(any(p.get('event')=='STMn' for p in lms.packets))
+            lms.song_queue.advance() # host recovery, not StreamingFailed for received MP4 bytes
             lms.wait('STMu', timeout=5)
             stdout, stderr = proc.communicate(timeout=6)
             self.assertEqual(proc.returncode, 0, stderr)
