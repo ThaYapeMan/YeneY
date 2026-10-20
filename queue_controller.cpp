@@ -147,6 +147,14 @@ struct QueueController::Impl {
             return false;
         }
     }
+    static bool replayable(const QueueAsset &a) {
+        try {
+            auto length = a.item ? a.item->contentLength() : std::nullopt;
+            return length && a.item->producedFrames() >= (*length - 44) / 6;
+        } catch (const std::exception &) {
+            return false;
+        }
+    }
     std::vector<QueueAsset> plan;
     std::vector<std::string> urls;
     std::set<std::string> ownedUris;
@@ -791,16 +799,19 @@ struct QueueController::Impl {
             std::find_if(assets.begin(), assets.end(), [&](const auto &a) { return token(a) == current; });
         if (select && chosen == assets.end())
             throw std::invalid_argument("queue-current-occurrence-missing");
-        if (select && !alreadyPrepared && !available(*chosen)) {
+        if (select && !alreadyPrepared && !replayable(*chosen)) {
             if (!options.prepare)
                 throw std::runtime_error("queue-preparation-unavailable");
             auto prepared = options.prepare(current, 0);
             prepared.token = current;
             *chosen = std::move(prepared);
+            awaitingFreshSeek = true; // a selected replacement may cancel the old producer
             log("prepare token=" + std::to_string(current) + " reason=history-missing");
         }
-        if (select)
+        if (select) {
             echoRun.until = 0;
+            awaitingFreshSeek = true;
+        }
         playlist = assets;
         playlistRevision = revision;
         if (!select) {
@@ -867,6 +878,9 @@ struct QueueController::Impl {
         }
         if (command != 's')
             echoRun.until = 0;
+        const bool alreadyPlaying =
+            command == 'u' && ((ownState.value == "PLAYING" && ownState.until >= nowMs()) ||
+                               (speakerState == yeney::PlaybackState::Playing && ownState.until < nowMs()));
         ownStateOccurrence =
             target ? target
                    : (audibleIndex != SIZE_MAX ? plan[audibleIndex].occurrence : plan.front().occurrence);
@@ -878,9 +892,14 @@ struct QueueController::Impl {
             ownState.set("STOPPED");
         if (command == 'p')
             actions.pause();
-        else if (command == 'u')
-            actions.play();
-        else if (command == 'q' || command == 'f') {
+        else if (command == 'u') {
+            if (target && pendingSent != target)
+                log("LMS resume awaiting prepared target");
+            else if (!alreadyPlaying)
+                actions.play();
+            else
+                log("LMS resume acknowledged by existing Play");
+        } else if (command == 'q' || command == 'f') {
             target = pendingSent = 0;
             pendingFuture.clear();
             rebuildAfterConfirm = false;
@@ -946,6 +965,11 @@ struct QueueController::Impl {
             auto &asset = plan[urls.size()];
             if (!asset.item)
                 break;
+            if (awaitingFreshSeek && asset.occurrence != target && !available(asset)) {
+                log("future producer superseded occurrence=" + std::to_string(asset.occurrence));
+                asset.item.reset(); // wait for a fresh LMS producer, never retry a CLI jump
+                break;
+            }
             std::optional<uint64_t> length;
             try {
                 length = asset.item->contentLength();

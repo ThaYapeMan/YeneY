@@ -1148,3 +1148,52 @@ source before any prepared asset existed. Identical valid queue strm s retries
 retain their current producer while no STMd-requested successor is outstanding;
 STMd credits admit new tracks even when LMS reuses the exact HTTP request.
 Stop/flush, source/format changes and new generations still permit a fresh start.
+
+### LMS protocol discipline (20 October start-loop correction)
+
+Queue playback is a SlimProto receiver. LMS owns source selection and its
+StreamingController song queue. An incoming command never causes a CLI mutation.
+In particular, `q` followed by `s` adopts that track in the existing queue
+preparation/generation. A cached selection or a genuine stream-to-queue rearm
+resumes the already received HTTP start internally; readiness never sends
+`playlist index`. The rearm-loop circuit breaker remains a last-resort guard.
+
+| Evidence/state | YeneY response | LMS StreamingController meaning |
+|---|---|---|
+| New TCP connection | Exactly one HELO; no HELO for an epoch/readiness change | `playerReconnect` may invoke `_Continue`, restarting a source; never use it as an internal reset |
+| `strm q`, including repeated idle stops | Acknowledge flush/stop; keep queue ownership | Stop/flush before a selection is normal; it does not authorize YeneY to select an LMS track |
+| `strm s` while idle/stopped/preparing | Accept/adopt its producer or cached selection, with no CLI command | LMS has already selected and streamed the song |
+| Cached selection | STMc, actual HTTP/RESP handshake, discard encoded body and retain existing PCM; no decoder reopen | LMS clears its connecting state only after RESP |
+| `u` after autostart-zero buffering | Release producer admission; keep audible state speaker-confirmed and suppress a redundant Sonos Play | BufferReady/start synchronization is distinct from unpausing |
+| Speaker confirms the owned item is playing | STMs once for that start | Started: LMS playing identity becomes that audible song |
+| Fully decoded local item, STMs already sent | STMd no earlier than the next event-loop round | StreamingComplete: `_NextIfMore` admits a successor only when the song queue has fewer than two songs |
+| Fully decoded remote item, STMs already sent | Hold STMd until remaining speaker-audible time is strictly below `YENEY_QUEUE_NEXT_DELAY_S` (default 20 s, 1–120 s) | Admit a remote successor near playback, avoiding an idle service connection; never use HTTP reads as the playback clock |
+| Fault with zero audio body bytes | STMn; no fabricated STMs | StreamingFailed: `_StopNextIfMore` may stop and select another song |
+| Fault after any audio body bytes | Report the queue fault and preserve the produced tail; no STMn | Received audio must not be misrepresented as an empty failed source; the ownership/fallback policy handles it |
+| Unambiguous Sonos user action | One CLI mutation with `reason=sonos-user-action`, then verify by queries and suppress its SlimProto echo | Explicit external user control, not a response to LMS's own messages |
+| Fallback handoff | At most one query-verified continuation batch with `reason=fallback`; its q/s cannot rearm queue mode | Resume the selected position in the latched stream session without a feedback loop |
+
+`LmsClient::submit` is the queue mutation choke point. Missing/internal reasons,
+unrecognized mutations and attempts to mutate through the query API are rejected
+before network I/O. All mutations log their reason and command; no mutation is
+blindly retried. Remote-source classification uses LMS's remote flag, negative
+IDs or a non-file URL. Unresolved identity conservatively delays successor
+admission until the prepared item has metadata.
+
+These independently implemented rules were studied from
+[LMS StreamingController](https://github.com/LMS-Community/slimserver/blob/public/9.1/Slim/Player/StreamingController.pm)
+and [LMS-uPnP's squeezelite state machine](https://github.com/philippe44/LMS-uPnP/blob/master/application/squeezelite/slimproto.c).
+No implementation from those projects is included in YeneY.
+
+LMS can expose the previous `time` while waiting for the new run. The room therefore
+uses a read-only CLI `listen 1` subscription, filtered to its decoded player ID,
+to retain an authoritative `time` command target. It never derives a seek from
+HTTP Range, and never sends a setter in response. Owned seek notifications are
+suppressed as echoes. STAT elapsed is relative to the new run; room status and
+handoff evidence retain absolute source time, while LMS adds its own seek offset.
+
+Expected re-render cancellation removes an unrendered producer's descriptor and
+its asset from the future plan. Reservations read the core's actual occurrence
+counter without advancing it. A superseded future producer waits for real LMS
+audio, without being mistaken for a SOAP fault or requesting another source.
+Service-shutdown flushes cannot request a fallback continuation.

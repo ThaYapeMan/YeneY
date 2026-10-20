@@ -19,6 +19,10 @@ class Server(socketserver.ThreadingTCPServer):
         class Handler(socketserver.StreamRequestHandler):
             def handle(self):
                 wire=self.rfile.readline().decode().strip()
+                if profile=='notify' and wire=='listen 1':
+                    owner.commands.append(wire)
+                    self.wfile.write(b'listen 1\n00%3A00%3A00%3A00%3A00%3A00 time 99\naa%3Abb%3Acc%3Add%3Aee%3Aff time 2.5\n')
+                    self.wfile.flush();return
                 assert wire.startswith('aa:bb:cc:dd:ee:ff '),wire
                 words=[unquote(w) for w in wire.split()];command=' '.join(words[1:])
                 owner.connections+=1;owner.commands.append(command);count=owner.commands.count(command)
@@ -51,6 +55,11 @@ class Tests(unittest.TestCase):
             status=json.loads(next(l[7:] for l in p.stdout.splitlines() if l.startswith('STATUS ')))
             return server.commands,p.stdout,status
         finally:server.close()
+    def test_notification(self):
+        commands,out,_=self.run_profile('notify')
+        self.assertEqual(commands,['listen 1'])
+        self.assertIn('PASS read-only LMS notifications',out)
+        print('PASS read-only LMS notification: authoritative seek target, encoded identity filter, no playback mutation, shutdown joins listener')
     def test_mutation_guard(self):
         commands,out,_=self.run_profile('guard')
         self.assertEqual(commands,[])

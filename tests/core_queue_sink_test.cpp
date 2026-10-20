@@ -370,5 +370,27 @@ int main() {
         std::cout << "PASS speaker sink: confirmed zero keeps internal zero, source frames required, no "
                      "duplicate starts, occurrence-local monotonic capped elapsed, flush fences state\n";
     }
+    {
+        CoreQueueSink sink("CancelledDescriptor", c, 1);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 100, 0, 0});
+        sink.coreEvent("queue-refetch", 1, 0); // no PCM boundary existed
+        sink.coreEvent("strm", 2, 0);
+        sink.trackDescriptor({2, 8000, 100, 0, 0});
+        sink.trackBoundary(0, {8000, 16, 2, false}, false);
+        std::vector<yeney::Frame> pcm(100, {65536, -65536});
+        assert(sink.write(pcm.data(), pcm.size(), false) == pcm.size());
+        sink.resolvedItemBoundary({2, 0, 100, 0, "replacement"});
+        sink.waitIdle();
+        auto records = sink.snapshot();
+        assert(records.size() == 2 && !records[0].item && !records[0].incomplete.empty());
+        assert(records[1].item && records[1].item->descriptor().occurrence == "2");
+        assert(records[1].item->producedFrames() == 100 && sink.latestOccurrence() == 2);
+        sink.flush();
+        sink.waitIdle();
+        assert(sink.latestOccurrence() == 2); // only actual core starts allocate occurrences
+        std::cout << "PASS cancelled queue descriptor: unrendered producer removed, replacement owns its "
+                     "PCM/identity, reservations never advance the actual core occurrence\n";
+    }
     std::filesystem::remove_all(root);
 }

@@ -35,9 +35,20 @@ int main(int argc, char **argv) {
     }
     if (profile == "late")
         o.queryMs = 300;
+    if (profile == "notify")
+        o.notification = [&](const std::string &wire) {
+            assert(decodeLms(wire) == "aa:bb:cc:dd:ee:ff time 2.5");
+            done = true;
+        };
     LmsClient cli("127.0.0.1", "aa:bb:cc:dd:ee:ff", o);
     std::string reply;
-    if (profile == "guard") {
+    if (profile == "notify") {
+        for (unsigned i = 0; i < 200 && !done; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        assert(done && !fallbacks);
+        std::cout << "PASS read-only LMS notifications: listen subscription, encoded player filter, exact "
+                     "seek target, bounded shutdown\n";
+    } else if (profile == "guard") {
         assert(!cli.submit({"playlist index 0"}, "readiness"));
         assert(!cli.submit({"play"}, ""));
         assert(!cli.submit({"playlist clear"}, "sonos-user-action"));

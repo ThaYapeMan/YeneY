@@ -6,6 +6,7 @@
 #include "queue_controller.h"
 #include "queue_lms_client.h"
 #include "queue_playlist.h"
+#include "queue_protocol.h"
 #include "stream_session.h"
 #include "upnp/queue_coordinator.h"
 #include <condition_variable>
@@ -46,20 +47,24 @@ struct QueueRoom::Impl {
         uint32_t origin;
     };
     std::map<uint64_t, Binding> bindings;
+    mutable std::mutex sourceMutex;
+    std::map<uint64_t, bool> remoteSources;
     std::map<uint64_t, queue_audio::QueueAsset> assets;
     std::mutex mutex;
     std::condition_variable changed;
     std::deque<std::function<void()>> jobs;
     std::thread worker;
-    bool closing = false, playing = false, drainRequested = false, queueReadyPending = false;
+    bool closing = false, drainRequested = false, queueReadyPending = false;
+    std::atomic<bool> playing{false};
     std::atomic<uint64_t> epoch{1}, lastBound{0};
     uint64_t lastSnapshot = 0, lastPoll = 0;
     std::optional<unsigned> initialIndex;
     uint64_t producerToken = 0;
     std::atomic<uint64_t> coreReady{0};
-    std::atomic<bool> stopped{false}, readiness{true};
+    std::atomic<bool> stopped{false}, readiness{true}, deferIncoming{false};
     std::atomic<uint64_t> queueGeneration{1};
-    std::atomic<uint64_t> seekOrigin{UINT64_MAX}, pendingRender{0};
+    std::atomic<uint64_t> seekOrigin{UINT64_MAX}, pendingRender{0}, notifiedSeek{UINT64_MAX},
+        ownSeek{UINT64_MAX};
     std::atomic<bool> refetchPending{false}, manualIntent{false}, renderPending{false},
         renderAdmission{false};
     std::mutex preparedMutex;
@@ -89,7 +94,7 @@ struct QueueRoom::Impl {
                 return true; // CLI re-render echo must preserve the prepared target
             if (c == 'f')
                 manualIntent = !refetchPending;
-            if (c == 'q' && mode.status().item.owned)
+            if (c == 'q' && playing)
                 manualIntent = true;
             if (c == 'p' || c == 'u' || c == 'q' || c == 'f') {
                 post([this, c] {
@@ -106,8 +111,11 @@ struct QueueRoom::Impl {
             if (c == 's' && refetchPending.exchange(false)) {
                 manualIntent = false;
                 post([this] {
-                    if (playing)
+                    if (playing) {
+                        queue.restartCached();
                         controller->lmsCommand(epoch, 's');
+                        queue.confirmCachedStart();
+                    }
                 });
                 return true;
             }
@@ -119,6 +127,32 @@ struct QueueRoom::Impl {
         });
         queue_audio::LmsClient::Options cli;
         cli.log = logger;
+        cli.notification = [this](const std::string &wire) {
+            std::istringstream input(wire);
+            std::string id, command, value;
+            input >> id >> command >> value;
+            command = queue_audio::decodeLms(command);
+            value = queue_audio::decodeLms(value);
+            if (command != "time" || value.empty() || value == "?")
+                return;
+            try {
+                size_t end = 0;
+                double seconds = std::stod(value, &end);
+                if (value.front() == '+' || value.front() == '-')
+                    seconds += double(mode.status().item.sourceMs) / 1000;
+                if (end == value.size() && std::isfinite(seconds) && seconds >= 0 &&
+                    seconds * 1000 <= UINT32_MAX) {
+                    const auto ms = uint64_t(seconds * 1000);
+                    if (ownSeek.load() == ms) {
+                        ownSeek = UINT64_MAX;
+                        return;
+                    }
+                    notifiedSeek = ms;
+                    logger("queue LMS seek notification source_ms=" + std::to_string(notifiedSeek.load()));
+                }
+            } catch (...) {
+            }
+        };
         cli.metrics = [this](uint64_t slow, uint64_t failed) { mode.lmsMetrics(slow, failed); };
         cli.unavailable = [this](const std::string &reason) { post([this, reason] { fallback(reason); }); };
         lms = std::make_unique<queue_audio::LmsClient>(host, mac, std::move(cli));
@@ -129,16 +163,21 @@ struct QueueRoom::Impl {
         o.managedFallback = true;
         o.log = logger;
         o.lmsControl = [this](const std::string &c) {
+            if (c.rfind("time ", 0) == 0)
+                ownSeek = uint64_t(std::stod(c.substr(5)) * 1000);
             refetchPending = c.rfind("playlist index ", 0) == 0 || c.rfind("time ", 0) == 0;
             return lms->submit({c}, "sonos-user-action");
         };
         o.lmsPending = [this] { return lms->pending(); };
-        o.fallbackRequest = [this](const std::string &reason) { post([this, reason] { fallback(reason); }); };
+        o.fallbackRequest = [this](const std::string &reason) {
+            if (!roomStop)
+                post([this, reason] { fallback(reason); });
+        };
         o.reanchor = [this](uint64_t id, uint32_t origin) { queue.reanchorSpeaker(id, origin); };
         o.audiblePosition = [this](uint64_t id, uint64_t frame, yeney::PlaybackState st) {
             post([this, id, frame, st] {
                 auto b = bindings.find(id);
-                if (b != bindings.end() && mode.accepts(b->second.generation, true))
+                if (b != bindings.end() && mode.accepts(b->second.generation, true) && !refetchPending)
                     queue.speakerPosition(id, frame, st);
             });
         };
@@ -173,7 +212,9 @@ struct QueueRoom::Impl {
             // Called by controller worker; reserve the next core occurrence and
             // let the LMS refetch supply its descriptor/item asynchronously.
             queue_audio::QueueAsset a;
-            a.occurrence = lastBound.fetch_add(1) + 1;
+            a.occurrence = queue.latestOccurrence() + 1;
+            logger("queue reserve occurrence=" + std::to_string(a.occurrence) +
+                   " token=" + std::to_string(token));
             pendingRender = a.occurrence;
             a.token = token;
             a.sourceOriginMs = ms;
@@ -267,6 +308,10 @@ struct QueueRoom::Impl {
                 a.metadata.artist = e.artist;
                 a.metadata.album = e.album;
                 a.metadata.artwork = e.artwork(host);
+                std::lock_guard<std::mutex> lock(sourceMutex);
+                remoteSources[r.source.occurrence] = remoteArtworkTrack(e.id, e.remote, e.url);
+                while (remoteSources.size() > 60000)
+                    remoteSources.erase(remoteSources.begin());
             }
         return a;
     }
@@ -303,7 +348,14 @@ struct QueueRoom::Impl {
             if (!initialIndex)
                 initialIndex = playlist.index;
             for (auto &r : records)
-                if (r.source.occurrence > lastBound && r.source.occurrence < UINT64_MAX / 2) {
+                if (r.incomplete.empty() && r.source.occurrence > lastBound &&
+                    r.source.occurrence < UINT64_MAX / 2) {
+                    auto reserved = bindings.find(r.source.occurrence);
+                    if (reserved != bindings.end()) {
+                        lastBound = r.source.occurrence;
+                        producerToken = reserved->second.token;
+                        continue;
+                    }
                     const auto sought = seekOrigin.exchange(UINT64_MAX);
                     const auto origin = sought == UINT64_MAX ? 0 : uint32_t(sought);
                     size_t at = *initialIndex;
@@ -323,7 +375,8 @@ struct QueueRoom::Impl {
                 }
             for (auto &r : records) {
                 auto b = bindings.find(r.source.occurrence);
-                if (b != bindings.end() && b->second.generation == state.generation && r.item)
+                if (b != bindings.end() && b->second.generation == state.generation && r.item &&
+                    r.incomplete.empty())
                     assets[r.source.occurrence] = asset(r, b->second);
             }
         }
@@ -332,6 +385,10 @@ struct QueueRoom::Impl {
             return;
         std::vector<queue_audio::QueueAsset> plan;
         for (auto &r : records) {
+            if (!r.incomplete.empty()) {
+                assets.erase(r.source.occurrence);
+                continue;
+            }
             auto b = bindings.find(r.source.occurrence);
             if (b == bindings.end() || b->second.generation != state.generation || !r.item)
                 continue;
@@ -385,6 +442,12 @@ struct QueueRoom::Impl {
             return;
         }
         auto token = playlist.entries[playlist.index].token;
+        const auto targetTime = notifiedSeek.exchange(UINT64_MAX);
+        if (token == state.item.token && targetTime != UINT64_MAX)
+            playlist.timeMs = uint32_t(targetTime);
+        producerToken = token;
+        initialIndex = playlist.index;
+        queue.restartCached();
         const bool seek =
             token == state.item.token && std::abs(int64_t(playlist.timeMs) - state.item.sourceMs) >= 1000;
         if (seek)
@@ -409,6 +472,8 @@ struct QueueRoom::Impl {
             manualIntent = false;
             refetchPending = false;
             queue.resumeReceivedStart();
+        } else {
+            queue.confirmCachedStart();
         }
     }
     struct LmsPending : std::runtime_error {
@@ -464,6 +529,8 @@ struct QueueRoom::Impl {
                 }
             }
             try {
+                if (roomStop)
+                    continue;
                 if (job)
                     job();
                 if (queueReadyPending && coreReady == mode.status().generation) {
@@ -498,13 +565,20 @@ struct QueueRoom::Impl {
                 lms->tick(); // No state inferred from a missing/late CLI reply.
             } catch (const std::exception &e) {
                 logger("queue room-worker error=" + std::string(e.what()));
-                if (!mode.status().latched)
+                if (!roomStop && !mode.status().latched)
                     fallback(std::string(e.what()).find("playlist-") != std::string::npos ? "lms-unavailable"
                                                                                           : "soap-error");
             }
         }
     }
     void command(const yeney::Command &c) {
+        if (c.letter == 'q')
+            stopped = true;
+        if (c.letter == 's') {
+            const auto v = mode.status();
+            deferIncoming =
+                !router.isQueue() && stopped && v.state == "active" && v.lastFallback != "rearm-loop";
+        }
         if (!router.isQueue() && mode.status().state == "active")
             stream.command(c);
         post([this, c] {
@@ -520,16 +594,15 @@ struct QueueRoom::Impl {
             }
             if (c.letter == 's' && stopped.exchange(false)) {
                 if (mode.status().active == "queue") {
+                    if (!playing) {
+                        producerToken = 0;
+                        initialIndex.reset();
+                    }
                     mode.adoptPlay();
                     return; // adopt the received start; never request another from LMS
                 }
                 if (mode.status().lastFallback == "rearm-loop")
                     return; // The circuit breaker requires a service restart.
-                std::string probe;
-                if (!lms->query("playlist index ?", probe)) {
-                    stopped = true;
-                    return;
-                }
                 try {
                     upnp::QueueCoordinator coordinator(room);
                     coordinator.verifyLease();
@@ -568,6 +641,8 @@ struct QueueRoom::Impl {
                     seekOrigin = UINT64_MAX;
                     initialIndex.reset();
                     producerToken = 0;
+                } else {
+                    router.resumeReceivedStart();
                 }
             }
         });
@@ -583,6 +658,12 @@ void QueueRoom::shutdown() { impl->shutdown(); }
 yeney::Sink &QueueRoom::sink() { return impl->router; }
 void QueueRoom::command(const yeney::Command &c) { impl->command(c); }
 bool QueueRoom::queueActive() const { return impl->mode.status().active == "queue"; }
+bool QueueRoom::deferStart() { return impl->deferIncoming.exchange(false); }
+bool QueueRoom::remoteSource(uint64_t id) const {
+    std::lock_guard<std::mutex> lock(impl->sourceMutex);
+    auto found = impl->remoteSources.find(id);
+    return found == impl->remoteSources.end() || found->second;
+}
 } // namespace bridge
 
 void bridge::runQueueCoreClient(const char *server, const uint8_t *mac, const char *name, QueueRoom &room) {
@@ -602,6 +683,10 @@ void bridge::runQueueCoreClient(const char *server, const uint8_t *mac, const ch
         config.name = name;
         std::copy(mac, mac + 6, config.mac.begin());
         config.startOnSubmit = true;
+        config.queueNextDelayMs = bridge::queueNextDelayMs();
+        config.queueRelativeClock = true;
+        config.deferQueueStart = [&room] { return room.deferStart(); };
+        config.queueRemoteSource = [&room](uint64_t id) { return room.remoteSource(id); };
         config.log = [](const std::string &s) { printf("core: %s\n", s.c_str()); };
         config.observeCommand = [&room](const yeney::Command &c) { room.command(c); };
         yeney::Player player(config, room.sink());

@@ -235,6 +235,7 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | Setting | Values | Default |
 |---|---|---|
 | `YENEY_PLAYBACK_MODE` | `stream`: existing transport · `queue`: standalone owned queue opt-in · `auto`: stream, logged as `auto-phase4` | `stream` |
+| `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |
 | `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; invalid/overflowing values fail queue configuration | `256` |
 | `YENEY_STREAM_PACING` | `sonos`: follow the Sonos clock · `wall`: legacy host clock opt-out | `sonos` |
 | `YENEY_AUDIO` | `24/48`: 24-bit FLAC at the source's 44.1/48 kHz rate · `16/44`: legacy 16-bit/44.1 kHz | `24/48` |

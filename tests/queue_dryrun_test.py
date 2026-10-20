@@ -242,7 +242,9 @@ class DryRunTests(unittest.TestCase):
         try:
             lms.accept()
             SongQueue(lms, [(source, dict(rate=8000)) for source in sources[:2]])
-            lms.wait('STMn', timeout=6)
+            lms.wait('DSCO'); lms.wait('STMs'); time.sleep(.4); lms.timer()
+            self.assertFalse(any(p.get('event') == 'STMn' for p in lms.packets))
+            lms.song_queue.advance()
             lms.wait('RESP')
             lms.song_queue = None
             lms.strm('f'); lms.wait('STMf')

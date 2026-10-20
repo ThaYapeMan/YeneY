@@ -79,6 +79,8 @@ std::vector<QueueRecord> CoreQueueSink::snapshot() const {
     return out;
 }
 void CoreQueueSink::coreEvent(const std::string &event, uint64_t id, uint64_t) {
+    if (event == "strm")
+        latestProducer = id;
     const double stamp = now();
     const auto receivedAt = std::chrono::steady_clock::now();
     enqueue([=] {
@@ -99,9 +101,12 @@ void CoreQueueSink::coreEvent(const std::string &event, uint64_t id, uint64_t) {
             r.fault = event.substr(6);
         else if (event == "STMs")
             r.stms = stamp;
-        else if (event == "queue-refetch" && r.item) {
+        else if (event == "queue-refetch") {
             r.incomplete = "superseded by queue seek";
-            r.item->cancel("queue seek superseded incomplete production; LMS re-render required");
+            descriptorOrder.erase(std::remove(descriptorOrder.begin(), descriptorOrder.end(), id),
+                                  descriptorOrder.end());
+            if (r.item)
+                r.item->cancel("queue seek superseded incomplete production; LMS re-render required");
         }
     });
 }
@@ -357,6 +362,14 @@ void CoreQueueSink::audibleFrom(uint64_t id, uint64_t frame) {
     prefixPending = true;
     lock.unlock();
     enqueue([this] { protectItems(); });
+}
+void CoreQueueSink::restartCached() {
+    std::lock_guard<std::mutex> lock(mutex);
+    audibleId = 0;
+    speakerElapsed.reset();
+    speakerState.reset();
+    audibleSignals.clear();
+    speakerStates.clear();
 }
 void CoreQueueSink::beginRender() {
     refetchRequested = true;

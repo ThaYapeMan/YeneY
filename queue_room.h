@@ -17,6 +17,8 @@ public:
     yeney::Sink &sink();
     void command(const yeney::Command &);
     bool queueActive() const;
+    bool remoteSource(uint64_t occurrence) const;
+    bool deferStart();
 };
 void runQueueCoreClient(const char *, const uint8_t *, const char *, QueueRoom &);
 } // namespace bridge

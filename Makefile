@@ -60,6 +60,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/queue_device_suite_test.py
 	python3 tests/queue_device_cli_test.py
 	python3 tests/queue_lms_client_test.py
+	python3 tests/queue_protocol_setting_test.py
 	python3 tests/queue_device_ws_test.py
 	YENEY_ACCEPTANCE_BINARY=$(CURDIR)/yeney python3 tests/queue_binary_test.py
 	python3 tests/queue_mode_test.py
@@ -399,3 +400,5 @@ queue-lms-client-test: tests/queue_lms_client_fixture.cpp queue_lms_client.h que
 queue-controller-fixture queue-mode-fixture: queue_lms_cli.h
 
 yeney.o queue_room.o room-mode-test: lms_artwork.h
+
+queue_room.o: queue_protocol.h

@@ -24,6 +24,7 @@ public:
         };
         std::function<void(const std::string &)> log, unavailable;
         std::function<void(uint64_t, uint64_t)> metrics;
+        std::function<void(const std::string &)> notification;
     };
 
 private:
@@ -118,7 +119,65 @@ private:
                 return {prefix + "?", c.substr(prefix.size())};
         return {};
     }
-    std::thread worker;
+    std::thread worker, listener;
+    void listen() {
+        while (!closing) {
+            addrinfo hints{}, *addresses = nullptr;
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            int fd = -1;
+            if (!getaddrinfo(host.c_str(), std::to_string(options.port).c_str(), &hints, &addresses)) {
+                fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+                if (fd >= 0)
+                    connect(fd, addresses->ai_addr, addresses->ai_addrlen);
+                freeaddrinfo(addresses);
+            }
+            std::string pending = "listen 1\n", input;
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
+            bool acknowledged = false;
+            while (fd >= 0 && !closing) {
+                if (!acknowledged && std::chrono::steady_clock::now() >= deadline)
+                    break;
+                pollfd p{fd, short(pending.empty() ? POLLIN : POLLOUT), 0};
+                if (poll(&p, 1, 100) <= 0)
+                    continue;
+                if (!pending.empty()) {
+                    auto n = send(fd, pending.data(), pending.size(), MSG_NOSIGNAL);
+                    if (n <= 0)
+                        break;
+                    pending.erase(0, size_t(n));
+                } else {
+                    char bytes[4096];
+                    auto n = recv(fd, bytes, sizeof(bytes), 0);
+                    if (n <= 0)
+                        break;
+                    input.append(bytes, size_t(n));
+                    if (input.size() > 1024 * 1024)
+                        break;
+                    size_t end;
+                    while ((end = input.find('\n')) != std::string::npos) {
+                        auto line = input.substr(0, end);
+                        input.erase(0, end + 1);
+                        if (!line.empty() && line.back() == '\r')
+                            line.pop_back();
+                        if (decodeLms(line) == "listen 1")
+                            acknowledged = true;
+                        else if (acknowledged) {
+                            std::istringstream fields(line);
+                            std::string id;
+                            fields >> id;
+                            if (decodeLms(id) == mac)
+                                options.notification(line);
+                        }
+                    }
+                }
+            }
+            if (fd >= 0)
+                close(fd);
+            std::unique_lock<std::mutex> lock(mutex);
+            changed.wait_for(lock, std::chrono::seconds(1), [&] { return closing.load(); });
+        }
+    }
     bool apply(const std::string &command, uint64_t ticket) {
         if (closing || generation != ticket)
             return false;
@@ -200,6 +259,8 @@ public:
     LmsClient(std::string h, std::string m, Options o)
         : host(std::move(h)), mac(std::move(m)), options(std::move(o)) {
         worker = std::thread([this] { run(); });
+        if (options.notification)
+            listener = std::thread([this] { listen(); });
     }
     ~LmsClient() { shutdown(); }
     void shutdown() {
@@ -207,6 +268,8 @@ public:
         changed.notify_all();
         if (worker.joinable())
             worker.join();
+        if (listener.joinable())
+            listener.join();
     }
     bool query(const std::string &command, std::string &wire,
                const std::function<bool(const std::string &)> &valid = {}) {

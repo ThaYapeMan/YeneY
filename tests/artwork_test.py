@@ -54,6 +54,8 @@ class Client(socketserver.StreamRequestHandler):
     def handle(self):
         for wire in self.rfile:
             line = wire.decode().strip()
+            if line == 'listen 1':
+                self.wfile.write(b'listen 1\n');self.wfile.flush();continue
             mac, command = line.split(' ', 1)
             assert mac.count(':') == 5 and '%' not in mac, line
             if command in ('pause 1', 'stop'):
@@ -122,6 +124,8 @@ class QueueClient(socketserver.StreamRequestHandler):
     def handle(self):
         for wire in self.rfile:
             line = wire.decode().strip()
+            if line == 'listen 1':
+                self.wfile.write(b'listen 1\n');self.wfile.flush();continue
             mac, command = line.split(' ', 1)
             assert mac == self.server.owner.mac and '%' not in mac, line
             if command.startswith('status '):
