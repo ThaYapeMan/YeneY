@@ -126,6 +126,8 @@ class SOAP(Handler):
     def do_GET(self):self.path='/description.xml';super().do_GET()
     def action(self,service,action,args):
         model=self.server.model
+        if action=='SaveQueue' and self.server.fail_save:
+            return {},'800'
         if action=='Browse' and service=='ContentDirectory' and args['ObjectID']!='SQ:':
             entries=self.server.snapshots[args['ObjectID']]
             return dict(Result=didl(entries),NumberReturned=len(entries),TotalMatches=len(entries),UpdateID='1'),None
@@ -218,7 +220,43 @@ class Tests(unittest.TestCase):
             self.assertTrue({'summary.md','samples.jsonl','joins.jsonl','seeks.jsonl','manifest.tsv','journal.log','backup.json','before.json','result.txt','websocket-summary.json'}<=names,names)
         self.assertEqual(len(list(self.root.glob('yeney-queue-device-suite-20*.tar.gz'))),1)
         self.assertTrue({'p','u','s','f','q'}<=set(self.model.slim_commands))
+        self.assertEqual(len(self.sonos.actions('SaveQueue')),1)
+        self.assertIn('Before YeneY backup verified: SQ:',(self.suite.work/'summary.md').read_text())
+        self.assertIn('Q:0 before takeover: entries=1 owned=0 foreign=1',(self.suite.work/'commands.log').read_text())
+        print('PASS queue device backup: foreign entries require an identity/content-verified saved queue')
         print('PASS queue device suite: full loopback CLI/SlimProto/SOAP sequence, three joins per album, controls, 60 s stream reference, archive and exact restoration')
+    def test_backup_not_needed(self):
+        for label,entries,note in (
+                ('empty',[],'queue empty'),
+                ('owned',[dict(uri='http://127.0.0.1/music/queue.wav?session=previous&epoch=1&item=1')],'only owned entries')):
+            with self.subTest(queue=label):
+                self.sonos.items=entries
+                self.sonos.fail_save=True  # Match the field failure if SaveQueue is attempted.
+                code,output=self.run_suite();self.assertEqual(code,0,output)
+                self.restored()
+                self.assertFalse(self.sonos.actions('SaveQueue'))
+                self.assertEqual(self.suite.results[0]['joins'],3)
+                self.assertIn('backup not needed: '+note,(self.suite.work/'summary.md').read_text())
+                backup=json.loads((self.suite.work/'backup.json').read_text())
+                self.assertFalse(backup['needed'])
+                self.assertIn(f'Q:0 before takeover: entries={len(entries)} owned={len(entries)} foreign=0',(self.suite.work/'commands.log').read_text())
+                print('PASS queue device backup: '+note+' skips SaveQueue and completes all scenarios')
+                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root)
+                self.backend.suite=self.suite
+
+    def test_named_soap_http_fault(self):
+        self.sonos.fail_save=True
+        code,output=self.run_suite();self.assertEqual(code,1,output)
+        expected='SOAP AVTransport SaveQueue failed: HTTP 500 UPnPError 800 fixture rejection'
+        self.assertIn(expected,output)
+        log=(self.suite.work/'commands.log').read_text()
+        request=log.index('SOAP AVTransport SaveQueue request ')
+        outcome=log.index(expected)
+        self.assertLess(request,outcome)
+        self.assertIn('SOAP Queue Browse succeeded: HTTP 200',log)
+        self.assertFalse(any(c[0]=='systemctl' and c[1]=='restart' for c in self.backend.calls))
+        print('PASS queue device SOAP: HTTP 500 fault names service/action/code/description; request precedes outcome in log')
+
     def test_signal_and_error_cleanup(self):
         for event in (signal.SIGINT,signal.SIGHUP,signal.SIGTERM,'injected error'):
             with self.subTest(event=event):

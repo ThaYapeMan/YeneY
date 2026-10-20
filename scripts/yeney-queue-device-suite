@@ -18,6 +18,7 @@ import tarfile
 import tempfile
 import time
 import urllib.request
+import urllib.error
 from urllib.parse import urljoin, urlsplit
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
@@ -82,18 +83,45 @@ class Speaker:
                 self.services[v['serviceType'].split(':')[-2]] = (v['serviceType'], urljoin(self.base, v['controlURL']))
 
     def call(self, service, action, **args):
-        urn, url = self.services[service]
-        data = ('<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
-                '<u:'+action+' xmlns:u="'+urn+'">'+''.join('<'+k+'>'+escape(str(v))+'</'+k+'>' for k,v in args.items())+
-                '</u:'+action+'></s:Body></s:Envelope>').encode()
-        request = urllib.request.Request(url, data, {'Content-Type':'text/xml; charset="utf-8"', 'SOAPAction':'"'+urn+'#'+action+'"'})
-        with self.http.open(request, timeout=3) as r:
-            root = ET.fromstring(r.read(4*1024*1024))
-        if any(local(n.tag) == 'Fault' for n in root.iter()):
-            raise SuiteError('SOAP fault: '+action)
-        self.log('SOAP '+service+' '+action)
-        response = next(n for n in root.iter() if local(n.tag) == action+'Response')
-        return fields(response)
+        name = 'SOAP '+service+' '+action
+        self.log(name+' request '+json.dumps(args,sort_keys=True))
+        status = None
+        try:
+            urn, url = self.services[service]
+            data = ('<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
+                    '<u:'+action+' xmlns:u="'+urn+'">'+''.join('<'+k+'>'+escape(str(v))+'</'+k+'>' for k,v in args.items())+
+                    '</u:'+action+'></s:Body></s:Envelope>').encode()
+            request = urllib.request.Request(url, data, {'Content-Type':'text/xml; charset="utf-8"', 'SOAPAction':'"'+urn+'#'+action+'"'})
+            try:
+                with self.http.open(request, timeout=3) as r:
+                    status, body = r.status, r.read(4*1024*1024)
+            except urllib.error.HTTPError as error:
+                with error:
+                    status, body = error.code, error.read(4*1024*1024)
+            try:
+                root = ET.fromstring(body)
+            except ET.ParseError as error:
+                raise SuiteError('HTTP '+str(status)+' invalid SOAP body') from error
+            fault = next((n for n in root.iter() if local(n.tag)=='Fault'),None)
+            if fault is not None:
+                details = {local(n.tag): n.text or '' for n in fault.iter()}
+                message = 'HTTP '+str(status)+' UPnPError '+details.get('errorCode','unknown')
+                description = details.get('errorDescription') or details.get('faultstring')
+                if description:
+                    message += ' '+description
+                raise SuiteError(message)
+            if status != 200:
+                raise SuiteError('HTTP '+str(status)+' without SOAP fault')
+            response = next((n for n in root.iter() if local(n.tag)==action+'Response'),None)
+            if response is None:
+                raise SuiteError('HTTP '+str(status)+' missing SOAP response')
+            result = fields(response)
+        except Exception as error:
+            message = name+' failed: '+str(error)
+            self.log(message)
+            raise SuiteError(message) from error
+        self.log(name+' succeeded: HTTP '+str(status))
+        return result
 
     def standalone(self):
         root = ET.fromstring(self.call('ZoneGroupTopology','GetZoneGroupState')['ZoneGroupState'])
@@ -149,6 +177,7 @@ class Suite(PACING['Suite']):
         self.ws = None
         self.ws_mode = 'queue'
         self.ws_report = {}
+        self.backup_note = 'backup not assessed'
 
     def lock(self):
         # Also honor both existing suite lock namespaces. Hold them to exclude
@@ -287,15 +316,24 @@ class Suite(PACING['Suite']):
             raise SuiteError('invalid saved LMS index')
         (self.work/'before.json').write_text(json.dumps(self.before,indent=2)+'\n')
         original = self.speaker.browse('Q:0')
-        title = 'Before YeneY '+time.strftime('%Y-%m-%d %H:%M:%S')+' device suite'
+        owned = sum('/music/queue.wav?' in entry.get('res','') for entry in original)
+        foreign = len(original)-owned
+        self.log(f'Q:0 before takeover: entries={len(original)} owned={owned} foreign={foreign}')
         self.isolated()
-        saved = self.speaker.call('AVTransport','SaveQueue',InstanceID=0,Title=title,ObjectID='')['AssignedObjectID']
-        playlists = self.speaker.browse('SQ:')
-        if not any(p['id']==saved and p.get('title')==title for p in playlists):
-            raise SuiteError('Before YeneY backup identity unverified')
-        if [p.get('res') for p in original] != [p.get('res') for p in self.speaker.browse(saved)]:
-            raise SuiteError('Before YeneY backup contents unverified')
-        (self.work/'backup.json').write_text(json.dumps(dict(id=saved,title=title,entries=original),indent=2)+'\n')
+        if not foreign:
+            self.backup_note = 'backup not needed: '+('queue empty' if not original else 'only owned entries')
+            self.log(self.backup_note)
+            (self.work/'backup.json').write_text(json.dumps(dict(needed=False,reason=self.backup_note,entries=original),indent=2)+'\n')
+        else:
+            title = 'Before YeneY '+time.strftime('%Y-%m-%d %H:%M:%S')+' device suite'
+            saved = self.speaker.call('AVTransport','SaveQueue',InstanceID=0,Title=title,ObjectID='')['AssignedObjectID']
+            playlists = self.speaker.browse('SQ:')
+            if not any(p['id']==saved and p.get('title')==title for p in playlists):
+                raise SuiteError('Before YeneY backup identity unverified')
+            if [p.get('res') for p in original] != [p.get('res') for p in self.speaker.browse(saved)]:
+                raise SuiteError('Before YeneY backup contents unverified')
+            (self.work/'backup.json').write_text(json.dumps(dict(id=saved,title=title,entries=original),indent=2)+'\n')
+            self.backup_note = 'Before YeneY backup verified: '+saved
         directory = self.unit_root/(self.unit+'.d')
         if self.unit_root.is_symlink() or directory.is_symlink():
             raise SuiteError('symlinked drop-in directory')
@@ -636,7 +674,7 @@ class Suite(PACING['Suite']):
             self.results.sort(key=lambda r:order[r['name']])
             for r in self.results:
                 lines.append('| '+' | '.join(str(r[k]).replace('|','/') for k in ('name','verdict','joins','startup','mismatch','fallbacks','note'))+' |')
-            lines += ['', 'WebSocket metrics per mode (all per-item fits and start differences in websocket-summary.json):', '', '```json', json.dumps(self.ws_report,indent=2), '```', '', ws_verdict, '', 'Release verified: '+str(self.release_verified), '', 'HTTP counts: not exposed unless present in samples. RelTime join gaps are observational, not an acoustic silence measurement.', '', CHECKLIST, '', verdict]
+            lines += ['', self.backup_note, '', 'WebSocket metrics per mode (all per-item fits and start differences in websocket-summary.json):', '', '```json', json.dumps(self.ws_report,indent=2), '```', '', ws_verdict, '', 'Release verified: '+str(self.release_verified), '', 'HTTP counts: not exposed unless present in samples. RelTime join gaps are observational, not an acoustic silence measurement.', '', CHECKLIST, '', verdict]
             (self.work/'summary.md').write_text('\n'.join(lines)+'\n')
             (self.work/'listening-checklist.txt').write_text(CHECKLIST+'\n')
             self.logfile.close()

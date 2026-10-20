@@ -676,9 +676,16 @@ HTTP requests per item are marked unavailable unless diagnostics expose them.
 joins where required, LMS identity matching the audible item with at most two
 seconds of boundary mismatch, startup and seeks within three seconds, and no
 RelTime regression inside an item outside an intentional seek. Before takeover,
-a new `Before YeneY ... device suite` saved queue is verified by both its assigned
-ID/title and its ordered resource contents, including an empty original queue.
-This backup is intentionally retained; the suite never loads it automatically.
+the suite logs Q:0's total, owned and foreign entry counts. A new
+`Before YeneY ... device suite` saved queue is required only when foreign entries
+exist, and is verified by both its assigned ID/title and ordered resource
+contents. This backup is intentionally retained; the suite never loads it
+automatically. Empty queues and queues containing only YeneY-owned finite queue
+URLs are not saved: `summary.md` records `backup not needed: queue empty` or
+`backup not needed: only owned entries`. These cases satisfy the backup policy
+without a saved playlist. SOAP requests are logged before transmission and
+outcomes include the service/action, HTTP status and UPnP fault code/description
+when the speaker rejects an action.
 After playback, the suite removes the drop-in and plays the same LMS playlist for
 one additional 60-second reference in the normal stream configuration. A normal
 configuration explicitly set to queue cannot supply this stream reference and
