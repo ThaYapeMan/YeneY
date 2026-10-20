@@ -143,6 +143,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/sonos_queue_probe_test.py
 	python3 tests/queue_dryrun_test.py
 	python3 tests/queue_suite_test.py
+	python3 tests/real_lms_test.py
 	$(MAKE) -C third_party/yeney-core test
 
 sbstreamer.o sbencoder.o: sbencoder.h

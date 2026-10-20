@@ -90,6 +90,13 @@ struct QueueRoom::Impl {
             host.resize(colon);
         queue.useSpeakerClock();
         queue.onQueueCommand([this](char c, uint32_t) {
+            if (c == 'f' && queue.latestOccurrence() != queue.audibleOccurrence()) {
+                // LMS flushes a removed prefetch independently of the audible
+                // song. A producer cancellation is not a transport Stop.
+                manualIntent = false;
+                logger("queue LMS prefetch flush: audible item retained");
+                return true;
+            }
             if (c == 'f' && renderAdmission)
                 return true; // CLI re-render echo must preserve the prepared target
             if (c == 'f')
@@ -363,12 +370,24 @@ struct QueueRoom::Impl {
                         auto previous =
                             std::find_if(playlist.entries.begin(), playlist.entries.end(),
                                          [&](const auto &entry) { return entry.token == producerToken; });
-                        if (previous == playlist.entries.end())
-                            throw std::runtime_error("playlist-producer-token-missing");
+                        if (previous == playlist.entries.end()) {
+                            logger("queue producer superseded occurrence=" +
+                                   std::to_string(r.source.occurrence) + " reason=playlist-edited");
+                            lastBound = r.source.occurrence;
+                            continue;
+                        }
                         at = std::distance(playlist.entries.begin(), previous) + 1;
                     }
-                    if (at >= playlist.entries.size())
-                        throw std::runtime_error("playlist-occurrence-unmapped");
+                    if (at >= playlist.entries.size()) {
+                        // LMS can start a speculative successor and cancel it
+                        // before our snapshot observes the short-lived entry.
+                        // It has no authoritative token and must never be
+                        // attached to the audible item or trigger a replay.
+                        logger("queue producer superseded occurrence=" + std::to_string(r.source.occurrence) +
+                               " reason=playlist-edited");
+                        lastBound = r.source.occurrence;
+                        continue;
+                    }
                     bindings[r.source.occurrence] = {playlist.entries[at].token, state.generation, origin};
                     lastBound = r.source.occurrence;
                     producerToken = playlist.entries[at].token;

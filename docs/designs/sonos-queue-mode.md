@@ -1197,3 +1197,21 @@ its asset from the future plan. Reservations read the core's actual occurrence
 counter without advancing it. A superseded future producer waits for real LMS
 audio, without being mistaken for a SOAP fault or requesting another source.
 Service-shutdown flushes cannot request a fallback continuation.
+
+
+### Real LMS regression acceptance (20 October 2026)
+
+`tests/real_lms_test.py` runs the production binary against official LMS 9.1.1
+and the loopback Sonos coordinator. The temporary distribution, library, cache,
+logs and optional private Perl SSL modules stay under `/tmp`; nothing is installed
+system-wide. The test records every SlimProto packet and bridge CLI request.
+Generated 24-second FLAC files exercise three natural joins and 44.1/48 kHz;
+ALAC library input uses LMS's default FLAC transcode. A local HTTP FLAC source
+exercises the remote near-end completion gate. Valid FLAC padding makes the tiny
+constant-PCM fixture large enough for LMS's remote scanner without changing PCM.
+
+The acceptance checks LMS controls, seek, playlist changes and stop/new play,
+one HELO on the connection, matching audible identity, one initial takeover,
+no queue-generated CLI mutation and service-stop cleanup. Source formats are
+also exercised natively by the existing fake-LMS decoder tests. This is protocol
+acceptance with a fake speaker, not device or listening qualification.
