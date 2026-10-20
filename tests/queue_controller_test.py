@@ -13,6 +13,8 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import Mock
+from types import SimpleNamespace
 from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape, quoteattr
@@ -41,6 +43,7 @@ class Coordinator(ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address=('127.0.0.1', 0), handler=None):
         super().__init__(address, handler or Handler)
+        self.closing = False
         self.lock = threading.RLock()
         self.original = [{'uri': 'http://foreign.invalid/original.flac'}]
         self.items = copy.deepcopy(self.original)
@@ -60,6 +63,7 @@ class Coordinator(ThreadingHTTPServer):
         self.worker.start()
 
     def close(self):
+        self.closing = True
         self.shutdown(); self.server_close(); self.worker.join()
         assert not self.errors, self.errors
 
@@ -81,7 +85,11 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Connection', 'close')
-        self.end_headers(); self.wfile.write(body)
+        try:
+            self.end_headers(); self.wfile.write(body)
+        except ConnectionError:
+            if not self.server.closing:
+                raise # live client failures still fail the fixture
 
     def do_GET(self):
         try:
@@ -509,6 +517,20 @@ class ControllerTests(unittest.TestCase):
         d.command('PLAY 2 1 1', 'ERR')
         self.assertEqual(s.items, before)
         print('PASS queue coordinator fencing: stale UpdateID never retries an enqueue, preserves foreign edits and restores CrossfadeMode; grouped lease blocks mutations')
+
+
+class ShutdownResponse(unittest.TestCase):
+    def test_cancelled_response_only_allowed_during_shutdown(self):
+        handler = object.__new__(Handler)
+        handler.send_response = handler.send_header = handler.end_headers = Mock()
+        handler.wfile = Mock()
+        handler.wfile.write.side_effect = BrokenPipeError('cancelled SOAP poll')
+        handler.server = SimpleNamespace(closing=False)
+        with self.assertRaises(BrokenPipeError):
+            handler.send('response')
+        handler.server.closing = True
+        handler.send('response')
+        print('PASS fake Sonos shutdown: cancelled SOAP response tolerates peer close only during teardown; live disconnects and validation errors still fail')
 
 
 class PublicationRace(unittest.TestCase):

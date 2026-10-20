@@ -223,6 +223,7 @@ class Binary:
         return next(p['elapsed'] for p in self.packets('STMt') if p.get('stamp')==stamp)
     def packets(self,event):return [p for p in self.lms.packets if p.get('event')==event]
     def close(self):
+        self.sonos.closing=True
         self.stopping=True
         errors=[]
         def close(fn):

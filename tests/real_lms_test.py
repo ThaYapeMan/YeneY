@@ -321,6 +321,7 @@ try:
 finally:
     failures=[]
     if proxy:proxy.closing=True
+    if sonos:sonos.closing=True
     def cleanup(action):
         try:action()
         except Exception as error:failures.append(error)

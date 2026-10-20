@@ -568,7 +568,7 @@ struct QueueRoom::Impl {
                     auto v = mode.status();
                     if (stopped) {
                         try {
-                            upnp::QueueCoordinator c(room);
+                            upnp::QueueCoordinator c(room, logger);
                             c.verifyLease();
                             readiness = true;
                         } catch (...) {
@@ -626,7 +626,7 @@ struct QueueRoom::Impl {
                 if (mode.status().lastFallback == "rearm-loop")
                     return; // The circuit breaker requires a service restart.
                 try {
-                    upnp::QueueCoordinator coordinator(room);
+                    upnp::QueueCoordinator coordinator(room, logger);
                     coordinator.verifyLease();
                     readiness = true;
                 } catch (...) {
