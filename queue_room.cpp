@@ -4,6 +4,7 @@
 #include "core_sonos.h"
 #include "mode_sink.h"
 #include "queue_controller.h"
+#include "queue_lms_client.h"
 #include "queue_playlist.h"
 #include "stream_session.h"
 #include "upnp/queue_coordinator.h"
@@ -36,6 +37,7 @@ struct QueueRoom::Impl {
     CoreSonosSink stream;
     ModeSink router;
     RoomMode mode;
+    std::unique_ptr<queue_audio::LmsClient> lms;
     std::unique_ptr<queue_audio::QueueController> controller;
     queue_audio::PlaylistReader reader;
     queue_audio::PlaylistSnapshot playlist;
@@ -113,6 +115,11 @@ struct QueueRoom::Impl {
             }
             return false;
         });
+        queue_audio::LmsClient::Options cli;
+        cli.log = logger;
+        cli.metrics = [this](uint64_t slow, uint64_t failed) { mode.lmsMetrics(slow, failed); };
+        cli.unavailable = [this](const std::string &reason) { post([this, reason] { fallback(reason); }); };
+        lms = std::make_unique<queue_audio::LmsClient>(host, mac, std::move(cli));
         queue_audio::ControllerOptions o;
         o.room = room;
         o.session = streamSessionToken();
@@ -121,8 +128,9 @@ struct QueueRoom::Impl {
         o.log = logger;
         o.lmsControl = [this](const std::string &c) {
             refetchPending = c.rfind("playlist index ", 0) == 0 || c.rfind("time ", 0) == 0;
-            return queue_audio::controlLms(host, mac, c);
+            return lms->submit({c});
         };
+        o.lmsPending = [this] { return lms->pending(); };
         o.fallbackRequest = [this](const std::string &reason) { post([this, reason] { fallback(reason); }); };
         o.reanchor = [this](uint64_t id, uint32_t origin) { queue.reanchorSpeaker(id, origin); };
         o.audiblePosition = [this](uint64_t id, uint64_t frame, yeney::PlaybackState st) {
@@ -204,6 +212,8 @@ struct QueueRoom::Impl {
             closing = true;
         }
         changed.notify_all();
+        if (lms)
+            lms->shutdown();
         if (worker.joinable())
             worker.join();
         if (controller)
@@ -223,6 +233,7 @@ struct QueueRoom::Impl {
     void fallback(const std::string &reason, bool brokenCurrent = false) {
         if (mode.status().latched)
             return;
+        lms->cancelPending();
         // Faulted current assets cannot promise a remaining tail.
         if (brokenCurrent) {
             auto v = mode.status().item;
@@ -277,7 +288,7 @@ struct QueueRoom::Impl {
             if (r.source.occurrence > lastBound && r.source.occurrence < UINT64_MAX / 2)
                 unbound = true;
         if (unbound || mono() - lastSnapshot >= 1000) {
-            auto fresh = reader.read(host, mac);
+            auto fresh = readPlaylist();
             lastSnapshot = mono();
             playlist = std::move(fresh);
             if (playlist.entries.empty()) {
@@ -364,7 +375,7 @@ struct QueueRoom::Impl {
         const auto state = mode.status();
         if (!playing || state.active != "queue" || state.latched)
             return;
-        playlist = reader.read(host, mac);
+        playlist = readPlaylist();
         if (playlist.entries.empty()) {
             controller->lmsPlaylist(epoch, playlist.revision, 0, {}).get();
             return;
@@ -392,27 +403,47 @@ struct QueueRoom::Impl {
             // first would cause a second strm and an ambiguous render epoch.
             const auto command = seek ? "time " + std::to_string(playlist.timeMs / 1000)
                                       : "playlist index " + std::to_string(playlist.index);
-            if (!queue_audio::controlLms(host, mac, command))
-                throw std::runtime_error("playlist-render-unconfirmed");
+            lms->submit({command});
         }
+    }
+    struct LmsPending : std::runtime_error {
+        LmsPending() : std::runtime_error("lms-pending") {}
+    };
+    queue_audio::PlaylistSnapshot readPlaylist() {
+        const auto at = mono();
+        queue_audio::PlaylistSnapshot result;
+        std::string reply;
+        const bool ok = lms->query("status 0 60000 tags:alKu", reply, [&](const std::string &wire) {
+            result = reader.parse(wire);
+            return true;
+        });
+        mode.deferPreparation(mono() - at);
+        if (!ok)
+            throw LmsPending();
+        return result;
     }
     void handoff() {
         auto v = mode.status();
         if (v.active != "stream" || v.state != "handoff" || coreReady != v.generation)
             return;
-        coreReady = 0;
         unsigned index = v.item.index, ms = v.item.sourceMs;
         if (v.item.ended && v.item.frame >= v.item.promised && v.item.promised &&
             index + 1 < playlist.entries.size()) {
             ++index;
             ms = 0;
         }
-        if (!queue_audio::controlLms(host, mac, "playlist index " + std::to_string(index)))
-            throw std::runtime_error("handoff-cli-index");
-        if (ms && !queue_audio::controlLms(host, mac, "time " + std::to_string(ms / 1000)))
-            throw std::runtime_error("handoff-cli-time");
-        stream.command({'s', 0, false});
-        router.admit();
+        std::vector<std::string> commands = {"playlist index " + std::to_string(index)};
+        if (ms)
+            commands.push_back("time " + std::to_string(ms / 1000));
+        coreReady = 0;
+        lms->submit(std::move(commands), [this, g = v.generation] {
+            post([this, g] {
+                if (mode.status().generation != g || mode.status().state != "handoff")
+                    return;
+                stream.command({'s', 0, false});
+                router.admit();
+            });
+        });
     }
     void work() {
         for (;;) {
@@ -431,12 +462,10 @@ struct QueueRoom::Impl {
                 if (job)
                     job();
                 if (queueReadyPending && coreReady == mode.status().generation) {
+                    playlist = readPlaylist();
                     queueReadyPending = false;
                     coreReady = 0;
-                    playlist = reader.read(host, mac);
-                    if (!queue_audio::controlLms(host, mac,
-                                                 "playlist index " + std::to_string(playlist.index)))
-                        throw std::runtime_error("playlist-rearm-unconfirmed");
+                    lms->submit({"playlist index " + std::to_string(playlist.index)});
                 }
                 sync();
                 mode.tick(mono());
@@ -461,14 +490,13 @@ struct QueueRoom::Impl {
                             mode.streamAudible(v.generation, mono(), stream.outputRate());
                     }
                 }
+            } catch (const LmsPending &) {
+                lms->tick(); // No state inferred from a missing/late CLI reply.
             } catch (const std::exception &e) {
                 logger("queue room-worker error=" + std::string(e.what()));
                 if (!mode.status().latched)
-                    fallback(std::string(e.what()).find("playlist-cli") != std::string::npos
-                                 ? "preparation-timeout"
-                             : std::string(e.what()).find("playlist-") != std::string::npos
-                                 ? "foreign-control"
-                                 : "soap-error");
+                    fallback(std::string(e.what()).find("playlist-") != std::string::npos ? "lms-unavailable"
+                                                                                          : "soap-error");
             }
         }
     }
@@ -484,6 +512,11 @@ struct QueueRoom::Impl {
                 mode.stop();
             }
             if (c.letter == 's' && stopped.exchange(false)) {
+                std::string probe;
+                if (!lms->query("playlist index ?", probe)) {
+                    stopped = true;
+                    return;
+                }
                 try {
                     upnp::QueueCoordinator coordinator(room);
                     coordinator.verifyLease();

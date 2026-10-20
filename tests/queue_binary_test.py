@@ -53,6 +53,9 @@ def alac(seconds=24):
 
 class Device(Handler):
     def action(self,service,action,args):
+        if action=='GetPositionInfo' and getattr(self.server,'clocked',False):
+            seconds=max(0,int(time.monotonic()-getattr(self.server,'clock_base',time.monotonic())))
+            self.server.position['RelTime']=f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
         if action=='SetAVTransportURI' and args['CurrentURI'].startswith('http://'):
             self.server.uri=args['CurrentURI'];self.server.stream_uri=args['CurrentURI'];return {},None
         if action=='Play' and self.server.uri.startswith('http://'):
@@ -96,6 +99,13 @@ class CLI(socketserver.ThreadingTCPServer):
                     line=wire.decode().strip(); mac,cmd=line.split(' ',1)
                     assert mac==owner.mac and '%' not in mac, line
                     owner.commands.append(cmd)
+                    if cmd in ('pause 1','play') or (cmd.startswith('playlist index ') and not cmd.endswith('?')):
+                        time.sleep(getattr(owner,'cli_delay',0))
+                    if cmd in ('mode ?','playlist index ?','time ?'):
+                        if cmd=='mode ?': value=getattr(owner,'cli_mode','play')
+                        elif cmd=='playlist index ?': value=str(getattr(owner,'cli_index',max(0,owner.model.playing-1)))
+                        else: value=str(getattr(owner,'cli_time',owner.source_ms/1000))
+                        self.wfile.write((mac+' '+cmd[:-1]+value+'\n').encode());self.wfile.flush();return
                     if cmd.startswith('status '):
                         fields=[f'playlist_cur_index:{owner.index if owner.index is not None else max(0,owner.model.playing-1) if owner.model else 0}',
                                 f'playlist_tracks:{len(owner.order)}', f'time:{owner.source_ms/1000}', f'playlist_timestamp:{owner.revision}']
@@ -111,7 +121,11 @@ class CLI(socketserver.ThreadingTCPServer):
                     self.wfile.write((quote(line,safe=': ')+(' '+reply if reply else '')+'\n').encode())
                     self.wfile.flush()
                     if cmd.startswith('playlist index '):
+                        owner.cli_index=int(cmd.split()[-1])
                         owner.model.streaming=int(cmd.split()[-1])+1
+                    if cmd.startswith('time '):owner.cli_time=float(cmd.split()[-1])
+                    if cmd=='pause 1':owner.cli_mode='pause'
+                    elif cmd=='play':owner.cli_mode='play'
                     if cmd.startswith('time ') or cmd.startswith('playlist index '):
                         owner.lms.strm('f')
                         if owner.refetch_audio:
@@ -179,6 +193,7 @@ class Binary:
         with self.sonos.lock:
             self.sonos.position=dict(Track=str(track),TrackURI=self.items()[track-1]['uri'],RelTime=f'00:00:{seconds:02}')
             self.sonos.transport_state=state
+            self.sonos.clock_base=time.monotonic()-seconds
         callback=getattr(self.sonos,'callback','')
         if callback:
             self.sequence+=1
@@ -196,17 +211,24 @@ class Binary:
     def packets(self,event):return [p for p in self.lms.packets if p.get('event')==event]
     def close(self):
         self.stopping=True
+        errors=[]
+        def close(fn):
+            try:fn()
+            except Exception as error:errors.append(error)
         self.proc.send_signal(signal.SIGTERM)
         try:self.proc.wait(12)
-        except subprocess.TimeoutExpired:self.proc.kill();self.proc.wait();raise
-        self.reader.join(2);self.log.close();self.lms.close()
-        for source in self.sources:source.close()
-        self.cli.close();self.sonos.close()
-        assert self.proc.returncode==0,(self.base/'bridge.log').read_text()
+        except subprocess.TimeoutExpired:
+            self.proc.kill();self.proc.wait();errors.append(AssertionError('binary shutdown timeout'))
+        self.reader.join(2);self.log.close();close(self.lms.close)
+        for source in self.sources:close(source.close)
+        close(self.cli.close);close(self.sonos.close)
+        if self.proc.returncode:errors.append(AssertionError((self.base/'bridge.log').read_text()))
+        if errors:raise errors[0]
 
 def album(codec='f',rates=(44100,)*4,fade=False):
     h=Binary(codec,rates,fade,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
     try:
+        h.sonos.clocked=True
         h.until(lambda:h.sonos.verified_save and any('resource' in i for i in h.items()))
         assert h.sonos.snapshots[h.sonos.last_save]==h.sonos.original
         assert not h.sonos.crossfade
@@ -224,7 +246,7 @@ def album(codec='f',rates=(44100,)*4,fade=False):
             total=int(r.getheader('Content-Range').split('/')[-1]);r.read();c.close()
             c,r=request(uri,byte_range='bytes=4096-8191');assert r.status==206;r.read();c.close()
             duration=(total-44)/6/rates[track-1]
-            h.state(track,max(0,int(duration)-4))
+            h.until(lambda:time.monotonic()-h.sonos.clock_base>=max(0,int(duration)-4),timeout=35)
             if track<4:
                 h.until(lambda:len(h.items())>=track+1)
                 c,r=request(h.items()[track]['uri']);assert r.status==200
@@ -234,7 +256,7 @@ def album(codec='f',rates=(44100,)*4,fade=False):
                     if not chunk:break
                     count+=len(chunk);time.sleep(len(chunk)/(6*rates[track]*9))
                 assert count==int(r.getheader('Content-Length'));c.close()
-            h.state(track,max(0,int(duration)-1));time.sleep(1.2)
+            h.until(lambda:time.monotonic()-h.sonos.clock_base>=max(0,int(duration)-1),timeout=10);time.sleep(1.2)
         assert len(h.packets('STMs'))==4 and len(h.packets('STMd'))==4
         print(f'PASS real yeney queue album codec={codec} rates={rates} crossfade={10 if fade else 0}: verified backup, three joins, speaker/LMS identity, STMs before STMd, prefetch 3–4 s early at 9x, Range/reconnect',flush=True)
     finally:h.close()
@@ -244,10 +266,12 @@ def album(codec='f',rates=(44100,)*4,fade=False):
 def controls():
     h=Binary(rates=(44100,)*6,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
     try:
+        h.sonos.clocked=True
         for track in (1,2,3):
             h.state(track);h.until(lambda:len(h.packets('STMs'))==track)
             h.until(lambda:len(h.packets('STMd'))==track)
-            h.state(track,23);time.sleep(1.2)
+            h.until(lambda:time.monotonic()-h.sonos.clock_base>=23,timeout=30);time.sleep(1.2)
+        h.sonos.clocked=False
         h.until(lambda:len(h.items())>=4)
         h.model.sources=iter(());h.model.ready=False
         h.lms.strm('p');h.until(lambda:len(h.packets('STMp'))==1)
@@ -285,6 +309,28 @@ def controls():
             h.until(lambda:(h.base/'bridge.log').read_text().count('rebuild revision=')>before)
             assert h.sonos.position['TrackURI']==audible
         print('PASS real yeney LMS add/delete/move/clear: encoded stable identities, future rebuilds preserve audible URI',flush=True)
+    finally:h.close()
+
+def slow_app():
+    h=Binary(rates=(44100,)*2,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
+    try:
+        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
+        h.until(lambda:len(h.items())>=2)
+        h.cli_delay=5
+        h.state(1,0,'PAUSED_PLAYBACK')
+        h.until(lambda:'mode ?' in h.commands,timeout=15)
+        h.until(lambda:len(h.packets('STMp'))==1,timeout=15)
+        h.state(1,0,'PLAYING')
+        h.until(lambda:len(h.packets('STMr'))==1,timeout=15)
+        h.state(2)
+        h.until(lambda:'playlist index ?' in h.commands,timeout=15)
+        h.until(lambda:len(h.packets('STMs'))==2,timeout=15)
+        time.sleep(1)
+        assert h.commands.count('pause 1')==1 and h.commands.count('playlist index 1')==1,h.commands
+        log=(h.base/'bridge.log').read_text()
+        assert 'state=drain' not in log,log
+        assert h.model.playing==2
+        print('PASS real yeney app pause/resume and next with 5 s LMS replies: matching audible identity, no echo loop or fallback',flush=True)
     finally:h.close()
 
 def foreign():
@@ -332,5 +378,6 @@ if __name__=='__main__':
     album(rates=(44100,48000,44100,48000))
     album(fade=True)
     controls()
+    slow_app()
     foreign()
     seek_future()

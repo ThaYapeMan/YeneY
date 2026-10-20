@@ -19,7 +19,7 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import quote, unquote, urljoin, urlsplit
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -58,12 +58,58 @@ def seconds(value):
     return result
 
 
-class CLI(PACING['CLI']):
-    def call(self, *args):
-        words = super().call(*args)
-        if any(w.startswith(('error:', 'badparams:')) for w in words[len(args):]):
-            raise SuiteError('LMS rejected command')
-        return words
+class CLITimeout(SuiteError):
+    pass
+
+
+class CLI:
+    # One request per connection, even after success: delayed responses cannot
+    # enter the next transaction. URLs retain LMS's existing percent escapes.
+    def __init__(self, host, log, port=9090, query_timeout=3, mutation_timeout=30):
+        self.host,self.log,self.port=host,log,port
+        self.query_timeout,self.mutation_timeout=query_timeout,mutation_timeout
+
+    def fresh(self):
+        return CLI(self.host,self.log,self.port,self.query_timeout,self.mutation_timeout)
+
+    @staticmethod
+    def same(a,b):
+        return a==b or (urlsplit(a).scheme in ('file','http','https') and unquote(a)==unquote(b))
+
+    def call(self,*args):
+        args=list(map(str,args))
+        query=args[-1]=='?' or args[0] in ('players','titles','syncgroups') or (len(args)>1 and args[1]=='status')
+        timeout=self.query_timeout if query else self.mutation_timeout
+        request=' '.join(quote(a,safe=':/%?,&=+' if urlsplit(a).scheme in ('file','http','https') else ':,?') for a in args)
+        self.log('CLI > '+request+' timeout_s='+str(timeout))
+        started=time.monotonic();deadline=started+timeout
+        try:
+            with socket.create_connection((self.host,self.port),timeout=min(3,timeout)) as connection:
+                connection.settimeout(max(.001,deadline-time.monotonic()))
+                connection.sendall((request+'\n').encode())
+                response=bytearray()
+                while b'\n' not in response:
+                    remaining=deadline-time.monotonic()
+                    if remaining<=0:raise TimeoutError('deadline')
+                    connection.settimeout(remaining)
+                    part=connection.recv(65536)
+                    if not part:raise SuiteError('LMS CLI closed before response')
+                    response.extend(part)
+                    if len(response)>16*1024*1024:raise SuiteError('LMS CLI response limit')
+            words=[unquote(w) for w in response.decode().splitlines()[0].split()]
+            prefix=args[:-1] if args[-1]=='?' else args
+            if len(words)<len(prefix) or any(not self.same(a,b) for a,b in zip(prefix,words)):
+                raise SuiteError('LMS CLI echo mismatch: '+request)
+            if any(w.startswith(('error:','badparams:')) for w in words[len(prefix):]):
+                raise SuiteError('LMS CLI rejected command: '+request)
+            self.log('CLI < '+repr(words)+' duration_s='+str(round(time.monotonic()-started,3)))
+            return words
+        except TimeoutError as error:
+            self.log('CLI timeout; connection discarded: '+request)
+            raise CLITimeout('LMS CLI timeout after '+str(timeout)+' s: '+request) from error
+        except Exception as error:
+            self.log('CLI failed; connection discarded: '+request+' '+str(error))
+            raise SuiteError(str(error)) from error
 
 
 class Speaker:
@@ -178,6 +224,7 @@ class Suite(PACING['Suite']):
         self.ws_mode = 'queue'
         self.ws_report = {}
         self.backup_note = 'backup not assessed'
+        self.not_restored = []
 
     def lock(self):
         # Also honor both existing suite lock namespaces. Hold them to exclude
@@ -209,16 +256,55 @@ class Suite(PACING['Suite']):
         else:
             super().isolated()
 
-    def playlist(self):
+    def playlist_entries(self):
         count = int(self.query('playlist','tracks'))
         if not 0 <= count <= 1000000:
             raise SuiteError('invalid playlist count')
         rows = []
         for start in range(0, count, 250):
             rows += records(self.cli.call(self.mac,'status',str(start),'250','tags:ut'), 'playlist index')
-        if len(rows) != count or any(int(r['playlist index']) != i or not r.get('url') for i,r in enumerate(rows)):
+        if len(rows) != count or any(int(r['playlist index']) != i or not (r.get('id') or r.get('url')) for i,r in enumerate(rows)):
             raise SuiteError('cannot save complete LMS playlist URLs/order')
-        return [r['url'] for r in rows]
+        return [dict(id=r.get('id',''),url=r.get('url','')) for r in rows]
+
+    def playlist(self):
+        return [r['url'] for r in self.playlist_entries()]
+
+    def fresh_cli(self):
+        if hasattr(self.cli,'fresh'):
+            self.cli=self.cli.fresh()
+
+    @staticmethod
+    def entries_equal(a,b):
+        return len(a)==len(b) and all((x['id']==y['id'] if y.get('id') else CLI.same(x.get('url',''),y.get('url',''))) for x,y in zip(a,b))
+
+    def lms_ready(self,entries,mode=None,queue=False,deadline=None):
+        deadline=self.backend.now()+60 if deadline is None else deadline
+        last='no reply'
+        while self.backend.now()<=deadline:
+            try:
+                actual=self.playlist_entries()
+                actual_mode=self.query('mode')
+                if self.entries_equal(actual,entries) and (mode is None or actual_mode==mode):
+                    if queue:
+                        p=self.diagnostic()
+                        if p.get('state') not in ('prepare','active'):
+                            raise SuiteError('queue preparation not ready')
+                    self.log('LMS ready: playlist and mode verified')
+                    return
+                last='playlist/mode not yet expected'
+            except (SuiteError,OSError,ValueError,KeyError) as error:
+                last=str(error)
+                self.fresh_cli()
+            self.backend.sleep(1)
+        raise SuiteError('LMS readiness timeout: '+last)
+
+    def pending_mutation(self,*args):
+        try:
+            self.mutate(*args)
+        except CLITimeout as error:
+            self.log('mutation outcome unknown; verify without resending: '+str(error))
+            self.fresh_cli()
 
     def library(self):
         tracks, offset, seen = [], 0, set()
@@ -300,11 +386,12 @@ class Suite(PACING['Suite']):
         self.speaker_ip = ip
         self.isolated()
         self.library()  # Fail for an unsuitable library before modifying anything.
-        self.before = dict(playlist=self.playlist(), index=self.query('playlist','index'), time=self.query('time'),
+        entries=self.playlist_entries()
+        self.before = dict(entries=entries,playlist=[r['url'] for r in entries], index=self.query('playlist','index'), time=self.query('time'),
                            repeat=self.query('playlist','repeat'), shuffle=self.query('playlist','shuffle'), mode=self.query('mode'),
                            prefs={p:self.query('playerpref',p) for p in PREFS}, crossfade=self.speaker.crossfade(),
                            environment=self.backend.run('systemctl','show',self.unit,'-p','Environment','--value'))
-        if self.before['playlist'] != self.playlist() or self.before['mode'] not in ('play','pause','stop'):
+        if not self.entries_equal(self.playlist_entries(),self.before['entries']) or self.before['mode'] not in ('play','pause','stop'):
             raise SuiteError('LMS playlist changed during snapshot')
         if (self.before['repeat'] not in ('0','1','2') or self.before['shuffle'] not in ('0','1','2') or
                 self.before['prefs']['transitionType'] not in ('0','1','2','3','4') or
@@ -448,9 +535,13 @@ class Suite(PACING['Suite']):
             self.mutate('playerpref',k,v)
             if self.query('playerpref',k)!=v:
                 self.problem('LMS transition preference not applied: '+k)
+        deadline=self.backend.now()+60
+        expected=[dict(id=t['id'],url=t['url']) for t in tracks]
+        self.pending_mutation('playlistcontrol','cmd:load','track_id:'+','.join(t['id'] for t in tracks))
+        self.pending_mutation('play')
+        self.lms_ready(expected,'play',queue=True,deadline=deadline)
         start = self.backend.now()
-        self.mutate('playlistcontrol','cmd:load','track_id:'+','.join(t['id'] for t in tracks))
-        self.mutate('play')
+        self.due=start
         row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'],3,preparing=True)
         delay = row['monotonic']-start
         self.current['startup'] = max(self.current['startup'],delay)
@@ -493,7 +584,9 @@ class Suite(PACING['Suite']):
             row = self.sample(tracks)
             if row['speaker']['state']!='PAUSED_PLAYBACK' or row['speaker']['rel']!=paused:
                 self.problem('pause did not hold for 10 s')
-        self.mutate('play')
+        self.pending_mutation('play')
+        self.lms_ready([dict(id=t['id'],url=t['url']) for t in tracks],'play',queue=True)
+        self.due=self.backend.now()
         self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING',3)
         origins = {self.last_sample['speaker']['uri']:0.}
         for fraction in (.5,.1):
@@ -518,8 +611,10 @@ class Suite(PACING['Suite']):
         self.mutate('stop')
         self.wait(tracks,lambda r:r['speaker']['state']=='STOPPED',3)
         self.begin('resume-after-stop')
+        self.pending_mutation('play')
+        self.lms_ready([dict(id=t['id'],url=t['url']) for t in tracks],'play',queue=True)
         start = self.backend.now()
-        self.mutate('play')
+        self.due=start
         row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'],3,preparing=True)
         self.record_start(row,'resume-after-stop')
         self.current['startup']=row['monotonic']-start
@@ -551,9 +646,10 @@ class Suite(PACING['Suite']):
                 self.backend.sleep(1)
         self.ws_mode = 'stream'
         self.begin('stream-reference-60s')
+        self.pending_mutation('play')
+        self.lms_ready([dict(id=t['id'],url=t['url']) for t in self.selected['flac-off']],'play')
         start = self.backend.now()
         observed_start = False
-        self.mutate('play')
         while self.backend.now()-start < 60:
             p = self.diagnostic()
             if p['active'] != 'stream':
@@ -567,7 +663,69 @@ class Suite(PACING['Suite']):
                 f.write(json.dumps(dict(scenario=self.current['name'],monotonic=self.backend.now(),wall=time.time(),speaker=speaker,lms=words,playback=p))+'\n')
             self.backend.sleep(1)
 
+    def restore_item(self,label,expected,setter,getter,compare=None):
+        compare=compare or (lambda a,b:a==b)
+        got='unavailable'
+        for attempt in range(2):
+            self.fresh_cli()
+            try:
+                if attempt:
+                    got=getter()
+                    if compare(got,expected):return True
+                # A lost acknowledgement may still have applied the mutation.
+                try:
+                    setter()
+                except SuiteError as error:
+                    self.log('restore mutation uncertain '+label+': '+str(error))
+                got=getter()
+                if compare(got,expected):return True
+            except Exception as error:
+                got=str(error)
+            self.log('restore retry '+label+' got='+str(got))
+        message='NOT RESTORED: '+label+' (expected '+str(expected)+', got '+str(got)+')'
+        self.not_restored.append(message);self.errors.append(message);self.log(message)
+        return False
+
+    def restore_lms(self):
+        entries=self.before['entries']
+        # Batch load preserves IDs, order and duplicate occurrences atomically.
+        batch_ok=False
+        if entries and all(e.get('id') for e in entries):
+            try:
+                self.pending_mutation('playlistcontrol','cmd:load','track_id:'+','.join(e['id'] for e in entries))
+                self.lms_ready(entries)
+                batch_ok=True
+            except Exception as error:
+                self.log('batch restore incomplete; recover per entry: '+str(error))
+        if not batch_ok:
+            cleared=self.restore_item('playlist clear',0,lambda:self.mutate('playlist','clear'),lambda:int(self.query('playlist','tracks')))
+            recovered=[]
+            for i,entry in enumerate(entries):
+                target=recovered+[entry]
+                def add(entry=entry,target=target):
+                    if self.entries_equal(self.playlist_entries(),target):return
+                    if not cleared:raise SuiteError('playlist clear unconfirmed')
+                    if entry.get('id'):
+                        self.mutate('playlistcontrol','cmd:add','track_id:'+entry['id'])
+                    else:
+                        self.mutate('playlist','add',entry['url'])
+                if self.restore_item('playlist item '+str(i)+' '+(entry.get('id') or entry['url']),target,add,self.playlist_entries,self.entries_equal):
+                    recovered=target
+        # Every preference is an independent transaction, even if playlist recovery failed.
+        for key,args in [('index',('playlist','index')),('time',('time',)),('repeat',('playlist','repeat')),('shuffle',('playlist','shuffle'))]:
+            if key in ('index','time') and not entries:continue
+            expected=self.before[key]
+            compare=(lambda a,b:abs(float(a)-float(b))<=3) if key=='time' else None
+            self.restore_item(key,expected,lambda args=args,expected=expected:self.mutate(*args,expected),lambda args=args:self.query(*args),compare)
+        for pref in PREFS:
+            expected=self.before['prefs'][pref]
+            self.restore_item(pref,expected,lambda pref=pref,expected=expected:self.mutate('playerpref',pref,expected),lambda pref=pref:self.query('playerpref',pref))
+        mode=self.before['mode']
+        self.restore_item('mode',mode,lambda:self.mutate(*(('pause','1') if mode=='pause' else (mode,))),lambda:self.query('mode'))
+        self.restore_item('playlist identities/order',entries,lambda:None,self.playlist_entries,self.entries_equal)
+
     def cleanup(self):
+        self.fresh_cli()
         def attempt(name, fn):
             try:
                 fn()
@@ -591,32 +749,8 @@ class Suite(PACING['Suite']):
                 self.connected()
             attempt('restore room/release',release)
         if self.playback:
-            def restore():
-                self.isolated()
-                self.mutate('playlist','shuffle','0')
-                self.mutate('playlist','clear')
-                for url in self.before['playlist']:
-                    self.mutate('playlist','add',url)
-                for p,v in self.before['prefs'].items():
-                    self.mutate('playerpref',p,v)
-                self.mutate('playlist','repeat',self.before['repeat'])
-                self.mutate('playlist','shuffle',self.before['shuffle'])
-                if self.before['playlist']:
-                    self.mutate('playlist','index',self.before['index'])
-                    self.mutate('time',self.before['time'])
-                self.mutate(*(('pause','1') if self.before['mode']=='pause' else (self.before['mode'],)))
-                if self.playlist()!=self.before['playlist']:
-                    raise SuiteError('restored playlist/order differs')
-                for key,args in [('mode',('mode',)),('repeat',('playlist','repeat')),('shuffle',('playlist','shuffle'))]:
-                    if self.query(*args)!=self.before[key]:
-                        raise SuiteError('restoration mismatch: '+key)
-                for p,v in self.before['prefs'].items():
-                    if self.query('playerpref',p)!=v:
-                        raise SuiteError('restoration mismatch: '+p)
-                if self.before['playlist'] and (self.query('playlist','index')!=self.before['index'] or
-                    abs(float(self.query('time'))-float(self.before['time']))>3):
-                    raise SuiteError('restoration position/time mismatch')
-            attempt('restore LMS',restore)
+            self.fresh_cli()
+            self.restore_lms()
         if self.override:
             def verify():
                 self.backend.run('systemctl','is-active','--quiet',self.unit)
@@ -674,7 +808,7 @@ class Suite(PACING['Suite']):
             self.results.sort(key=lambda r:order[r['name']])
             for r in self.results:
                 lines.append('| '+' | '.join(str(r[k]).replace('|','/') for k in ('name','verdict','joins','startup','mismatch','fallbacks','note'))+' |')
-            lines += ['', self.backup_note, '', 'WebSocket metrics per mode (all per-item fits and start differences in websocket-summary.json):', '', '```json', json.dumps(self.ws_report,indent=2), '```', '', ws_verdict, '', 'Release verified: '+str(self.release_verified), '', 'HTTP counts: not exposed unless present in samples. RelTime join gaps are observational, not an acoustic silence measurement.', '', CHECKLIST, '', verdict]
+            lines += ['', *self.not_restored, '', self.backup_note, '', 'WebSocket metrics per mode (all per-item fits and start differences in websocket-summary.json):', '', '```json', json.dumps(self.ws_report,indent=2), '```', '', ws_verdict, '', 'Release verified: '+str(self.release_verified), '', 'HTTP counts: not exposed unless present in samples. RelTime join gaps are observational, not an acoustic silence measurement.', '', CHECKLIST, '', verdict]
             (self.work/'summary.md').write_text('\n'.join(lines)+'\n')
             (self.work/'listening-checklist.txt').write_text(CHECKLIST+'\n')
             self.logfile.close()
@@ -698,7 +832,7 @@ class Suite(PACING['Suite']):
                 except OSError:pass
             finally:
                 if temporary and os.path.exists(temporary):os.unlink(temporary)
-            print(str(latest)+'\n'+str(archive)+'\n'+CHECKLIST+'\n'+ws_verdict+'\n'+verdict,flush=True)
+            print(str(latest)+'\n'+str(archive)+'\n'+'\n'.join(self.not_restored)+'\n'+CHECKLIST+'\n'+ws_verdict+'\n'+verdict,flush=True)
             return 1 if self.errors else 0
         finally:
             for held in reversed(self.locks):

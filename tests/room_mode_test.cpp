@@ -29,7 +29,7 @@ struct Sink : yeney::Sink {
 int main() {
     upnp::Speaker room{"127.0.0.1", "RINCON_TEST", "Study", "Study", {"Study"}};
     for (std::string reason : {"foreign-control", "preparation-timeout", "soap-error", "length-fault",
-                               "storage-fault", "coordinator-change"}) {
+                               "storage-fault", "coordinator-change", "lms-unavailable"}) {
         unsigned stops = 0, releases = 0, switches = 0;
         uint64_t streamGeneration = 0;
         bridge::ModeEvidence continued;

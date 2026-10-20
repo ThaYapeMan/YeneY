@@ -1061,6 +1061,7 @@ Fallback reasons are:
 | `length-fault` | Promised rendered count cannot be fulfilled. |
 | `storage-fault` | Asset storage/history failure or exhausted protected storage budget. |
 | `coordinator-change` | Loss of the verified coordinator/grouping lease. |
+| `lms-unavailable` | A verified LMS contradiction after reconciliation, or 30 s without a successful reply during a pending operation. |
 
 Fallback preserves a valid audible tail where possible; foreign control freezes
 at a speaker-confirmed point. It releases owned entries, restores CrossfadeMode,
@@ -1105,3 +1106,21 @@ Loopback CLI/SlimProto/SOAP/systemd/status and self-signed TLS WebSocket tests
 exercise these transactions; they are not an owner device run. See
 [device verification](../../DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
 for installation, the full command paths and the Proxmox archive pull.
+
+### Slow LMS hardening
+
+Queue app actions, full playlist snapshots, render refetch, fallback continuation
+and rearm now use the queue-only LMS client. Core/audio callbacks enqueue work;
+app commands use a dedicated CLI worker and snapshots use the room worker. Each
+request owns a fresh socket. Short queries have a 6 s deadline and one read retry;
+full snapshots and mutations have 30 s. A mutation is never blindly resent, even
+after a lost acknowledgement: mode/index/time queries reconcile its outcome.
+
+A missing reply preserves pending intent. Only sustained lack of any successful
+reply for 30 s, or a concrete contradictory verification after that reconciliation
+window, requests `lms-unavailable`. CLI wait time is excluded from preparation
+and pending CLI work holds only LMS-dependent confirmation/echo leases. Pending
+CLI jobs/completions are generation-fenced on fallback. Slow (>1 s) replies are
+logged at most once per command per minute; queue JSON exposes
+`lms_cli_slow_replies` and `lms_cli_failed_replies`. Default stream mode retains
+its old wire/transport path and status serialization.

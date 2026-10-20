@@ -111,6 +111,12 @@ public:
             {
                 audioSeen = true;
                 ++audioPackets;
+                // Deterministic send-error injection: hold an existing packet,
+                // rather than feeding extra PCM that may correctly migrate to
+                // the promoted encoder while this request is being retired.
+                while (holdAudioSend && !sendError)
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                if (holdAudioSend && sendError) { errno = closeError; return false; }
             }
         }
         phase = (phase + 1) % 3;
@@ -121,7 +127,7 @@ public:
     void Disconnect() { disconnected = true; }
     int failureFd = -1;
     int closeReason = 0, closeError = ECONNRESET;
-    std::atomic<bool> clientClosed{false}, sendError{false};
+    std::atomic<bool> clientClosed{false}, sendError{false}, holdAudioSend{false};
     std::atomic<unsigned> audioPackets{0};
     std::atomic<bool> headersSent{false}, audioSeen{false}, eof{false}, disconnected{false};
     std::string headers, wire;
@@ -575,6 +581,7 @@ int main(int argc, char** argv) {
     // socket still appears connected. Each successor starts fresh FLAC.
     for (const std::string reason : {"client close", "idle timeout", "send error"}) {
         Socket active(1, false, true), standby(1, false, true);
+        active.holdAudioSend = reason == "send error";
         auto first = std::async(std::launch::async, [&] { serve(broker, active); });
         waitUntil([&] { return active.headersSent.load(); });
         feed(530);
@@ -585,7 +592,6 @@ int main(int argc, char** argv) {
         if (reason == "client close") active.clientClosed = true;
         if (reason == "send error") {
             active.sendError = true; // IsValid still true: no peerClosed shortcut
-            feed(531);
         }
         assert(first.wait_for(std::chrono::seconds(5)) == std::future_status::ready);
         first.get();

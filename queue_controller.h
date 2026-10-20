@@ -35,8 +35,9 @@ struct ControllerOptions {
     std::function<void(uint64_t, uint32_t)> reanchor;
     // Part 5 host boundary. A fallbackRequest enables app reconciliation.
     // Bind both before use; execution stays on the worker.
-    // lmsControl returns only after a decoded CLI acknowledgement; never retry.
+    // lmsControl may enqueue serialized verified work. No mutation is retried blindly.
     std::function<bool(const std::string &)> lmsControl;
+    std::function<bool()> lmsPending; // suspend LMS-dependent confirmation/echo deadlines only
     std::function<void(const std::string &)> fallbackRequest;
     bool managedFallback = false; // room mode owns drain/release/handoff
     std::function<void(const ConfirmedItem &)> confirmed;

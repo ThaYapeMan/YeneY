@@ -22,7 +22,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f yeney-queue-acceptance queue-mode-fixture room-mode-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f queue-lms-client-test yeney-queue-acceptance queue-mode-fixture room-mode-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -37,6 +37,7 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
 # Preserve the legacy wire fixtures explicitly; settings tests also exercise the unset default.
+test: queue-lms-client-test
 test: export YENEY_STREAM_PACING = wall
 test: export YENEY_PLAYBACK_MODE = stream
 test: export YENEY_START_LEAD_MS = 0
@@ -57,6 +58,8 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	./stream-metrics-test
 	python3 tests/stream_pacing_suite_test.py
 	python3 tests/queue_device_suite_test.py
+	python3 tests/queue_device_cli_test.py
+	python3 tests/queue_lms_client_test.py
 	python3 tests/queue_device_ws_test.py
 	YENEY_ACCEPTANCE_BINARY=$(CURDIR)/yeney python3 tests/queue_binary_test.py
 	python3 tests/queue_mode_test.py
@@ -372,7 +375,7 @@ stream-metrics-lifetime-test: tests/stream_metrics_lifetime_test.cpp stream_metr
 	g++ -std=c++17 -g -O1 -Wall -Wextra -fsanitize=address -fno-omit-frame-pointer -I. -pthread -o $@ $<
 test: stream-metrics-lifetime-test
 
-queue_room.o: queue_room.cpp queue_room.h room_mode.h mode_sink.h queue_playlist.h queue_lms_cli.h queue_controller.h core_queue_sink.h
+queue_room.o: queue_room.cpp queue_room.h room_mode.h mode_sink.h queue_playlist.h queue_lms_cli.h queue_lms_client.h queue_controller.h core_queue_sink.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ queue_room.cpp
 room_mode.o: room_mode.cpp room_mode.h playback_mode.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ room_mode.cpp
@@ -388,3 +391,8 @@ test: queue-mode-fixture
 $(OBJS): room_mode.h
 core_shm.o: third_party/yeney-core/core/sink.h
 stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test: room_mode.h
+
+queue-lms-client-test: tests/queue_lms_client_fixture.cpp queue_lms_client.h queue_lms_cli.h room_mode.h room_mode.o
+	$(CXX) -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $< room_mode.o
+
+queue-controller-fixture queue-mode-fixture: queue_lms_cli.h

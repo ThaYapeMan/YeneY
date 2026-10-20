@@ -646,7 +646,7 @@ sudo /usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.2
 The suite refuses a grouped room, an inactive room service, an LMS-synced player,
 an ambiguous player identity or an existing suite lock. It controls only the
 selected room's service and raw-MAC LMS player. It saves the full LMS playlist
-URLs/order, index, elapsed time, play/pause/stop state, repeat, shuffle and
+IDs and URLs/order, index, elapsed time, play/pause/stop state, repeat, shuffle and
 transition preferences; volume is untouched. It creates only that room's
 `queue-suite.conf` with `Environment=YENEY_PLAYBACK_MODE=queue`, reloads systemd,
 restarts that service and waits for fresh process-matched queue status and the
@@ -743,3 +743,37 @@ Optional listening/app checklist, separate from the automated verdict:
 
 These manual observations and an owner-returned archive qualify the physical
 room; loopback tests alone do not constitute device qualification.
+
+### Slow LMS replies and restoration
+
+`/usr/local/bin/yeney-queue-device-suite` uses one fresh CLI connection per
+request, including successful requests, and separate client instances for cleanup
+and restoration. Queries have a 3 s deadline; mutations (including playlist
+changes, play and stop) have 30 s. A timed-out mutation is not blindly resent:
+the suite checks playlist IDs/order, LMS mode and queue preparation for up to
+60 s. Startup timing begins only after this readiness check; time spent loading
+the LMS playlist is logged separately and does not count as speaker startup.
+
+The saved state includes both LMS track IDs and the original URLs. An identified
+playlist is restored with one ordered `playlistcontrol cmd:load track_id:...`
+request, preserving repeated occurrences. If batch recovery fails, restoration
+continues per entry using IDs. Only entries without IDs use `playlist add` with
+the reported URL's existing escapes preserved. Each preference, index, time and
+mode is restored and queried independently. A failed item gets one retry on a
+fresh connection, checking its state before resending. An unconfirmed item never
+prevents later preferences (including transitionSmart) being attempted.
+`summary.md`, the terminal and the failure verdict list every unresolved item,
+for example `NOT RESTORED: transitionSmart (expected 1, got 0)`. Keep `before.json`
+and this list if manual recovery is needed.
+
+Production queue playback also uses isolated CLI transactions off the audio
+thread: app commands run on a dedicated worker; snapshots run on the room worker.
+Short queries allow 6 s and at most one fresh-connection retry; large full-playlist
+snapshots and mutations allow 30 s. Mutations are sent once and verified by reads.
+LMS waits do not consume the queue preparation deadline or expire pending LMS
+echoes. Only a verified contradiction after the reconciliation deadline, or 30 s
+without a successful reply during an outstanding operation, requests fallback
+with `lms-unavailable`. Slow replies over 1 s are counted and logged at most once
+per command per minute. Queue room JSON includes `lms_cli_slow_replies` and
+`lms_cli_failed_replies`; failed attempts alone do not immediately fail playback.
+Stream mode and its CLI/transport path remain unchanged.

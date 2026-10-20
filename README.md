@@ -264,7 +264,10 @@ Settings apply on room service restart. A grouped coordinator or member keeps
 stream mode with reason `group-rate-undecided`; an unconfirmed coordinator uses
 `coordinator-unconfirmed`. `auto` still uses stream. Queue mode owns only its
 prepared entries, maps LMS and unambiguous app controls, and falls back once to
-stream for the playback session when ownership or finite playback fails.
+stream for the playback session when ownership or finite playback fails. Slow
+LMS replies are reconciled off the audio thread; a sustained outage or verified
+contradiction uses `lms-unavailable`. Queue room status includes
+`lms_cli_slow_replies` and `lms_cli_failed_replies`.
 Whole-list mirroring and the group rate policy remain open. Owners can qualify
 a standalone room with `/usr/local/bin/yeney-queue-device-suite`; use the
 [unattended systemd-run procedure](DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)

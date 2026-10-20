@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include "playback_mode.h"
+#include <algorithm>
 #include <atomic>
 #include <functional>
 #include <mutex>
@@ -18,6 +19,7 @@ struct ModeStatus {
     uint64_t generation = 1;
     unsigned oldRate = 0, newRate = 0;
     bool latched = false;
+    uint64_t lmsSlow = 0, lmsFailed = 0;
     double gapMs = -1;
 };
 class RoomMode {
@@ -45,6 +47,16 @@ public:
     // Call on the serialized room worker; now is monotonic milliseconds.
     bool newPlay(bool ready, uint64_t epoch, uint64_t now);
     void beginPreparation(uint64_t now);
+    void deferPreparation(uint64_t ms) {
+        std::lock_guard<std::mutex> l(mutex);
+        if (s.state == "prepare" && prepareAt)
+            prepareAt += ms;
+    }
+    void lmsMetrics(uint64_t slow, uint64_t failed) {
+        std::lock_guard<std::mutex> l(mutex);
+        s.lmsSlow = std::max(s.lmsSlow, slow);
+        s.lmsFailed = std::max(s.lmsFailed, failed);
+    }
     void stop(); // explicit LMS q only, not seek/refetch f
     void evidence(ModeEvidence, uint64_t now);
     void request(const std::string &reason, uint64_t now);
@@ -76,7 +88,10 @@ inline std::string RoomMode::json(const ModeStatus &v) {
       << ",\"epoch\":" << v.item.epoch << ",\"generation\":" << v.generation
       << ",\"owned\":" << (v.item.owned ? "true" : "false") << ",\"mirrored_ahead\":" << v.item.ahead
       << ",\"last_fallback\":" << q(v.lastFallback) << ",\"handoff_gap_ms\":" << v.gapMs
-      << ",\"latched\":" << (v.latched ? "true" : "false") << "}";
+      << ",\"latched\":" << (v.latched ? "true" : "false");
+    if (v.requested == "queue")
+        o << ",\"lms_cli_slow_replies\":" << v.lmsSlow << ",\"lms_cli_failed_replies\":" << v.lmsFailed;
+    o << "}";
     return o.str();
 }
 inline std::atomic<RoomMode *> &modeRegistry() {

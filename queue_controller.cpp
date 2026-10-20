@@ -568,6 +568,16 @@ struct QueueController::Impl {
         changed.notify_all();
         return future;
     }
+    void holdLms() {
+        if (!options.lmsPending || !options.lmsPending())
+            return;
+        const auto until = nowMs() + 5000;
+        for (auto *echo : {&echoState, &echoToken, &echoTime, &echoRun})
+            if (echo->until)
+                echo->until = std::max(echo->until, until);
+        if (intentDeadline)
+            intentDeadline = std::max(intentDeadline, until);
+    }
     void work() {
         for (;;) {
             Job job;
@@ -586,6 +596,7 @@ struct QueueController::Impl {
                     jobs.pop_front();
                 }
             }
+            holdLms();
             if (job.run)
                 job.run();
             else
@@ -839,9 +850,8 @@ struct QueueController::Impl {
         pendingSent = 0;
         intentDeadline = nowMs() + 15000; // publication/refetch precedes the
                                           // five-second SOAP acknowledgement
-        log("rebuild revision=" + std::to_string(revision) +
-            " select-token=" + std::to_string(current) + " cached=" + std::to_string(cached) +
-            " mixed-intro=" + std::to_string(chosen->mixedIntro));
+        log("rebuild revision=" + std::to_string(revision) + " select-token=" + std::to_string(current) +
+            " cached=" + std::to_string(cached) + " mixed-intro=" + std::to_string(chosen->mixedIntro));
     }
     void command(char command) {
         if ((command == 'f' || command == 's') && audibleIndex != SIZE_MAX &&

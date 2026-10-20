@@ -40,6 +40,7 @@ class Model:
         self.byid={t['id']:t for t in self.library}
         self.urls=['file:///saved/one.flac','file:///saved/two.flac']
         self.before=list(self.urls)
+        for i,url in enumerate(self.urls):self.byid[str(9001+i)]=dict(id=str(9001+i),url=url,title='Saved',artist='',album='')
         self.index=1;self.time=12.5;self.mode='pause';self.repeat='2';self.shuffle='0'
         self.prefs=dict(transitionType='4',transitionDuration='7',transitionSmart='1')
         self.calls=[];self.clock=100.;self.queue=False;self.epoch=0;self.owned=False;self.fault=None;self.backend=None
@@ -83,7 +84,7 @@ class Model:
             else:entries=entries[int(cmd[1]):int(cmd[1])+int(cmd[2])]
             result=[f'playlist_cur_index:{self.index}',f'time:{self.time}']
             for i,url in entries:
-                t=next((t for t in self.library if t['url']==url),dict(id='saved',title='Saved'))
+                t=next((t for t in self.byid.values() if t['url']==url),dict(id='',title='Saved'))
                 result += [f'playlist index:{i}',f'url:{url}',f'id:{t["id"]}',f'title:{t["title"]}']
             return result
         if cmd[-1]=='?':
@@ -92,7 +93,10 @@ class Model:
             return [str(dict(index=self.index,time=self.time,tracks=len(self.urls),mode=self.mode,repeat=self.repeat,shuffle=self.shuffle)[key])]
         if cmd[0]=='playerpref':self.prefs[cmd[1]]=cmd[2]
         elif cmd[0]=='playlistcontrol':
-            ids=cmd[-1].split(':')[1].split(',');self.urls=[self.byid[i]['url'] for i in ids];self.index=0;self.time=0;self.epoch+=1
+            ids=cmd[-1].split(':',1)[1].split(',')
+            values=[self.byid[i]['url'] for i in ids]
+            if cmd[1]=='cmd:load':self.urls=values;self.index=0;self.time=0;self.epoch+=1
+            else:self.urls+=values
         elif cmd[0]=='playlist':
             if cmd[1]=='index':self.index=(self.index+int(cmd[2]) if cmd[2].startswith(('+','-')) else int(cmd[2]));self.time=0;self.slim.strm('s')
             elif cmd[1]=='clear':self.urls=[];self.index=0;self.time=0
@@ -163,7 +167,7 @@ class Backend:
     def snapshot(self):
         if self.model.owned:
             self.sonos.items=[dict(uri='http://127.0.0.1/music/queue.wav?session=fixture')]
-        p=dict(requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='queue-opt-in',occurrence=self.model.index+1,epoch=self.model.epoch,
+        p=dict(state='active',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='queue-opt-in',occurrence=self.model.index+1,epoch=self.model.epoch,
                owned=self.model.owned,mirrored_ahead=3,last_fallback='soap-error' if self.model.fault=='fallback' else '',handoff_gap_ms=-1,latched=False)
         path=self.root/('stream-pacing-'+b'Study'.hex()+'.json')
         path.write_text(json.dumps(dict(pid=self.pid,monotonic_ms=self.now()*1000,playback=p)))

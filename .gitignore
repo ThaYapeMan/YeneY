@@ -81,3 +81,5 @@ field-cold-test
 /queue-mode-fixture
 
 /yeney-queue-acceptance
+
+/queue-lms-client-test
