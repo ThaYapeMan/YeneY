@@ -37,9 +37,18 @@ int main(int argc, char **argv) {
         o.queryMs = 300;
     LmsClient cli("127.0.0.1", "aa:bb:cc:dd:ee:ff", o);
     std::string reply;
-    if (profile == "actions") {
+    if (profile == "guard") {
+        assert(!cli.submit({"playlist index 0"}, "readiness"));
+        assert(!cli.submit({"play"}, ""));
+        assert(!cli.submit({"playlist clear"}, "sonos-user-action"));
+        assert(!cli.query("playlist index 1", reply));
+        assert(cli.counts() == std::make_pair(uint64_t(0), uint64_t(0)));
+        std::cout << "PASS queue CLI mutation choke: missing/internal reason and query bypass rejected "
+                     "before any network write\n";
+    } else if (profile == "actions") {
         const auto start = std::chrono::steady_clock::now();
-        assert(cli.submit({"pause 1", "playlist index 2", "time 20"}, [&] { done = true; }));
+        assert(cli.submit({"pause 1", "playlist index 2", "time 20"}, "sonos-user-action",
+                          [&] { done = true; }));
         assert(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(50));
         for (int i = 0; i < 1500 && !done; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -75,7 +84,7 @@ int main(int argc, char **argv) {
         cli.tick();
         assert(fallbacks == 1);
     } else if (profile == "mutation-drop") {
-        assert(cli.submit({"pause 1"}, [&] { done = true; }));
+        assert(cli.submit({"pause 1"}, "sonos-user-action", [&] { done = true; }));
         for (int i = 0; i < 500 && !done; ++i)
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         assert(done && failed == 1 && !fallbacks);

@@ -33,13 +33,14 @@ private:
     std::condition_variable changed;
     struct Job {
         std::vector<std::string> commands;
+        std::string reason;
         std::function<void()> done;
         uint64_t ticket;
     };
     std::deque<Job> jobs;
     std::atomic_bool closing{false}, busy{false};
     std::atomic<uint64_t> generation{1};
-    uint64_t slow = 0, failed = 0, outage = 0, lastSuccess = 0;
+    uint64_t slow = 0, failed = 0, outage = 0, lastSuccess = 0, fallbackTicket = 0;
     bool notified = false;
     std::map<std::string, uint64_t> lastLog;
     void observe(const std::string &command, bool ok, uint64_t start, uint64_t duration) {
@@ -181,11 +182,14 @@ private:
             busy = true;
             bool ok = true;
             const auto ticket = job.ticket;
-            for (const auto &c : job.commands)
+            for (const auto &c : job.commands) {
+                if (options.log)
+                    options.log("queue LMS mutation reason=" + job.reason + " command=" + c);
                 if (generation != ticket || !apply(c, ticket)) {
                     ok = false;
                     break;
                 }
+            }
             if (ok && !closing && generation == ticket && job.done)
                 job.done();
             busy = false;
@@ -206,6 +210,9 @@ public:
     }
     bool query(const std::string &command, std::string &wire,
                const std::function<bool(const std::string &)> &valid = {}) {
+        if (command.rfind("status ", 0) != 0 &&
+            (command.size() < 2 || command.compare(command.size() - 2, 2, " ?") != 0))
+            return false; // read-only API cannot bypass the mutation choke point
         for (int i = 0; i < 2 && !closing; ++i)
             if (exchange(command, wire,
                          command.rfind("status ", 0) == 0 ? options.snapshotMs : options.queryMs, valid))
@@ -217,11 +224,22 @@ public:
             }
         return false;
     }
-    bool submit(std::vector<std::string> commands, std::function<void()> done = {}) {
+    bool submit(std::vector<std::string> commands, const std::string &reason,
+                std::function<void()> done = {}) {
+        if ((reason != "sonos-user-action" && reason != "fallback") || commands.empty())
+            return false;
+        for (const auto &command : commands)
+            if (verification(command).first.empty())
+                return false;
         std::lock_guard<std::mutex> l(mutex);
         if (closing || jobs.size() >= 256)
             return false;
-        jobs.push_back({std::move(commands), std::move(done), generation.load()});
+        if (reason == "fallback") {
+            if (fallbackTicket == generation.load())
+                return false;
+            fallbackTicket = generation.load();
+        }
+        jobs.push_back({std::move(commands), reason, std::move(done), generation.load()});
         changed.notify_one();
         return true;
     }

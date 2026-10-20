@@ -130,7 +130,7 @@ struct QueueRoom::Impl {
         o.log = logger;
         o.lmsControl = [this](const std::string &c) {
             refetchPending = c.rfind("playlist index ", 0) == 0 || c.rfind("time ", 0) == 0;
-            return lms->submit({c});
+            return lms->submit({c}, "sonos-user-action");
         };
         o.lmsPending = [this] { return lms->pending(); };
         o.fallbackRequest = [this](const std::string &reason) { post([this, reason] { fallback(reason); }); };
@@ -403,11 +403,12 @@ struct QueueRoom::Impl {
             controller->lmsPlaylist(epoch, playlist.revision, token, plan, true).get();
         }
         if (renderPending.exchange(false)) {
-            // A seek stays on the current LMS occurrence. Selecting its index
-            // first would cause a second strm and an ambiguous render epoch.
-            const auto command = seek ? "time " + std::to_string(playlist.timeMs / 1000)
-                                      : "playlist index " + std::to_string(playlist.index);
-            lms->submit({command});
+            // Reuse the already received SlimProto start. A CLI jump here
+            // restarts LMS and turns track selection into a feedback loop.
+            renderAdmission = false;
+            manualIntent = false;
+            refetchPending = false;
+            queue.resumeReceivedStart();
         }
     }
     struct LmsPending : std::runtime_error {
@@ -440,7 +441,7 @@ struct QueueRoom::Impl {
         if (ms)
             commands.push_back("time " + std::to_string(ms / 1000));
         coreReady = 0;
-        lms->submit(std::move(commands), [this, g = v.generation] {
+        lms->submit(std::move(commands), "fallback", [this, g = v.generation] {
             post([this, g] {
                 if (mode.status().generation != g || mode.status().state != "handoff")
                     return;
@@ -508,6 +509,8 @@ struct QueueRoom::Impl {
             stream.command(c);
         post([this, c] {
             mode.command(c.letter);
+            if (mode.status().state == "handoff")
+                return; // the one fallback continuation is not a user stop/new play
             if (c.letter == 's')
                 mode.beginPreparation(mono());
             if (c.letter == 'q') {

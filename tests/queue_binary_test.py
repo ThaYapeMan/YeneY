@@ -391,12 +391,13 @@ def seek_future():
         target=h.base/'seek.flac'
         subprocess.run(['flac','-s','-f','-o',str(target),str(path)],check=True)
         h.bodies[0]=target.read_bytes();h.index=0;h.source_ms=20000;h.refetch_audio=True
-        h.lms.strm('f');h.lms.strm('s')
+        source=HTTP(h.bodies[0]);h.sources.append(source)
+        h.lms.strm('f');h.lms.strm('s',source,fmt='f')
         h.until(lambda:h.sonos.position['TrackURI']!=old and h.sonos.position['TrackURI'].startswith('http'))
         h.until(lambda:'history=rerender' in (h.base/'bridge.log').read_text())
         h.until(lambda:len(h.packets('STMs'))==2)
         assert h.model.playing==1
-        assert h.commands.count('time 20')==1
+        assert h.commands.count('time 20')==0, h.commands
         print('PASS real yeney LMS seek beyond produced history: one fresh asset/URL, decoder admission, LMS source-time target and matching identity',flush=True)
     finally:h.close()
 

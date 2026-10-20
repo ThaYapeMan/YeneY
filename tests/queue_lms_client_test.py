@@ -51,6 +51,11 @@ class Tests(unittest.TestCase):
             status=json.loads(next(l[7:] for l in p.stdout.splitlines() if l.startswith('STATUS ')))
             return server.commands,p.stdout,status
         finally:server.close()
+    def test_mutation_guard(self):
+        commands,out,_=self.run_profile('guard')
+        self.assertEqual(commands,[])
+        self.assertIn('PASS queue CLI mutation choke',out)
+        print('PASS queue CLI mutation choke: internal/missing reasons and mutation through query rejected; zero network writes')
     def test_app_pause_next(self):
         commands,out,status=self.run_profile('actions')
         self.assertEqual(commands.count('pause 1'),1);self.assertEqual(commands.count('playlist index 2'),1)
@@ -58,6 +63,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(commands.count('time 20'),1);self.assertIn('time ?',commands)
         self.assertEqual(status['lms_cli_slow_replies'],3)
         self.assertIn('duration_ms=',out)
+        self.assertEqual(out.count('mutation reason=sonos-user-action command='),3)
         print('PASS production queue LMS: 5 s app pause/next acknowledged and query-verified off caller thread, sent once, no fallback, advancing seek time verified, slow counters/logs')
     def test_snapshot(self):
         for profile in ('snapshot','snapshot20'):
