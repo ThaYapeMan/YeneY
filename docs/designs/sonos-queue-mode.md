@@ -419,7 +419,7 @@ Log saved playlist identity/title and explain restoration through the Sonos app.
 A transport URI/length snapshot alone is not a backup.
 
 Hold a coordinator ownership lease and fence every queue update with its current
-UpdateID and session identity. Qualify large batches, removal/reorder around the
+Browse revision and session identity. Qualify long sequences of single-item appends, removal/reorder around the
 playing item, app selections during preparation, backup failure and concurrent
 controllers before enabling this behavior. Phase 1 implements none of these
 SOAP/controller actions.
@@ -687,7 +687,7 @@ Phases and approximate remaining production changes:
 | 1: new item-store/WAV writer + tests | Done in `e3e0c70`. Implemented independent progressive/sealed WAV24 readers, indexed FLAC history, RAM/disk quotas, cancellation/length faults and tests; no playback integration yet. |
 | 2: core decoder/player/sink API, item store, new queue sink/dry-run + tests | Done in core `ff2e857`, `478ce6b`, `fbdc8b9`, `9c68473` and bridge `d26bdb8`. Stable occurrences/counts, resolved item boundaries, decode/audible separation, bounded lookahead, worker adoption and tail recovery. Owner-run LMS qualification remains required; no queue playback wiring. |
 | 3: `upnp/soap.*`, `own_speaker_control.*`, `event_parsers.*`, `speaker_state.*`, HTTP route | Queue actions/music DIDL, identity/events/position, coordinator lease and finite serving; 350–600 lines. |
-| 4: `yeney.cpp`, LMS metadata/control helpers, room status/config docs | Whole-playlist batches/UpdateID edits, on-demand preparation, SaveQueue/five-backup retention, serialized controls and fallback; 500–850 lines. |
+| 4: `yeney.cpp`, LMS metadata/control helpers, room status/config docs | Whole-playlist single-item appends/revision-fenced edits, on-demand preparation, SaveQueue/five-backup retention, serialized controls and fallback; 500–850 lines. |
 | 5: `position_state.h`, `sonos-position.cpp`, tap/timing exporter | Item clocks, overlap maps, audible analysis pump and generation fencing; 300–550 lines. |
 | 6: optional converter and device qualification | Deferred owner rate policy, then exact conversion lengths and ownership/group-change tests; 150–300 lines plus dependency/build work. |
 
