@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import shlex
 from urllib.parse import quote
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,11 +78,14 @@ spec = importlib.util.spec_from_file_location('device_auto', ROOT / 'scripts/dev
 auto = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(auto)
 prefix = script[:script.index('# ------------------------------------------------------------------ main ---')]
+# This is extracted code run with bash -c, which has no BASH_SOURCE stack.
+prefix = prefix.replace(next(line for line in prefix.splitlines() if line.startswith('AUTO_HELPER=')),
+                        'AUTO_HELPER='+shlex.quote(str(ROOT/'scripts/device_test_auto.py')))
 with tempfile.TemporaryDirectory(prefix='sonos-auto-fixture-') as directory:
     env = {**os.environ, 'OUT': directory, 'AUTO': '1', 'QUICK': '0'}
     def run_shell(body, **overrides):
         return subprocess.run(['bash', '-c', prefix + '\n' + body],
-                              env={**env, **overrides}, capture_output=True, text=True)
+                              env={**env, **overrides}, stdin=subprocess.DEVNULL, capture_output=True, text=True)
     journal = ('Stream session: abc\nCreating new stream (21)\n'
                'PlaySqueezeBox: title=\'A real track\' art=\'\'\n'
                '| Title  A real track |\nspeaker URI: stream=21 session=abc\n')
@@ -179,7 +183,7 @@ snapshot() { :; }
 mark() { printf '=== %s\n' "$*"; }
 lms() { :; }
 finish() { auto_summary; }
-python3() { printf '192.0.2.10\n'; }
+python3() { cat >/dev/null; printf '192.0.2.10\n'; }
 ./yeney() { :; }
 auto_begin() { AUTO_REASONS=(); }
 auto_end() { auto_record "$1"; }
