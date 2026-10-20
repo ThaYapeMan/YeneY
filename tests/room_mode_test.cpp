@@ -176,7 +176,7 @@ int main() {
     assert(ambiguous);
     std::cout << "PASS production playlist snapshots: decoded fields, full count/index validation, stable "
                  "occurrence tokens across move, LMS source-time origin\n";
-    bridge::RoomMode status("Study", "Study", bridge::selectPlaybackMode("queue", room), {});
+    bridge::RoomMode status("Study", "Study", bridge::selectPlaybackMode("queue", room, false), {});
     bridge::setRoomMode(&status);
     bridge::StreamMetrics metrics;
     metrics.configure("mode-fixture", "/tmp");

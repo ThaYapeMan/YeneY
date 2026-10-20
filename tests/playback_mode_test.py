@@ -85,7 +85,7 @@ try:
     cases = [(None, 'solo', 'default-stream'), ('stream', 'solo', 'configured-stream'),
              ('auto', 'solo', 'auto-phase4'), ('invalid', 'solo', 'invalid-setting'),
              ('', 'solo', 'invalid-setting'), ('queue', 'coordinator', 'group-rate-undecided'),
-             ('queue', 'member', 'group-rate-undecided'), ('queue', 'solo', 'queue-unavailable')]
+             ('queue', 'member', 'group-rate-undecided')]
     reference = None
     for mode, group, reason in cases:
         server.group, server.actions = group, []
@@ -127,7 +127,7 @@ try:
                 if process.poll() is None:
                     process.kill()
                     process.communicate(timeout=5)
-    print('PASS playback mode startup: actual yeney, default/stream/auto/invalid/grouped/guarded queue byte-identical HELO, one startup log, no queue mutation')
+    print('PASS playback mode startup: actual yeney, default/stream/auto/invalid/grouped queue byte-identical HELO, one startup log, no queue mutation')
 finally:
     server.shutdown()
     server.server_close()

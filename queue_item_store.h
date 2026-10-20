@@ -17,6 +17,9 @@ struct Descriptor {
     uint64_t generation;
     unsigned channels = 2, bits = 24;
 };
+struct PublicationSuperseded : std::runtime_error {
+    PublicationSuperseded() : std::runtime_error("pending item superseded by publication") {}
+};
 struct LengthFault : std::runtime_error {
     const uint64_t expected, actual;
     LengthFault(uint64_t expected, uint64_t actual);

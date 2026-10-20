@@ -39,8 +39,8 @@ def didl(entries, saved=False):
 
 class Coordinator(ThreadingHTTPServer):
     daemon_threads = True
-    def __init__(self):
-        super().__init__(('127.0.0.1', 0), Handler)
+    def __init__(self, address=('127.0.0.1', 0), handler=None):
+        super().__init__(address, handler or Handler)
         self.lock = threading.RLock()
         self.original = [{'uri': 'http://foreign.invalid/original.flac'}]
         self.items = copy.deepcopy(self.original)
@@ -186,7 +186,7 @@ class Handler(BaseHTTPRequestHandler):
             resource = next(n for n in item if n.tag.rsplit('}', 1)[-1] == 'res')
             assert fields['class'] == 'object.item.audioItem.musicTrack'
             assert fields['title'].startswith('Artist <one> - Title & ')
-            assert fields['album'] == 'Album & fixture'
+            assert fields['album'] in getattr(s, 'expected_albums', ['Album & fixture'])
             assert resource.text == uri and resource.attrib['protocolInfo'] == 'http-get:*:audio/wav:*'
             assert resource.attrib['bitsPerSample'] == '24' and resource.attrib['nrAudioChannels'] == '2'
             s.items.append(dict(uri=uri, metadata=fields, resource=resource.attrib)); s.update += 1
@@ -474,5 +474,23 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(s.items, before)
         print('PASS queue coordinator fencing: stale UpdateID never retries an enqueue, preserves foreign edits and restores CrossfadeMode; grouped lease blocks mutations')
 
+
+class PublicationRace(unittest.TestCase):
+    def test_replaced_pending_handle_waits_for_host_snapshot(self):
+        speaker=Coordinator();driver=Driver(speaker)
+        try:
+            driver.put(1)
+            driver.command('PUT 2 S 0 100 44100')
+            driver.command('PLAY 1 1 1 2');driver.wait(1)
+            driver.command('PUBLISH 2 100')
+            # Deliberately leave the superseded handle in the controller for
+            # several worker ticks before delivering its immutable replacement.
+            time.sleep(.2)
+            status=driver.command('STATUS','STATUS ')
+            self.assertTrue(status.startswith('STATUS 1 '),status)
+            driver.command('UPDATE 1 1 2');driver.wait(2)
+            self.assertEqual(len(speaker.items),2)
+            print('PASS queue publication race: superseded unpublished handle waits for refreshed snapshot without fault or fallback',flush=True)
+        finally:driver.close();speaker.close()
 
 if __name__ == '__main__': unittest.main(verbosity=2)

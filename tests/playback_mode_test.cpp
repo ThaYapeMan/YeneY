@@ -11,9 +11,10 @@ int main() {
                (value && std::string(value) != "stream" && std::string(value) != "auto"));
     }
     assert(bridge::selectPlaybackMode("auto", room).reason == "auto-phase4");
-    auto guarded = bridge::selectPlaybackMode("queue", room);
-    assert(guarded.selected == bridge::PlaybackMode::Stream && guarded.reason == "queue-unavailable");
-    auto queued = bridge::selectPlaybackMode("queue", room, true);
+    auto guarded = bridge::selectPlaybackMode("queue", room, false);
+    assert(guarded.selected == bridge::PlaybackMode::Stream &&
+           guarded.reason == "queue-unavailable");
+    auto queued = bridge::selectPlaybackMode("queue", room);
     assert(queued.selected == bridge::PlaybackMode::Queue && queued.reason == "queue-opt-in");
     room.members.push_back("Other");
     assert(bridge::selectPlaybackMode("queue", room).reason == "group-rate-undecided");
@@ -27,7 +28,8 @@ int main() {
     room.members = {"Study"};
     room.uuid.clear();
     assert(bridge::selectPlaybackMode("queue", room).selected == bridge::PlaybackMode::Stream);
-    std::cout << "PASS playback mode policy: stream default, queue-unavailable guard, readiness flag, "
+    std::cout << "PASS playback mode policy: stream default, explicit standalone "
+                 "queue, closed readiness flag, "
                  "deferred auto, invalid values, "
                  "grouped coordinators/members and unknown topology\n";
 }

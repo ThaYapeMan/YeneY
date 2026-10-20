@@ -131,6 +131,12 @@ LengthFault::LengthFault(uint64_t e, uint64_t a)
       expected(e), actual(a) {}
 Config Config::environment() {
     Config c;
+    if (const char *directory = std::getenv("STATE_DIRECTORY")) {
+        std::filesystem::path root(directory);
+        if (!root.is_absolute() || std::string(directory).find(':') != std::string::npos)
+            throw std::invalid_argument("invalid queue STATE_DIRECTORY");
+        c.root = root / "queue";
+    }
     if (const char *p = std::getenv("YENEY_QUEUE_DISK_MIB")) {
         std::string s(p);
         size_t used = 0;
@@ -328,7 +334,7 @@ std::shared_ptr<Item> Store::publish(const std::shared_ptr<Item> &pending, uint6
     item->ram = std::move(old.ram);
     item->history = std::move(old.history);
     item->protectedItem = old.protectedItem;
-    old.fault = std::make_exception_ptr(std::runtime_error("pending item superseded by publication"));
+    old.fault = std::make_exception_ptr(PublicationSuperseded());
     state->items.emplace(key, item);
     state->changed.notify_all();
     return std::shared_ptr<Item>(new Item(state, item));

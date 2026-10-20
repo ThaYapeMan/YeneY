@@ -66,6 +66,8 @@ public:
     // the playlist has them. Unpublished entries remain pending in queue order.
     std::future<void> play(uint64_t epoch, uint64_t current, std::vector<QueueAsset>);
     std::future<void> update(uint64_t epoch, std::vector<QueueAsset>);
+    // Refresh prepared handles without rebuilding a pending same-token seek.
+    std::future<void> prepared(uint64_t epoch, std::vector<QueueAsset>);
     // Authoritative LMS playlist snapshot, including stable duplicate tokens.
     // A higher revision edits future entries only. select is explicit user
     // intent, unlike decoder read-ahead s. current is a token, never a Sonos

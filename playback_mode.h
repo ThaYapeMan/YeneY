@@ -3,8 +3,8 @@
 #include "upnp/speaker_control.h"
 #include <string>
 namespace bridge {
-// Enable only after part 7 qualifies the real binary against fake Sonos/LMS.
-inline constexpr bool queuePlaybackReady = false;
+// Explicit standalone queue playback qualified through the real binary.
+inline constexpr bool queuePlaybackReady = true;
 enum class PlaybackMode { Stream, Queue };
 struct PlaybackSelection {
     std::string requested, reason;

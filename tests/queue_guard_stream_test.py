@@ -1,4 +1,4 @@
-"""Compare real stream output for explicit stream and the queue-unavailable guard."""
+"""Compare real stream output for unset, explicit stream and deferred auto modes."""
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 from pathlib import Path
 import os
@@ -31,9 +31,11 @@ previous = os.environ.get('YENEY_PLAYBACK_MODE')
 try:
     captured = []
     with tempfile.TemporaryDirectory(prefix='yeney-queue-guard-') as folder:
-        for mode in ('stream', 'queue'):
-            os.environ['YENEY_PLAYBACK_MODE'] = mode
-            run = Run(mode, Path(folder))
+        for mode in (None, 'stream', 'auto'):
+            if mode is None:os.environ.pop('YENEY_PLAYBACK_MODE',None)
+            else:os.environ['YENEY_PLAYBACK_MODE'] = mode
+            name=mode or 'default'
+            run = Run(name, Path(folder))
             try:
                 body, _ = pcm(seconds=1)
                 run.start(body, fmt='p')
@@ -47,14 +49,15 @@ try:
                              if action in ('SetAVTransportURI', 'Play', 'Pause', 'Stop')]
                 # HTTP body bytes and production SOAP bodies (apart from the
                 # deliberately fresh process session token) must match exactly.
-                captured.append((bytes(run.captures[0][1]), mutations, run.sources[0].request))
+                captured.append((bytes(run.captures[0][1]), mutations, run.sources[0].request,
+                                 next(p['body'] for p in run.lms.packets if p['op']=='HELO')))
             finally:
                 run.close()
-            log = (Path(folder)/mode/'bridge.log').read_text()
+            log = (Path(folder)/name/'bridge.log').read_text()
             assert log.count('playback selection room=') == 1, log
-            assert ('reason=queue-unavailable' in log) == (mode == 'queue'), log
-        assert captured[0] == captured[1], [(len(c[0]), c[1], c[2]) for c in captured]
-    print('PASS queue-unavailable stream equivalence: real yeney/fake LMS, identical encoded FLAC body, SOAP transport order/bodies and source HTTP request; only process session token normalized')
+            assert 'reason='+('default-stream' if mode is None else 'auto-phase4' if mode=='auto' else 'configured-stream') in log,log
+        assert captured[0] == captured[1] == captured[2], [(len(c[0]), c[1], c[2]) for c in captured]
+    print('PASS default/stream/auto stream equivalence: real yeney/fake LMS, identical HELO, encoded FLAC body, SOAP transport order/bodies and source HTTP request; only process session token normalized')
 finally:
     if previous is None: os.environ.pop('YENEY_PLAYBACK_MODE', None)
     else: os.environ['YENEY_PLAYBACK_MODE'] = previous

@@ -156,6 +156,10 @@ int main(int argc, char **argv) {
                 uint64_t count;
                 input >> id >> count;
                 append(id, count);
+            } else if (action == "PUBLISH") {
+                uint64_t frames;
+                input >> id >> frames;
+                assets.at(id).item = store.publish(assets.at(id).item, frames);
             } else if (action == "FINISH") {
                 input >> id;
                 assets.at(id).item->finish();

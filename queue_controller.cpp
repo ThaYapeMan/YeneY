@@ -837,9 +837,11 @@ struct QueueController::Impl {
         }
         target = chosen->occurrence;
         pendingSent = 0;
-        intentDeadline = nowMs() + 15000; // publication/refetch precedes the five-second SOAP acknowledgement
-        log("rebuild revision=" + std::to_string(revision) + " select-token=" + std::to_string(current) +
-            " cached=" + std::to_string(cached) + " mixed-intro=" + std::to_string(chosen->mixedIntro));
+        intentDeadline = nowMs() + 15000; // publication/refetch precedes the
+                                          // five-second SOAP acknowledgement
+        log("rebuild revision=" + std::to_string(revision) +
+            " select-token=" + std::to_string(current) + " cached=" + std::to_string(cached) +
+            " mixed-intro=" + std::to_string(chosen->mixedIntro));
     }
     void command(char command) {
         if ((command == 'f' || command == 's') && audibleIndex != SIZE_MAX &&
@@ -913,6 +915,7 @@ struct QueueController::Impl {
                 throw std::runtime_error("queue-seek-item-removed");
             *it = replacement;
             reconcile(playlistRevision, token(a), std::move(assets), true, true);
+            awaitingFreshSeek = true; // the superseded producer may now cancel its old asset
             log("seek source-ms=" + std::to_string(ms) +
                 " history=rerender new-occurrence=" + std::to_string(replacement.occurrence));
         }
@@ -933,7 +936,12 @@ struct QueueController::Impl {
             auto &asset = plan[urls.size()];
             if (!asset.item)
                 break;
-            auto length = asset.item->contentLength();
+            std::optional<uint64_t> length;
+            try {
+                length = asset.item->contentLength();
+            } catch (const PublicationSuperseded &) {
+                break; // host snapshot will supply the immutable published handle
+            }
             if (!length)
                 break;
             if (asset.item->descriptor().occurrence != std::to_string(asset.occurrence))
@@ -1011,6 +1019,19 @@ std::future<void> QueueController::update(uint64_t epoch, std::vector<QueueAsset
         if (!p->active || epoch != p->epoch)
             throw StaleEpoch();
         p->setPlan(std::move(assets));
+    });
+}
+std::future<void> QueueController::prepared(uint64_t epoch, std::vector<QueueAsset> assets) {
+    return impl->post([p = impl.get(), epoch, assets = std::move(assets)] {
+        p->checkEpoch(epoch);
+        for (const auto &a : assets) {
+            for (size_t i = p->urls.size(); i < p->plan.size(); ++i)
+                if (p->plan[i].occurrence == a.occurrence)
+                    p->plan[i] = a;
+            for (auto &entry : p->playlist)
+                if (entry.occurrence == a.occurrence)
+                    entry = a;
+        }
     });
 }
 std::future<void> QueueController::lmsPlaylist(uint64_t epoch, uint64_t revision, uint64_t current,

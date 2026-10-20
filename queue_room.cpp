@@ -57,8 +57,9 @@ struct QueueRoom::Impl {
     std::atomic<uint64_t> coreReady{0};
     std::atomic<bool> stopped{false}, readiness{true};
     std::atomic<uint64_t> queueGeneration{1};
-    std::atomic<uint64_t> seekOrigin{UINT64_MAX};
-    std::atomic<bool> refetchPending{false}, manualIntent{false}, renderPending{false};
+    std::atomic<uint64_t> seekOrigin{UINT64_MAX}, pendingRender{0};
+    std::atomic<bool> refetchPending{false}, manualIntent{false}, renderPending{false},
+        renderAdmission{false};
     std::mutex preparedMutex;
     std::map<uint64_t, Binding> prepared;
     Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
@@ -82,6 +83,8 @@ struct QueueRoom::Impl {
             host.resize(colon);
         queue.useSpeakerClock();
         queue.onQueueCommand([this](char c, uint32_t) {
+            if (c == 'f' && renderAdmission)
+                return true; // CLI re-render echo must preserve the prepared target
             if (c == 'f')
                 manualIntent = !refetchPending;
             if (c == 'p' || c == 'u' || c == 'q' || c == 'f') {
@@ -90,6 +93,11 @@ struct QueueRoom::Impl {
                         controller->lmsCommand(epoch, c).get();
                 });
                 return true;
+            }
+            if (c == 's' && renderAdmission.exchange(false)) {
+                manualIntent = false;
+                refetchPending = false;
+                return false; // the requested re-render must reach the decoder
             }
             if (c == 's' && refetchPending.exchange(false)) {
                 manualIntent = false;
@@ -112,8 +120,6 @@ struct QueueRoom::Impl {
         o.managedFallback = true;
         o.log = logger;
         o.lmsControl = [this](const std::string &c) {
-            if (c.rfind("time ", 0) == 0)
-                seekOrigin = uint32_t(std::stod(c.substr(5)) * 1000);
             refetchPending = c.rfind("playlist index ", 0) == 0 || c.rfind("time ", 0) == 0;
             return queue_audio::controlLms(host, mac, c);
         };
@@ -131,6 +137,8 @@ struct QueueRoom::Impl {
                 auto b = bindings.find(e.occurrence);
                 if (b == bindings.end() || !mode.accepts(b->second.generation, true))
                     return;
+                if (pendingRender == e.occurrence)
+                    pendingRender = 0;
                 ModeEvidence v;
                 v.generation = b->second.generation;
                 v.epoch = e.epoch;
@@ -156,6 +164,7 @@ struct QueueRoom::Impl {
             // let the LMS refetch supply its descriptor/item asynchronously.
             queue_audio::QueueAsset a;
             a.occurrence = lastBound.fetch_add(1) + 1;
+            pendingRender = a.occurrence;
             a.token = token;
             a.sourceOriginMs = ms;
             seekOrigin = ms;
@@ -164,6 +173,7 @@ struct QueueRoom::Impl {
                 prepared[a.occurrence] = {token, mode.status().generation, ms};
             }
             renderPending = true;
+            renderAdmission = true;
             refetchPending = false;
             queue.beginRender();
             return a;
@@ -321,6 +331,10 @@ struct QueueRoom::Impl {
         }
         if (plan.empty())
             return;
+        if (pendingRender && state.item.occurrence != pendingRender) {
+            controller->prepared(epoch, plan).get();
+            return;
+        }
         std::vector<queue_audio::QueueAsset> authoritative;
         for (const auto &e : playlist.entries) {
             queue_audio::QueueAsset a;
@@ -335,6 +349,8 @@ struct QueueRoom::Impl {
             try {
                 if (!plan.front().item->contentLength())
                     return;
+            } catch (const queue_audio::PublicationSuperseded &) {
+                return; // publication raced this snapshot; refresh on the next tick
             } catch (...) {
                 fallback("length-fault");
                 return;
@@ -372,10 +388,12 @@ struct QueueRoom::Impl {
             controller->lmsPlaylist(epoch, playlist.revision, token, plan, true).get();
         }
         if (renderPending.exchange(false)) {
-            if (!queue_audio::controlLms(host, mac, "playlist index " + std::to_string(playlist.index)))
+            // A seek stays on the current LMS occurrence. Selecting its index
+            // first would cause a second strm and an ambiguous render epoch.
+            const auto command = seek ? "time " + std::to_string(playlist.timeMs / 1000)
+                                      : "playlist index " + std::to_string(playlist.index);
+            if (!queue_audio::controlLms(host, mac, command))
                 throw std::runtime_error("playlist-render-unconfirmed");
-            if (seek && !queue_audio::controlLms(host, mac, "time " + std::to_string(playlist.timeMs / 1000)))
-                throw std::runtime_error("playlist-seek-unconfirmed");
         }
     }
     void handoff() {
@@ -494,9 +512,11 @@ struct QueueRoom::Impl {
                     for (const auto &record : queue.snapshot())
                         actualLast = std::max(actualLast, record.source.occurrence);
                     lastBound = actualLast;
+                    pendingRender = 0;
                     refetchPending = false;
                     manualIntent = false;
                     renderPending = false;
+                    renderAdmission = false;
                     seekOrigin = UINT64_MAX;
                     initialIndex.reset();
                     producerToken = 0;
