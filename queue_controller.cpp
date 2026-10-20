@@ -787,6 +787,8 @@ struct QueueController::Impl {
                        a.item == b.item;
             }))
             return;
+        if (!select && target)
+            return; // retry a future-only edit after our pending Seek is confirmed
         for (const auto &a : plan)
             history[token(a)] = a;
         for (auto &a : assets) {
@@ -865,9 +867,10 @@ struct QueueController::Impl {
             " cached=" + std::to_string(cached) + " mixed-intro=" + std::to_string(chosen->mixedIntro));
     }
     void command(char command) {
-        if ((command == 'f' || command == 's') && audibleIndex != SIZE_MAX &&
-            plan[audibleIndex].occurrence == echoRunOccurrence && echoRun.take(std::string(1, command))) {
-            if (command == 'f')
+        const char echoedRun = command == 'q' ? 'f' : command;
+        if ((echoedRun == 'f' || echoedRun == 's') && audibleIndex != SIZE_MAX &&
+            plan[audibleIndex].occurrence == echoRunOccurrence && echoRun.take(std::string(1, echoedRun))) {
+            if (echoedRun == 'f')
                 echoRun.set("s");
             log("echo suppressed LMS retained-run=" + std::string(1, command));
             return;

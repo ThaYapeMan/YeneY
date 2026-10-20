@@ -96,7 +96,10 @@ class CLI(socketserver.ThreadingTCPServer):
         class Client(socketserver.StreamRequestHandler):
             def handle(self):
                 for wire in self.rfile:
-                    line=wire.decode().strip(); mac,cmd=line.split(' ',1)
+                    line=wire.decode().strip()
+                    if line=='listen 1':
+                        self.wfile.write(b'listen 1\n');self.wfile.flush();continue
+                    mac,cmd=line.split(' ',1)
                     assert mac==owner.mac and '%' not in mac, line
                     owner.commands.append(cmd)
                     if cmd in ('pause 1','play') or (cmd.startswith('playlist index ') and not cmd.endswith('?')):
@@ -127,13 +130,17 @@ class CLI(socketserver.ThreadingTCPServer):
                     if cmd=='pause 1':owner.cli_mode='pause'
                     elif cmd=='play':owner.cli_mode='play'
                     if cmd.startswith('time ') or cmd.startswith('playlist index '):
-                        owner.lms.strm('f')
+                        owner.lms.strm('q')
                         if owner.refetch_audio:
                             index=owner.index if owner.index is not None else max(0,owner.model.playing-1)
                             body=owner.bodies[index];delay=owner.refetch_delay
                             source=HTTP(body,first=len(body)//2 if delay else None,delay=delay);owner.sources.append(source)
                             owner.lms.strm('s',source,fmt='f',rate=owner.rates[index])
-                        else:owner.lms.strm('s')
+                        else:
+                            index=owner.index if owner.index is not None else max(0,owner.model.playing-1)
+                            source=HTTP(owner.bodies[index]);owner.sources.append(source)
+                            owner.lms.strm('s',source,fmt='f',rate=owner.rates[index])
+                        owner.lms.strm('u')
                     elif cmd=='pause 1':owner.lms.strm('p')
                     elif cmd=='play':owner.lms.strm('u')
         super().__init__(('127.0.0.1',9090),Client)
@@ -285,15 +292,18 @@ def controls():
         for index in (3,2):
             h.index=index;h.source_ms=0;h.model.streaming=index+1
             before=len(h.packets('STMs'))
-            h.lms.strm('f');h.lms.strm('s')
+            source=HTTP(h.bodies[index]);h.sources.append(source)
+            h.lms.strm('q');h.lms.strm('s',source,fmt='f',rate=h.rates[index])
             h.until(lambda:len(h.packets('STMs'))==before+1)
             assert h.model.playing==index+1
         print('PASS real yeney LMS next/previous: retained prepared assets, matching audible identity, no double advance',flush=True)
         h.index=2;h.source_ms=2000
-        before=len(h.packets('STMs'));h.lms.strm('f');h.lms.strm('s')
+        source=HTTP(h.bodies[2]);h.sources.append(source)
+        before=len(h.packets('STMs'));h.lms.strm('q');h.lms.strm('s',source,fmt='f')
         h.until(lambda:any(a[1].get('Unit')=='REL_TIME' for a in h.sonos.actions('Seek')))
-        assert len(h.packets('STMs'))==before
-        print('PASS real yeney LMS seek within history: REL_TIME, same asset and no duplicate STMs',flush=True)
+        h.lms.strm('u') # real LMS releases the newly connected seek run
+        h.until(lambda:len(h.packets('STMs'))==before+1)
+        print('PASS real yeney LMS seek within history: REL_TIME, same asset and one acknowledged LMS run',flush=True)
         time.sleep(2)
         track=int(h.sonos.position['Track'])
         h.state(track,2,'PAUSED_PLAYBACK')
@@ -337,6 +347,24 @@ def rearm_replay():
         assert sum(p['op']=='HELO' for p in h.lms.packets)==1
         assert 'state=drain' not in log
         print('PASS field q/q/q+s replay: one preparation/takeover/enqueue/Play, zero CLI mutations, one HELO; repeated same-track s does not rearm',flush=True)
+    finally:h.close()
+
+def rapid_selections():
+    h=Binary(rates=(44100,)*3)
+    try:
+        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
+        h.until(lambda:len(h.items())>=2)
+        h.model.sources=iter(());h.model.ready=False
+        for index in (1,0,1,0):
+            h.index=index;h.source_ms=0;h.model.streaming=index+1
+            before=len(h.packets('STMs'))
+            source=HTTP(h.bodies[index]);h.sources.append(source)
+            h.lms.strm('q');h.lms.strm('s',source,fmt='f')
+            h.until(lambda:len(h.packets('STMs'))==before+1 and h.model.playing==index+1)
+            assert h.model.playing==index+1
+        assert sum(p['op']=='HELO' for p in h.lms.packets)==1
+        assert not [c for c in h.commands if not (c.startswith('status ') or c.endswith(' ?'))]
+        print('PASS rapid LMS q/s selections: four next/previous starts before room status catches up, matching identity, no false seek/rearm/CLI mutation',flush=True)
     finally:h.close()
 
 def slow_app():
@@ -392,7 +420,7 @@ def seek_future():
         subprocess.run(['flac','-s','-f','-o',str(target),str(path)],check=True)
         h.bodies[0]=target.read_bytes();h.index=0;h.source_ms=20000;h.refetch_audio=True
         source=HTTP(h.bodies[0]);h.sources.append(source)
-        h.lms.strm('f');h.lms.strm('s',source,fmt='f')
+        h.lms.strm('q');h.lms.strm('s',source,fmt='f')
         h.until(lambda:h.sonos.position['TrackURI']!=old and h.sonos.position['TrackURI'].startswith('http'))
         h.until(lambda:'history=rerender' in (h.base/'bridge.log').read_text())
         h.until(lambda:len(h.packets('STMs'))==2)
@@ -403,6 +431,7 @@ def seek_future():
 
 if __name__=='__main__':
     rearm_replay()
+    rapid_selections()
     album()
     album('l')
     album(rates=(44100,48000,44100,48000))

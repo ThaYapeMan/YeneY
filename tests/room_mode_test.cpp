@@ -44,6 +44,13 @@ int main() {
         auto initial = mode.status().generation;
         assert(!mode.newPlay(true, 2, 100)); // repeated s without explicit stop
         assert(mode.status().generation == initial);
+        for (unsigned i = 0; i < 40; ++i) {
+            mode.command('q');
+            mode.stop();
+            mode.command('s');
+            mode.adoptPlay(); // LMS jump/start does not reserve a new generation
+            assert(mode.status().generation == initial && !mode.status().latched);
+        }
         for (unsigned i = 1; i <= 3; ++i) {
             mode.command('q');
             mode.stop();

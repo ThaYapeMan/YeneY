@@ -59,7 +59,7 @@ struct QueueRoom::Impl {
     std::atomic<uint64_t> epoch{1}, lastBound{0};
     uint64_t lastSnapshot = 0, lastPoll = 0;
     std::optional<unsigned> initialIndex;
-    uint64_t producerToken = 0;
+    uint64_t producerToken = 0, selectionToken = 0;
     std::atomic<uint64_t> coreReady{0};
     std::atomic<bool> stopped{false}, readiness{true}, deferIncoming{false};
     std::atomic<uint64_t> queueGeneration{1};
@@ -447,6 +447,7 @@ struct QueueRoom::Impl {
                 return;
             }
             controller->play(epoch, plan.front().occurrence, authoritative).get();
+            selectionToken = plan.front().token;
             playing = true;
         } else if (state.item.owned)
             controller->lmsPlaylist(epoch, playlist.revision, state.item.token, authoritative).get();
@@ -462,13 +463,15 @@ struct QueueRoom::Impl {
         }
         auto token = playlist.entries[playlist.index].token;
         const auto targetTime = notifiedSeek.exchange(UINT64_MAX);
-        if (token == state.item.token && targetTime != UINT64_MAX)
+        const auto previousSelection = selectionToken ? selectionToken : state.item.token;
+        selectionToken = token;
+        if (token == previousSelection && targetTime != UINT64_MAX)
             playlist.timeMs = uint32_t(targetTime);
         producerToken = token;
         initialIndex = playlist.index;
         queue.restartCached();
         const bool seek =
-            token == state.item.token && std::abs(int64_t(playlist.timeMs) - state.item.sourceMs) >= 1000;
+            token == previousSelection && std::abs(int64_t(playlist.timeMs) - state.item.sourceMs) >= 1000;
         if (seek)
             controller->lmsSeek(epoch, playlist.timeMs).get();
         else {
@@ -659,7 +662,7 @@ struct QueueRoom::Impl {
                     renderAdmission = false;
                     seekOrigin = UINT64_MAX;
                     initialIndex.reset();
-                    producerToken = 0;
+                    producerToken = selectionToken = 0;
                 } else {
                     router.resumeReceivedStart();
                 }

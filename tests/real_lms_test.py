@@ -25,6 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tests'))
 from queue_binary_test import Coordinator, Device, HTTP, wav, alac
+from decoders_test import alac_parts, mp4
 HOME=Path(os.environ.get('YENEY_REAL_LMS_HOME','/tmp/yeney-real-lms-9.1.1'))
 OWNER_CLI=[]
 URL='https://downloads.lms-community.org/LyrionMusicServer_v9.1.1/lyrionmusicserver-9.1.1.tgz'
@@ -187,7 +188,11 @@ for i,rate in enumerate((44100,48000,44100,48000)):
     path=base/f'input-{i}.wav';path.write_bytes(wav(rate,24))
     subprocess.run(['flac','-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
                     '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
-for i in (4,5): (base/f'library/{i}.m4a').write_bytes(alac(24))
+for i,rate in ((4,44100),(5,48000)):
+    cookie,packets=alac_parts(alac(24))
+    cookie=cookie[:20]+struct.pack('!I',rate)
+    count=(24*rate+4095)//4096
+    (base/f'library/{i}.m4a').write_bytes(mp4(cookie,[packets[0]]*count,count*4096))
 (base/'prefs/server.prefs').write_text('---\naudiodir: '+str(base/'library')+'\nplaylistdir: '+str(base/'playlists')+'\ncheckVersion: 0\nlanguage: EN\n')
 # Seed CLI preferences so first-start plugin migration cannot replace the port.
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
@@ -280,12 +285,15 @@ try:
     identity(0 if controls_only else 3)
     print('PASS real LMS controls: next/previous, pause/resume, seek, playlist edit, stop/new play; one Play per start, no mutation echo',flush=True)
     cli('stop',mac)
-    cli('playlistcontrol cmd:load track_id:'+alac_ids[0],mac)
-    wait(lambda:any(i['metadata'].get('title','').split(' - ')[-1]=='4' for i in items()),15,'ALAC prepared')
-    assert sum(r['op']=='HELO' for r in tap.records)==1,tap.records
-    print('PASS real LMS ALAC source: scanned generated MP4, LMS default FLAC transcoding, finite queue start, one connection HELO',flush=True)
-    identity(0)
-    wait(lambda:packets('STMd') and packets('STMd')[-1]['when']>=packets('STMs')[-1]['when'],10,'ALAC fully produced')
+    for position,rate in enumerate((44100,48000)):
+        cli('playlistcontrol cmd:load track_id:'+alac_ids[position],mac)
+        wait(lambda:any(i['metadata'].get('title','').split(' - ')[-1]==str(4+position)
+                        and i['resource'].get('sampleFrequency')==str(rate) for i in items()),15,'ALAC prepared')
+        assert sum(r['op']=='HELO' for r in tap.records)==1,tap.records
+        identity(0)
+        wait(lambda:packets('STMd') and packets('STMd')[-1]['when']>=packets('STMs')[-1]['when'],10,'ALAC fully produced')
+        cli('stop',mac)
+    print('PASS real LMS ALAC sources: generated MP4 at 44.1/48 kHz, LMS default FLAC transcoding, finite queue starts, one connection HELO',flush=True)
     remote_path=base/'radio.flac';remote_path.write_bytes((base/'library/0.flac').read_bytes())
     # LMS's remote scanner needs a probe-sized body; constant PCM compresses
     # below that size. Valid FLAC padding preserves the exact audio frames.
