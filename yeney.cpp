@@ -11,6 +11,7 @@
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 #include "legacy_environment.h"
+#include "lms_artwork.h"
 #include "upnp/own_speaker_control.h"
 #include "upnp/backend.h"
 #include "upnp/title_format.h"
@@ -342,6 +343,7 @@ struct TrackInfo {
     std::string artist;
     std::string album;
     std::string artworkUrl;
+    bool remote = false;
 };
 
 static std::string lmsUrldecode(const std::string& s)
@@ -400,8 +402,8 @@ static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac
     snprintf(macFmt, sizeof(macFmt), "%02x:%02x:%02x:%02x:%02x:%02x",
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    // tags: a=artist, l=album; title and id are always returned
-    std::string query = std::string(macFmt) + " status - 1 tags:aAl\n";
+    // Include artwork and remote/source fields; title and id are always returned
+    std::string query = std::string(macFmt) + " status - 1 tags:aAlKuj\n";
     send(fd, query.c_str(), query.size(), 0);
 
     std::string response;
@@ -414,6 +416,7 @@ static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac
 
     // Each space-separated token is URL-encoded "key:value"
     std::string playlistTimestamp, playlistIndex, time, duration, mode;
+    std::string artwork, remote, sourceUrl;
     std::istringstream ss(response);
     std::string token;
     while (ss >> token) {
@@ -426,6 +429,9 @@ static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac
         else if (key == "artist") info.artist = val;
         else if (key == "album")  info.album = val;
         else if (key == "id")     info.id = val;
+        else if (key == "artwork_url") artwork = val;
+        else if (key == "remote") remote = val;
+        else if (key == "url") sourceUrl = val;
         else if (key == "playlist_timestamp") playlistTimestamp = val;
         else if (key == "playlist_cur_index") playlistIndex = val;
         else if (key == "time") time = val;
@@ -437,9 +443,8 @@ static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac
         info.id.c_str(), playlistTimestamp.c_str(), playlistIndex.c_str(),
         time.c_str(), duration.c_str(), mode.c_str());
 
-    // Build cover art URL from track id (works for local library and most streams)
-    if (!info.id.empty())
-        info.artworkUrl = "http://" + host + ":9000/music/" + info.id + "/cover.jpg";
+    info.remote = bridge::remoteArtworkTrack(info.id, remote, sourceUrl);
+    info.artworkUrl = bridge::lmsArtwork(host, info.id, artwork, info.remote);
 
     return info;
 }
@@ -647,7 +652,7 @@ static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)
         const auto res = gStreamServer->resource(SBSTREAMER_CNAME);
         TrackInfo track = fetchLmsTrackInfo(gServer, gMac);
         std::string title = track.title.empty() ? "Squeezebox" : track.title;
-        std::string artUrl = track.artworkUrl.empty()
+        std::string artUrl = track.artworkUrl.empty() && !track.remote
             ? gPlayer->controllerUri() + res.iconUri : track.artworkUrl;
         printf("PlaySqueezeBox: title='%s' art='%s'\n", upnp::formatTitle(title, track.artist).c_str(), artUrl.c_str());
         if (resetPosition) reset_sonos_position(stream_id);

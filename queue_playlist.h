@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
+#include "lms_artwork.h"
 #include "queue_lms_cli.h"
 #include <map>
 #include <sstream>
@@ -8,6 +9,10 @@ namespace queue_audio {
 struct PlaylistEntry {
     uint64_t token = 0;
     std::string id, title, artist, album, url;
+    std::string artworkUrl, remote;
+    std::string artwork(const std::string &host) const {
+        return bridge::lmsArtwork(host, id, artworkUrl, bridge::remoteArtworkTrack(id, remote, url));
+    }
 };
 struct PlaylistSnapshot {
     uint64_t revision = 0;
@@ -58,6 +63,10 @@ public:
                     entry->album = value;
                 else if (key == "url")
                     entry->url = value;
+                else if (key == "artwork_url")
+                    entry->artworkUrl = value;
+                else if (key == "remote")
+                    entry->remote = value;
             }
         }
         if (count > 60000 || out.entries.size() != count || (!count && out.index) ||

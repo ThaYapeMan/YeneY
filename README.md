@@ -252,6 +252,14 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | `YENEY_TIMING_PUBLISH` | `1`: publish the LampaStream timing contract and core audio tap, only with TIMING_PROBE | off |
 | `YENEY_AUDIBLE_OFFSET_MS` | -500–500 ms acoustic calibration, added to published audible times | `0` |
 
+Artwork in both stream and queue mode comes from LMS. Local library tracks keep
+`http://<lms>:9000/music/<id>/cover.jpg`. Remote tracks (podcasts, internet radio
+and streaming services) use LMS's `artwork_url`: relative paths use the LMS HTTP
+host, and absolute HTTP/HTTPS images go through its image proxy so Sonos fetches
+plain HTTP from LMS. Existing image-proxy paths retain their inner percent
+escapes. Remote tracks without artwork send no album-art element. Stream
+metadata is fetched at stream start; this adds no midstream polling.
+
 Queue mode is an explicit per-room opt-in in the same systemd override:
 
 ```ini

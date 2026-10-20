@@ -264,6 +264,7 @@ struct QueueRoom::Impl {
                 a.metadata.title = e.title;
                 a.metadata.artist = e.artist;
                 a.metadata.album = e.album;
+                a.metadata.artwork = e.artwork(host);
             }
         return a;
     }

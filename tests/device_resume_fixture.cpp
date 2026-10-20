@@ -110,7 +110,7 @@ struct FakeServer {
     Resource resource(const char*) { return value; }
 } serverStub;
 static FakeServer* gStreamServer = &serverStub;
-struct TrackInfo { std::string title, artworkUrl, artist, album; };
+struct TrackInfo { std::string title, artworkUrl, artist, album; bool remote = false; };
 static TrackInfo fetchLmsTrackInfo(int, int) { return {"Test track", "http://bridge/art", "Test artist", "Test album"}; }
 static void reset_sonos_position(unsigned) {}
 namespace bridge {

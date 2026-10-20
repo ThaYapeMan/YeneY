@@ -25,8 +25,9 @@ std::string queueDidl(const QueueMetadata &m, TitleFormat format) {
            esc(m.artist) + "</dc:creator><upnp:artist>" + esc(m.artist) +
            "</upnp:artist>"
            "<upnp:album>" +
-           esc(m.album) + "</upnp:album><upnp:albumArtURI>" + esc(m.artwork) +
-           "</upnp:albumArtURI>"
+           esc(m.album) + "</upnp:album>" +
+           (m.artwork.empty() ? std::string{}
+                              : "<upnp:albumArtURI>" + esc(m.artwork) + "</upnp:albumArtURI>") +
            "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
            "<res protocolInfo=\"http-get:*:audio/wav:*\" duration=\"" +
            duration + "\" size=\"" + std::to_string(m.size) + "\" sampleFrequency=\"" +

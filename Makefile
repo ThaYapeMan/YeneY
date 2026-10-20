@@ -76,6 +76,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	./queue-ownership-test
 	./queue-actions-test
 	./queue-metadata-test
+	python3 tests/artwork_test.py
 	./queue-route-test
 	./queue-item-store-test
 	./core-queue-sink-test
@@ -396,3 +397,5 @@ queue-lms-client-test: tests/queue_lms_client_fixture.cpp queue_lms_client.h que
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $< room_mode.o
 
 queue-controller-fixture queue-mode-fixture: queue_lms_cli.h
+
+yeney.o queue_room.o room-mode-test: lms_artwork.h
