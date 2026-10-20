@@ -1,6 +1,8 @@
 """Acceptance through the real application; every endpoint is loopback."""
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import http.client
+import json
+import xml.etree.ElementTree as ET
 import os
 from pathlib import Path
 import signal
@@ -148,11 +150,12 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False):
         self.rates=rates; self.albums=[f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=initial_stop; self.refetch_delay=8 if initial_stop and slow else 0; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
         self.sonos=Coordinator(('127.0.0.1',1400),Device)
+        self.sonos.fail_add=fail_add
         self.sonos.follow_controls=True
         self.sonos.expected_albums=self.albums
         self.cli=CLI(self);self.lms=LMS();self.log=open(self.base/'bridge.log','w')
@@ -333,6 +336,7 @@ def rearm_replay():
         assert log.count('ownership acquired')==1,log
         assert len(h.sonos.actions('AddURIToQueue'))==1,h.sonos.calls
         assert len(h.sonos.actions('Play'))==1
+        assert not h.sonos.actions('AddMultipleURIsToQueue')
         assert sum(p['op']=='HELO' for p in h.lms.packets)==1,h.lms.packets
         assert h.lms.reconnect_replays==0
         generations=log.count('state=prepare reason=finite-ready')
@@ -346,7 +350,29 @@ def rearm_replay():
         assert log.count('state=prepare reason=finite-ready')==generations,log
         assert sum(p['op']=='HELO' for p in h.lms.packets)==1
         assert 'state=drain' not in log
+        print('PASS 23:14 field enqueue replay: AddURIToQueue accepted, no AddMultipleURIsToQueue, Play once, no fallback')
         print('PASS field q/q/q+s replay: one preparation/takeover/enqueue/Play, zero CLI mutations, one HELO; repeated same-track s does not rearm',flush=True)
+    finally:h.close()
+
+def enqueue_fault():
+    h=Binary(rates=(44100,),initial_stop=True,fail_add=True,
+             binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
+    try:
+        h.until(lambda:'active=stream state=active reason=soap-error' in (h.base/'bridge.log').read_text(),timeout=25)
+        time.sleep(1)
+        log=(h.base/'bridge.log').read_text()
+        assert log.count('active=queue state=drain reason=soap-error')==1,log
+        assert log.count('release reason=mode-handoff')==1,log
+        assert len(h.sonos.actions('AddURIToQueue'))==1
+        assert not h.sonos.actions('AddMultipleURIsToQueue')
+        lines=[line for line in log.splitlines() if 'queue SOAP action=AddURIToQueue HTTP=500' in line]
+        assert len(lines)==1,log
+        assert 'errorCode="402" errorDescription="fixture rejection"' in lines[0],lines
+        body=json.loads(lines[0].split(' request=',1)[1])
+        action=ET.fromstring(body).find('{http://schemas.xmlsoap.org/soap/envelope/}Body')[0]
+        assert {n.tag:n.text or '' for n in action}==h.sonos.actions('AddURIToQueue')[0][1]
+        assert 'EnqueuedURIMetaData' in body and '&lt;DIDL-Lite' in body
+        print('PASS AddURIToQueue fault replay: exactly one soap-error fallback and release; complete action/HTTP/UPnP fault and exact DIDL request logged',flush=True)
     finally:h.close()
 
 def rapid_selections():
@@ -431,6 +457,7 @@ def seek_future():
 
 if __name__=='__main__':
     rearm_replay()
+    enqueue_fault()
     rapid_selections()
     album()
     album('l')

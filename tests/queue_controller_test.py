@@ -174,7 +174,11 @@ class Handler(BaseHTTPRequestHandler):
             first, count = int(a['StartingIndex'])-1, int(a['NumberOfTracks'])
             del s.items[first:first+count]; s.update += 1
             return {'NewUpdateID': s.update}, None
+        if action == 'AddMultipleURIsToQueue': return {}, '402'
         if action == 'AddURIToQueue':
+            assert set(a) == {'InstanceID', 'EnqueuedURI', 'EnqueuedURIMetaData',
+                              'DesiredFirstTrackNumberEnqueued', 'EnqueueAsNext'}
+            if getattr(s, 'fail_add', False): return {}, '402'
             if s.race_add:
                 s.race_add = False; s.add_foreign()
             assert not s.crossfade and a['InstanceID'] == '0'
@@ -182,7 +186,11 @@ class Handler(BaseHTTPRequestHandler):
             uri = a['EnqueuedURI']; u = urlsplit(uri)
             assert u.hostname == '127.0.0.1' and u.path == '/music/queue.wav'
             metadata = ET.fromstring(a['EnqueuedURIMetaData'])
-            item = next(iter(metadata)); fields = {n.tag.rsplit('}', 1)[-1]: n.text for n in item}
+            assert metadata.tag == '{urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/}DIDL-Lite'
+            assert len(metadata) == 1 and metadata[0].tag.rsplit('}', 1)[-1] == 'item'
+            item = metadata[0]
+            assert len([n for n in item if n.tag.rsplit('}', 1)[-1] == 'res']) == 1
+            fields = {n.tag.rsplit('}', 1)[-1]: n.text for n in item}
             resource = next(n for n in item if n.tag.rsplit('}', 1)[-1] == 'res')
             assert fields['class'] == 'object.item.audioItem.musicTrack'
             assert fields['title'].startswith(getattr(s, 'expected_title_prefix', 'Artist <one> - Title & '))
@@ -374,6 +382,21 @@ class ControllerTests(unittest.TestCase):
         connection, response = request(first, 'HEAD')
         self.assertEqual(response.status, 404); connection.close()
         print('PASS queue controller: verified backup/five retained, current plus three ahead, publication ordering, one transport URI, 3.5 s prefetch, <=9x bursts, independent Range/reconnect readers, mixed native rates and exact owned-only stop release')
+
+    def test_device_enqueue_validation(self):
+        d, s = self.driver, self.speaker
+        d.put(1); d.command('PLAY 1 1 1'); d.wait(1)
+        args = s.actions('AddURIToQueue')[0][1]
+        handler = object.__new__(Handler); handler.server = s
+        self.assertEqual(handler.action('AVTransport', 'AddMultipleURIsToQueue', {}), ({}, '402'))
+        for bad in (dict(args, UpdateID='20'),
+                    dict(args, EnqueuedURIMetaData='<broken>'),
+                    dict(args, EnqueuedURI='http://127.0.0.1/music/queue.wav?different'),
+                    dict(args, EnqueuedURIMetaData=args['EnqueuedURIMetaData'].replace('</item>', '<res>extra</res></item>'))):
+            with self.assertRaises((AssertionError, ET.ParseError)):
+                handler.action('AVTransport', 'AddURIToQueue', bad)
+        self.assertEqual(len(s.items), 1)
+        print('PASS fake Sonos enqueue validation: exact AddURI arguments and one matching DIDL resource; malformed metadata/extra arguments rejected; AddMultiple always faults 402')
 
     def test_failed_backup_preserves_foreign_queue(self):
         for failure in ('fail_save', 'hide_save'):
