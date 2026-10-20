@@ -172,7 +172,8 @@ class Binary:
                 source=HTTP(body,first=len(body)//2 if slow and i==0 else None,delay=8 if slow and i==0 else 0);self.sources.append(source)
                 yield source,dict(fmt=codec,rate=rate,transition=int(fade),period=10 if fade else 0)
         self.lms.connection.settimeout(30)
-        if initial_stop:self.lms.strm('q')
+        if initial_stop:
+            for _ in range(3): self.lms.strm('q')
         self.model=SongQueue(self.lms,sources())
         def read():
             try:
@@ -325,6 +326,8 @@ def rearm_replay():
         assert sum(p['op']=='HELO' for p in h.lms.packets)==1,h.lms.packets
         assert h.lms.reconnect_replays==0
         generations=log.count('state=prepare reason=finite-ready')
+        assert generations == 1, log
+        assert not [c for c in h.commands if not (c.startswith('status ') or c.endswith(' ?'))], h.commands
         assert not h.packets('STMd') # retry while this progressive producer is still active
         h.lms.strm('s',h.sources[-1],fmt='f',rate=44100)
         h.until(lambda:'queue repeated strm s' in (h.base/'bridge.log').read_text())
@@ -333,7 +336,7 @@ def rearm_replay():
         assert log.count('state=prepare reason=finite-ready')==generations,log
         assert sum(p['op']=='HELO' for p in h.lms.packets)==1
         assert 'state=drain' not in log
-        print('PASS 20 October real-binary replay: connect/prepare/q/play has one takeover, enqueue and Play, one connection HELO, zero LMS reconnect replays; repeated same-track strm s does not rearm',flush=True)
+        print('PASS field q/q/q+s replay: one preparation/takeover/enqueue/Play, zero CLI mutations, one HELO; repeated same-track s does not rearm',flush=True)
     finally:h.close()
 
 def slow_app():

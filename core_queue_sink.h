@@ -54,7 +54,7 @@ class CoreQueueSink : public yeney::Sink {
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
     uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
     bool prefixPending = false, freshRender = false;
-    std::atomic_bool refetchRequested{false};
+    std::atomic_bool refetchRequested{false}, startRequested{false};
     uint32_t rate = 48000;
     std::string workerFault;
     std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
@@ -91,6 +91,8 @@ public:
     // Before an LMS re-render/seek run: do not carry an old outgoing tail
     // into the independently selected asset. Cached mixed intros are untouched.
     void beginRender();
+    void resumeReceivedStart() { startRequested = true; }
+    bool takeQueueStart() override { return startRequested.exchange(false); }
     bool takeQueueRefetch() override { return refetchRequested.exchange(false); }
     void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);

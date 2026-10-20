@@ -89,6 +89,8 @@ struct QueueRoom::Impl {
                 return true; // CLI re-render echo must preserve the prepared target
             if (c == 'f')
                 manualIntent = !refetchPending;
+            if (c == 'q' && mode.status().item.owned)
+                manualIntent = true;
             if (c == 'p' || c == 'u' || c == 'q' || c == 'f') {
                 post([this, c] {
                     if (playing)
@@ -464,15 +466,9 @@ struct QueueRoom::Impl {
                 if (job)
                     job();
                 if (queueReadyPending && coreReady == mode.status().generation) {
-                    playlist = readPlaylist();
                     queueReadyPending = false;
                     coreReady = 0;
-                    // This q/s rearm needs fresh decoder audio. Its CLI f/s
-                    // continuation is not a manual selection of cached audio.
-                    manualIntent = false;
-                    refetchPending = false;
-                    renderAdmission = true;
-                    lms->submit({"playlist index " + std::to_string(playlist.index)});
+                    queue.resumeReceivedStart();
                 }
                 sync();
                 mode.tick(mono());
@@ -520,6 +516,10 @@ struct QueueRoom::Impl {
                 mode.stop();
             }
             if (c.letter == 's' && stopped.exchange(false)) {
+                if (mode.status().active == "queue") {
+                    mode.adoptPlay();
+                    return; // adopt the received start; never request another from LMS
+                }
                 if (mode.status().lastFallback == "rearm-loop")
                     return; // The circuit breaker requires a service restart.
                 std::string probe;

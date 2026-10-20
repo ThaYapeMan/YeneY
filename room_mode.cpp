@@ -86,6 +86,10 @@ void RoomMode::command(char c) {
     if (commands.size() > 16)
         commands.pop_front();
 }
+void RoomMode::adoptPlay() {
+    std::lock_guard<std::mutex> l(mutex);
+    stopped = false;
+}
 void RoomMode::beginPreparation(uint64_t now) {
     std::lock_guard<std::mutex> l(mutex);
     if (s.active == "queue" && s.state == "prepare" && !prepareAt)

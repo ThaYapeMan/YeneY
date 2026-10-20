@@ -60,6 +60,7 @@ public:
     }
     bool queueCommand(char c, uint32_t v) override { return admitted && sink().queueCommand(c, v); }
     bool takeQueueRefetch() override { return admitted && sink().takeQueueRefetch(); }
+    bool takeQueueStart() override { return admitted && applied == requested && sink().takeQueueStart(); }
     bool takeAudibleStart(yeney::AudibleStart &a) override { return admitted && sink().takeAudibleStart(a); }
     bool takeAudibleState(yeney::AudibleState &a) override { return admitted && sink().takeAudibleState(a); }
     std::optional<uint32_t> audibleElapsedMs(uint64_t a) const override { return sink().audibleElapsedMs(a); }

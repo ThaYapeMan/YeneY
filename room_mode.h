@@ -51,6 +51,7 @@ public:
     // Call on the serialized room worker; now is monotonic milliseconds.
     bool newPlay(bool ready, uint64_t epoch, uint64_t now);
     void beginPreparation(uint64_t now);
+    void adoptPlay(); // existing queue generation: q/s is a track start, not a rearm
     void deferPreparation(uint64_t ms) {
         std::lock_guard<std::mutex> l(mutex);
         if (s.state == "prepare" && prepareAt)
