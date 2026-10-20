@@ -98,6 +98,23 @@ class Tests(unittest.TestCase):
             self.assertFalse(any(args[1:3]==('playlist','add') for args in f.model.calls))
             self.assertEqual(f.model.prefs['transitionSmart'],'1')
         print('PASS queue device restore: full 14-track playlist loaded by IDs/order, index/time and every preference including transitionSmart verified')
+    def test_stopped_state_restore_never_autoplays(self):
+        with fixture() as f:
+            f.model.mode='stop'
+            original=list(f.model.urls)
+            with contextlib.redirect_stdout(io.StringIO()) as output,patch.object(m,'Sampler',DummyWS):
+                code=f.suite.execute()
+            self.assertEqual(code,0,output.getvalue())
+            self.assertEqual(f.model.mode,'stop');self.assertEqual(f.model.urls,original)
+            restored=next(args for args in f.model.calls if args[1:]==('playlistcontrol','cmd:add','track_id:9001,9002'))
+            tail=f.model.calls[f.model.calls.index(restored):]
+            self.assertFalse(any(args[1:3]==('playlistcontrol','cmd:load') for args in tail))
+            self.assertFalse(any(args[1:]==('play',) for args in tail))
+            self.assertTrue(any(args[1:]==('stop',) for args in tail))
+            stop_at=max(i for i,args in enumerate(tail) if args[1:]==('stop',))
+            self.assertTrue(any(args[1:]==('mode','?') for args in tail[stop_at+1:]))
+            self.assertEqual(tail[-1][1:3],('status','0'))
+        print('PASS queue device stopped restore: ordered ID add without load, final stop acknowledged and query-verified, original playlist retained, no autoplaying load or Play request')
     def test_best_effort_and_url_fallback(self):
         with fixture() as f:
             original_url='file:///saved/A%20track.flac'

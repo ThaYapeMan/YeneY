@@ -93,9 +93,11 @@ class Model:
             return [str(dict(index=self.index,time=self.time,tracks=len(self.urls),mode=self.mode,repeat=self.repeat,shuffle=self.shuffle)[key])]
         if cmd[0]=='playerpref':self.prefs[cmd[1]]=cmd[2]
         elif cmd[0]=='playlistcontrol':
-            ids=cmd[-1].split(':',1)[1].split(',')
+            ids=next(v for v in cmd if v.startswith('track_id:')).split(':',1)[1].split(',')
             values=[self.byid[i]['url'] for i in ids]
-            if cmd[1]=='cmd:load':self.urls=values;self.index=0;self.time=0;self.epoch+=1
+            if cmd[1]=='cmd:load':
+                self.urls=values;self.index=0;self.time=0;self.epoch+=1
+                self.mode='play'
             else:self.urls+=values
         elif cmd[0]=='playlist':
             if cmd[1]=='index':self.index=(self.index+int(cmd[2]) if cmd[2].startswith(('+','-')) else int(cmd[2]));self.time=0;self.slim.strm('s')

@@ -187,6 +187,7 @@ struct QueueRoom::Impl {
             return a;
         };
         controller = std::make_unique<queue_audio::QueueController>(o, http);
+        mode.onRearmLoop([this] { fallback("rearm-loop"); });
         mode.newPlay(true, epoch, 0);
         queueGeneration = mode.status().generation;
         router.bootstrap(queueGeneration);
@@ -465,6 +466,11 @@ struct QueueRoom::Impl {
                     playlist = readPlaylist();
                     queueReadyPending = false;
                     coreReady = 0;
+                    // This q/s rearm needs fresh decoder audio. Its CLI f/s
+                    // continuation is not a manual selection of cached audio.
+                    manualIntent = false;
+                    refetchPending = false;
+                    renderAdmission = true;
                     lms->submit({"playlist index " + std::to_string(playlist.index)});
                 }
                 sync();
@@ -504,6 +510,7 @@ struct QueueRoom::Impl {
         if (!router.isQueue() && mode.status().state == "active")
             stream.command(c);
         post([this, c] {
+            mode.command(c.letter);
             if (c.letter == 's')
                 mode.beginPreparation(mono());
             if (c.letter == 'q') {
@@ -512,6 +519,8 @@ struct QueueRoom::Impl {
                 mode.stop();
             }
             if (c.letter == 's' && stopped.exchange(false)) {
+                if (mode.status().lastFallback == "rearm-loop")
+                    return; // The circuit breaker requires a service restart.
                 std::string probe;
                 if (!lms->query("playlist index ?", probe)) {
                     stopped = true;
@@ -524,7 +533,9 @@ struct QueueRoom::Impl {
                 } catch (...) {
                     readiness = false;
                 }
-                if (mode.newPlay(readiness, ++epoch, mono())) {
+                const auto nextEpoch = epoch.load() + 1;
+                if (mode.newPlay(readiness, nextEpoch, mono())) {
+                    epoch = nextEpoch;
                     auto g = mode.status().generation;
                     queueGeneration = g;
                     stream.flush();

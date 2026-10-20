@@ -777,3 +777,11 @@ with `lms-unavailable`. Slow replies over 1 s are counted and logged at most onc
 per command per minute. Queue room JSON includes `lms_cli_slow_replies` and
 `lms_cli_failed_replies`; failed attempts alone do not immediately fail playback.
 Stream mode and its CLI/transport path remain unchanged.
+
+A saved stopped session is restored without the autoplaying `cmd:load`: the suite
+verifies an empty playlist and uses ordered `playlistcontrol cmd:add` track IDs.
+After restoring index, time and preferences, it sends Stop and queries mode to
+verify `stop`. This also guards against index/time restoration starting playback.
+The [LMS playlist CLI reference](https://lyrion.org/reference/cli/playlist/) documents
+the load/add distinction and ordered track IDs. Unconfirmed Stop is reported as
+`NOT RESTORED: mode`, even if playlist restoration succeeded.

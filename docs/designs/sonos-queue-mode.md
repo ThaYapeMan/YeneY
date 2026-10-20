@@ -1124,3 +1124,27 @@ CLI jobs/completions are generation-fenced on fallback. Slow (>1 s) replies are
 logged at most once per command per minute; queue JSON exposes
 `lms_cli_slow_replies` and `lms_cli_failed_replies`. Default stream mode retains
 its old wire/transport path and status serialization.
+
+### Reconnect-loop prevention (20 October 2026)
+
+Queue rearm and fallback generations are internal fences, never LMS reconnects:
+core resets the old producer/decoder and signals readiness without another HELO.
+An already preparing/playing session ignores a rearm request until an explicit
+LMS Stop followed by Play; ordinary repeated strm s remains track selection.
+The room mode controller also limits rearm generation changes to three in a
+rolling five-second window (initial bootstrap excluded). A fourth request logs
+`rearm-loop` and the last 16 SlimProto command letters, then requests one latched
+stream fallback with reason `rearm-loop`. This defensive block lasts until the
+room service restarts, so repeated q/s cannot clear it. The usual finite-tail and
+generation-fencing handoff applies.
+
+The shared fake LMS models same-connection HELO as q/s of the current song. The
+real-binary field replay checks one takeover, one enqueue, one Play and one HELO,
+then sends a repeated same-track start and checks that no rearm occurred.
+
+The rearm CLI index continuation explicitly admits its f/s into the decoder;
+without that admission, the manual-selection path could swallow a new session's
+source before any prepared asset existed. Identical valid queue strm s retries
+retain their current producer while no STMd-requested successor is outstanding;
+STMd credits admit new tracks even when LMS reuses the exact HTTP request.
+Stop/flush, source/format changes and new generations still permit a fresh start.

@@ -28,8 +28,60 @@ struct Sink : yeney::Sink {
 };
 int main() {
     upnp::Speaker room{"127.0.0.1", "RINCON_TEST", "Study", "Study", {"Study"}};
+    {
+        unsigned releases = 0, switches = 0, requests = 0;
+        std::vector<std::string> logs;
+        bridge::RoomMode mode("Study", "Study", bridge::selectPlaybackMode("queue", room, true),
+                              {{},
+                               [&](const auto &) { ++releases; },
+                               [&](auto, const auto &) { ++switches; },
+                               [&](const std::string &v) { logs.push_back(v); }});
+        mode.onRearmLoop([&] {
+            ++requests;
+            mode.request("rearm-loop", 400);
+        });
+        assert(mode.newPlay(true, 1, 0));
+        auto initial = mode.status().generation;
+        assert(!mode.newPlay(true, 2, 100)); // repeated s without explicit stop
+        assert(mode.status().generation == initial);
+        for (unsigned i = 1; i <= 3; ++i) {
+            mode.command('q');
+            mode.stop();
+            mode.command('s');
+            assert(mode.newPlay(true, i + 1, i * 100));
+        }
+        mode.command('q');
+        mode.stop();
+        mode.command('s');
+        assert(!mode.newPlay(true, 5, 400));
+        assert(mode.status().lastFallback == "rearm-loop" && mode.status().latched);
+        assert(releases == 1 && switches == 1 && requests == 1);
+        for (unsigned i = 0; i < 40; ++i) {
+            mode.stop();
+            assert(!mode.newPlay(true, 6 + i, 500 + i));
+            mode.tick(600 + i);
+        }
+        assert(releases == 1 && switches == 1 && requests == 1);
+        assert(std::count_if(logs.begin(), logs.end(), [](const auto &s) {
+                   return s.find("rearm-loop room=") != std::string::npos &&
+                          s.find("last_commands=qsqsqsqs") != std::string::npos;
+               }) == 1);
+        std::cout << "PASS rearm-loop guard: repeated start preserves generation; fourth rearm in 5 s logs "
+                     "last commands, one latched release/fallback, forty retries suppressed\n";
+    }
+    {
+        bridge::RoomMode mode("Study", "Study", bridge::selectPlaybackMode("queue", room, true), {});
+        assert(mode.newPlay(true, 1, 0));
+        for (unsigned i = 1; i <= 6; ++i) {
+            mode.stop();
+            assert(mode.newPlay(true, i + 1, i * 6000));
+        }
+        assert(!mode.status().latched);
+        std::cout << "PASS rearm-loop window: legitimate stop/new-play cycles outside five seconds remain "
+                     "eligible\n";
+    }
     for (std::string reason : {"foreign-control", "preparation-timeout", "soap-error", "length-fault",
-                               "storage-fault", "coordinator-change", "lms-unavailable"}) {
+                               "storage-fault", "coordinator-change", "lms-unavailable", "rearm-loop"}) {
         unsigned stops = 0, releases = 0, switches = 0;
         uint64_t streamGeneration = 0;
         bridge::ModeEvidence continued;

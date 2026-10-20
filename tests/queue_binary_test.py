@@ -129,8 +129,9 @@ class CLI(socketserver.ThreadingTCPServer):
                     if cmd.startswith('time ') or cmd.startswith('playlist index '):
                         owner.lms.strm('f')
                         if owner.refetch_audio:
-                            index=owner.index if owner.index is not None else owner.model.playing-1
-                            source=HTTP(owner.bodies[index]);owner.sources.append(source)
+                            index=owner.index if owner.index is not None else max(0,owner.model.playing-1)
+                            body=owner.bodies[index];delay=owner.refetch_delay
+                            source=HTTP(body,first=len(body)//2 if delay else None,delay=delay);owner.sources.append(source)
                             owner.lms.strm('s',source,fmt='f',rate=owner.rates[index])
                         else:owner.lms.strm('s')
                     elif cmd=='pause 1':owner.lms.strm('p')
@@ -140,8 +141,8 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False):
-        self.rates=rates; self.albums=[f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=False; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False):
+        self.rates=rates; self.albums=[f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=initial_stop; self.refetch_delay=8 if initial_stop and slow else 0; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
         self.sonos=Coordinator(('127.0.0.1',1400),Device)
@@ -171,6 +172,7 @@ class Binary:
                 source=HTTP(body,first=len(body)//2 if slow and i==0 else None,delay=8 if slow and i==0 else 0);self.sources.append(source)
                 yield source,dict(fmt=codec,rate=rate,transition=int(fade),period=10 if fade else 0)
         self.lms.connection.settimeout(30)
+        if initial_stop:self.lms.strm('q')
         self.model=SongQueue(self.lms,sources())
         def read():
             try:
@@ -311,6 +313,29 @@ def controls():
         print('PASS real yeney LMS add/delete/move/clear: encoded stable identities, future rebuilds preserve audible URI',flush=True)
     finally:h.close()
 
+def rearm_replay():
+    h=Binary(rates=(44100,),initial_stop=True,slow=True,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
+    try:
+        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
+        time.sleep(1)
+        log=(h.base/'bridge.log').read_text()
+        assert log.count('ownership acquired')==1,log
+        assert len(h.sonos.actions('AddMultipleURIsToQueue'))==1,h.sonos.calls
+        assert len(h.sonos.actions('Play'))==1
+        assert sum(p['op']=='HELO' for p in h.lms.packets)==1,h.lms.packets
+        assert h.lms.reconnect_replays==0
+        generations=log.count('state=prepare reason=finite-ready')
+        assert not h.packets('STMd') # retry while this progressive producer is still active
+        h.lms.strm('s',h.sources[-1],fmt='f',rate=44100)
+        h.until(lambda:'queue repeated strm s' in (h.base/'bridge.log').read_text())
+        time.sleep(1)
+        log=(h.base/'bridge.log').read_text()
+        assert log.count('state=prepare reason=finite-ready')==generations,log
+        assert sum(p['op']=='HELO' for p in h.lms.packets)==1
+        assert 'state=drain' not in log
+        print('PASS 20 October real-binary replay: connect/prepare/q/play has one takeover, enqueue and Play, one connection HELO, zero LMS reconnect replays; repeated same-track strm s does not rearm',flush=True)
+    finally:h.close()
+
 def slow_app():
     h=Binary(rates=(44100,)*2,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
     try:
@@ -373,6 +398,7 @@ def seek_future():
     finally:h.close()
 
 if __name__=='__main__':
+    rearm_replay()
     album()
     album('l')
     album(rates=(44100,48000,44100,48000))

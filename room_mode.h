@@ -3,6 +3,7 @@
 #include "playback_mode.h"
 #include <algorithm>
 #include <atomic>
+#include <deque>
 #include <functional>
 #include <mutex>
 #include <sstream>
@@ -36,7 +37,10 @@ private:
     ModeStatus s;
     Hooks hooks;
     std::string room, coordinator;
-    bool stopped = false, freezeFailed = false;
+    bool stopped = false, freezeFailed = false, started = false, rearmBlocked = false;
+    std::deque<uint64_t> rearms;
+    std::deque<char> commands;
+    std::function<void()> loopHandler;
     uint64_t endAt = 0, prepareAt = 0;
     void log(const ModeStatus &v) const;
 
@@ -57,7 +61,9 @@ public:
         s.lmsSlow = std::max(s.lmsSlow, slow);
         s.lmsFailed = std::max(s.lmsFailed, failed);
     }
-    void stop(); // explicit LMS q only, not seek/refetch f
+    void onRearmLoop(std::function<void()> handler) { loopHandler = std::move(handler); }
+    void command(char); // serialized command history for loop diagnostics
+    void stop();        // explicit LMS q only, not seek/refetch f
     void evidence(ModeEvidence, uint64_t now);
     void request(const std::string &reason, uint64_t now);
     void tick(uint64_t now);

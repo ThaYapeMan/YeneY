@@ -47,7 +47,7 @@ class Modes(unittest.TestCase):
         finally:d.close();cli.close();s.close()
 
     def test_triggers_tail_handoff_and_fences(self):
-        for reason in ['foreign-control','preparation-timeout','soap-error','length-fault','storage-fault','coordinator-change','lms-unavailable']:
+        for reason in ['foreign-control','preparation-timeout','soap-error','length-fault','storage-fault','coordinator-change','lms-unavailable','rearm-loop']:
             with self.subTest(reason=reason):
                 s=Coordinator(); cli=CLI(); d=Driver(s,'queue-mode-fixture',(cli.server_address[1],))
                 try:

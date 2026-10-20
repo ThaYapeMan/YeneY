@@ -33,29 +33,58 @@ bool RoomMode::newPlay(bool ready, uint64_t epoch, uint64_t now) {
     ModeStatus v;
     {
         std::lock_guard<std::mutex> l(mutex);
-        if (s.latched && !stopped)
+        if (rearmBlocked || (started && !stopped))
             return false;
         if (s.requested != "queue" || !ready) {
             stopped = false;
             return false;
         }
-        stopped = false;
-        freezeFailed = false;
-        s.latched = false;
-        s.active = "queue";
-        s.state = "prepare";
-        s.reason = "finite-ready";
-        s.item = {};
-        s.oldRate = s.newRate = 0;
-        s.item.epoch = epoch;
-        s.item.generation = ++s.generation;
-        prepareAt = now;
-        endAt = 0;
-        s.gapMs = -1;
-        v = s;
+        while (!rearms.empty() && now >= rearms.front() && now - rearms.front() > 5000)
+            rearms.pop_front();
+        if (now && rearms.size() >= 3) {
+            rearmBlocked = true;
+        } else {
+            if (now)
+                rearms.push_back(now);
+            started = true;
+        }
+        if (!rearmBlocked) {
+            stopped = false;
+            freezeFailed = false;
+            s.latched = false;
+            s.active = "queue";
+            s.state = "prepare";
+            s.reason = "finite-ready";
+            s.item = {};
+            s.oldRate = s.newRate = 0;
+            s.item.epoch = epoch;
+            s.item.generation = ++s.generation;
+            prepareAt = now;
+            endAt = 0;
+            s.gapMs = -1;
+            v = s;
+        }
+    }
+    if (rearmBlocked) {
+        std::string recent;
+        for (char c : commands)
+            recent += c;
+        if (hooks.log)
+            hooks.log("rearm-loop room=" + room + " last_commands=" + recent);
+        if (loopHandler)
+            loopHandler();
+        else
+            request("rearm-loop", now);
+        return false;
     }
     log(v);
     return true;
+}
+void RoomMode::command(char c) {
+    std::lock_guard<std::mutex> l(mutex);
+    commands.push_back(c);
+    if (commands.size() > 16)
+        commands.pop_front();
 }
 void RoomMode::beginPreparation(uint64_t now) {
     std::lock_guard<std::mutex> l(mutex);

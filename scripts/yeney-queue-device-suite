@@ -692,7 +692,14 @@ class Suite(PACING['Suite']):
         batch_ok=False
         if entries and all(e.get('id') for e in entries):
             try:
-                self.pending_mutation('playlistcontrol','cmd:load','track_id:'+','.join(e['id'] for e in entries))
+                # cmd:load autoplays. A stopped owner gets an ordered add
+                # into a verified empty playlist, then a final verified Stop.
+                restore_cmd='cmd:load'
+                if self.before['mode']=='stop':
+                    if not self.restore_item('playlist clear',0,lambda:self.mutate('playlist','clear'),lambda:int(self.query('playlist','tracks'))):
+                        raise SuiteError('stopped restore clear unconfirmed')
+                    restore_cmd='cmd:add'
+                self.pending_mutation('playlistcontrol',restore_cmd,'track_id:'+','.join(e['id'] for e in entries))
                 self.lms_ready(entries)
                 batch_ok=True
             except Exception as error:
