@@ -230,10 +230,12 @@ sudo systemctl restart 'yeney@Study'
 ```
 
 Settings are read once; timing RAW/STALE are inspected only when the probe is enabled. An invalid value logs a warning
-and uses the default.
+and uses the default, except for an invalid queue disk quota, which fails queue configuration.
 
 | Setting | Values | Default |
 |---|---|---|
+| `YENEY_PLAYBACK_MODE` | `stream`: existing transport · `queue`: standalone owned queue opt-in · `auto`: stream, logged as `auto-phase4` | `stream` |
+| `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; invalid/overflowing values fail queue configuration | `256` |
 | `YENEY_STREAM_PACING` | `sonos`: follow the Sonos clock · `wall`: legacy host clock opt-out | `sonos` |
 | `YENEY_AUDIO` | `24/48`: 24-bit FLAC at the source's 44.1/48 kHz rate · `16/44`: legacy 16-bit/44.1 kHz | `24/48` |
 | `YENEY_TITLE_FORMAT` | `artist-title`: "artist - title" · `title`: title only | `artist-title` |
@@ -249,6 +251,22 @@ and uses the default.
 | `YENEY_LMS_POSITION_FROM_MODEL` | `1`: continuous locked-clock LMS position; `0`: RelTime-only. Requires an active timing probe model. | 1 |
 | `YENEY_TIMING_PUBLISH` | `1`: publish the LampaStream timing contract and core audio tap, only with TIMING_PROBE | off |
 | `YENEY_AUDIBLE_OFFSET_MS` | -500–500 ms acoustic calibration, added to published audible times | `0` |
+
+Queue mode is an explicit per-room opt-in in the same systemd override:
+
+```ini
+[Service]
+Environment=YENEY_PLAYBACK_MODE=queue
+Environment=YENEY_QUEUE_DISK_MIB=256
+```
+
+Settings apply on room service restart. A grouped coordinator or member keeps
+stream mode with reason `group-rate-undecided`; an unconfirmed coordinator uses
+`coordinator-unconfirmed`. `auto` still uses stream. Queue mode owns only its
+prepared entries, maps LMS and unambiguous app controls, and falls back once to
+stream for the playback session when ownership or finite playback fails.
+Whole-list mirroring and the group rate policy remain open. Phase 3c unattended
+device qualification follows; see [queue mode status](docs/designs/sonos-queue-mode.md#phase-3-implementation-checkpoint).
 
 On 19 October 2026, the owner qualified Study on bridge `5a686ad` with
 `/usr/local/bin/yeney-stream-pacing-suite --room Study --hours 2`: **PACING OK**.

@@ -600,3 +600,19 @@ The run collected 720 samples at 10-second intervals over one connection, with
 
 Other rooms can be qualified with
 `/usr/local/bin/yeney-stream-pacing-suite --room <room> --hours 2`.
+
+
+## Queue mode phase 3 qualification status
+
+Phase 3b parts 1–8 are complete in loopback tests through the real production
+`yeney` binary. Explicit `YENEY_PLAYBACK_MODE=queue` is available only for a
+confirmed standalone room; stream remains the default, and grouped rooms use
+stream with `group-rate-undecided`. `auto` remains deferred and selects stream.
+The settings and limits are recorded in [README](README.md#settings) and the
+[queue design status](docs/designs/sonos-queue-mode.md#phase-3-implementation-checkpoint).
+
+The phase 3c unattended physical-device suite follows. There are **no new owner
+steps yet** for phase 3 queue qualification, and local acceptance must not be
+reported as device qualification. Existing stream-pacing and earlier dry-run
+procedures remain their own qualifications. Agents never run against a real LMS
+or speaker, SSH to LXC 113, or deploy there.

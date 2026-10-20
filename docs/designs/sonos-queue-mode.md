@@ -215,7 +215,9 @@ events, never from a Range offset alone.
 Owner budgets: **8 MiB RAM write buffer per room**, **256 MiB disk quota per room**,
 configurable through `YENEY_QUEUE_DISK_MIB`. The storage directory is
 `/var/lib/yeney/queue/<room>` and is cleaned on store startup under an exclusive
-room lock. Evict the oldest history first, never current or next. Phase 1 evicts
+room lock. When systemd supplies a single absolute `STATE_DIRECTORY`, the queue
+root is `<STATE_DIRECTORY>/queue` instead; loopback acceptance uses this to keep
+all storage under its temporary directory. Evict the oldest history first, never current or next. Phase 1 evicts
 whole completed/failed item histories by creation order; live producers are
 retained. If protected/live history alone exhausts quota, raise a storage fault
 rather than lose its audio or exceed quota. Decoder/encoder scratch space is
@@ -631,15 +633,15 @@ Environment=YENEY_QUEUE_DISK_MIB=256
 |---|---|
 | `stream` (default) | Select the existing stream sink and transport behavior. |
 | `auto` | Accepted and logged as `auto-phase4`; select stream until phase 4. |
-| `queue` | A confirmed standalone coordinator currently selects stream with `queue-unavailable` until part 3 is complete. Grouped coordinators and members select stream with `group-rate-undecided`; incomplete topology selects stream with `coordinator-unconfirmed`. |
+| `queue` | Opt in to owned queue playback on a confirmed standalone coordinator. Grouped coordinators and members select stream with `group-rate-undecided`; incomplete topology selects stream with `coordinator-unconfirmed`. |
 
 Reliable length means a resolved exact rendered count, not just an LMS duration
 field. Sealing can qualify an otherwise uncertain finite source. Invalid setting
 values warn and select `stream`. Empty values are invalid too. Settings are read once at room startup after topology discovery. `YENEY_QUEUE_DISK_MIB` is a positive integer
 in MiB, read when the item store is constructed; invalid or overflowing values
-fail configuration. It has no effect on today's unmodified stream-only playback. These first two phases leave the running production behavior unchanged; once queue implementation
-is qualified and shipped, `auto` is its default. Owners can explicitly select
-`stream` during staged device qualification or to roll back.
+fail configuration. It has no effect in stream mode. Phase 3 keeps `stream` as
+the default and `queue` as an explicit room opt-in. Any future change to the
+default or `auto` behavior is deferred to a separate task.
 
 The mode controller has prepare → active → drain → handoff states. Plan the next
 mode before the current audible end, retain the old response/timing until that
@@ -647,7 +649,9 @@ end and fence both sinks by generation. Never switch transport simply because
 decoding crossed a boundary. An album followed by radio becomes queue → stream;
 a finite track after radio becomes stream → queue when its asset is ready.
 Radio's unknown end requires an explicit LMS skip/stop/transition intent to
-schedule the handoff; do not guess its duration.
+schedule the handoff; do not guess its duration. These automatic return-to-queue
+transitions describe future work: phase 3 latches stream for the playback session
+and only considers queue again after explicit LMS stop/new play and readiness checks.
 
 A seamless queue-to-queue join is demonstrated. A queue/HTTP-radio transport URI
 handoff is **not**: SetAVTransportURI can discard buffered audio and startup can
@@ -752,15 +756,22 @@ Phase 2 is field-qualified by the owner's 18 October unattended suite at bridge
 or 10 seconds, LMS identity matched 12/12 completed occurrences, startup was
 about one second and successor leads were at least 57 seconds.
 
-**Phase 3b parts 1–6 are done. Parts 7–8 remain.** Production stays on the
-normal stream path, including eligible standalone `queue` requests: startup logs
-`selected=stream reason=queue-unavailable` once and continues through HELO and
-ordinary stream playback. The previous fatal opt-in guard is removed. Grouped
-rooms retain `group-rate-undecided`. `bridge::queuePlaybackReady` in
-`playback_mode.h` is the single production readiness constant; it must remain
-false until part 7 qualifies the real binary against fake Sonos/LMS and opens explicit `queue`. There is no command-line or environment bypass. The controller
-fixture alone compiles with `YENEY_QUEUE_CONTROLLER_TEST`; installed programs do
-not use it. No owner device steps are available yet.
+**Phase 3b parts 1–8 are complete. Phase 3c device qualification remains pending.**
+Explicit `YENEY_PLAYBACK_MODE=queue` now enables owned queue playback on a confirmed
+standalone coordinator. `stream` remains the default; `auto` still selects stream
+and logs `auto-phase4`. Grouped coordinators and members select stream with
+`group-rate-undecided`; incomplete standalone identity selects stream with
+`coordinator-unconfirmed`. There are no new owner device steps yet: the phase 3c
+unattended device suite follows this implementation acceptance.
+
+Queue mode prepares finite native-rate assets, mirrors the prepared future window,
+backs up and takes ownership of the coordinator queue, and uses speaker-confirmed
+identity/position for LMS starts and elapsed time. It supports LMS controls,
+future-only playlist edits, mapped Sonos-app controls and echo suppression, cached
+history and fresh seek epochs, rendered crossfade intros, and controlled fallback.
+It restores CrossfadeMode and removes only owned entries on release/service stop.
+Whole-list mirroring, automatic mode selection and the group rate policy remain
+open. Local loopback acceptance is not physical-device qualification.
 
 `QueueController` owns one serialized worker and an exclusive in-process room
 lease. The host forwards LMS play intent with an epoch, current occurrence and
@@ -800,12 +811,12 @@ not-yet-created assets, current plus three successors, single transport setup,
 UpdateID conflicts, grouped-room refusal, stale updates and all three release
 paths. The fake reader uses a 40x test clock, 3.5-second prefetch leads, bursts
 paced at up to 9x, unaligned and suffix ranges, and reconnects. Separate real
-`yeney`/fake-LMS checks compare guarded queue and stream HELO packets, encoded
+`yeney`/fake-LMS checks now compare unset, explicit stream and deferred auto HELO packets, encoded
 FLAC bodies, source HTTP requests and transport SOAP bytes (normalizing only the
 fresh per-process session token). These preparation/delivery checks remain
 separate from the speaker-evidence acceptance tests below.
 
-Part 3 adds speaker-confirmed audible starts behind the same production guard.
+Part 3 added speaker-confirmed audible starts behind the then-closed production guard.
 The subscription owner forwards SID/coordinator-validated AVTransport events,
 with the epoch captured on receipt, to the serialized controller. Queue-field
 parsing retains TrackNumber, TrackURI and RelTime without changing stream GENA
@@ -842,7 +853,7 @@ song-queue model. They check native 44.1/48 kHz and mixed-rate joins, rendered
 LMS identity at every join, moving zero-based monotonic/capped elapsed, pause and
 resume, STOPPED retaining ownership, missed GENA polling, and stale/foreign/
 revoked evidence. Separate deterministic tests verify phase reset/rate-prior
-carry and prefix/source-zero safeguards. Room integration remains guarded;
+carry and prefix/source-zero safeguards. Room integration remained guarded at that checkpoint;
 this does not qualify physical playback or complete LMS control/fallback.
 
 Part 4 adds the guarded LMS control boundary. `Sink::queueCommand` is an
@@ -882,7 +893,7 @@ uses real SlimProto/core status packets, cached selections, a ten-second pause,
 independent re-renders, future edits, and identity checks after each action.
 The fixture supplies the authoritative playlist/seek state at the host boundary;
 production LMS snapshot acquisition and room runtime wiring remain in part 6,
-behind the unchanged production guard. No room enables queue playback yet.
+behind the then-closed production guard. Room queue playback opened later in part 7.
 
 Part 5 adds app reconciliation on the serialized controller worker. A host binds
 `ControllerOptions::lmsControl` to `controlLms(host, rawMac, command)` (port 9090
@@ -940,10 +951,9 @@ and each foreign-action category with exact preservation
 of foreign entries and one release/request. The fixture joins its core thread
 before destroying the controller so late command echoes cannot outlive it.
 
-Remaining: part 7 the complete end-to-end audible fake-Sonos acceptance suite
-through the real `yeney` binary and opening explicit `queue`; part 8 final phase 3 status and
-device-verification documentation. The unattended physical device suite follows
-in phase 3c. Agents never run against real LMS or speakers or deploy on LXC 113.
+Parts 7–8 complete the real-binary acceptance and documentation below. The
+unattended physical device suite follows in phase 3c. Agents never run against
+real LMS or speakers or deploy on LXC 113.
 
 
 ### Phase 3b part 6: controlled fallback and guarded room runtime
@@ -979,9 +989,9 @@ worker acquires production CLI playlist snapshots, validates their complete
 count/index, decodes fields and preserves occurrence tokens across edits. Missing
 future assets remain unpublished placeholders. Duplicate edits whose identity
 cannot be resolved fail closed. Metadata/CLI/SOAP work stays off the audio thread.
-The closed `queuePlaybackReady` constant still makes every production `queue`
-request select the original stream client with `queue-unavailable`; no environment
-or command-line bypass exists. Default stream sinks use generation zero and never
+Part 6 shipped with `queuePlaybackReady` closed and selected the original stream
+client with `queue-unavailable`. Part 7 opens it for explicit standalone `queue`
+after real-binary loopback acceptance. Default stream sinks use generation zero and never
 enter the core handoff branch. HTTP constants, stream URLs and stream transport
 ordering are unchanged.
 
@@ -997,8 +1007,8 @@ uses the real controller, finite HTTP/store and loopback SOAP/CLI to verify one
 release/handoff per reason, an intact tail, index/time continuation, URL revocation
 and late reads/events. Core speaker tests exercise generation reset, capability
 publication and subsequent stream playback without duplicate audible starts.
-Existing app/LMS control and closed-guard stream wire fixtures remain required.
-These boundary tests do not replace part 7's acceptance through the real binary.
+Existing app/LMS control and legacy wall-mode wire fixtures remain required.
+The real-binary acceptance below complements these boundary tests.
 
 
 Part 6 validation also requires `LAMPASTREAM_CHECKOUT=/path/to/LampaStream make test`.
@@ -1009,3 +1019,62 @@ consumer test uses `require_v1=True`, and must print its source path and
 checkout or import dependency fails rather than skipping. Dependencies, if
 needed, belong in a virtual environment under `/tmp`, never in the checkout or
 system Python. A skipped consumer is not an accepted validation result.
+
+
+### Phase 3b parts 7–8: real-binary acceptance and shipped limits
+
+`tests/queue_binary_test.py` launches the real `yeney` application, using the
+production room/controller/sink wiring. The fake coordinator exposes SOAP and
+GENA, and its HTTP consumer prefetches 3–4 seconds before joins in bursts paced
+at up to 9x, with Range reads and reconnects. The fake LMS uses SlimProto and
+CLI port 9090 with raw MAC requests and URL-encoded IDs/replies. No fixture host
+stands in for the application. Acceptance first passed with the readiness guard
+opened only by a temporary test build flag, then passed again after opening the
+production guard with no test flag, including the Sonos-clock pacing default.
+
+Coverage includes ALAC and FLAC albums with at least three joins each, a 10-second
+crossfade across album boundaries, mixed 44.1/48 kHz, verified Before YeneY backup,
+CrossfadeMode off/restoration, prepared successors, LMS/audible identity, STMs
+before STMd, per-item monotonic elapsed, a 10-second pause/resume, next/previous,
+history and fresh-asset seeks, add/delete/move/clear, app controls and echo
+suppression. Foreign queue edits exercise one real stream handoff at the confirmed
+point, preserved foreign entries and LMS index/time continuation. Shutdown removes
+owned entries and restores CrossfadeMode. Startup tests verify grouped-room stream
+selection, while unset/stream/auto have identical HELO, encoded stream bodies,
+source requests and SOAP transport order/bytes (only the session token normalized).
+
+The acceptance exposed and fixed a pending-to-published handle race, source-time
+carryover after a cached app seek, and same-token re-render ordering. Unpublished
+superseded handles wait for a refreshed snapshot; prepared seek handles refresh
+without removing the target. Only the final seek command requests fresh decoding,
+and its flush echo cannot cancel the prepared target. A deterministic publication
+race test leaves the stale handle in place across several worker ticks.
+
+Fallback reasons are:
+
+| Reason | Trigger |
+|---|---|
+| `foreign-control` | Unmapped app action, foreign queue/source/item/mode edit, or ambiguous identity. |
+| `preparation-timeout` | Finite preparation or command confirmation cannot complete in its bounded deadline. |
+| `soap-error` | Coordinator RPC/transport failure. |
+| `length-fault` | Promised rendered count cannot be fulfilled. |
+| `storage-fault` | Asset storage/history failure or exhausted protected storage budget. |
+| `coordinator-change` | Loss of the verified coordinator/grouping lease. |
+
+Fallback preserves a valid audible tail where possible; foreign control freezes
+at a speaker-confirmed point. It releases owned entries, restores CrossfadeMode,
+fences generations and hands off once to stream at the same LMS position. The
+stream latch lasts until explicit stop followed by new play and readiness checks;
+there is no automatic reacquisition or retry loop. Handoff is measured, not
+claimed gapless. Unknown/unusable assets cannot promise an uninterrupted tail.
+
+Room diagnostics and per-room pacing JSON expose `requested`, `active`, `state`,
+`reason`, `occurrence`, `epoch`, `generation`, `owned`, `mirrored_ahead`,
+`last_fallback`, `handoff_gap_ms` and `latched` in the playback status. A gap of
+`-1` means no confirmed handoff measurement yet. Transition logs also include
+room/coordinator, old/new rates and promised/actual frames.
+
+Production limits remain standalone rooms only, explicit queue opt-in, and a
+bounded prepared window/history budget. Whole-list mirroring, `auto` selection
+and the group rate policy remain open. Phase 3c will provide unattended physical
+device qualification; this completion records loopback acceptance only.
