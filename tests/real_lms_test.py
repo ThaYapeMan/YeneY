@@ -331,7 +331,7 @@ finally:
         cleanup(proxy.close);(base/'cli.json').write_text(json.dumps(proxy.records,indent=2))
     if sonos:
         def ownership_restored():
-            owned={entry[1]['EnqueuedURIs'] for entry in sonos.actions('AddMultipleURIsToQueue')}
+            owned={entry[1]['EnqueuedURI'] for entry in sonos.actions('AddURIToQueue')}
             assert not any(i['uri'] in owned for i in sonos.items) and sonos.crossfade,'owned cleanup/crossfade'
             assert sonos.verified_save and sonos.snapshots[sonos.last_save]==sonos.original,'verified Before YeneY backup'
         cleanup(ownership_restored)

@@ -331,7 +331,7 @@ def rearm_replay():
         time.sleep(1)
         log=(h.base/'bridge.log').read_text()
         assert log.count('ownership acquired')==1,log
-        assert len(h.sonos.actions('AddMultipleURIsToQueue'))==1,h.sonos.calls
+        assert len(h.sonos.actions('AddURIToQueue'))==1,h.sonos.calls
         assert len(h.sonos.actions('Play'))==1
         assert sum(p['op']=='HELO' for p in h.lms.packets)==1,h.lms.packets
         assert h.lms.reconnect_replays==0

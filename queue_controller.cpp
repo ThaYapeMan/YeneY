@@ -997,7 +997,7 @@ struct QueueController::Impl {
             metadata.frames = (*length - 44) / 6;
             metadata.rate = asset.item->descriptor().rate;
             ownedUris.insert(metadata.url); // also clean up an enqueue whose reply is lost
-            auto result = actions.addMultiple({{metadata.url, upnp::queueDidl(metadata)}}, before.update);
+            auto result = actions.add(metadata.url, upnp::queueDidl(metadata));
             auto expected = urls;
             expected.push_back(metadata.url);
             auto after = coordinator.browse();

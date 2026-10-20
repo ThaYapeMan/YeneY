@@ -140,9 +140,9 @@ class Controls(unittest.TestCase):
                         track = int(h.sonos.position['Track'])
                         future = h.sonos.items[track:]
                         self.assertEqual([int(parse_qs(urlsplit(i['uri']).query)['item'][0]) for i in future], [4,7])
-                added = len(h.sonos.actions('AddMultipleURIsToQueue'))
+                added = len(h.sonos.actions('AddURIToQueue'))
                 h.driver.command(f'PLAN {revision} {current} '+' '.join(map(str,edited)))
-                self.assertEqual(len(h.sonos.actions('AddMultipleURIsToQueue')), added)
+                self.assertEqual(len(h.sonos.actions('AddURIToQueue')), added)
             print('PASS LMS playlist add/delete/move/clear: token-based future-only rebuilds, audible URI retained, no transport skip')
             stops=len(h.sonos.actions('Stop'));underruns=len(h.packets('STMu'))
             h.lms.strm('q'); h.until(lambda: len(h.sonos.actions('Stop'))>stops and h.sonos.transport_state=='STOPPED')

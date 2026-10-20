@@ -386,7 +386,8 @@ Mirror the **whole effective LMS playlist**, not a previous/current/next window.
 Items not yet prepared have stable occurrence URLs and DIDL metadata from LMS.
 Their LMS duration is a display hint; omit speculative byte size until the exact
 HTTP promise is known. HTTP never substitutes that hint for exact frame counts.
-Use `AddMultipleURIsToQueue` in batches of at most 16 URIs, with UpdateID fencing;
+Use device-proven `AddURIToQueue` appends, with Browse-before/Browse-after revision
+and exact-URI ownership fencing plus `NumTracksAdded=1` confirmation;
 edit with `ReorderTracksInQueue` and `RemoveTrackRangeFromQueue`. Verify signatures
 and returned queue revisions against coordinator SCPD/device behavior before
 integration; these actions are not added in phase 1. Retain processed history
@@ -403,7 +404,7 @@ not issue a destructive skip. Races require generation-fenced request ownership.
 
 LMS remains authoritative for shuffle/repeat and playlist revision. Sonos plays
 NORMAL order; repeat visits receive distinct occurrences. Apply LMS edits in
-revision-fenced batches, retaining any asset the speaker is still reading.
+revision-fenced edits, retaining any asset the speaker is still reading.
 Dependency edits also reroute a cancelled fade's old tail into the next item.
 A foreign queue change while YeneY owns playback invalidates the mutation plan;
 never clear new foreign entries based on an old snapshot.
@@ -797,8 +798,12 @@ rechecks saved identity, title and creation order. CrossfadeMode is saved, force
 off and read back; release restores and confirms the saved value.
 
 The finite route and 3a DIDL are used for each published asset. Every append uses
-AddMultipleURIsToQueue with one URI and a freshly observed UpdateID, followed by
-a confirming queue snapshot. The queue transport URI is set once, and Play is
+`AddURIToQueue` with `InstanceID=0`, `DesiredFirstTrackNumberEnqueued=0` and
+`EnqueueAsNext=0`, between freshly observed and confirming queue snapshots.
+`NumTracksAdded=1`, the expected URI list and a changed UpdateID must all agree.
+The retained `AddMultipleURIsToQueue` helper is not device-verified: Study S2
+86.10-81100 rejected it with UPnP 402 on 20 October 2026. It is never used in
+production; batching requires separate device qualification. The queue transport URI is set once, and Play is
 sent once, when the first item is ready. Later publications only extend the
 queue; Sonos owns the joins. Explicit session-end, mode-change and destructor/service-shutdown
 release remove only exact asset URLs registered by this controller, preserving

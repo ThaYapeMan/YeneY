@@ -174,14 +174,14 @@ class Handler(BaseHTTPRequestHandler):
             first, count = int(a['StartingIndex'])-1, int(a['NumberOfTracks'])
             del s.items[first:first+count]; s.update += 1
             return {'NewUpdateID': s.update}, None
-        if action == 'AddMultipleURIsToQueue':
+        if action == 'AddURIToQueue':
             if s.race_add:
                 s.race_add = False; s.add_foreign()
-            if int(a['UpdateID']) != s.update: return {}, '803'
-            assert not s.crossfade and a['NumberOfURIs'] == '1'
-            uri = a['EnqueuedURIs']; u = urlsplit(uri)
+            assert not s.crossfade and a['InstanceID'] == '0'
+            assert a['DesiredFirstTrackNumberEnqueued'] == '0' and a['EnqueueAsNext'] == '0'
+            uri = a['EnqueuedURI']; u = urlsplit(uri)
             assert u.hostname == '127.0.0.1' and u.path == '/music/queue.wav'
-            metadata = ET.fromstring(a['EnqueuedURIsMetaData'])
+            metadata = ET.fromstring(a['EnqueuedURIMetaData'])
             item = next(iter(metadata)); fields = {n.tag.rsplit('}', 1)[-1]: n.text for n in item}
             resource = next(n for n in item if n.tag.rsplit('}', 1)[-1] == 'res')
             assert fields['class'] == 'object.item.audioItem.musicTrack'
@@ -348,13 +348,13 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(int(response.getheader('Content-Length')), 44+8*44100*6)
         connection.close()
         time.sleep(.12); self.assertEqual(d.status()['mirrored'], 1)
-        self.assertEqual(len(s.actions('AddMultipleURIsToQueue')), 1)
+        self.assertEqual(len(s.actions('AddURIToQueue')), 1)
         d.command('APPEND 10 '+str(6*44100)); d.command('FINISH 10')
         d.command('FINISH 11'); d.wait(4)
         d.command('PLAY 1 10 9 10 11 12 13'); d.command('UPDATE 1 10 11 12 13')
         self.assertIn('queue-stale-epoch', d.command('UPDATE 0 10 11 12 13', 'ERR'))
         self.assertTrue(d.status()['active']); self.assertEqual(d.status()['fault'], '')
-        self.assertEqual(len(s.actions('AddMultipleURIsToQueue')), 4)
+        self.assertEqual(len(s.actions('AddURIToQueue')), 4)
         client = ProbeClient()
         for index, (id, rate) in enumerate([(10, 44100), (11, 44100), (12, 44100), (13, 48000)]):
             if index:
@@ -450,7 +450,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(d.status()['mirrored'], 1)
         d.command('UPDATE 1 1 2 3 4'); d.wait(3)
         d.command('FINISH 4'); d.wait(4)
-        self.assertEqual(len(s.actions('AddMultipleURIsToQueue')), 4)
+        self.assertEqual(len(s.actions('AddURIToQueue')), 4)
         d.command('RELEASE stop')
         print('PASS queue pending assets: decoder-created items supplied by asynchronous update, sealed successors watched without blocking, publication stays ordered and deduplicated')
 
@@ -461,7 +461,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(d.status()['fault'], 'queue-crossfade-unconfirmed')
         self.assertEqual(s.items, s.original)
         self.assertTrue(s.crossfade)
-        self.assertFalse(s.actions('AddMultipleURIsToQueue'))
+        self.assertFalse(s.actions('AddURIToQueue'))
         print('PASS queue crossfade verification: a successful SOAP reply without the requested mode cannot clear or own the queue')
 
     def test_updateid_race_and_group_lease(self):
@@ -470,7 +470,7 @@ class ControllerTests(unittest.TestCase):
         d.command('PLAY 1 1 1', 'ERR')
         self.assertEqual(s.items, [{'uri': 'http://foreign.invalid/added-during-play.flac'}])
         self.assertTrue(s.crossfade); self.assertFalse(s.actions('SetAVTransportURI'))
-        self.assertIn('queue-soap-error', d.status()['fault'])
+        self.assertIn('queue-enqueue-unconfirmed', d.status()['fault'])
         # A room that became grouped is refused before any queue mutation.
         s.grouped = True
         before = copy.deepcopy(s.items)
