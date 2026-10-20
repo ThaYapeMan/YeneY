@@ -625,6 +625,12 @@ Install the committed code on the deployment host using the normal owner workflo
 git pull && git submodule update --init --recursive && make && sudo make install
 ```
 
+The 20 October queue-start protocol correction requires no change to the owner
+commands or suite steps below. Ordinary LMS starts are adopted without a CLI
+playlist jump or another HELO. Remote successors are requested only after full
+production and when fewer than 20 audible seconds remain (the queue-only
+`YENEY_QUEUE_NEXT_DELAY_S` setting); leave its default for qualification.
+
 The installer supplies `/usr/local/bin/yeney-queue-device-suite` and its standard
 library WebSocket helper. Run as root on the Sonos network. No agent runs this
 command or deploys it. To survive an SSH disconnect, start a transient service:

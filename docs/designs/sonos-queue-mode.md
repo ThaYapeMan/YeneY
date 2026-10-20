@@ -1163,6 +1163,7 @@ resumes the already received HTTP start internally; readiness never sends
 | New TCP connection | Exactly one HELO; no HELO for an epoch/readiness change | `playerReconnect` may invoke `_Continue`, restarting a source; never use it as an internal reset |
 | `strm q`, including repeated idle stops | Acknowledge flush/stop; keep queue ownership | Stop/flush before a selection is normal; it does not authorize YeneY to select an LMS track |
 | `strm s` while idle/stopped/preparing | Accept/adopt its producer or cached selection, with no CLI command | LMS has already selected and streamed the song |
+| `strm f` canceling a speculative future producer | Acknowledge flush; discard an unmapped deleted successor and retain the audible transport | LMS can cancel a removed prefetched song without stopping its playing song |
 | Cached selection | STMc, actual HTTP/RESP handshake, discard encoded body and retain existing PCM; no decoder reopen | LMS clears its connecting state only after RESP |
 | `u` after autostart-zero buffering | Release producer admission; keep audible state speaker-confirmed and suppress a redundant Sonos Play | BufferReady/start synchronization is distinct from unpausing |
 | Speaker confirms the owned item is playing | STMs once for that start | Started: LMS playing identity becomes that audible song |
@@ -1206,7 +1207,7 @@ and the loopback Sonos coordinator. The temporary distribution, library, cache,
 logs and optional private Perl SSL modules stay under `/tmp`; nothing is installed
 system-wide. The test records every SlimProto packet and bridge CLI request.
 Generated 24-second FLAC files exercise three natural joins and 44.1/48 kHz;
-ALAC library input uses LMS's default FLAC transcode. A local HTTP FLAC source
+ALAC library input at both rates uses LMS's default FLAC transcode. A local HTTP FLAC source
 exercises the remote near-end completion gate. Valid FLAC padding makes the tiny
 constant-PCM fixture large enough for LMS's remote scanner without changing PCM.
 
@@ -1215,3 +1216,14 @@ one HELO on the connection, matching audible identity, one initial takeover,
 no queue-generated CLI mutation and service-stop cleanup. Source formats are
 also exercised natively by the existing fake-LMS decoder tests. This is protocol
 acceptance with a fake speaker, not device or listening qualification.
+
+Rapid q/s selections retain their latest LMS occurrence token separately from
+asynchronous status evidence. This prevents a previous/next selection from
+being treated as an in-track seek while the prior confirmation is still queued.
+A confirmed pause likewise remains paused internally until the speaker confirms
+resume; autostart-zero producer admission alone never fabricates STMr.
+
+Future-only playlist reconciliation is deferred while an owned Seek is pending;
+the next snapshot retries after confirmation instead of weakening the audible
+position check. Loopback LMS echoes include q/s and producer admission u, as
+observed with the real server.
