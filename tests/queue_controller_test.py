@@ -387,7 +387,16 @@ class ControllerTests(unittest.TestCase):
                 self.assertFalse(self.speaker.actions('RemoveTrackRangeFromQueue'))
                 self.assertFalse(self.speaker.actions('SetAVTransportURI'))
                 self.assertFalse(self.speaker.actions('SetCrossfadeMode'))
+                if failure == 'fail_save':
+                    lines = Path(self.driver.log.name).read_text().splitlines()
+                    fault = [line for line in lines if 'queue SOAP action=SaveQueue HTTP=500' in line]
+                    self.assertEqual(len(fault), 1, lines)
+                    self.assertIn('errorCode="701" errorDescription="fixture rejection"', fault[0])
+                    self.assertIn('<InstanceID>0</InstanceID>', fault[0])
+                    self.assertIn('<Title>Before YeneY ', fault[0])
+                    self.assertIn('<ObjectID></ObjectID>', fault[0])
                 setattr(self.speaker, failure, False)
+        print('PASS queue SOAP fault diagnostics: action, HTTP status, UPnP code/description and complete request arguments on one line')
         print('PASS queue backup failure: failed SaveQueue and unverified saved identity leave the original queue and CrossfadeMode untouched')
 
     def test_sealed_current_and_shutdown_release(self):

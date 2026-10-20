@@ -9,6 +9,21 @@
 #include <stdexcept>
 namespace upnp {
 namespace {
+// Quote diagnostic fields without truncation or embedded log-line boundaries.
+std::string diagnostic(const std::string &text) {
+    std::ostringstream out;
+    out << '"';
+    for (unsigned char c : text) {
+        if (c == '"' || c == '\\')
+            out << '\\' << c;
+        else if (c < 32)
+            out << "\\u00" << std::hex << std::setfill('0') << std::setw(2) << unsigned(c);
+        else
+            out << c;
+    }
+    out << '"';
+    return out.str();
+}
 uint32_t number(const std::string &text) {
     uint64_t value = 0;
     if (text.empty())
@@ -118,7 +133,11 @@ SoapResult QueueCoordinator::raw(const std::string &service, const std::string &
     auto result = parseSoap(http.body, action);
     if (log)
         log("queue SOAP action=" + action + " HTTP=" + std::to_string(http.status) +
-            " fault=" + result.faultCode);
+            " fault=" + result.faultCode +
+            ((!http.error.empty() || http.status != 200 || !result.ok)
+                 ? " errorCode=" + diagnostic(result.faultCode) + " errorDescription=" +
+                       diagnostic(result.faultDescription) + " request=" + diagnostic(body)
+                 : ""));
     if (!http.error.empty() || http.status != 200 || !result.ok)
         throw std::runtime_error("queue-soap-error action=" + action + " fault=" + result.faultCode +
                                  " error=" + http.error);
