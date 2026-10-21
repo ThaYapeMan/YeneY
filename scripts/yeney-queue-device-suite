@@ -139,7 +139,7 @@ class CLI:
                     if not part:raise SuiteError('LMS CLI closed before response')
                     response.extend(part)
                     if len(response)>16*1024*1024:raise SuiteError('LMS CLI response limit')
-            words=[cli_word(w) for w in response.decode().splitlines()[0].split()]
+            words=[cli_word(w) for w in bytes(response).splitlines()[0].split()]
             prefix=args[:-1] if args[-1]=='?' else args
             if len(words)<len(prefix) or any(not self.same(a,b) for a,b in zip(prefix,words)):
                 raise SuiteError('LMS CLI echo mismatch: '+request)

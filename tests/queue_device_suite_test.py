@@ -15,10 +15,12 @@ import struct
 import sys
 import tarfile
 import tempfile
+import subprocess
+import random
 import threading
 import unittest
 from unittest.mock import patch
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, quote_from_bytes
 from queue_controller_test import Coordinator, Handler, didl
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'third_party/yeney-core/tests'))
@@ -37,6 +39,7 @@ class Model:
                 n=str(len(self.library)+1)
                 self.library.append(dict(id=n,title='Title & '+n,artist='Artist <one>',album='Album '+str(album),album_id=str(album),
                                          type=kind,samplerate=str(rate),duration='60',url='file:///music/'+n+'.m4a'))
+        self.speaker_metadata={};self.title_format='artist-title'
         self.byid={t['id']:t for t in self.library}
         self.urls=['file:///saved/one.flac','file:///saved/two.flac']
         self.before=list(self.urls)
@@ -143,8 +146,9 @@ class SOAP(Handler):
             if model.fault=='regression' and model.time>4:position=0
             uri=f'http://127.0.0.1/music/queue.wav?epoch={model.epoch}&item={t["id"]}' if model.queue else 'http://127.0.0.1/music/stream.flac'
             from xml.sax.saxutils import escape
-            title='Wrong' if model.fault=='identity' else t['artist']+' - '+t['title'] if t.get('artist') else t['title']
-            metadata='<DIDL-Lite xmlns:dc="urn:dc" xmlns:upnp="urn:upnp"><item><dc:title>'+escape(title)+'</dc:title><upnp:album>'+escape(t['album'])+'</upnp:album></item></DIDL-Lite>'
+            title='Wrong' if model.fault=='identity' else t['artist']+' - '+t['title'] if model.title_format=='artist-title' and t.get('artist') else t['title']
+            tags=dict(title=title,album=t['album']);tags.update(model.speaker_metadata.get(t['id'],{}))
+            metadata='<DIDL-Lite xmlns:dc="urn:dc" xmlns:upnp="urn:upnp"><item><dc:title>'+escape(tags['title'])+'</dc:title><upnp:album>'+escape(tags['album'])+'</upnp:album></item></DIDL-Lite>'
             return dict(Track=str(model.index+1),TrackURI=uri,RelTime=f'{int(position)//3600:02}:{int(position)//60%60:02}:{int(position)%60:02}',TrackMetaData=metadata),None
         if action=='GetTransportInfo':return dict(CurrentTransportState={'play':'PLAYING','pause':'PAUSED_PLAYBACK','stop':'STOPPED'}[model.mode]),None
         return super().action(service,action,args)
@@ -152,7 +156,7 @@ class SOAP(Handler):
 
 class Backend:
     def __init__(self,model,sonos,root):
-        self.model=model;self.sonos=sonos;self.root=root;self.suite=None;self.calls=[];self.pid=100;self.grouped=False;self.running=True;self.signal=None;self.inject=None
+        self.model=model;self.sonos=sonos;self.root=root;self.suite=None;self.calls=[];self.pid=100;self.grouped=False;self.running=True;self.signal=None;self.inject=None;self.environment='ORIGINAL=1'
     def now(self):return self.model.clock
     def sleep(self,duration):
         self.model.clock+=duration
@@ -179,7 +183,7 @@ class Backend:
         if args[0].endswith('/yeney'):return 'Study\tPort\t127.0.0.1\tStudy\t'+('Study,Kitchen' if self.grouped else 'Study')
         if args[0]=='journalctl':return 'room Study journal only'
         assert args[0]=='systemctl',args
-        if args[1]=='show':return str(self.pid) if 'MainPID' in args else ('YENEY_PLAYBACK_MODE=queue' if self.suite.dropin and self.suite.dropin.exists() else 'ORIGINAL=1')
+        if args[1]=='show':return str(self.pid) if 'MainPID' in args else self.environment+(' YENEY_PLAYBACK_MODE=queue' if self.suite.dropin and self.suite.dropin.exists() else '')
         if args[1]=='is-active' and not self.running:raise m.SuiteError('not running')
         if args[1] in ('restart','stop'):
             assert args[-1]=='yeney@Study.service'
@@ -215,6 +219,62 @@ class Tests(unittest.TestCase):
         self.assertFalse(self.sonos.items)
         self.assertFalse(any('volume' in args for args in self.model.calls))
         self.assertTrue(all(args[-1]=='yeney@Study.service' for args in self.backend.calls if args[0]=='systemctl' and args[1] in ('restart','stop','is-active')))
+    def field_album(self):
+        clean='Het beste uit pop in je moerstaal, Vol. 2'
+        for track in self.model.library[:4]:
+            track['album']='\x16'+clean
+            self.model.speaker_metadata[track['id']]=dict(album=clean)
+        return clean
+
+    def test_field_sanitized_album_identity(self):
+        clean=self.field_album()
+        def replay():
+            self.suite.begin('alac-off')
+            tracks=self.suite.selected['alac-off'];self.suite.load(tracks)
+            row=self.suite.samples[-1]
+            self.assertTrue(row['identity']);self.assertEqual(row['speaker']['metadata']['album'],clean)
+            self.assertEqual(row['lms']['id'],tracks[0]['id'])
+            self.assertLessEqual(self.suite.current['startup'],3)
+        with patch.object(self.suite,'measure',side_effect=replay):code,output=self.run_suite()
+        self.assertEqual(code,0,output);self.restored()
+        print('PASS device suite 10:16 replay: leading U+0016 LMS album matches sanitized speaker album within startup deadline; ID and restoration unchanged')
+
+    def test_different_album_still_fails(self):
+        self.field_album()
+        def replay():
+            self.suite.begin('alac-off')
+            tracks=self.suite.selected['alac-off'];self.suite.load(tracks)
+            self.model.speaker_metadata[tracks[0]['id']]['album']='A genuinely different album'
+            for _ in range(4):self.suite.sample(tracks)
+            self.fail('a persistent wrong album must fail')
+        with patch.object(self.suite,'measure',side_effect=replay):code,output=self.run_suite()
+        self.assertEqual(code,1,output)
+        self.assertIn('speaker/LMS identity mismatch >2 s',output)
+        self.assertEqual(self.suite.results[0]['mismatch'],3)
+        self.restored()
+        print('PASS device suite different album: identity stays false and fails after the unchanged >2 s limit; restoration succeeds')
+
+    def test_configured_title_format(self):
+        for configured in (None,'artist-title','title','invalid',''):
+            with self.subTest(configured=configured):
+                self.backend.environment='ORIGINAL=1'+(' "YENEY_TITLE_FORMAT='+configured+'"' if configured is not None else '')
+                selected='title' if configured=='title' else 'artist-title'
+                self.model.title_format=selected
+                def replay():
+                    self.assertEqual(self.suite.title_format,selected)
+                    self.suite.begin('alac-off');tracks=self.suite.selected['alac-off'];self.suite.load(tracks)
+                    self.assertTrue(self.suite.samples[-1]['identity'])
+                    track=tracks[0]
+                    wrong=track['title'] if selected=='artist-title' else track['artist']+' - '+track['title']
+                    self.model.speaker_metadata[track['id']]=dict(title=wrong)
+                    self.assertFalse(self.suite.sample(tracks,preparing=True)['identity'])
+                    self.model.speaker_metadata.clear()
+                with patch.object(self.suite,'measure',side_effect=replay):code,output=self.run_suite()
+                self.assertEqual(code,0,output);self.restored()
+                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root)
+                self.backend.suite=self.suite
+        print('PASS device suite title format: room environment selects exactly title or artist-title; unset/invalid/empty use artist-title; wrong format rejected')
+
     def test_full_sequence(self):
         code,output=self.run_suite();self.assertEqual(code,0,output)
         self.restored();self.assertIn('DEVICE SUITE OK',output)
@@ -333,6 +393,55 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.suite.results[0]['verdict'],'SKIP')
         self.suite.logfile.close()
         print('PASS queue device suite: absent 48 kHz library is an explicit non-failing skip')
+
+
+class SanitizerParity(unittest.TestCase):
+    def test_cpp_xml_sanitize_parity(self):
+        source = r'''
+#include "upnp/xml.h"
+#include <iostream>
+#include <iomanip>
+int main() {
+    std::string line;
+    while (std::getline(std::cin,line)) {
+        std::string raw;
+        for (size_t i=0;i<line.size();i+=2) raw+=char(std::stoul(line.substr(i,2),nullptr,16));
+        for (unsigned char c:upnp::xmlSanitize(raw))
+            std::cout<<std::hex<<std::setfill('0')<<std::setw(2)<<unsigned(c);
+        std::cout<<'\n';
+    }
+}
+'''
+        cases=[b'']+[bytes([v]) for v in range(256)]
+        cases += [b'\xe2\x82',b'\xe2(\xa1',b'\xe0\x80\x80',b'\xf4\x90\x80\x80',
+                  b'\xc0\xaf',b'\x16Het beste uit pop in je moerstaal, Vol. 2']
+        cases += [chr(v).encode('utf-8','surrogatepass') for v in
+                  (9,10,13,32,0xd7ff,0xd800,0xdfff,0xe000,0xfffd,0xfffe,0xffff,0x10000,0x10ffff)]
+        cases += ['é ü 😀'.encode()]
+        rng=random.Random(20261021)
+        cases += [bytes(rng.randrange(256) for _ in range(rng.randrange(16))) for _ in range(512)]
+        with tempfile.TemporaryDirectory(prefix='queue-suite-xml-parity-') as directory:
+            directory=Path(directory);cpp=directory/'parity.cpp';cpp.write_text(source)
+            binary=directory/'parity'
+            subprocess.run(['g++','-std=c++17','-O2','-I',str(ROOT),str(cpp),str(ROOT/'upnp/xml.cpp'),'-o',str(binary)],check=True)
+            result=subprocess.check_output([str(binary)],input='\n'.join(raw.hex() for raw in cases)+'\n',text=True)
+        expected=result.splitlines()
+        self.assertEqual(len(expected),len(cases))
+        for raw,clean in zip(cases,expected):
+            with self.subTest(raw=raw):
+                self.assertEqual(m.xml_sanitize(raw).encode().hex(),clean)
+                for name in ('title','artist','album'):
+                    wire=quote_from_bytes(name.encode()+b':'+raw,safe='')
+                    self.assertEqual(m.cli_word(wire).partition(':')[2].encode().hex(),clean)
+                    self.assertEqual(m.cli_word(name.encode()+b':'+raw).partition(':')[2].encode().hex(),clean)
+        self.assertEqual(m.cli_word('url%3Apodcast%3A%2F%2Fhttps%3A%2F%2Fexample%2FA%2520B'),
+                         'url:podcast://https://example/A%20B')
+        self.assertEqual(m.cli_word('id%3A-95857229938624'),'id:-95857229938624')
+        self.assertEqual(m.expected_metadata(dict(title='\x16é',artist='\x07Björk',album='\x16Album'),'artist-title'),
+                         ('Björk - é','Album'))
+        self.assertEqual(m.expected_metadata(dict(title='Title',artist='\x16',album='Album'),'artist-title'),
+                         ('Title','Album'))
+        print('PASS device suite/C++ XML sanitizer parity: all byte values, forbidden controls/scalars, malformed UTF-8, Unicode and deterministic random inputs; CLI metadata repaired before lossy decoding, URLs and IDs unchanged')
 
 
 if __name__=='__main__':unittest.main(verbosity=2)
