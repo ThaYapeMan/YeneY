@@ -1,5 +1,7 @@
 #pragma once
 #include <cstddef>
+#include <initializer_list>
+#include <utility>
 #include <map>
 #include <string>
 #include <vector>
@@ -10,6 +12,9 @@ struct XmlTextChanges {
 // Preserve valid UTF-8 exactly, drop XML 1.0 forbidden code points, replace
 // malformed UTF-8 with U+FFFD. Encoded surrogate code points are dropped.
 std::string xmlSanitize(const std::string& text, XmlTextChanges* changes = nullptr);
+// Sanitize metadata before formatting/logging/caching; one summary per item,
+// field names and counts only. Empty summary means no text changed.
+std::string sanitizeXmlFields(std::initializer_list<std::pair<const char*, std::string*>> fields);
 // Text or double-quoted attributes; apostrophes remain literal, as pinned by the wire fixtures.
 std::string xmlEscape(const std::string& text);
 bool xmlUnescape(const std::string& text, std::string& out);

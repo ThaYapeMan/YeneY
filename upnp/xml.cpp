@@ -65,6 +65,18 @@ std::string xmlSanitize(const std::string& text, XmlTextChanges* changes) {
     if (changes) *changes = count;
     return out;
 }
+std::string sanitizeXmlFields(std::initializer_list<std::pair<const char*, std::string*>> fields) {
+    std::string summary;
+    for (const auto& field : fields) {
+        XmlTextChanges changes;
+        *field.second = xmlSanitize(*field.second, &changes);
+        if (!changes.removed && !changes.replaced) continue;
+        if (!summary.empty()) summary += ' ';
+        summary += std::string("field=") + field.first + " removed=" + std::to_string(changes.removed)
+            + " replaced=" + std::to_string(changes.replaced);
+    }
+    return summary;
+}
 bool xmlUnescape(const std::string& text, std::string& out) {
     out.clear();
     for (size_t p = 0; p < text.size(); ++p) {

@@ -996,6 +996,13 @@ struct QueueController::Impl {
             metadata.size = *length;
             metadata.frames = (*length - 44) / 6;
             metadata.rate = asset.item->descriptor().rate;
+            const auto changed = upnp::sanitizeXmlFields({{"title", &metadata.title},
+                                                          {"artist", &metadata.artist},
+                                                          {"album", &metadata.album},
+                                                          {"artwork", &metadata.artwork}});
+            if (!changed.empty())
+                log("metadata sanitized mode=queue occurrence=" + std::to_string(asset.occurrence) + " " +
+                    changed);
             ownedUris.insert(metadata.url); // also clean up an enqueue whose reply is lost
             auto result = actions.add(metadata.url, upnp::queueDidl(metadata));
             auto expected = urls;
