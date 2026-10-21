@@ -107,4 +107,10 @@ int main() {
     assert(!control.positionInfo(ms)); assert(control.positionInfo(ms));
     puts("PASS: request closing during timeout is classified using activity at read start");
     puts("PASS: timeout diagnostic rearms for a later pause");
+    assert(control.playStream("http://bridge/clean.flac", "\x16Title", "", "\x07" "Artist",
+                              "\x16Het beste uit pop in je moerstaal, Vol. 2"));
+    assert(control.transportInfo().title == upnp::formatTitle("Title", "Artist"));
+    assert(lastSetUri.find('\x16') == std::string::npos && lastSetUri.find('\x07') == std::string::npos);
+    puts("PASS sanitized stream display cache: title/artist match outgoing DIDL in both title formats");
+
 }

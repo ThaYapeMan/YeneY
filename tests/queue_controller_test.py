@@ -125,6 +125,12 @@ class Handler(BaseHTTPRequestHandler):
                 values = ''.join('<'+k+'>'+escape(str(v))+'</'+k+'>' for k, v in result.items())
                 self.send(f'<s:Envelope xmlns:s="{SOAP}"><s:Body><u:{action}Response xmlns:u="{urn}">'
                           f'{values}</u:{action}Response></s:Body></s:Envelope>')
+        except (ET.ParseError, UnicodeError):
+            with s.lock:
+                s.busy = max(0, s.busy-1)
+            self.send(f'<s:Envelope xmlns:s="{SOAP}"><s:Body><s:Fault><detail><UPnPError>'
+                      '<errorCode>402</errorCode><errorDescription>Invalid Args</errorDescription>'
+                      '</UPnPError></detail></s:Fault></s:Body></s:Envelope>', 500)
         except Exception as error:
             with s.lock:
                 s.errors.append(repr(error)); s.busy = max(0, s.busy-1)
@@ -208,6 +214,8 @@ class Handler(BaseHTTPRequestHandler):
             s.items.append(dict(uri=uri, metadata=fields, resource=resource.attrib)); s.update += 1
             return dict(NumTracksAdded=1, FirstTrackNumberEnqueued=len(s.items), NewQueueLength=len(s.items), NewUpdateID=s.update), None
         if action == 'SetAVTransportURI':
+            if a.get('CurrentURIMetaData'):
+                ET.fromstring(a['CurrentURIMetaData']) # strict XML 1.0, including nested DIDL
             assert a['CurrentURI'] == 'x-rincon-queue:RINCON_TEST#0' and s.items
             s.uri = a['CurrentURI']; return {}, None
         if action == 'Seek':

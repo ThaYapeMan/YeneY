@@ -34,6 +34,10 @@ class Speaker(BaseHTTPRequestHandler):
     def do_POST(self):
         try:
             self.handle_post()
+        except (ET.ParseError, UnicodeError):
+            self.send(f'<s:Envelope xmlns:s="{SOAP}"><s:Body><s:Fault><detail><UPnPError>'
+                      '<errorCode>402</errorCode><errorDescription>Invalid Args</errorDescription>'
+                      '</UPnPError></detail></s:Fault></s:Body></s:Envelope>', 500)
         except (BrokenPipeError, ConnectionResetError):
             pass  # deadline tests intentionally close before the response
         except Exception as error:
@@ -80,7 +84,10 @@ class Speaker(BaseHTTPRequestHandler):
             assert node.findtext('Speed') == '1'
             if self.server.mode in ('control', 'delayed-play') and count == 1: time.sleep(6)
             if self.server.mode == 'timeout-playing': time.sleep(21)
-        if action == 'SetAVTransportURI': self.server.current_uri = node.findtext('CurrentURI')
+        if action == 'SetAVTransportURI':
+            metadata = node.findtext('CurrentURIMetaData')
+            if metadata: ET.fromstring(metadata) # strict XML 1.0 in the escaped DIDL too
+            self.server.current_uri = node.findtext('CurrentURI')
         if action == 'Stop' and self.server.mode in ('get-first', 'event-first'): self.server.stopped = True
         values = ''
         fault = self.server.mode == 'control' and (action == 'Pause' or action == 'Play' and count == 2)

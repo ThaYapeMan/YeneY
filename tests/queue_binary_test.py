@@ -59,6 +59,7 @@ class Device(Handler):
             seconds=max(0,int(time.monotonic()-getattr(self.server,'clock_base',time.monotonic())))
             self.server.position['RelTime']=f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
         if action=='SetAVTransportURI' and args['CurrentURI'].startswith('http://'):
+            if args.get('CurrentURIMetaData'): ET.fromstring(args['CurrentURIMetaData'])
             self.server.uri=args['CurrentURI'];self.server.stream_uri=args['CurrentURI'];return {},None
         if action=='Play' and self.server.uri.startswith('http://'):
             self.server.transport_state='PLAYING'
@@ -150,14 +151,14 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False):
-        self.rates=rates; self.albums=[f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=initial_stop; self.refetch_delay=8 if initial_stop and slow else 0; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None):
+        self.rates=rates; self.albums=albums if albums is not None else [f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=initial_stop; self.refetch_delay=8 if initial_stop and slow else 0; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
         self.sonos=Coordinator(('127.0.0.1',1400),Device)
         self.sonos.fail_add=fail_add
         self.sonos.follow_controls=True
-        self.sonos.expected_albums=self.albums
+        self.sonos.expected_albums=self.albums if expected_albums is None else expected_albums
         self.cli=CLI(self);self.lms=LMS();self.log=open(self.base/'bridge.log','w')
         env=dict(os.environ,YENEY_PLAYBACK_MODE='queue',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(self.base))
         self.proc=subprocess.Popen([str(binary or ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',
@@ -376,6 +377,26 @@ def enqueue_fault():
         print('PASS AddURIToQueue fault replay: exactly one soap-error fallback and release; complete action/HTTP/UPnP fault and exact DIDL request logged',flush=True)
     finally:h.close()
 
+def metadata_replay():
+    album='Het beste uit pop in je moerstaal, Vol. 2'
+    h=Binary(codec='l',rates=(44100,),initial_stop=True,albums=['\x16'+album],expected_albums=[album],
+             binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
+    try:
+        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
+        log=(h.base/'bridge.log').read_text()
+        assert log.count('ownership acquired')==1,log
+        assert len(h.sonos.actions('AddURIToQueue'))==1 and len(h.sonos.actions('Play'))==1
+        assert not h.sonos.actions('AddMultipleURIsToQueue')
+        assert 'state=drain' not in log and 'fallback command=' not in log,log
+        metadata=h.sonos.actions('AddURIToQueue')[0][1]['EnqueuedURIMetaData']
+        item=ET.fromstring(metadata)[0]
+        assert next(n.text for n in item if n.tag.endswith('}album'))==album
+        changed=[line for line in log.splitlines() if 'metadata sanitized mode=queue' in line]
+        assert len(changed)==1 and 'field=album removed=1 replaced=0' in changed[0],changed
+        assert '\x16' not in metadata and '\x16' not in log
+        print('PASS 08:57 metadata replay: CLI %16 album sanitized, strict Sonos accepts AddURIToQueue, one takeover/Play, one field-count log and no fallback',flush=True)
+    finally:h.close()
+
 def rapid_selections():
     h=Binary(rates=(44100,)*3)
     try:
@@ -459,6 +480,7 @@ def seek_future():
 if __name__=='__main__':
     rearm_replay()
     enqueue_fault()
+    metadata_replay()
     rapid_selections()
     album()
     album('l')

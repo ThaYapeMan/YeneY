@@ -78,6 +78,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	./queue-actions-test
 	./queue-metadata-test
 	python3 tests/artwork_test.py
+	python3 tests/xml_metadata_test.py
 	./queue-route-test
 	./queue-item-store-test
 	./core-queue-sink-test
