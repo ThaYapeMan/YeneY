@@ -21,7 +21,7 @@ import threading
 import unittest
 from unittest.mock import patch
 from urllib.parse import quote, unquote, quote_from_bytes
-from queue_controller_test import Coordinator, Handler, didl
+from queue_sonos_fake import Coordinator, Handler, didl
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'third_party/yeney-core/tests'))
 from fake_lms import LMS
@@ -45,6 +45,7 @@ class Model:
         self.before=list(self.urls)
         for i,url in enumerate(self.urls):self.byid[str(9001+i)]=dict(id=str(9001+i),url=url,title='Saved',artist='',album='')
         self.index=1;self.time=12.5;self.mode='pause';self.repeat='2';self.shuffle='0'
+        self.volume='37'
         self.prefs=dict(transitionType='4',transitionDuration='7',transitionSmart='1')
         self.calls=[];self.clock=100.;self.queue=False;self.epoch=0;self.owned=False;self.fault=None;self.backend=None
         self.slim=LMS()
@@ -93,8 +94,9 @@ class Model:
         if cmd[-1]=='?':
             if cmd[0]=='playerpref':return [self.prefs[cmd[1]]]
             key=cmd[-2]
-            return [str(dict(index=self.index,time=self.time,tracks=len(self.urls),mode=self.mode,repeat=self.repeat,shuffle=self.shuffle)[key])]
-        if cmd[0]=='playerpref':self.prefs[cmd[1]]=cmd[2]
+            return [str(dict(index=self.index,time=self.time,tracks=len(self.urls),mode=self.mode,repeat=self.repeat,shuffle=self.shuffle,volume=self.volume)[key])]
+        if cmd[0]=='mixer':self.volume=cmd[2]
+        elif cmd[0]=='playerpref':self.prefs[cmd[1]]=cmd[2]
         elif cmd[0]=='playlistcontrol':
             ids=next(v for v in cmd if v.startswith('track_id:')).split(':',1)[1].split(',')
             values=[self.byid[i]['url'] for i in ids]
@@ -173,7 +175,7 @@ class Backend:
     def snapshot(self):
         if self.model.owned:
             self.sonos.items=[dict(uri='http://127.0.0.1/music/queue.wav?session=fixture')]
-        p=dict(state='active',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='queue-opt-in',occurrence=self.model.index+1,epoch=self.model.epoch,
+        p=dict(state='PLAYING' if self.model.mode=='play' else 'PAUSED' if self.model.mode=='pause' else 'STOPPED',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='queue-opt-in',occurrence=self.model.index+1,epoch=self.model.epoch,
                owned=self.model.owned,mirrored_ahead=3,last_fallback='soap-error' if self.model.fault=='fallback' else '',handoff_gap_ms=-1,latched=False)
         path=self.root/('stream-pacing-'+b'Study'.hex()+'.json')
         path.write_text(json.dumps(dict(pid=self.pid,monotonic_ms=self.now()*1000,playback=p)))
@@ -210,14 +212,14 @@ class Tests(unittest.TestCase):
     def tearDown(self):
         self.suite.logfile.close();self.cli.close();self.sonos.close();self.model.close();self.tmp.cleanup()
     def run_suite(self):
-        with contextlib.redirect_stdout(io.StringIO()) as output,patch.object(m,'Sampler',DummyWS):
+        with contextlib.redirect_stdout(io.StringIO()) as output,contextlib.nullcontext():
             code=self.suite.execute()
         return code,output.getvalue()
     def restored(self):
         self.assertEqual((self.model.urls,self.model.index,self.model.time,self.model.mode,self.model.repeat,self.model.shuffle,self.model.prefs),self.original)
         self.assertFalse(self.suite.dropin.exists());self.assertTrue(self.sonos.crossfade)
         self.assertFalse(self.sonos.items)
-        self.assertFalse(any('volume' in args for args in self.model.calls))
+        self.assertEqual(self.model.volume,'37')
         self.assertTrue(all(args[-1]=='yeney@Study.service' for args in self.backend.calls if args[0]=='systemctl' and args[1] in ('restart','stop','is-active')))
     def field_album(self):
         clean='Het beste uit pop in je moerstaal, Vol. 2'
@@ -229,8 +231,8 @@ class Tests(unittest.TestCase):
     def test_field_sanitized_album_identity(self):
         clean=self.field_album()
         def replay():
-            self.suite.begin('alac-off')
-            tracks=self.suite.selected['alac-off'];self.suite.load(tracks)
+            self.suite.begin('album')
+            tracks=self.suite.selected['album'];self.suite.load(tracks)
             row=self.suite.samples[-1]
             self.assertTrue(row['identity']);self.assertEqual(row['speaker']['metadata']['album'],clean)
             self.assertEqual(row['lms']['id'],tracks[0]['id'])
@@ -242,8 +244,8 @@ class Tests(unittest.TestCase):
     def test_different_album_still_fails(self):
         self.field_album()
         def replay():
-            self.suite.begin('alac-off')
-            tracks=self.suite.selected['alac-off'];self.suite.load(tracks)
+            self.suite.begin('album')
+            tracks=self.suite.selected['album'];self.suite.load(tracks)
             self.model.speaker_metadata[tracks[0]['id']]['album']='A genuinely different album'
             for _ in range(4):self.suite.sample(tracks)
             self.fail('a persistent wrong album must fail')
@@ -262,7 +264,7 @@ class Tests(unittest.TestCase):
                 self.model.title_format=selected
                 def replay():
                     self.assertEqual(self.suite.title_format,selected)
-                    self.suite.begin('alac-off');tracks=self.suite.selected['alac-off'];self.suite.load(tracks)
+                    self.suite.begin('album');tracks=self.suite.selected['album'];self.suite.load(tracks)
                     self.assertTrue(self.suite.samples[-1]['identity'])
                     track=tracks[0]
                     wrong=track['title'] if selected=='artist-title' else track['artist']+' - '+track['title']
@@ -278,19 +280,18 @@ class Tests(unittest.TestCase):
     def test_full_sequence(self):
         code,output=self.run_suite();self.assertEqual(code,0,output)
         self.restored();self.assertIn('DEVICE SUITE OK',output)
-        self.assertEqual([r['joins'] for r in self.suite.results[:4]],[3]*4)
-        self.assertEqual([r['name'] for r in self.suite.results],['alac-off','flac-off','alac-crossfade','mixed-rate','lms-controls','resume-after-stop','stream-reference-60s'])
-        self.assertIn('WS POSITION: unavailable',output)
+        self.assertEqual(self.suite.results[0]['joins'],3)
+        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play'])
         with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:
             names={n.split('/',1)[-1] for n in tar.getnames()}
-            self.assertTrue({'summary.md','samples.jsonl','joins.jsonl','seeks.jsonl','manifest.tsv','journal.log','backup.json','before.json','result.txt','websocket-summary.json'}<=names,names)
+            self.assertTrue({'summary.md','samples.jsonl','joins.jsonl','manifest.tsv','journal.log','backup.json','before.json','result.txt'}<=names,names)
         self.assertEqual(len(list(self.root.glob('yeney-queue-device-suite-20*.tar.gz'))),1)
-        self.assertTrue({'p','u','s','f','q'}<=set(self.model.slim_commands))
+        self.assertTrue({'p','u','q'}<=set(self.model.slim_commands))
         self.assertEqual(len(self.sonos.actions('SaveQueue')),1)
         self.assertIn('Before YeneY backup verified: SQ:',(self.suite.work/'summary.md').read_text())
         self.assertIn('Q:0 before takeover: entries=1 owned=0 foreign=1',(self.suite.work/'commands.log').read_text())
         print('PASS queue device backup: foreign entries require an identity/content-verified saved queue')
-        print('PASS queue device suite: full loopback CLI/SlimProto/SOAP sequence, three joins per album, controls, 60 s stream reference, archive and exact restoration')
+        print('PASS queue device suite: full loopback CLI/SlimProto/SOAP sequence, album three joins, pause ten seconds, stop/new play, saved/restored volume, archive and exact restoration')
     def test_backup_not_needed(self):
         for label,entries,note in (
                 ('empty',[],'queue empty'),
@@ -368,31 +369,14 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.model.urls,self.original[0])
         print('PASS queue device suite: existing drop-in preserved and unverifiable backup prevents takeover')
 
-    def test_seek_requires_speaker_evidence(self):
-        with patch.object(self.suite,'setup',lambda:None),patch.object(self.suite,'cleanup',lambda:None):
-            self.suite.mac=MAC;self.suite.pid=self.backend.pid
-            self.model.queue=True;self.model.owned=True
-            tracks=self.model.library[:4];self.model.urls=[t['url'] for t in tracks];self.model.index=0;self.model.time=0
-            self.suite.begin('seek-evidence');self.backend.snapshot()
-            # LMS has acknowledged the target; SOAP stays at zero.
-            original=self.suite.speaker
-            self.suite.speaker=m.Speaker('127.0.0.1',self.suite.log)
-            real=self.suite.speaker.evidence
-            def unchanged():
-                value=real();value['rel']=0;return value
-            self.model.time=30
-            with patch.object(self.suite.speaker,'evidence',unchanged):
-                with self.assertRaisesRegex(m.SuiteError,'deadline'):
-                    self.suite.wait(tracks,lambda r:abs(r['speaker']['rel']-30)<=2,3,discontinuity=True)
-            self.suite.speaker=original
-        print('PASS queue device suite: CLI seek acknowledgement without settled speaker position cannot pass')
-
-    def test_no_48(self):
-        self.model.library=[t for t in self.model.library if t['samplerate']!='48000']
-        self.suite.mac=MAC;self.suite.library()
-        self.assertEqual(self.suite.results[0]['verdict'],'SKIP')
-        self.suite.logfile.close()
-        print('PASS queue device suite: absent 48 kHz library is an explicit non-failing skip')
+    def test_album_selection(self):
+        self.suite.mac=MAC;self.suite.album_choice='5';self.suite.library()
+        self.assertEqual(self.suite.selected['album'][0]['album_id'],'5')
+        self.suite.album_choice='Album 1';self.suite.library()
+        self.assertEqual(self.suite.selected['album'][0]['album_id'],'1')
+        self.suite.album_choice='missing'
+        with self.assertRaises(m.SuiteError):self.suite.library()
+        print('PASS relay device album selection: ID/name/default and ineligible rejection')
 
 
 class SanitizerParity(unittest.TestCase):

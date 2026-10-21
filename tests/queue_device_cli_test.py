@@ -105,7 +105,7 @@ class Tests(unittest.TestCase):
                 f.model.byid[entry['id']]=entry;entries.append(entry)
             f.model.urls=[e['url'] for e in entries];f.model.index=6;f.model.time=17.5
             original=(list(f.model.urls),dict(f.model.prefs))
-            with contextlib.redirect_stdout(io.StringIO()) as output,patch.object(m,'Sampler',DummyWS):
+            with contextlib.redirect_stdout(io.StringIO()) as output,contextlib.nullcontext():
                 code=f.suite.execute()
             self.assertEqual(code,0,output.getvalue())
             self.assertEqual(f.model.urls,original[0]);self.assertEqual(f.model.prefs,original[1])
@@ -117,7 +117,7 @@ class Tests(unittest.TestCase):
         with fixture() as f:
             f.model.mode='stop'
             original=list(f.model.urls)
-            with contextlib.redirect_stdout(io.StringIO()) as output,patch.object(m,'Sampler',DummyWS):
+            with contextlib.redirect_stdout(io.StringIO()) as output,contextlib.nullcontext():
                 code=f.suite.execute()
             self.assertEqual(code,0,output.getvalue())
             self.assertEqual(f.model.mode,'stop');self.assertEqual(f.model.urls,original)
@@ -138,7 +138,7 @@ class Tests(unittest.TestCase):
             server.reject.add(('playerpref','transitionType','4'))
             try:
                 f.suite.cli=m.CLI('127.0.0.1',f.suite.log,server.server_address[1])
-                with contextlib.redirect_stdout(io.StringIO()) as output,patch.object(m,'Sampler',DummyWS):
+                with contextlib.redirect_stdout(io.StringIO()) as output,contextlib.nullcontext():
                     code=f.suite.execute()
                 self.assertEqual(code,1,output.getvalue())
                 self.assertIn('NOT RESTORED: transitionType (expected 4, got 0)',output.getvalue())

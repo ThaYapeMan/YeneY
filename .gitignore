@@ -85,3 +85,5 @@ field-cold-test
 /queue-lms-client-test
 
 /xml-sanitize-test
+
+/room-status-test

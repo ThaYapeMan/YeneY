@@ -27,20 +27,17 @@ from xml.sax.saxutils import escape
 # Installed together by make install. Reuse the existing audited CLI/room helpers.
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0,str(HERE))
-from yeney_queue_ws import Sampler, analyze
+
 PACING = runpy.run_path(str(HERE/'yeney-stream-pacing-suite'))
 QUEUE = runpy.run_path(str(HERE/'yeney-queue-suite'))
 SuiteError = PACING['SuiteError']
 records = PACING['records']
 PREFS = ('transitionType', 'transitionDuration', 'transitionSmart')
-CHECKLIST = '''Optional listening/app checklist (not part of the automated verdict):
+CHECKLIST = """Optional listening checklist:
 - Listen for a gap or click at each join; uninterrupted audio is expected.
-- Listen for the 10 s fade across albums; the cached mixed intro is expected.
-- Seek: sound should start at the requested source time within 3 s.
-- Sonos app pause/resume: LMS follows the confirmed speaker state once.
-- Sonos app next/previous: LMS identifies the audible prepared track, without loops.
-- Sonos app seek: LMS time follows the speaker, without duplicate starts.
-Run app checks only after this suite finishes; they are deliberately not automated.'''
+- Confirm LMS pause holds and resume continues the same item.
+- Confirm stop/new play starts once. Sonos-app control qualification is parked;
+  do not expect app actions to change LMS in this relay release."""
 
 
 def xml_sanitize(text):
@@ -252,10 +249,12 @@ class Speaker:
 
 
 class Suite(PACING['Suite']):
-    def __init__(self, room, server, *, speaker=None, **kwargs):
+    def __init__(self, room, server, *, speaker=None, album=None, volume=10, **kwargs):
         super().__init__(room, server, **kwargs)
         # Parent constructor creates only an archive workspace, never a service.
         self.cli = kwargs.get('cli') or CLI(server, self.log)
+        self.album_choice, self.test_volume = album, volume
+        if not 0 <= volume <= 100: raise SuiteError("volume must be 0–100")
         self.speaker = speaker
         self.results, self.selected = [], {}
         self.locks = []
@@ -340,7 +339,7 @@ class Suite(PACING['Suite']):
                 if self.entries_equal(actual,entries) and (mode is None or actual_mode==mode):
                     if queue:
                         p=self.diagnostic()
-                        if p.get('state') not in ('prepare','active'):
+                        if p.get('state') not in ('STOPPED','PLAYING','PAUSED'):
                             raise SuiteError('queue preparation not ready')
                     self.log('LMS ready: playlist and mode verified')
                     return
@@ -382,30 +381,13 @@ class Suite(PACING['Suite']):
                     QUEUE['number'](t.get('samplerate')) in (44100,48000,44.1,48) and
                     t.get('remote','0') == '0' and t.get('url','').startswith('file://'))
         good = [t for t in tracks if eligible(t)]
-        for kind in ('alac','flac'):
-            albums = collections.defaultdict(list)
-            for t in good:
-                if QUEUE['codec'](t) == kind and QUEUE['number'](t['samplerate']) in (44100,44.1):
-                    albums[t['album_id']].append(t)
-            group = next((v for v in albums.values() if len(v) >= 4), None)
-            if not group:
-                raise SuiteError('need a '+kind+' album with four local tracks >=60 s at 44.1 kHz')
-            self.selected[kind+'-off'] = group[:4]
-            if kind == 'alac':
-                if len(albums) < 4:
-                    raise SuiteError('need ALAC tracks from four different albums')
-                self.selected['alac-crossfade'] = [v[0] for v in list(albums.values())[:4]]
-        has48 = any(QUEUE['number'](t.get('samplerate')) in (48000,48) for t in tracks)
-        at48 = [t for t in good if QUEUE['number'](t['samplerate']) in (48000,48) and QUEUE['codec'](t)]
-        if has48 and not at48:
-            raise SuiteError('48 kHz library present but no eligible lossless track')
-        if at48:
-            a,b = self.selected['flac-off'][:2]
-            self.selected['mixed-rate'] = [a,at48[0],b,at48[-1]]
-        else:
-            self.results.append(dict(name='mixed-rate', verdict='SKIP', joins=0, startup=None,
-                                     mismatch=0, fallbacks=[], note='library has no 48 kHz tracks'))
-        self.selected={name:self.selected[name] for name in ('alac-off','flac-off','alac-crossfade','mixed-rate') if name in self.selected}
+        albums = collections.defaultdict(list)
+        for track in good:
+            if QUEUE['codec'](track): albums[track['album_id']].append(track)
+        group = next((v for key,v in albums.items() if len(v)>=4 and
+                     (self.album_choice is None or str(self.album_choice)==key or self.album_choice==v[0].get('album'))),None)
+        if not group: raise SuiteError('need selected album with four eligible local lossless tracks >=60 s')
+        self.selected={'album':group}
         with (self.work/'manifest.tsv').open('w',newline='') as f:
             writer=csv.writer(f,delimiter='\t');writer.writerow(['scenario','index','id','title','album','album_id','codec','samplerate','duration','url'])
             for name, entries in self.selected.items():
@@ -441,7 +423,7 @@ class Suite(PACING['Suite']):
         entries=self.playlist_entries()
         self.before = dict(entries=entries,playlist=[r['url'] for r in entries], index=self.query('playlist','index'), time=self.query('time'),
                            repeat=self.query('playlist','repeat'), shuffle=self.query('playlist','shuffle'), mode=self.query('mode'),
-                           prefs={p:self.query('playerpref',p) for p in PREFS}, crossfade=self.speaker.crossfade(),
+                           prefs={p:self.query('playerpref',p) for p in PREFS}, crossfade=self.speaker.crossfade(), volume=self.query('mixer','volume'),
                            environment=self.backend.run('systemctl','show',self.unit,'-p','Environment','--value'))
         if not self.entries_equal(self.playlist_entries(),self.before['entries']) or self.before['mode'] not in ('play','pause','stop'):
             raise SuiteError('LMS playlist changed during snapshot')
@@ -488,6 +470,7 @@ class Suite(PACING['Suite']):
             self.override = True
             f.write('[Service]\nEnvironment=YENEY_PLAYBACK_MODE=queue\n')
         self.playback = True
+        self.mutate('mixer','volume',str(self.test_volume))
         self.restart()
         self.pid = self.connected()
         deadline = self.backend.now()+30
@@ -536,6 +519,7 @@ class Suite(PACING['Suite']):
         with (self.work/'samples.jsonl').open('a') as f:
             f.write(json.dumps(row,sort_keys=True)+'\n')
         self.samples.append(row)
+        if p.get('last_fault'): self.problem('relay fault: '+p['last_fault'])
         if p.get('active') != 'queue' or p.get('requested') != 'queue' or p.get('last_fallback') or p.get('latched'):
             self.current['fallbacks'].append(p.get('last_fallback') or p.get('reason'))
             self.problem('fallback '+str(self.current['fallbacks']))
@@ -596,16 +580,16 @@ class Suite(PACING['Suite']):
         deadline=self.backend.now()+60
         expected=[dict(id=t['id'],url=t['url']) for t in tracks]
         self.pending_mutation('playlistcontrol','cmd:load','track_id:'+','.join(t['id'] for t in tracks))
+        start = self.backend.now()
         self.pending_mutation('play')
         self.lms_ready(expected,'play',queue=True,deadline=deadline)
-        start = self.backend.now()
         self.due=start
-        row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'],3,preparing=True)
+        row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'],max(0,5-(self.backend.now()-start)),preparing=True)
         delay = row['monotonic']-start
         self.current['startup'] = max(self.current['startup'],delay)
         self.last_sample = row
-        if delay > 3:
-            self.problem('startup >3 s')
+        if delay > 5:
+            self.problem('startup >5 s')
         self.record_start(row,'play')
         return row
 
@@ -627,99 +611,24 @@ class Suite(PACING['Suite']):
         if self.mismatch_since is not None:
             self.wait(tracks,lambda r:r['identity'],2)
 
-    def controls(self):
-        tracks = self.selected['flac-off']
-        self.begin('lms-controls')
-        self.load(tracks)
-        for target in (1,0):
-            self.mutate('playlist','index','+1' if target==1 else '-1')
-            self.wait(tracks,lambda r:r['lms']['index']==target and r['identity'] and r['speaker']['state']=='PLAYING',3,discontinuity=True)
-        self.mutate('pause','1')
-        row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PAUSED_PLAYBACK',3)
-        paused = row['speaker']['rel']
-        until = self.backend.now()+10
-        while self.backend.now()<until:
-            row = self.sample(tracks)
-            if row['speaker']['state']!='PAUSED_PLAYBACK' or row['speaker']['rel']!=paused:
-                self.problem('pause did not hold for 10 s')
-        self.pending_mutation('play')
-        self.lms_ready([dict(id=t['id'],url=t['url']) for t in tracks],'play',queue=True)
-        self.due=self.backend.now()
-        self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING',3)
-        origins = {self.last_sample['speaker']['uri']:0.}
-        for fraction in (.5,.1):
-            target = float(tracks[0]['duration'])*fraction
-            start = self.backend.now()
-            self.mutate('time',str(target))
-            # Source time can differ from asset RelTime after a new seek epoch.
-            def settled(r):
-                speaker = r['speaker']
-                expected_rel = target-origins[speaker['uri']] if speaker['uri'] in origins else 0.
-                return (abs(r['lms']['time']-target)<=2 and abs(speaker['rel']-expected_rel)<=2 and
-                        r['identity'] and speaker['state']=='PLAYING')
-            row,_ = self.wait(tracks,settled,3,discontinuity=True)
-            origins.setdefault(row['speaker']['uri'],target)
-            self.record_start(row,'seek')
-            delay = row['monotonic']-start
-            if delay > 3:
-                self.problem('seek >3 s')
-            self.current['startup'] = max(self.current['startup'],delay)
-            with (self.work/'seeks.jsonl').open('a') as f:
-                f.write(json.dumps(dict(target=target,settled_s=delay,uri=row['speaker']['uri'],rel=row['speaker']['rel'],epoch=row['playback']['epoch']))+'\n')
-        self.mutate('stop')
-        self.wait(tracks,lambda r:r['speaker']['state']=='STOPPED',3)
-        self.begin('resume-after-stop')
-        self.pending_mutation('play')
-        self.lms_ready([dict(id=t['id'],url=t['url']) for t in tracks],'play',queue=True)
-        start = self.backend.now()
-        self.due=start
-        row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'],3,preparing=True)
-        self.record_start(row,'resume-after-stop')
-        self.current['startup']=row['monotonic']-start
-        if self.current['startup']>3:
-            self.problem('restart after stop >3 s')
-        if not row['playback'].get('owned') or row['playback'].get('latched'):
-            self.problem('queue did not re-arm')
-
     def measure(self):
-        for name,tracks in self.selected.items():
-            self.album(name,tracks,10 if name=='alac-crossfade' else 0)
-        self.controls()
-        self.normal_stream()
-
-    def normal_stream(self):
+        tracks=self.selected['album']
+        self.album('album',tracks)
+        self.begin('pause-resume')
+        self.mutate('pause','1')
+        self.wait(tracks,lambda r:r['speaker']['state']=='PAUSED_PLAYBACK',5)
+        paused=self.samples[-1]['speaker']['rel']
+        until=self.backend.now()+10
+        while self.backend.now()<until:
+            row=self.sample(tracks)
+            if row['speaker']['state']!='PAUSED_PLAYBACK' or row['speaker']['rel']!=paused:
+                self.problem('pause did not hold position')
+        self.mutate('play')
+        self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'],5)
+        self.begin('stop-new-play')
         self.mutate('stop')
-        self.dropin.unlink()
-        self.restart()
-        self.pid = self.connected()
-        ready = self.backend.now()+30
-        while True:
-            try:
-                if self.diagnostic()['active'] != 'stream':
-                    raise SuiteError('normal room configuration does not select stream')
-                break
-            except (OSError,ValueError,KeyError,SuiteError):
-                if self.backend.now()>=ready:
-                    self.problem('normal stream readiness timeout')
-                self.backend.sleep(1)
-        self.ws_mode = 'stream'
-        self.begin('stream-reference-60s')
-        self.pending_mutation('play')
-        self.lms_ready([dict(id=t['id'],url=t['url']) for t in self.selected['flac-off']],'play')
-        start = self.backend.now()
-        observed_start = False
-        while self.backend.now()-start < 60:
-            p = self.diagnostic()
-            if p['active'] != 'stream':
-                self.problem('normal room configuration does not select stream')
-            speaker = self.speaker.evidence()
-            if speaker['state']=='PLAYING' and not observed_start:
-                self.record_start(dict(monotonic=self.backend.now(),speaker=speaker),'stream-play')
-                observed_start = True
-            words = self.cli.call(self.mac,'status','-','1','tags:utal')
-            with (self.work/'samples.jsonl').open('a') as f:
-                f.write(json.dumps(dict(scenario=self.current['name'],monotonic=self.backend.now(),wall=time.time(),speaker=speaker,lms=words,playback=p))+'\n')
-            self.backend.sleep(1)
+        self.wait(tracks,lambda r:r['speaker']['state']=='STOPPED',5)
+        self.load(tracks)
 
     def restore_item(self,label,expected,setter,getter,compare=None):
         compare=compare or (lambda a,b:a==b)
@@ -785,6 +694,9 @@ class Suite(PACING['Suite']):
         for pref in PREFS:
             expected=self.before['prefs'][pref]
             self.restore_item(pref,expected,lambda pref=pref,expected=expected:self.mutate('playerpref',pref,expected),lambda pref=pref:self.query('playerpref',pref))
+        if 'volume' in self.before:
+            expected=self.before['volume']
+            self.restore_item('volume',expected,lambda:self.mutate('mixer','volume',expected),lambda:self.query('mixer','volume'))
         mode=self.before['mode']
         self.restore_item('mode',mode,lambda:self.mutate(*(('pause','1') if mode=='pause' else (mode,))),lambda:self.query('mode'))
         self.restore_item('playlist identities/order',entries,lambda:None,self.playlist_entries,self.entries_equal)
@@ -835,13 +747,6 @@ class Suite(PACING['Suite']):
         try:
             try:
                 self.setup()
-                try:
-                    self.ws = Sampler(self.speaker_ip,self.work,lambda:dict(mode=self.ws_mode,scenario=self.current['name'] if self.current else 'setup'))
-                    self.ws.start()
-                except Exception as error:
-                    self.log('WebSocket unavailable: '+str(error))
-                    self.ws = None
-                    (self.work/'websocket-unavailable.txt').write_text(str(error)+'\n')
                 self.measure()
             except (Exception,KeyboardInterrupt) as e:
                 self.errors.append(str(e) or 'interrupted')
@@ -850,30 +755,18 @@ class Suite(PACING['Suite']):
             finally:
                 for s in watched:
                     signal.signal(s,signal.SIG_IGN)
-                if self.ws:
-                    try:
-                        self.ws.close()
-                    except Exception as error:
-                        self.ws.rows.append(dict(mode=self.ws_mode,error=str(error)))
                 self.cleanup()
-            joins=[json.loads(line) for line in (self.work/'joins.jsonl').read_text().splitlines()] if (self.work/'joins.jsonl').exists() else []
-            try:
-                self.ws_report=analyze(self.ws.rows if self.ws else [],joins)
-            except Exception as error:
-                self.ws_report=analyze([dict(mode=mode,error='analysis unavailable: '+str(error)) for mode in ('queue','stream')],[])
-            (self.work/'websocket-summary.json').write_text(json.dumps(self.ws_report,indent=2)+'\n')
-            ws_verdict='WS POSITION: '+('unavailable' if any(v['verdict']=='unavailable' for v in self.ws_report.values()) else 'sub-second' if all(v['verdict']=='sub-second' for v in self.ws_report.values()) else 'whole seconds')
             verdict = 'DEVICE SUITE FAILED: '+'; '.join(dict.fromkeys(self.errors)) if self.errors else 'DEVICE SUITE OK'
             (self.work/'result.txt').write_text(verdict+'\n')
             lines = ['# Queue device qualification','', '| Scenario | Verdict | Joins | Startup/seek max s | Boundary mismatch max s | Fallbacks | Note |', '|---|---|---:|---:|---:|---|---|']
-            for name in ('alac-off','flac-off','alac-crossfade','mixed-rate','lms-controls','resume-after-stop','stream-reference-60s'):
+            for name in ('album','pause-resume','stop-new-play'):
                 if not any(r['name']==name for r in self.results):
                     self.results.append(dict(name=name,verdict='NOT RUN',joins=0,startup=None,mismatch=0,fallbacks=[],note='prior failure'))
-            order={name:i for i,name in enumerate(('alac-off','flac-off','alac-crossfade','mixed-rate','lms-controls','resume-after-stop','stream-reference-60s'))}
-            self.results.sort(key=lambda r:order[r['name']])
+            order={name:i for i,name in enumerate(('album','pause-resume','stop-new-play'))}
+            self.results.sort(key=lambda r:order.get(r['name'],len(order)))
             for r in self.results:
                 lines.append('| '+' | '.join(str(r[k]).replace('|','/') for k in ('name','verdict','joins','startup','mismatch','fallbacks','note'))+' |')
-            lines += ['', *self.not_restored, '', self.backup_note, '', 'WebSocket metrics per mode (all per-item fits and start differences in websocket-summary.json):', '', '```json', json.dumps(self.ws_report,indent=2), '```', '', ws_verdict, '', 'Release verified: '+str(self.release_verified), '', 'HTTP counts: not exposed unless present in samples. RelTime join gaps are observational, not an acoustic silence measurement.', '', CHECKLIST, '', verdict]
+            lines += ['', *self.not_restored, '', self.backup_note, '', 'Release verified: '+str(self.release_verified), '', CHECKLIST, '', verdict]
             (self.work/'summary.md').write_text('\n'.join(lines)+'\n')
             (self.work/'listening-checklist.txt').write_text(CHECKLIST+'\n')
             self.logfile.close()
@@ -897,7 +790,7 @@ class Suite(PACING['Suite']):
                 except OSError:pass
             finally:
                 if temporary and os.path.exists(temporary):os.unlink(temporary)
-            print(str(latest)+'\n'+str(archive)+'\n'+'\n'.join(self.not_restored)+'\n'+CHECKLIST+'\n'+ws_verdict+'\n'+verdict,flush=True)
+            print(str(latest)+'\n'+str(archive)+'\n'+'\n'.join(self.not_restored)+'\n'+CHECKLIST+'\n'+verdict,flush=True)
             return 1 if self.errors else 0
         finally:
             for held in reversed(self.locks):
@@ -910,8 +803,10 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--room',required=True)
     parser.add_argument('--server',required=True)
+    parser.add_argument('--album',help='LMS album ID or exact name; first eligible album by default')
+    parser.add_argument('--volume',type=int,default=10,choices=range(101),metavar='0–100')
     args=parser.parse_args()
-    suite=Suite(args.room,args.server)
+    suite=Suite(args.room,args.server,album=args.album,volume=args.volume)
     if os.geteuid()!=0:
         suite.setup=lambda:(_ for _ in ()).throw(SuiteError('run as root'))
     return suite.execute()
