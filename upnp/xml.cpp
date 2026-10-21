@@ -4,7 +4,7 @@
 namespace upnp {
 std::string xmlEscape(const std::string& text) {
     std::string out;
-    for (char c : text) switch (c) {
+    for (char c : xmlSanitize(text)) switch (c) {
         case '&': out += "&amp;"; break;
         case '<': out += "&lt;"; break;
         case '>': out += "&gt;"; break;
@@ -32,6 +32,38 @@ std::string local(const std::string& name) {
     const auto colon = name.find(':');
     return colon == std::string::npos ? name : name.substr(colon + 1);
 }
+}
+std::string xmlSanitize(const std::string& text, XmlTextChanges* changes) {
+    XmlTextChanges count;
+    std::string out;
+    out.reserve(text.size());
+    for (size_t p = 0; p < text.size();) {
+        const size_t start = p;
+        const unsigned lead = static_cast<unsigned char>(text[p++]);
+        unsigned code = lead, width = 1, minimum = 0;
+        bool valid = true;
+        if (lead >= 0xc2 && lead <= 0xdf) { code = lead & 31; width = 2; minimum = 0x80; }
+        else if (lead >= 0xe0 && lead <= 0xef) { code = lead & 15; width = 3; minimum = 0x800; }
+        else if (lead >= 0xf0 && lead <= 0xf4) { code = lead & 7; width = 4; minimum = 0x10000; }
+        else if (lead >= 0x80) valid = false;
+        for (unsigned n = 1; valid && n < width; ++n) {
+            if (p == text.size() || (static_cast<unsigned char>(text[p]) & 0xc0) != 0x80) {
+                valid = false;
+                break; // leave the first unrelated byte for the next character
+            }
+            code = (code << 6) | (static_cast<unsigned char>(text[p++]) & 63);
+        }
+        if (!valid || code < minimum || code > 0x10ffff) {
+            utf8(0xfffd, out);
+            ++count.replaced;
+        } else if (!xmlCharacter(code)) {
+            ++count.removed;
+        } else {
+            out.append(text, start, p - start);
+        }
+    }
+    if (changes) *changes = count;
+    return out;
 }
 bool xmlUnescape(const std::string& text, std::string& out) {
     out.clear();

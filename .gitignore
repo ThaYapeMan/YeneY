@@ -83,3 +83,5 @@ field-cold-test
 /yeney-queue-acceptance
 
 /queue-lms-client-test
+
+/xml-sanitize-test

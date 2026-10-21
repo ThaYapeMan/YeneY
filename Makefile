@@ -22,7 +22,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f queue-lms-client-test yeney-queue-acceptance queue-mode-fixture room-mode-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f xml-sanitize-test queue-lms-client-test yeney-queue-acceptance queue-mode-fixture room-mode-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -111,6 +111,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/http_server_test.py
 	./speaker-state-test
 	./upnp-test
+	./xml-sanitize-test
 	./stream-content-test
 	python3 tests/title_format_setting_test.py
 	python3 tests/stream_content_setting_test.py
@@ -403,3 +404,7 @@ queue-controller-fixture queue-mode-fixture: queue_lms_cli.h
 yeney.o queue_room.o room-mode-test: lms_artwork.h
 
 queue_room.o: queue_protocol.h
+
+xml-sanitize-test: tests/xml_sanitize_test.cpp upnp/xml.cpp upnp/xml.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ tests/xml_sanitize_test.cpp upnp/xml.cpp
+test: xml-sanitize-test

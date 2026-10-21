@@ -802,8 +802,11 @@ The finite route and 3a DIDL are used for each published asset. Every append use
 `EnqueueAsNext=0`, between freshly observed and confirming queue snapshots.
 `NumTracksAdded=1`, the expected URI list and a changed UpdateID must all agree.
 The retained `AddMultipleURIsToQueue` helper is not device-verified: Study S2
-86.10-81100 rejected it with UPnP 402 on 20 October 2026. It is never used in
-production; batching requires separate device qualification. The queue transport URI is set once, and Play is
+86.10-81100 rejected it with UPnP 402 on 20 October 2026. That rejection is
+unexplained: the 21 October 08:57 AddURIToQueue request exposed a forbidden U+0016
+at the start of the same scenario's album tag, which may also explain the earlier
+batch rejection. AddURIToQueue remains the device-proven production action;
+batching requires separate device qualification. The queue transport URI is set once, and Play is
 sent once, when the first item is ready. Later publications only extend the
 queue; Sonos owns the joins. Explicit session-end, mode-change and destructor/service-shutdown
 release remove only exact asset URLs registered by this controller, preserving
