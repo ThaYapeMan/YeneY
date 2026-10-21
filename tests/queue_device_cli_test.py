@@ -69,7 +69,7 @@ class Tests(unittest.TestCase):
     def test_slow_load_2_and_20_seconds(self):
         with fixture() as f:
             tracks=f.model.library[:4]
-            command=('playlistcontrol','cmd:load','track_id:'+','.join(t['id'] for t in tracks))
+            command=('playlistcontrol','cmd:add','track_id:'+','.join(t['id'] for t in tracks))
             server=Delayed(f.model)
             try:
                 f.suite.cli=m.CLI('127.0.0.1',f.suite.log,server.server_address[1])

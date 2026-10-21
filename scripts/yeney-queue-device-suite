@@ -586,7 +586,11 @@ class Suite(PACING['Suite']):
                 self.problem('LMS transition preference not applied: '+k)
         deadline=self.backend.now()+60
         expected=[dict(id=t['id'],url=t['url']) for t in tracks]
-        self.pending_mutation('playlistcontrol','cmd:load','track_id:'+','.join(t['id'] for t in tracks))
+        # cmd:load autoplays. Stage while stopped so the startup clock is
+        # anchored to one genuine play, not a redundant later play command.
+        self.pending_mutation('playlist','clear')
+        self.pending_mutation('playlistcontrol','cmd:add','track_id:'+','.join(t['id'] for t in tracks))
+        self.lms_ready(expected,'stop',queue=True,deadline=deadline)
         start = self.backend.now()
         self.pending_mutation('play')
         self.lms_ready(expected,'play',queue=True,deadline=deadline)

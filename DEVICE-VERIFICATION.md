@@ -647,7 +647,8 @@ The default is the first eligible local lossless album with at least four
 tracks of 60 seconds or longer, and Sonos room volume 10 (range 0–100). LMS software volume is untouched. It plays until
 three joins, checks audible Sonos/LMS identity with at most two seconds of
 boundary mismatch, pauses ten seconds from LMS, resumes, then stops and plays
-again. Each start must reach PLAYING on an owned item within five seconds.
+again. The playlist is staged while stopped with `cmd:add`; one explicit LMS play
+starts the clock. Each start must reach PLAYING on an owned item within five seconds.
 Expected metadata follows YeneY's XML sanitisation and room title format.
 
 The suite refuses grouped/inactive rooms and competing suite locks. It saves

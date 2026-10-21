@@ -47,6 +47,7 @@ class Model:
         self.index=1;self.time=12.5;self.mode='pause';self.repeat='2';self.shuffle='0'
         self.volume='37'
         self.prefs=dict(transitionType='4',transitionDuration='7',transitionSmart='1')
+        self.play_prior_modes=[]
         self.calls=[];self.clock=100.;self.queue=False;self.epoch=0;self.owned=False;self.fault=None;self.backend=None
         self.slim=LMS()
         self.peer=socket.create_connection(self.slim.listener.getsockname())
@@ -112,6 +113,7 @@ class Model:
         elif cmd[0]=='time':self.time=float(cmd[1]);self.slim.strm('f');self.slim.strm('s')
         elif cmd[0]=='pause':self.mode='pause';self.slim.strm('p')
         elif cmd[0] in ('play','stop'):
+            if cmd[0]=='play':self.play_prior_modes.append(self.mode)
             self.mode=cmd[0];self.slim.strm('u' if cmd[0]=='play' else 'q')
             if self.mode=='play' and self.queue:self.owned=True;self.backend.sonos.crossfade=False
         else:raise AssertionError(args)
@@ -286,6 +288,7 @@ class Tests(unittest.TestCase):
         code,output=self.run_suite();self.assertEqual(code,0,output)
         self.restored();self.assertIn('DEVICE SUITE OK',output)
         self.assertEqual([a[1]['DesiredVolume'] for a in self.sonos.actions('SetVolume')],['10','23'])
+        self.assertEqual(self.model.play_prior_modes,['stop','pause','stop'])
         self.assertEqual(self.suite.results[0]['joins'],3)
         self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play'])
         with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:
@@ -297,6 +300,7 @@ class Tests(unittest.TestCase):
         self.assertIn('Before YeneY backup verified: SQ:',(self.suite.work/'summary.md').read_text())
         self.assertIn('Q:0 before takeover: entries=1 owned=0 foreign=1',(self.suite.work/'commands.log').read_text())
         print('PASS queue device backup: foreign entries require an identity/content-verified saved queue')
+        print('PASS relay startup measurement: playlist staged stopped with cmd:add; each timed Play starts a new run, resume follows pause')
         print('PASS queue device suite: full loopback CLI/SlimProto/SOAP sequence, album three joins, pause ten seconds, stop/new play, saved/restored volume, archive and exact restoration')
     def test_backup_not_needed(self):
         for label,entries,note in (
