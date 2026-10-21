@@ -29,7 +29,7 @@ QueueActions, verified foreign backup and crossfade restoration.
 | 2–5 | Advanced status: requested/active mode, prepare/drain/handoff, reason, epoch/generation, occurrence, ownership, ahead, rates, promised/actual frames, latch, fallback/gap, LMS CLI counters | `room_mode.*`, `stream_metrics.h`, `sonos-status.cpp`; `1806e22`, `b1da8d8` | `room_mode_test.cpp`, `queue_mode_test.py`, `queue_lms_client_test.py` |
 
 Generation-only core hooks to revisit in step 2: `Sink::playbackGeneration`,
-`Sink::readyForGeneration`, QueueMode::pollGeneration/beginRun and its
+`Sink::playbackReady`, QueueMode::pollGeneration/beginRun and its
 `modeGeneration`. Received/cached-start authorization and retained track state
 also supported step-3 refetch. These hooks must not drive the relay or issue a
 HELO. Existing core rendering policy remains independently tested.
@@ -82,3 +82,20 @@ sub-second/inflated-after-error tests when restoring them.
 These runs qualify the rendering and SOAP primitives, not the advanced
 controller. Rebuild each parked component independently against real LMS
 and the strict fake before requesting another owner run.
+
+## Relay extraction record
+
+The relay removes the advanced source/test targets listed above rather than
+leaving a second controller active. `tests/queue_sonos_fake.py` now owns the
+shared strict SOAP fake extracted from the old controller tests. Metadata and
+stream-wire tests retain that fake without the parked controller driver.
+`queue_playlist.h` keeps only metadata parsing; duplicate occurrence matching,
+revision state and ambiguous-edit rejection are parked with step 4.
+Core `modeGeneration` and its producer-reset/readiness branch are removed;
+public generation hooks retain inert defaults for source compatibility. Only
+the generation-specific block in core `tests/speaker_test.py` is retired.
+Core render/refetch tests remain useful independent tests of retained rendering.
+The new storage-completion gate prevents decoder EOF from admitting a successor
+before all promised WAV frames exist. The old store descriptor/route argument
+names retain their compatibility meaning; the relay uses a constant namespace,
+not a mode epoch.

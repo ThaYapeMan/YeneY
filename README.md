@@ -272,18 +272,19 @@ Environment=YENEY_QUEUE_DISK_MIB=256
 Settings apply on room service restart. A grouped coordinator or member keeps
 stream mode with reason `group-rate-undecided`; an unconfirmed coordinator uses
 `coordinator-unconfirmed`. `auto` still uses stream. Queue mode owns only its
-prepared entries, maps LMS and unambiguous app controls, and falls back once to
-stream for the playback session when ownership or finite playback fails. Slow
-LMS replies are reconciled off the audio thread; a sustained outage or verified
-contradiction uses `lms-unavailable`. Queue room status includes
-`lms_cli_slow_replies` and `lms_cli_failed_replies`.
-Whole-list mirroring and the group rate policy remain open. Owners can qualify
-a standalone room with `/usr/local/bin/yeney-queue-device-suite`; use the
-[unattended systemd-run procedure](DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
-to survive an SSH disconnect. It restores the room configuration and LMS state,
-archives SOAP/LMS/status and read-only WebSocket evidence, and prints a device
-verdict separately from WebSocket precision. Physical qualification remains
-pending the owner result; see [queue mode status](docs/designs/sonos-queue-mode.md#phase-3-implementation-checkpoint).
+prepared finite WAV entries. LMS controls play, pause, resume, stop and source
+seeks; confirmed speaker starts advance LMS through SlimProto. Queue mode sends
+no LMS CLI mutations and has no automatic fallback or Sonos-app mapping in this
+relay release. Failures stop/release the owned entries and report STMn.
+Whole-list mirroring, app mapping, fallback and group/auto policy are parked at
+`queue-full-v1`; see the [rebuild checklist](docs/designs/queue-parked-features.md).
+Owners can qualify a standalone room with
+`/usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23`,
+optionally `--album <id-or-name> --volume 10`. The suite saves/restores volume,
+LMS state and room configuration; it checks album joins, LMS pause/resume and
+stop/new play. Use the [systemd-run procedure](DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
+to survive an SSH disconnect. [Relay status and limitations](docs/designs/sonos-queue-mode.md)
+are documented separately. Physical qualification awaits an owner run.
 
 On 19 October 2026, the owner qualified Study on bridge `5a686ad` with
 `/usr/local/bin/yeney-stream-pacing-suite --room Study --hours 2`: **PACING OK**.

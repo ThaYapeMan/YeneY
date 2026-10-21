@@ -619,175 +619,67 @@ or speaker, SSH to LXC 113, or deploy there.
 
 ## Phase 3c: unattended queue playback device suite
 
-Install the committed code on the deployment host using the normal owner workflow:
+The thin relay replaces the previous advanced queue controller. The old
+controller and suite scenarios are preserved at `queue-full-v1`; see the
+[parked-feature checklist](docs/designs/queue-parked-features.md). No agent runs
+this suite against owner devices or deploys it.
+
+Install on the deployment host using the owner workflow:
 
 ```sh
 git pull && git submodule update --init --recursive && make && sudo make install
 ```
 
-The 20 October queue-start protocol correction requires no change to the owner
-commands or suite steps below. Ordinary LMS starts are adopted without a CLI
-playlist jump or another HELO. Remote successors are requested only after full
-production and when fewer than 20 audible seconds remain (the queue-only
-`YENEY_QUEUE_NEXT_DELAY_S` setting); leave its default for qualification.
-
-The installer supplies `/usr/local/bin/yeney-queue-device-suite` and its standard
-library WebSocket helper. Run as root on the Sonos network. No agent runs this
-command or deploys it. To survive an SSH disconnect, start a transient service:
+To survive SSH disconnects, run the installed suite as a transient service:
 
 ```sh
 sudo systemd-run --unit=yeney-queue-device-suite --collect /usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23
 sudo journalctl -fu yeney-queue-device-suite
 ```
 
-The second command follows progress; disconnecting it does not stop the suite.
-To interrupt deliberately, use `sudo systemctl stop yeney-queue-device-suite`.
-SIGTERM, Ctrl-C and SIGHUP all initiate restoration; further signals are ignored
-until restoration finishes. Direct foreground usage is also supported:
+Select an LMS album ID or exact name and a temporary volume if desired:
 
 ```sh
-sudo /usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23
+sudo /usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23 --album 'Album name' --volume 10
 ```
 
-The suite refuses a grouped room, an inactive room service, an LMS-synced player,
-an ambiguous player identity or an existing suite lock. It controls only the
-selected room's service and raw-MAC LMS player. It saves the full LMS playlist
-IDs and URLs/order, index, elapsed time, play/pause/stop state, repeat, shuffle and
-transition preferences; volume is untouched. It creates only that room's
-`queue-suite.conf` with `Environment=YENEY_PLAYBACK_MODE=queue`, reloads systemd,
-restarts that service and waits for fresh process-matched queue status and the
-connected `<room> (Sonos)` player.
+The default is the first eligible local lossless album with at least four
+tracks of 60 seconds or longer, and volume 10 (range 0–100). It plays until
+three joins, checks audible Sonos/LMS identity with at most two seconds of
+boundary mismatch, pauses ten seconds from LMS, resumes, then stops and plays
+again. Each start must reach PLAYING on an owned item within five seconds.
+Expected metadata follows YeneY's XML sanitisation and room title format.
 
-Selection is automatic and recorded in `manifest.tsv`. Required library material
-is four local ALAC tracks from one album, four local FLAC tracks from one album,
-and ALAC tracks from four different albums, all at 44.1 kHz and at least 60 s
-long. The suite plays three real joins for each album/off scenario and the
-standard LMS 10 s crossfade scenario (smart suppression disabled). If the library
-contains 48 kHz material, an additional alternating 44.1/48 kHz lossless playlist
-must complete three joins; no 48 kHz material is an explicit non-failing skip.
-An unsuitable required library fails before playback or the service is changed.
-Runtime depends on the selected tracks; no accelerated clock or early seek is
-used to manufacture album joins.
+The suite refuses grouped/inactive rooms and competing suite locks. It saves
+playlist identities/order, mode/index/time, repeat/shuffle/transition settings,
+volume and the room environment. It verifies a Before YeneY backup only when
+foreign queue entries exist; empty/owned-only queues explicitly need no backup.
+The room-only `queue-suite.conf` selects queue mode. No other room is restarted.
+Ctrl-C, SIGTERM, SIGHUP and errors run cleanup: Stop, remove drop-in, restore the
+normal service, verify owned-entry removal and CrossfadeMode restoration, then
+best-effort restore and verify every saved LMS value including volume. Any
+unrestored item is printed as `NOT RESTORED: ...`. A stopped saved mode remains
+stopped. To cancel a transient run: `sudo systemctl stop yeney-queue-device-suite`.
 
-It then exercises LMS next, previous, a ten-second pause, resume, seeks to 50%
-and back to 10%, stop and play again without reloading the playlist. It requires
-queue mode to re-arm. SOAP position/transport, LMS identity/time/title and the
-room's fresh JSON status are sampled at 1 Hz. Journal entries are limited to
-that room's service. Each join records speaker-confirmed observation time, LMS
-identity agreement and RelTime continuity evidence. Sampling and RelTime
-quantization bound the estimate: this cannot measure acoustic silence or clicks.
-HTTP requests per item are marked unavailable unless diagnostics expose them.
-
-`DEVICE SUITE OK` requires queue playback throughout the queue scenarios, three
-joins where required, LMS identity matching the audible item with at most two
-seconds of boundary mismatch, startup and seeks within three seconds, and no
-RelTime regression inside an item outside an intentional seek. Before takeover,
-the suite logs Q:0's total, owned and foreign entry counts. A new
-`Before YeneY ... device suite` saved queue is required only when foreign entries
-exist, and is verified by both its assigned ID/title and ordered resource
-contents. This backup is intentionally retained; the suite never loads it
-automatically. Empty queues and queues containing only YeneY-owned finite queue
-URLs are not saved: `summary.md` records `backup not needed: queue empty` or
-`backup not needed: only owned entries`. These cases satisfy the backup policy
-without a saved playlist. SOAP requests are logged before transmission and
-outcomes include the service/action, HTTP status and UPnP fault code/description
-when the speaker rejects an action.
-After playback, the suite removes the drop-in and plays the same LMS playlist for
-one additional 60-second reference in the normal stream configuration. A normal
-configuration explicitly set to queue cannot supply this stream reference and
-is reported as a failure rather than silently replacing owner settings.
-
-A read-only local WebSocket probe runs alongside measurements at 5 Hz. It uses
-`wss://<speaker-ip>:1443/websocket/api`, subprotocol
-`v1.api.smartspeaker.audio`, the public Home Assistant Sonos API key, and accepts
-the local speaker's self-signed certificate. Household/group IDs come from
-`https://<speaker-ip>:1443/api/v1/players/local/info`. Its only application command
-is `playback:1 getPlaybackStatus`. It records send/receive monotonic times,
-playbackState, itemId, positionMillis and previousPositionMillis, with bounded
-read deadlines and reconnect attempts. It never substitutes a previous position
-for a failed current response. WebSocket errors do **not** fail queue qualification.
-
-`websocket-summary.json` and `summary.md` report queue and stream separately:
-position presence, whole-second fraction, distinct values per second, round-trip
-median/p95, linear-fit absolute residual median/p95/max per continuous playing
-item segment, and the position difference from the RelTime-based estimate at
-confirmed item starts. Pauses, seeks and item changes split fit segments. The
-terminal and summary include a separate `WS POSITION: sub-second` verdict only
-when both modes have p95 residual below 30 ms and fewer than 10% whole-second
-values; otherwise the line says `WS POSITION: whole seconds` or
-`WS POSITION: unavailable` with recorded reasons. This diagnoses precision; it
-does not change YeneY's timing model.
-
-Cleanup stops playback, removes only the suite drop-in, reloads systemd, stops
-the room service to verify owned queue entries were removed and CrossfadeMode
-restored, restarts in the original environment, and restores and verifies the
-saved LMS state. Saved state and command logs remain in the archive for recovery
-if any verification fails. If the room becomes grouped, safe restart/restoration
-is deferred and the verdict fails rather than controlling a group. A normal
-queue configuration can legitimately re-acquire entries when its saved playback
-is restored; the release check is made while the service is stopped.
-
-The final terminal line is `DEVICE SUITE OK` or `DEVICE SUITE FAILED: <reasons>`.
-The same line is in `result.txt` and `summary.md`. Archives include one row per
-scenario, all SOAP/LMS/status samples, join/seek evidence, WebSocket samples and
-statistics, manifest, saved state, verified backup and room journal. Files are
-`/tmp/yeney-queue-device-suite-latest.tar.gz` and a timestamped copy. On the
-Proxmox host, copy the latest archive with:
+The archive contains summary.md, manifest.tsv, one-Hz SOAP/LMS/room-status
+samples, join observations, room journal, saved state, commands and final verdict.
+`DEVICE SUITE OK` means the automated relay checks and cleanup passed; it does
+not certify acoustic gaplessness. `DEVICE SUITE FAILED: ...` names failures.
+A timestamped archive and `/tmp/yeney-queue-device-suite-latest.tar.gz` are written.
+On the Proxmox host, fetch the latter with:
 
 ```sh
 pct pull 113 /tmp/yeney-queue-device-suite-latest.tar.gz /tmp/yeney-queue-device-suite-latest.tar.gz
 ```
 
-Optional listening/app checklist, separate from the automated verdict:
+Optional listening: listen for a gap/click at each join, confirm pause holds and
+resume continues, and confirm stop/new play starts once. Sonos-app actions,
+crossfade/mixed-rate owner scenarios, seeks/controls, stream reference and
+WebSocket precision measurement are parked for the staged rebuild. App actions
+do not control LMS in this release. Stream remains the default; queue faults
+stop/release without automatically switching transport.
 
-- Listen for a gap or click at each join; uninterrupted audio is expected.
-- Listen for the ten-second crossfade across albums, including the cached intro.
-- After each seek, expect sound at the requested source time within three seconds.
-- After the suite finishes, try Sonos-app pause/resume: LMS follows the confirmed speaker state once.
-- Try app next/previous: LMS identifies the prepared audible track without loops.
-- Try an app seek: LMS time follows the speaker without duplicate starts.
-
-These manual observations and an owner-returned archive qualify the physical
-room; loopback tests alone do not constitute device qualification.
-
-### Slow LMS replies and restoration
-
-`/usr/local/bin/yeney-queue-device-suite` uses one fresh CLI connection per
-request, including successful requests, and separate client instances for cleanup
-and restoration. Queries have a 3 s deadline; mutations (including playlist
-changes, play and stop) have 30 s. A timed-out mutation is not blindly resent:
-the suite checks playlist IDs/order, LMS mode and queue preparation for up to
-60 s. Startup timing begins only after this readiness check; time spent loading
-the LMS playlist is logged separately and does not count as speaker startup.
-
-The saved state includes both LMS track IDs and the original URLs. An identified
-playlist is restored with one ordered `playlistcontrol cmd:load track_id:...`
-request, preserving repeated occurrences. If batch recovery fails, restoration
-continues per entry using IDs. Only entries without IDs use `playlist add` with
-the reported URL's existing escapes preserved. Each preference, index, time and
-mode is restored and queried independently. A failed item gets one retry on a
-fresh connection, checking its state before resending. An unconfirmed item never
-prevents later preferences (including transitionSmart) being attempted.
-`summary.md`, the terminal and the failure verdict list every unresolved item,
-for example `NOT RESTORED: transitionSmart (expected 1, got 0)`. Keep `before.json`
-and this list if manual recovery is needed.
-
-Production queue playback also uses isolated CLI transactions off the audio
-thread: app commands run on a dedicated worker; snapshots run on the room worker.
-Short queries allow 6 s and at most one fresh-connection retry; large full-playlist
-snapshots and mutations allow 30 s. Mutations are sent once and verified by reads.
-LMS waits do not consume the queue preparation deadline or expire pending LMS
-echoes. Only a verified contradiction after the reconciliation deadline, or 30 s
-without a successful reply during an outstanding operation, requests fallback
-with `lms-unavailable`. Slow replies over 1 s are counted and logged at most once
-per command per minute. Queue room JSON includes `lms_cli_slow_replies` and
-`lms_cli_failed_replies`; failed attempts alone do not immediately fail playback.
-Stream mode and its CLI/transport path remain unchanged.
-
-A saved stopped session is restored without the autoplaying `cmd:load`: the suite
-verifies an empty playlist and uses ordered `playlistcontrol cmd:add` track IDs.
-After restoring index, time and preferences, it sends Stop and queries mode to
-verify `stop`. This also guards against index/time restoration starting playback.
-The [LMS playlist CLI reference](https://lyrion.org/reference/cli/playlist/) documents
-the load/add distinction and ordered track IDs. Unconfirmed Stop is reported as
-`NOT RESTORED: mode`, even if playlist restoration succeeded.
+LMS CLI uses fresh connections, a 30-second mutation deadline and short query
+deadlines. Slow loads wait for verified readiness before scenario measurements.
+Playlist restoration uses stable local IDs or exact remote URLs, retries failed
+items once on fresh connections and continues with the remaining preferences.
