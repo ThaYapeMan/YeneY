@@ -644,7 +644,7 @@ sudo /usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.2
 ```
 
 The default is the first eligible local lossless album with at least four
-tracks of 60 seconds or longer, and volume 10 (range 0–100). It plays until
+tracks of 60 seconds or longer, and Sonos room volume 10 (range 0–100). LMS software volume is untouched. It plays until
 three joins, checks audible Sonos/LMS identity with at most two seconds of
 boundary mismatch, pauses ten seconds from LMS, resumes, then stops and plays
 again. Each start must reach PLAYING on an owned item within five seconds.

@@ -141,7 +141,7 @@ struct QueueRoom::Impl {
             fault.clear();
             playlist = {};
             publish();
-        } else if (c == 's' && state == "STOPPED") {
+        } else if (c == 's' && state == "STOPPED" && (started || faulted)) {
             if (started || faulted)
                 release();
             firstStream = next;

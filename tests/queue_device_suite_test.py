@@ -137,6 +137,10 @@ class SOAP(Handler):
     def do_GET(self):self.path='/description.xml';super().do_GET()
     def action(self,service,action,args):
         model=self.server.model
+        if action=='GetVolume':return dict(CurrentVolume=self.server.volume),None
+        if action=='SetVolume':
+            assert service=='RenderingControl' and args['InstanceID']=='0' and args['Channel']=='Master'
+            self.server.volume=int(args['DesiredVolume']);return {},None
         if action=='SaveQueue' and self.server.fail_save:
             return {},'800'
         if action=='Browse' and service=='ContentDirectory' and args['ObjectID']!='SQ:':
@@ -220,6 +224,7 @@ class Tests(unittest.TestCase):
         self.assertFalse(self.suite.dropin.exists());self.assertTrue(self.sonos.crossfade)
         self.assertFalse(self.sonos.items)
         self.assertEqual(self.model.volume,'37')
+        self.assertEqual(self.sonos.volume,23)
         self.assertTrue(all(args[-1]=='yeney@Study.service' for args in self.backend.calls if args[0]=='systemctl' and args[1] in ('restart','stop','is-active')))
     def field_album(self):
         clean='Het beste uit pop in je moerstaal, Vol. 2'
@@ -280,6 +285,7 @@ class Tests(unittest.TestCase):
     def test_full_sequence(self):
         code,output=self.run_suite();self.assertEqual(code,0,output)
         self.restored();self.assertIn('DEVICE SUITE OK',output)
+        self.assertEqual([a[1]['DesiredVolume'] for a in self.sonos.actions('SetVolume')],['10','23'])
         self.assertEqual(self.suite.results[0]['joins'],3)
         self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play'])
         with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:

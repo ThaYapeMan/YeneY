@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOAP = 'http://schemas.xmlsoap.org/soap/envelope/'
 SERVICES = {name: ('urn:schemas-sonos-com:service:Queue:1' if name == 'Queue' else
                   'urn:schemas-upnp-org:service:'+name+':1')
-            for name in ('AVTransport', 'Queue', 'ContentDirectory', 'ZoneGroupTopology')}
+            for name in ('AVTransport', 'Queue', 'ContentDirectory', 'ZoneGroupTopology','RenderingControl')}
 PATHS = {name: '/advertised/'+name for name in SERVICES}
 
 
@@ -52,6 +52,7 @@ class Coordinator(ThreadingHTTPServer):
                             date=f'2026-10-18T12:{i:02}:00Z') for i in range(7)]
         self.update, self.saved_update, self.next_id = 20, 1, 9
         self.crossfade, self.playing, self.uri = True, False, ''
+        self.volume=23
         self.position = dict(Track='0', TrackURI='', RelTime='00:00:00')
         self.transport_state = 'STOPPED'
         self.play_mode = 'NORMAL'

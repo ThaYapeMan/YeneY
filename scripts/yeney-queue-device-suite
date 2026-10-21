@@ -153,7 +153,7 @@ class CLI:
 
 
 class Speaker:
-    """Read-only evidence, except a verified pre-takeover SaveQueue backup."""
+    """Speaker evidence, verified backup and room-only temporary volume."""
     def __init__(self, host, log):
         self.base = 'http://'+host+':1400'
         self.log = log
@@ -235,6 +235,13 @@ class Speaker:
                 return result
             if not page or start > 1000000:
                 raise SuiteError('incomplete queue Browse')
+
+    def volume(self):
+        return self.call('RenderingControl','GetVolume',InstanceID=0,Channel='Master')['CurrentVolume']
+
+    def set_volume(self,value):
+        self.call('RenderingControl','SetVolume',InstanceID=0,Channel='Master',DesiredVolume=int(value))
+        if int(self.volume())!=int(value): raise SuiteError('speaker volume not applied')
 
     def crossfade(self):
         return self.call('AVTransport','GetCrossfadeMode',InstanceID=0)['CrossfadeMode']
@@ -423,7 +430,7 @@ class Suite(PACING['Suite']):
         entries=self.playlist_entries()
         self.before = dict(entries=entries,playlist=[r['url'] for r in entries], index=self.query('playlist','index'), time=self.query('time'),
                            repeat=self.query('playlist','repeat'), shuffle=self.query('playlist','shuffle'), mode=self.query('mode'),
-                           prefs={p:self.query('playerpref',p) for p in PREFS}, crossfade=self.speaker.crossfade(), volume=self.query('mixer','volume'),
+                           prefs={p:self.query('playerpref',p) for p in PREFS}, crossfade=self.speaker.crossfade(), volume=self.speaker.volume(),
                            environment=self.backend.run('systemctl','show',self.unit,'-p','Environment','--value'))
         if not self.entries_equal(self.playlist_entries(),self.before['entries']) or self.before['mode'] not in ('play','pause','stop'):
             raise SuiteError('LMS playlist changed during snapshot')
@@ -470,7 +477,7 @@ class Suite(PACING['Suite']):
             self.override = True
             f.write('[Service]\nEnvironment=YENEY_PLAYBACK_MODE=queue\n')
         self.playback = True
-        self.mutate('mixer','volume',str(self.test_volume))
+        self.speaker.set_volume(self.test_volume)
         self.restart()
         self.pid = self.connected()
         deadline = self.backend.now()+30
@@ -696,7 +703,7 @@ class Suite(PACING['Suite']):
             self.restore_item(pref,expected,lambda pref=pref,expected=expected:self.mutate('playerpref',pref,expected),lambda pref=pref:self.query('playerpref',pref))
         if 'volume' in self.before:
             expected=self.before['volume']
-            self.restore_item('volume',expected,lambda:self.mutate('mixer','volume',expected),lambda:self.query('mixer','volume'))
+            self.restore_item('volume',expected,lambda:self.speaker.set_volume(expected),self.speaker.volume)
         mode=self.before['mode']
         self.restore_item('mode',mode,lambda:self.mutate(*(('pause','1') if mode=='pause' else (mode,))),lambda:self.query('mode'))
         self.restore_item('playlist identities/order',entries,lambda:None,self.playlist_entries,self.entries_equal)

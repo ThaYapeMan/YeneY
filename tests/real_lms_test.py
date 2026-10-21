@@ -260,6 +260,9 @@ try:
             with sonos.lock:sonos.position['RelTime']=f'00:00:{second:02}'
         select_item(index);wait(lambda:len(packets('STMs'))>=index+1)
         identity(index)
+    if not controls_only:
+        assert len(sonos.actions('Play'))==1 and len(sonos.actions('AddURIToQueue'))==4
+        assert (base/'bridge.log').read_text().count('ownership acquired')==1
     if not controls_only: print('PASS real LMS 9.1.1 album: FLAC 44.1/48 kHz, three audible joins, matching LMS index, no CLI mutation/rearm/restart',flush=True)
     for index in ((1,0) if controls_only else (2,3)):
         before=len(packets('STMs'));cli(f'playlist index {index}',mac)

@@ -180,7 +180,7 @@ class Binary:
                     subprocess.run(['flac','-s','-f','-o',str(target),str(path)],check=True)
                     body=target.read_bytes()
                 self.bodies[i]=body
-                source=HTTP(body,first=len(body)//2 if slow and i==0 else None,delay=8 if slow and i==0 else 0);self.sources.append(source)
+                source=HTTP(body,first=16 if slow and i==0 else None,delay=8 if slow and i==0 else 0);self.sources.append(source)
                 yield source,dict(fmt=codec,rate=rate,transition=int(fade),period=10 if fade else 0)
         self.lms.connection.settimeout(30)
         if initial_stop:
@@ -257,6 +257,17 @@ def relay_replay():
         print('PASS relay field replay: q/q/q+s, sanitized album, one enqueue/Play/HELO, synchronous status, pause/resume/stop, no CLI mutation',flush=True)
     finally:h.close()
 
+def preparing_repeat():
+    h=Binary(rates=(44100,),slow=True,initial_stop=True)
+    try:
+        h.until(lambda:len(h.sources)==1)
+        h.lms.strm('s',h.sources[0],fmt='f',rate=44100)
+        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
+        assert len(h.sonos.actions('AddURIToQueue'))==len(h.sonos.actions('Play'))==1
+        assert 'queue repeated strm s' in (h.base/'bridge.log').read_text()
+        print('PASS relay repeated preparing start: one producer, enqueue and Play despite identical strm s before publication',flush=True)
+    finally:h.close()
+
 def idle_start():
     h=Binary(rates=(44100,))
     try:
@@ -286,4 +297,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();idle_start();soap_fault()
+    relay_replay();preparing_repeat();idle_start();soap_fault()
