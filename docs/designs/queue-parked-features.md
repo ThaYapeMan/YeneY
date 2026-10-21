@@ -106,7 +106,7 @@ Additional controller details to recover with steps 2–3:
   `31507e7` cross-checked GPI/GTI/GPI, queue ordinal/URI and UpdateID, and GENA
   position/state agreement. It rejected duplicate/reordered SID sequences and
   stale epochs, matched pending targets, projected frames with
-  `ConnectionPosition`/`deviceRatePrior`, capped projection at produced length
+  `ConnectionPosition`/`deviceRatePrior`, capped projection at the promised finite length
   and stopped extrapolating after two seconds without evidence. The relay keeps
   confirmed owned-URI starts and state, but does not carry this reconciliation
   or smooth projection. Rebuild it as an evidence observer for fallback/app
