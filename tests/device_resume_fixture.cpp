@@ -3,6 +3,7 @@
 #include "resume_state.h"
 #include "upnp/speaker_control.h"
 #include "upnp/title_format.h"
+#include "upnp/xml.h"
 static void note_squeezebox_device_close() {}
 #include "transport_intent.h"
 #include "pause_mode.h"

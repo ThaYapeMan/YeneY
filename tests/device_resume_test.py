@@ -41,6 +41,7 @@ with tempfile.TemporaryDirectory(prefix="sonos-device-resume-") as directory:
     subprocess.run([
         "g++", "-g", "-O2", "-Wall", "-Wextra", "-I", str(ROOT),
         "-I", str(directory), str(ROOT / "tests/device_resume_fixture.cpp"),
+        str(ROOT / "upnp/xml.cpp"),
         "-o", str(executable), "-lpthread", "-lcrypto",
     ], check=True)
     for mode in ("stop", "pause"):
