@@ -986,13 +986,13 @@ int main(int argc, char** argv)
             std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer), playback, gServer, rawMac, gMac,
             [] { return SqueezeBoxURL(streamId.load()); });
     } else {
-        static auto* mode = new bridge::RoomMode;
+        static auto* mode = new bridge::RoomStatus;
         bridge::ModeStatus initial;
         initial.requested = playback.requested;
         initial.active = bridge::playbackModeName(playback.selected);
         initial.reason = playback.reason;
         mode->publish(initial);
-        bridge::setRoomMode(mode);
+        bridge::setRoomStatus(mode);
     }
     static StopTimer stopTimer;
     std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(), std::string(room) + " (Sonos)");

@@ -101,7 +101,7 @@ void Status::print()
 {
     streamMetrics().print(streamMetrics().sample());
     if (auto* mode = roomMode())
-        printf("Playback: %s\n", RoomMode::json(mode->status()).c_str());
+        printf("Playback: %s\n", RoomStatus::json(mode->status()).c_str());
     const std::string border(97, '-');
     int nameField = static_cast<int>(border.length()) - static_cast<int>(m_zoneName.length()) - 5;
     if (nameField < 0)

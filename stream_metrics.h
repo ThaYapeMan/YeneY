@@ -69,7 +69,7 @@ public:
             // Rename a complete snapshot; readers never see a partial JSON file.
             auto temporary = path + "." + std::to_string(getpid()) + ".tmp";
             if (FILE *f = fopen(temporary.c_str(), "w")) {
-                const auto playback=roomMode()?",\"playback\":"+RoomMode::json(roomMode()->status()):std::string{};
+                const auto playback=roomMode()?",\"playback\":"+RoomStatus::json(roomMode()->status()):std::string{};
                 fprintf(f, "{\"mode\":\"%s\",\"start_lead_ms\":%u,\"pid\":%d,\"monotonic_ms\":%llu,\"overwrites\":%llu,\"dropped\":%llu,\"socket_backpressure_ms\":%.3f,\"socket_backpressure_calls\":%llu,\"encoded_ms\":%.3f,\"audible_ms\":%.3f,\"lead_ms\":%.3f,\"valid\":%s,\"connection_id\":%llu,\"locked\":%s%s}\n",
                     streamPacingSonos() ? "sonos" : "wall", yeney_start_lead_ms(), getpid(), (unsigned long long)now, (unsigned long long)overwrites.load(),
                     (unsigned long long)dropped.load(), socketBlockedUs.load()/1000.,

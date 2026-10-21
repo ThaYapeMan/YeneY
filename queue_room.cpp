@@ -32,7 +32,7 @@ struct QueueRoom::Impl {
     upnp::QueueActions actions;
     std::set<std::string> owned;
     upnp::QueueOwnership ownership;
-    RoomMode status;
+    RoomStatus status;
     struct Entry {
         uint64_t stream;
         std::string uri;
@@ -83,7 +83,7 @@ struct QueueRoom::Impl {
             streamMetrics().configure(room.name, directory);
         route.registerWith(*http);
         queue.useSpeakerClock();
-        setRoomMode(&status);
+        setRoomStatus(&status);
         publish();
         queue.onQueueCommand([this](char c, uint32_t) {
             if (c == 'q' || c == 'p' || c == 'u') {
@@ -102,8 +102,8 @@ struct QueueRoom::Impl {
         v.requested = v.active = "queue";
         v.reason = "queue-opt-in";
         v.state = state;
-        v.item.owned = ownership.active();
-        v.item.occurrence = current;
+        v.owned = ownership.active();
+        v.occurrence = current;
         v.lastFault = fault;
         for (const auto &item : items) {
             v.ownedUris.push_back(item.uri);
@@ -300,7 +300,7 @@ struct QueueRoom::Impl {
         }
         changed.notify_all();
         worker.join();
-        setRoomMode(nullptr);
+        setRoomStatus(nullptr);
     }
     ~Impl() { shutdown(); }
 };
