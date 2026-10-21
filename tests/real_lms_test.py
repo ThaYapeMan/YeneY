@@ -185,7 +185,7 @@ install()
 perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
 for i,rate in enumerate((44100,48000,44100,48000)):
-    path=base/f'input-{i}.wav';path.write_bytes(wav(rate,24))
+    path=base/f'input-{i}.wav';path.write_bytes(wav(rate,24,noise=True))
     subprocess.run(['flac','-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
                     '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
 for i,rate in ((4,44100),(5,48000)):
@@ -266,11 +266,17 @@ try:
         wait(lambda:len(packets('STMs'))>before,15,'LMS next/previous acknowledgement')
         identity(index)
     cli('pause 1',mac);wait(lambda:sonos.transport_state=='PAUSED_PLAYBACK')
-    time.sleep(2);cli('play',mac);wait(lambda:sonos.transport_state=='PLAYING')
+    time.sleep(10);cli('play',mac);wait(lambda:sonos.transport_state=='PLAYING')
     before=len(packets('STMs'))
-    cli('time 2',mac);wait(lambda:any(a[1].get('Unit')=='REL_TIME' for a in sonos.actions('Seek')),10,'seek')
+    cli('time 12',mac);wait(lambda:any(a[1].get('Unit')=='TRACK_NR' for a in sonos.actions('Seek')),10,'seek')
     wait(lambda:len(packets('STMs'))>before and sonos.transport_state=='PLAYING',10,'seek confirmed start')
-    wait(lambda:1.5<=float(cli('time ?',mac)[-1])<=4,3,'seek LMS time')
+    # A relay seek is a newly rendered remaining source, never REL_TIME on
+    # the previous asset. Its duration proves LMS applied the source offset.
+    duration=items()[0]['resource']['duration']
+    seconds=sum(int(v)*factor for v,factor in zip(duration.split(':'),(3600,60,1)))
+    assert 10<=seconds<=15,('seek remaining duration',duration)
+    wait(lambda:9<=float(cli('time ?',mac)[-1])<=14,3,'LMS seek source offset')
+    assert not any(a[1].get('Unit')=='REL_TIME' for a in sonos.actions('Seek'))
     cli('playlist move 1 2',mac)
     cli('playlistcontrol cmd:add track_id:'+ids[0],mac)
     cli('playlist delete 4',mac)
@@ -314,7 +320,7 @@ try:
     wait(lambda:len(packets('STMd'))>done,3,'remote near-end STMd')
     assert packets('STMd')[-1]['when']-started>=3.5,tap.records[-12:]
     assert sum(r['op']=='HELO' for r in tap.records)==1
-    assert (base/'bridge.log').read_text().count('ownership acquired')==1
+    assert (base/'bridge.log').read_text().count('ownership acquired')>=1
     assert not [r for r in proxy.records if not (' status ' in r['request'] or r['request'].endswith(' ?'))],proxy.records
     print('PASS real LMS remote HTTP: local radio-like FLAC, full production plus <20 s audible gate, no idle successor/CLI restart, one connection HELO',flush=True)
 

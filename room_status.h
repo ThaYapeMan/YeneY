@@ -67,5 +67,5 @@ inline std::atomic<RoomStatus *> &statusRegistry() {
     return *registry;
 }
 inline RoomStatus *roomMode() { return statusRegistry().load(); }
-inline void setRoomMode(RoomStatus *value) { statusRegistry() = value; }
+inline void setRoomStatus(RoomStatus *value) { statusRegistry() = value; }
 } // namespace bridge

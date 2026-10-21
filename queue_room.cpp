@@ -44,9 +44,8 @@ struct QueueRoom::Impl {
     std::condition_variable changed;
     std::deque<std::pair<char, uint64_t>> commands;
     std::thread worker;
-    bool closing = false, started = false, faulted = false;
+    bool closing = false, started = false, faulted = false, releasing = false;
     uint64_t firstStream = 1, current = 0;
-    unsigned initialIndex = 0;
     queue_audio::PlaylistSnapshot playlist;
     queue_audio::PlaylistReader reader;
     std::string state = "STOPPED", fault;
@@ -74,7 +73,9 @@ struct QueueRoom::Impl {
         : room(std::move(r)), host(std::move(h)), mac(std::move(m)), session(streamSessionToken()),
           speaker(std::move(s)), queue(room.name, queue_audio::Config::environment(), 60),
           route(room.name, session), coordinator(room, logQueue),
-          actions([this](const auto &name, const auto &args) { return coordinator.transport(name, args); }),
+          actions([this](const auto &name, const auto &args) {
+              return releasing ? coordinator.releaseTransport(name, args) : coordinator.transport(name, args);
+          }),
           ownership(ownershipIO(), session) {
         auto colon = host.find(':');
         if (colon != std::string::npos)
@@ -86,7 +87,7 @@ struct QueueRoom::Impl {
         setRoomStatus(&status);
         publish();
         queue.onQueueCommand([this](char c, uint32_t) {
-            if (c == 'q' || c == 'p' || c == 'u') {
+            if (c == 'q' || c == 's' || c == 'p' || c == 'u') {
                 std::lock_guard<std::mutex> lock(mutex);
                 commands.push_back({c, queue.latestOccurrence() + 1});
                 changed.notify_all();
@@ -116,7 +117,14 @@ struct QueueRoom::Impl {
         streamMetrics().publishPlayback();
     }
     void release() {
-        ownership.release();
+        releasing = true;
+        try {
+            ownership.release();
+        } catch (...) {
+            releasing = false;
+            throw;
+        }
+        releasing = false;
         items.clear();
         started = false;
         current = 0;
@@ -132,6 +140,14 @@ struct QueueRoom::Impl {
             faulted = false;
             fault.clear();
             playlist = {};
+            publish();
+        } else if (c == 's' && state == "STOPPED") {
+            if (started || faulted)
+                release();
+            firstStream = next;
+            playlist = {};
+            faulted = false;
+            fault.clear();
             publish();
         } else if (c == 'p' && started)
             actions.pause();
@@ -153,11 +169,11 @@ struct QueueRoom::Impl {
                 continue;
             if (!record.fault.empty())
                 throw std::runtime_error(record.fault);
-            if (playlist.entries.empty()) {
-                playlist = reader.read(host, mac);
-                initialIndex = playlist.index;
-            }
-            const auto index = initialIndex + record.expectedIndex;
+            playlist = reader.read(host, mac);
+            // LMS admits at most one successor after this audible stream's
+            // STMd. Read its current index rather than retaining playlist
+            // ordinals across stops, seeks or edits.
+            const auto index = playlist.index + (started ? 1 : 0);
             if (index >= playlist.entries.size())
                 throw std::runtime_error("queue-stream-metadata-missing");
             const auto &track = playlist.entries[index];

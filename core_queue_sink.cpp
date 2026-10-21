@@ -390,6 +390,19 @@ void CoreQueueSink::useSpeakerClock() {
     std::lock_guard<std::mutex> lock(mutex);
     speakerClock = true;
 }
+bool CoreQueueSink::queueItemProduced(uint64_t id) const {
+    std::shared_ptr<Item> item;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        const auto it = records.find(id);
+        if (it != records.end())
+            item = it->second.item;
+    }
+    if (!item)
+        return false;
+    const auto length = item->contentLength();
+    return length && item->producedFrames() >= (*length - 44) / 6;
+}
 bool CoreQueueSink::speakerDriven() const {
     std::lock_guard<std::mutex> lock(mutex);
     return speakerClock;
@@ -557,6 +570,7 @@ void CoreQueueSink::flush() {
                 if (p.second.item)
                     items.push_back(p.second.item);
             active = 0;
+            freshRender = true;
             nextIndex = 0;
             descriptorOrder.clear();
         }

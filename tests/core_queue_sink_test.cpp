@@ -392,5 +392,25 @@ int main() {
         std::cout << "PASS cancelled queue descriptor: unrendered producer removed, replacement owns its "
                      "PCM/identity, reservations never advance the actual core occurrence\n";
     }
+    {
+        CoreQueueSink sink("DeliveredGate", c, 1);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 100, 0, 0});
+        sink.trackBoundary(0, {8000, 16, 2, false}, false);
+        sink.waitIdle();
+        assert(!sink.queueItemProduced(1));
+        std::vector<yeney::Frame> pcm(100, {65536, -65536});
+        assert(sink.write(pcm.data(), 50, false) == 50);
+        sink.waitIdle();
+        assert(!sink.queueItemProduced(1));
+        assert(sink.write(pcm.data() + 50, 50, false) == 50);
+        sink.waitIdle();
+        assert(sink.queueItemProduced(1));
+        assert(!sink.takeQueueFailure());
+        sink.failQueueTrack();
+        assert(sink.takeQueueFailure() && !sink.takeQueueFailure());
+        std::cout << "PASS relay delivery gate: STMd waits for all promised storage frames; renderer failure "
+                     "consumed once\n";
+    }
     std::filesystem::remove_all(root);
 }

@@ -257,6 +257,21 @@ def relay_replay():
         print('PASS relay field replay: q/q/q+s, sanitized album, one enqueue/Play/HELO, synchronous status, pause/resume/stop, no CLI mutation',flush=True)
     finally:h.close()
 
+def idle_start():
+    h=Binary(rates=(44100,))
+    try:
+        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
+        h.until(lambda:len(h.packets('STMd'))==1)
+        h.state(1,24,'STOPPED');h.until(lambda:len(h.packets('STMu'))==1)
+        source=HTTP(h.bodies[0]);h.sources.append(source)
+        h.model.streaming=1
+        h.lms.strm('s',source,fmt='f',rate=44100)
+        h.until(lambda:len(h.packets('STMs'))==2)
+        assert len(h.sonos.actions('Play'))==2 and len(h.items())==1
+        assert all(c.startswith('status ') for c in h.commands),h.commands
+        print('PASS relay idle start: final speaker STOPPED sends STMu once; new strm s without q releases old items and starts once',flush=True)
+    finally:h.close()
+
 def soap_fault():
     h=Binary(rates=(44100,),fail_add=True)
     try:
@@ -271,4 +286,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();soap_fault()
+    relay_replay();idle_start();soap_fault()

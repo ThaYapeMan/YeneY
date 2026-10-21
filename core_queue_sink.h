@@ -106,6 +106,7 @@ public:
     void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
     bool speakerDriven() const override;
+    bool queueItemProduced(uint64_t) const override;
     void failQueueTrack() { queueFailed = true; }
     bool takeQueueFailure() override { return queueFailed.exchange(false); }
     bool takeAudibleState(yeney::AudibleState &) override;

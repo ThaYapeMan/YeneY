@@ -7,7 +7,6 @@
 #include <stdexcept>
 namespace queue_audio {
 struct PlaylistEntry {
-    uint64_t token = 0;
     std::string id, title, artist, album, url;
     std::string artworkUrl, remote;
     std::string artwork(const std::string &host) const {
@@ -15,17 +14,12 @@ struct PlaylistEntry {
     }
 };
 struct PlaylistSnapshot {
-    uint64_t revision = 0;
     unsigned index = 0, timeMs = 0;
     std::vector<PlaylistEntry> entries;
 };
-// Controller-worker only. LMS IDs identify recordings, tokens identify visits.
-// Duplicate multiplicity is matched in order. Ambiguous duplicate edits fail
-// closed rather than selecting an arbitrary recording occurrence.
+// Read-only metadata snapshot. LMS alone determines stream order; the relay
+// has no occurrence matching, playlist edit inference or mirroring policy.
 class PlaylistReader {
-    PlaylistSnapshot previous;
-    uint64_t nextToken = 0, revision = 0;
-
 public:
     PlaylistSnapshot parse(const std::string &wire) {
         PlaylistSnapshot out;
@@ -72,29 +66,6 @@ public:
         if (count > 60000 || out.entries.size() != count || (!count && out.index) ||
             (count && out.index >= count))
             throw std::runtime_error("playlist-incomplete");
-        std::map<std::string, std::vector<uint64_t>> old;
-        std::map<std::string, unsigned> used, counts;
-        for (auto &e : previous.entries)
-            old[e.id].push_back(e.token);
-        for (auto &e : out.entries) {
-            if (e.id.empty())
-                e.id = e.url;
-            if (e.id.empty())
-                throw std::runtime_error("playlist-identity-missing");
-            ++counts[e.id];
-        }
-        bool same = out.entries.size() == previous.entries.size();
-        for (size_t i = 0; same && i < out.entries.size(); ++i)
-            same = out.entries[i].id == previous.entries[i].id;
-        for (auto &e : out.entries) {
-            auto &ids = old[e.id];
-            if (!same && !ids.empty() && (ids.size() > 1 || counts[e.id] > 1))
-                throw std::runtime_error("playlist-duplicate-edit-ambiguous");
-            auto n = used[e.id]++;
-            e.token = n < ids.size() ? ids[n] : ++nextToken;
-        }
-        out.revision = same && revision ? revision : ++revision;
-        previous = out;
         return out;
     }
     PlaylistSnapshot read(const std::string &host, const std::string &mac, unsigned port = 9090) {
