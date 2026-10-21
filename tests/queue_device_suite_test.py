@@ -143,7 +143,7 @@ class SOAP(Handler):
             if model.fault=='regression' and model.time>4:position=0
             uri=f'http://127.0.0.1/music/queue.wav?epoch={model.epoch}&item={t["id"]}' if model.queue else 'http://127.0.0.1/music/stream.flac'
             from xml.sax.saxutils import escape
-            title='Wrong' if model.fault=='identity' else t['title']
+            title='Wrong' if model.fault=='identity' else t['artist']+' - '+t['title'] if t.get('artist') else t['title']
             metadata='<DIDL-Lite xmlns:dc="urn:dc" xmlns:upnp="urn:upnp"><item><dc:title>'+escape(title)+'</dc:title><upnp:album>'+escape(t['album'])+'</upnp:album></item></DIDL-Lite>'
             return dict(Track=str(model.index+1),TrackURI=uri,RelTime=f'{int(position)//3600:02}:{int(position)//60%60:02}:{int(position)%60:02}',TrackMetaData=metadata),None
         if action=='GetTransportInfo':return dict(CurrentTransportState={'play':'PLAYING','pause':'PAUSED_PLAYBACK','stop':'STOPPED'}[model.mode]),None

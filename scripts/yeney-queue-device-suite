@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import runpy
 import shutil
+import shlex
 import signal
 import socket
 import sys
@@ -19,7 +20,7 @@ import tempfile
 import time
 import urllib.request
 import urllib.error
-from urllib.parse import quote, unquote, urljoin, urlsplit
+from urllib.parse import quote, unquote, unquote_to_bytes, urljoin, urlsplit
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -40,6 +41,48 @@ CHECKLIST = '''Optional listening/app checklist (not part of the automated verdi
 - Sonos app next/previous: LMS identifies the audible prepared track, without loops.
 - Sonos app seek: LMS time follows the speaker, without duplicate starts.
 Run app checks only after this suite finishes; they are deliberately not automated.'''
+
+
+def xml_sanitize(text):
+    """Match upnp/xml.cpp xmlSanitize, including malformed-prefix consumption."""
+    raw = text.encode('utf-8','surrogatepass') if isinstance(text,str) else text
+    out = bytearray()
+    p = 0
+    while p < len(raw):
+        start = p
+        lead = raw[p]; p += 1
+        code, width, minimum, valid = lead, 1, 0, True
+        if 0xc2 <= lead <= 0xdf: code, width, minimum = lead & 31, 2, 0x80
+        elif 0xe0 <= lead <= 0xef: code, width, minimum = lead & 15, 3, 0x800
+        elif 0xf0 <= lead <= 0xf4: code, width, minimum = lead & 7, 4, 0x10000
+        elif lead >= 0x80: valid = False
+        for _ in range(1,width):
+            if not valid or p == len(raw) or raw[p] & 0xc0 != 0x80:
+                valid = False
+                break
+            code = (code << 6) | (raw[p] & 63); p += 1
+        if not valid or code < minimum or code > 0x10ffff:
+            out.extend(b'\xef\xbf\xbd')
+        elif code in (9,10,13) or 32 <= code <= 0xd7ff or 0xe000 <= code <= 0xfffd or 0x10000 <= code <= 0x10ffff:
+            out.extend(raw[start:p])
+    return out.decode('utf-8')
+
+
+def cli_word(word):
+    # Repair metadata from the original percent-decoded bytes. Python's default
+    # UTF-8 replacement would otherwise lose the sequence boundaries YeneY uses.
+    raw = unquote_to_bytes(word)
+    key, separator, value = raw.partition(b':')
+    if separator and key in (b'title',b'artist',b'album'):
+        return key.decode()+':'+xml_sanitize(value)
+    return raw.decode('utf-8','replace')
+
+
+def expected_metadata(track, title_format):
+    title, artist, album = (xml_sanitize(track.get(k,'')) for k in ('title','artist','album'))
+    if title_format == 'artist-title' and artist:
+        title = artist+' - '+title
+    return title, album
 
 
 def local(tag):
@@ -96,7 +139,7 @@ class CLI:
                     if not part:raise SuiteError('LMS CLI closed before response')
                     response.extend(part)
                     if len(response)>16*1024*1024:raise SuiteError('LMS CLI response limit')
-            words=[unquote(w) for w in response.decode().splitlines()[0].split()]
+            words=[cli_word(w) for w in response.decode().splitlines()[0].split()]
             prefix=args[:-1] if args[-1]=='?' else args
             if len(words)<len(prefix) or any(not self.same(a,b) for a,b in zip(prefix,words)):
                 raise SuiteError('LMS CLI echo mismatch: '+request)
@@ -225,6 +268,7 @@ class Suite(PACING['Suite']):
         self.ws_report = {}
         self.backup_note = 'backup not assessed'
         self.not_restored = []
+        self.title_format = 'artist-title'
 
     def lock(self):
         # Also honor both existing suite lock namespaces. Hold them to exclude
@@ -409,6 +453,12 @@ class Suite(PACING['Suite']):
             raise SuiteError('invalid saved LMS preferences/time')
         if self.before['playlist'] and not 0 <= int(self.before['index']) < len(self.before['playlist']):
             raise SuiteError('invalid saved LMS index')
+        environment = dict(word.split('=',1) for word in shlex.split(self.before['environment']) if '=' in word)
+        configured = environment.get('YENEY_TITLE_FORMAT')
+        self.title_format = 'title' if configured == 'title' else 'artist-title'
+        if configured is not None and configured not in ('title','artist-title'):
+            self.log('Warning: invalid room YENEY_TITLE_FORMAT='+repr(configured)+'; using artist-title')
+        self.log('metadata comparison title_format='+self.title_format)
         (self.work/'before.json').write_text(json.dumps(self.before,indent=2)+'\n')
         original = self.speaker.browse('Q:0')
         owned = sum('/music/queue.wav?' in entry.get('res','') for entry in original)
@@ -475,9 +525,9 @@ class Suite(PACING['Suite']):
             self.problem('LMS index outside scenario')
         expected = tracks[index]
         meta = s['metadata']
-        titles = {expected.get('title',''), expected.get('artist','')+' - '+expected.get('title','')}
-        identity = (s['state'] != 'PLAYING' or (meta.get('title') in titles and
-                    (not expected.get('album') or meta.get('album')==expected['album']) and entry.get('id')==expected['id']))
+        title, album = expected_metadata(expected,self.title_format)
+        identity = (s['state'] != 'PLAYING' or (meta.get('title')==title and
+                    (not album or meta.get('album')==album) and entry.get('id')==expected['id']))
         now = self.backend.now()
         row = dict(scenario=self.current['name'],monotonic=now,wall=time.time(),speaker=s,
                    lms=dict(index=index,time=float(status.get('time','0')),title=entry.get('title',''),id=entry.get('id','')),
