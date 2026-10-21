@@ -99,3 +99,35 @@ The new storage-completion gate prevents decoder EOF from admitting a successor
 before all promised WAV frames exist. The old store descriptor/route argument
 names retain their compatibility meaning; the relay uses a constant namespace,
 not a mode epoch.
+
+Additional controller details to recover with steps 2–3:
+
+* `queue_controller.cpp::confirm/advance/notify` at `650ad30`, `8b498b6` and
+  `31507e7` cross-checked GPI/GTI/GPI, queue ordinal/URI and UpdateID, and GENA
+  position/state agreement. It rejected duplicate/reordered SID sequences and
+  stale epochs, matched pending targets, projected frames with
+  `ConnectionPosition`/`deviceRatePrior`, capped projection at produced length
+  and stopped extrapolating after two seconds without evidence. The relay keeps
+  confirmed owned-URI starts and state, but does not carry this reconciliation
+  or smooth projection. Rebuild it as an evidence observer for fallback/app
+  mapping, using `tests/queue_audible_test.py`, `tests/queue_app_control_test.py`
+  and the old binary cases. Shared `position_state.h` and its stream/position
+  tests remain; their retention does not reactivate the old queue controller.
+* `queue_controller.cpp::RoomLease` and its serialized future/job cancellation
+  (`b68cb0e`, `1806e22`) rejected duplicate room controllers and completed stale
+  queued work without applying it. The relay process constructs one room only;
+  any future multi-controller host must restore the explicit lease. Recover
+  `tests/queue_controller_guard_test.cpp`, `tests/queue_controller_fixture.cpp`
+  and `tests/queue_mode_test.py` with step 2.
+* Native standalone eligibility and original-device release fencing are retained
+  primitives, not newly implemented grouping support. Dynamic group/coordinator
+  policy, rate decisions and automatic selection still belong to step 5.
+
+Advanced-only test files removed from the active bridge tree (all available
+verbatim at the bridge tag): `queue_app_control_test.py`,
+`queue_audible_fixture.cpp`, `queue_audible_test.py`,
+`queue_controller_fixture.cpp`, `queue_controller_guard_test.cpp`,
+`queue_controller_test.py` (its strict SOAP fake was extracted),
+`queue_guard_stream_test.py`, `queue_lms_client_fixture.cpp`,
+`queue_lms_client_test.py`, `queue_lms_control_test.py`, `queue_mode_test.py`,
+`room_mode_test.cpp`, and `queue_device_ws_test.py`, all under `tests/`.
