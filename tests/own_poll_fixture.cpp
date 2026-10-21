@@ -1,4 +1,4 @@
-#include "room_mode.h"
+#include "room_status.h"
 #include "source_ownership.h"
 #include "upnp/own_speaker_control.h"
 #include "sonos-status.h"

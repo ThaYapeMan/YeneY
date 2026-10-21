@@ -1,7 +1,7 @@
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
-OBJS = queue_room.o room_mode.o core_queue_sink.o core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
+OBJS = queue_room.o core_queue_sink.o core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
 all: yeney libqueueitems.a yeney-queue-dryrun
 
@@ -31,13 +31,11 @@ install: yeney yeney-queue-dryrun
 	install -m 0755 scripts/yeney-queue-suite /usr/local/bin/yeney-queue-suite
 	install -m 0755 scripts/yeney-stream-pacing-suite /usr/local/bin/yeney-stream-pacing-suite
 	install -m 0755 scripts/yeney-queue-device-suite /usr/local/bin/yeney-queue-device-suite
-	install -m 0644 scripts/yeney_queue_ws.py /usr/local/bin/yeney_queue_ws.py
 	scripts/install-devices.sh
 encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
 # Preserve the legacy wire fixtures explicitly; settings tests also exercise the unset default.
-test: queue-lms-client-test
 test: export YENEY_STREAM_PACING = wall
 test: export YENEY_PLAYBACK_MODE = stream
 test: export YENEY_START_LEAD_MS = 0
@@ -59,19 +57,9 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/stream_pacing_suite_test.py
 	python3 tests/queue_device_suite_test.py
 	python3 tests/queue_device_cli_test.py
-	python3 tests/queue_lms_client_test.py
 	python3 tests/queue_protocol_setting_test.py
-	python3 tests/queue_device_ws_test.py
 	YENEY_ACCEPTANCE_BINARY=$(CURDIR)/yeney python3 tests/queue_binary_test.py
-	python3 tests/queue_mode_test.py
-	./room-mode-test
 	./queue-position-test
-	python3 tests/queue_audible_test.py
-	python3 tests/queue_lms_control_test.py
-	python3 tests/queue_app_control_test.py
-	./queue-controller-guard-test
-	python3 tests/queue_controller_test.py
-	python3 tests/queue_guard_stream_test.py
 	./playback-mode-test
 	python3 tests/playback_mode_test.py
 	./queue-ownership-test
@@ -327,8 +315,7 @@ playback-mode-test: tests/playback_mode_test.cpp playback_mode.h upnp/speaker_co
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $<
 test: playback-mode-test
 
-QUEUE_CONTROLLER_OBJS = queue_controller.o upnp/queue_coordinator.o upnp/queue_actions.o upnp/queue_ownership.o upnp/queue_metadata.o
-queue_controller.o: queue_controller.cpp queue_controller.h playback_mode.h queue_route.h queue_item_store.h upnp/queue_coordinator.h upnp/queue_ownership.h upnp/queue_metadata.h upnp/queue_actions.h upnp/stream_server.h
+QUEUE_CONTROLLER_OBJS = upnp/queue_coordinator.o upnp/queue_actions.o upnp/queue_ownership.o upnp/queue_metadata.o
 upnp/queue_coordinator.o: upnp/queue_coordinator.cpp upnp/queue_coordinator.h playback_mode.h upnp/queue_actions.h upnp/queue_ownership.h upnp/http.h upnp/soap.h upnp/xml.h upnp/discovery.h
 upnp/queue_actions.o: upnp/queue_actions.cpp upnp/queue_actions.h upnp/soap.h upnp/xml.h
 upnp/queue_ownership.o: upnp/queue_ownership.cpp upnp/queue_ownership.h
@@ -340,17 +327,8 @@ libqueuecontroller.a: $(QUEUE_CONTROLLER_OBJS)
 all: libqueuecontroller.a
 
 QUEUE_TEST_UPNP = upnp/http_server.o upnp/gena.o upnp/xml.o upnp/http.o upnp/soap.o upnp/discovery.o
-queue-controller-fixture: tests/queue_controller_fixture.cpp queue_controller.cpp queue_controller.h libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP)
-	g++ -std=c++17 -g -O2 -Wall -Wextra -DYENEY_QUEUE_CONTROLLER_TEST -I. -o $@ tests/queue_controller_fixture.cpp queue_controller.cpp $(filter-out queue_controller.o,$(QUEUE_CONTROLLER_OBJS)) libqueueitems.a $(QUEUE_TEST_UPNP) -lFLAC -pthread
-queue-controller-guard-test: tests/queue_controller_guard_test.cpp queue_controller.h libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP)
-	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $< libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP) -lFLAC -pthread
-test: queue-controller-fixture queue-controller-guard-test
 
-queue_controller.o: position_state.h upnp/event_parsers.h
-queue-audible-fixture: tests/queue_audible_fixture.cpp queue_lms_cli.h queue_controller.cpp queue_controller.h position_state.h core_queue_sink.o libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP) $(CORE_LIB)
-	g++ -std=c++17 -g -O2 -Wall -Wextra -DYENEY_QUEUE_CONTROLLER_TEST -I. -pthread -o $@ $< queue_controller.cpp core_queue_sink.o $(filter-out queue_controller.o,$(QUEUE_CONTROLLER_OBJS)) libqueueitems.a $(QUEUE_TEST_UPNP) $(CORE_LIB) -lFLAC
 
-test: queue-audible-fixture
 
 queue-position-test: tests/queue_position_test.cpp position_state.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
@@ -380,29 +358,18 @@ stream-metrics-lifetime-test: tests/stream_metrics_lifetime_test.cpp stream_metr
 	g++ -std=c++17 -g -O1 -Wall -Wextra -fsanitize=address -fno-omit-frame-pointer -I. -pthread -o $@ $<
 test: stream-metrics-lifetime-test
 
-queue_room.o: queue_room.cpp queue_room.h room_mode.h mode_sink.h queue_playlist.h queue_lms_cli.h queue_lms_client.h queue_controller.h core_queue_sink.h
+queue_room.o: queue_room.cpp queue_room.h room_status.h room_status.h queue_playlist.h queue_lms_cli.h upnp/queue_actions.h core_queue_sink.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ queue_room.cpp
-room_mode.o: room_mode.cpp room_mode.h playback_mode.h
-	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ room_mode.cpp
 
-room-mode-test: tests/room_mode_test.cpp room_mode.o room_mode.h mode_sink.h queue_playlist.h stream_metrics.h
-	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -pthread -o $@ $< room_mode.o
-test: room-mode-test
 
-queue-mode-fixture: tests/queue_controller_fixture.cpp room_mode.o queue_controller.cpp libqueuecontroller.a libqueueitems.a $(QUEUE_TEST_UPNP)
-	g++ -std=c++17 -g -O2 -Wall -Wextra -DMODE_FIXTURE -DYENEY_QUEUE_CONTROLLER_TEST -I. -o $@ $< room_mode.o queue_controller.cpp $(filter-out queue_controller.o,$(QUEUE_CONTROLLER_OBJS)) libqueueitems.a $(QUEUE_TEST_UPNP) -lFLAC -pthread
-test: queue-mode-fixture
 
-$(OBJS): room_mode.h
+$(OBJS): room_status.h
 core_shm.o: third_party/yeney-core/core/sink.h
-stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test: room_mode.h
+stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test: room_status.h
 
-queue-lms-client-test: tests/queue_lms_client_fixture.cpp queue_lms_client.h queue_lms_cli.h room_mode.h room_mode.o
-	$(CXX) -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $< room_mode.o
 
-queue-controller-fixture queue-mode-fixture: queue_lms_cli.h
 
-yeney.o queue_room.o room-mode-test: lms_artwork.h
+yeney.o queue_room.o : lms_artwork.h
 
 queue_room.o: queue_protocol.h
 

@@ -34,9 +34,8 @@ inline std::string decodeLms(const std::string &input) {
     }
     return out;
 }
-// Queue control adapter. Raw MAC on the wire, decoded exact acknowledgement,
-// one bounded attempt. Bind this to ControllerOptions::lmsControl at room
-// start.
+// Read-only metadata adapter used by the relay. Raw MAC, exact decoded
+// acknowledgement, fresh connection per bounded query.
 inline bool controlLms(const std::string &host, const std::string &mac, const std::string &command,
                        unsigned port = 9090, std::string *reply = nullptr, unsigned timeoutMs = 0,
                        const std::atomic_bool *cancel = nullptr) {

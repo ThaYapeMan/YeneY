@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include "stream_pacing.h"
-#include "room_mode.h"
+#include "room_status.h"
 #include "start_lead.h"
 #include <atomic>
 #include <chrono>
@@ -53,6 +53,10 @@ public:
             streamPacingSonos() ? "sonos" : "wall", yeney_start_lead_ms(),
             (unsigned long long)overwrites.load(), (unsigned long long)dropped.load(),
             socketBlockedUs.load()/1000., s.encodedMs, s.audibleMs, s.encodedMs-s.audibleMs, s.valid);
+    }
+    void publishPlayback() {
+        { std::lock_guard<std::mutex> lock(mutex); lastFile=0; }
+        tick();
     }
     bool tick(uint64_t now = streamMonoMs()) {
         { std::lock_guard<std::mutex> lock(mutex);

@@ -3,10 +3,10 @@
 #include "playback_mode.h"
 #include <algorithm>
 #include <atomic>
-#include <deque>
 #include <functional>
 #include <mutex>
 #include <sstream>
+#include <vector>
 namespace bridge {
 struct ModeEvidence {
     uint64_t generation = 0, epoch = 0, occurrence = 0, token = 0, frame = 0, promised = 0, actual = 0;
@@ -16,6 +16,8 @@ struct ModeEvidence {
 struct ModeStatus {
     std::string requested = "stream", active = "stream", state = "active", reason = "default-stream",
                 lastFallback;
+    std::vector<std::string> ownedUris;
+    std::string currentUri, lastFault;
     ModeEvidence item;
     uint64_t generation = 1;
     unsigned oldRate = 0, newRate = 0;
@@ -23,58 +25,22 @@ struct ModeStatus {
     uint64_t lmsSlow = 0, lmsFailed = 0;
     double gapMs = -1;
 };
+// Passive status only. The relay publishes before returning from each observation.
 class RoomMode {
-public:
-    struct Hooks {
-        // All hooks execute on the room worker, outside the status lock.
-        std::function<void(const ModeEvidence &)> stopOwned, release;
-        std::function<void(uint64_t, const ModeEvidence &)> stream;
-        std::function<void(const std::string &)> log;
-    };
-
-private:
     mutable std::mutex mutex;
-    ModeStatus s;
-    Hooks hooks;
-    std::string room, coordinator;
-    bool stopped = false, freezeFailed = false, started = false, rearmBlocked = false;
-    std::deque<uint64_t> rearms;
-    std::deque<char> commands;
-    std::function<void()> loopHandler;
-    uint64_t endAt = 0, prepareAt = 0;
-    void log(const ModeStatus &v) const;
+    ModeStatus value;
 
 public:
-    RoomMode(std::string room, std::string coordinator, PlaybackSelection, Hooks);
-    ModeStatus status() const;
-    bool accepts(uint64_t generation, bool queue) const;
-    // Call on the serialized room worker; now is monotonic milliseconds.
-    bool newPlay(bool ready, uint64_t epoch, uint64_t now);
-    void beginPreparation(uint64_t now);
-    void adoptPlay(); // existing queue generation: q/s is a track start, not a rearm
-    void deferPreparation(uint64_t ms) {
-        std::lock_guard<std::mutex> l(mutex);
-        if (s.state == "prepare" && prepareAt)
-            prepareAt += ms;
+    ModeStatus status() const {
+        std::lock_guard<std::mutex> lock(mutex);
+        return value;
     }
-    void lmsMetrics(uint64_t slow, uint64_t failed) {
-        std::lock_guard<std::mutex> l(mutex);
-        s.lmsSlow = std::max(s.lmsSlow, slow);
-        s.lmsFailed = std::max(s.lmsFailed, failed);
+    void publish(ModeStatus v) {
+        std::lock_guard<std::mutex> lock(mutex);
+        value = std::move(v);
     }
-    void onRearmLoop(std::function<void()> handler) { loopHandler = std::move(handler); }
-    void command(char); // serialized command history for loop diagnostics
-    void stop();        // explicit LMS q only, not seek/refetch f
-    void evidence(ModeEvidence, uint64_t now);
-    void request(const std::string &reason, uint64_t now);
-    void tick(uint64_t now);
-    void streamAudible(uint64_t generation, uint64_t now, unsigned rate);
     static std::string json(const ModeStatus &);
 };
-inline ModeStatus RoomMode::status() const {
-    std::lock_guard<std::mutex> l(mutex);
-    return s;
-}
 inline std::string RoomMode::json(const ModeStatus &v) {
     // Values are fixed reason codes/config selections; escape arbitrary input.
     auto q = [](const std::string &t) {
@@ -89,6 +55,20 @@ inline std::string RoomMode::json(const ModeStatus &v) {
         }
         return o + '"';
     };
+    if (v.active == "queue") {
+        std::ostringstream out;
+        out << "{\"requested\":\"queue\",\"active\":\"queue\",\"reason\":\"queue-opt-in\",\"state\":"
+            << q(v.state) << ",\"owned\":" << (v.item.owned ? "true" : "false")
+            << ",\"occurrence\":" << v.item.occurrence << ",\"current_owned_item\":" << q(v.currentUri)
+            << ",\"last_fault\":" << q(v.lastFault) << ",\"owned_item_uris\":[";
+        for (size_t i = 0; i < v.ownedUris.size(); ++i) {
+            if (i)
+                out << ',';
+            out << q(v.ownedUris[i]);
+        }
+        out << "]}";
+        return out.str();
+    }
     std::ostringstream o;
     o << "{\"requested\":" << q(v.requested) << ",\"active\":" << q(v.active) << ",\"state\":" << q(v.state)
       << ",\"reason\":" << q(v.reason) << ",\"occurrence\":" << v.item.occurrence

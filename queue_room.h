@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
-#include "room_mode.h"
+#include "room_status.h"
 #include "third_party/yeney-core/core/player.h"
 #include "upnp/own_speaker_control.h"
 namespace bridge {

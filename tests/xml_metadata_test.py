@@ -11,7 +11,7 @@ import threading
 from urllib.parse import quote_from_bytes
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
-from queue_controller_test import Coordinator, PATHS, SERVICES, SOAP
+from queue_sonos_fake import Coordinator, PATHS, SERVICES, SOAP
 
 ROOT = Path(__file__).resolve().parents[1]
 namespace = {'__file__': str(ROOT/'tests/player_engine_test.py')}

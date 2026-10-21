@@ -15,10 +15,10 @@ import threading
 import time
 from urllib.parse import quote, urlsplit
 from xml.sax.saxutils import escape, quoteattr
-from queue_controller_test import Coordinator, Handler, ROOT, request, SERVICES, PATHS
+from queue_sonos_fake import Coordinator, Handler, ROOT, request, SERVICES, PATHS
 sys.path.insert(0, str(ROOT/'third_party/yeney-core/tests'))
 from fake_lms import LMS, HTTP, SongQueue
-from queue_audible_test import wav
+from relay_audio import wav
 
 def alac(seconds=24):
     # Repeat a complete independently encoded ALAC sample, rebuilding the MP4
@@ -240,253 +240,35 @@ class Binary:
         if self.proc.returncode:errors.append(AssertionError((self.base/'bridge.log').read_text()))
         if errors:raise errors[0]
 
-def album(codec='f',rates=(44100,)*4,fade=False):
-    h=Binary(codec,rates,fade,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
+def relay_replay():
+    h=Binary(rates=(44100,),initial_stop=True,albums=['\x16Het beste uit pop in je moerstaal, Vol. 2'],expected_albums=['Het beste uit pop in je moerstaal, Vol. 2'])
     try:
-        h.sonos.clocked=True
-        h.until(lambda:h.sonos.verified_save and any('resource' in i for i in h.items()))
-        assert h.sonos.snapshots[h.sonos.last_save]==h.sonos.original
-        assert not h.sonos.crossfade
-        for track in range(1,5):
-            h.state(track)
-            h.until(lambda:len(h.packets('STMs'))==track)
-            assert h.model.playing==track,(h.model.playing,track)
-            first=h.elapsed();time.sleep(.12);second=h.elapsed()
-            assert 0<=first<=second<1500,(track,first,second)
-            h.until(lambda:len(h.packets('STMd'))==track)
-            assert h.packets('STMs')[-1]['time']<=h.packets('STMd')[-1]['time']
-            # Read/reconnect and Range never create an audible start.
-            uri=h.items()[track-1]['uri']
-            c,r=request(uri,byte_range='bytes=0-4095');assert r.status==206
-            total=int(r.getheader('Content-Range').split('/')[-1]);r.read();c.close()
-            c,r=request(uri,byte_range='bytes=4096-8191');assert r.status==206;r.read();c.close()
-            duration=(total-44)/6/rates[track-1]
-            h.until(lambda:time.monotonic()-h.sonos.clock_base>=max(0,int(duration)-4),timeout=35)
-            if track<4:
-                h.until(lambda:len(h.items())>=track+1)
-                c,r=request(h.items()[track]['uri']);assert r.status==200
-                count=0
-                while True:
-                    chunk=r.read(32768)
-                    if not chunk:break
-                    count+=len(chunk);time.sleep(len(chunk)/(6*rates[track]*9))
-                assert count==int(r.getheader('Content-Length'));c.close()
-            h.until(lambda:time.monotonic()-h.sonos.clock_base>=max(0,int(duration)-1),timeout=10);time.sleep(1.2)
-        assert len(h.packets('STMs'))==4 and len(h.packets('STMd'))==4
-        print(f'PASS real yeney queue album codec={codec} rates={rates} crossfade={10 if fade else 0}: verified backup, three joins, speaker/LMS identity, STMs before STMd, prefetch 3–4 s early at 9x, Range/reconnect',flush=True)
-    finally:h.close()
-    assert h.sonos.items==[] and h.sonos.crossfade
-    print('PASS real yeney owning service stop: exact owned removal and CrossfadeMode restored',flush=True)
-
-def controls():
-    h=Binary(rates=(44100,)*6,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
-    try:
-        h.sonos.clocked=True
-        for track in (1,2,3):
-            h.state(track);h.until(lambda:len(h.packets('STMs'))==track)
-            h.until(lambda:len(h.packets('STMd'))==track)
-            h.until(lambda:time.monotonic()-h.sonos.clock_base>=23,timeout=30);time.sleep(1.2)
-        h.sonos.clocked=False
-        h.until(lambda:len(h.items())>=4)
-        h.model.sources=iter(());h.model.ready=False
+        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
+        assert len(h.sonos.actions('AddURIToQueue'))==len(h.sonos.actions('Play'))==1
+        assert len([p for p in h.lms.packets if p.get('op')=='HELO'])==1
+        assert all(c.startswith('status ') for c in h.commands),h.commands
+        log=(h.base/'bridge.log').read_text()
+        assert 'metadata sanitized mode=queue' in log,log
+        status=json.loads((h.base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
+        assert status['state']=='PLAYING' and status['owned'] and status['current_owned_item']==h.sonos.position['TrackURI'],status
         h.lms.strm('p');h.until(lambda:len(h.packets('STMp'))==1)
-        elapsed=h.elapsed();time.sleep(10)
-        assert h.elapsed()==elapsed and len(h.packets('STMp'))==1
         h.lms.strm('u');h.until(lambda:len(h.packets('STMr'))==1)
-        print('PASS real yeney LMS pause 10 s/resume: confirmed state, one STMp/STMr',flush=True)
-        for index in (3,2):
-            h.index=index;h.source_ms=0;h.model.streaming=index+1
-            before=len(h.packets('STMs'))
-            source=HTTP(h.bodies[index]);h.sources.append(source)
-            h.lms.strm('q');h.lms.strm('s',source,fmt='f',rate=h.rates[index])
-            h.until(lambda:len(h.packets('STMs'))==before+1)
-            assert h.model.playing==index+1
-        print('PASS real yeney LMS next/previous: retained prepared assets, matching audible identity, no double advance',flush=True)
-        h.index=2;h.source_ms=2000
-        source=HTTP(h.bodies[2]);h.sources.append(source)
-        before=len(h.packets('STMs'));h.lms.strm('q');h.lms.strm('s',source,fmt='f')
-        h.until(lambda:any(a[1].get('Unit')=='REL_TIME' for a in h.sonos.actions('Seek')))
-        h.lms.strm('u') # real LMS releases the newly connected seek run
-        h.until(lambda:len(h.packets('STMs'))==before+1)
-        print('PASS real yeney LMS seek within history: REL_TIME, same asset and one acknowledged LMS run',flush=True)
-        time.sleep(2)
-        track=int(h.sonos.position['Track'])
-        h.state(track,2,'PAUSED_PLAYBACK')
-        h.until(lambda:h.commands.count('pause 1')==1)
-        h.state(track,2,'PLAYING');h.until(lambda:h.commands.count('play')==1)
-        for target in (track+1,track):
-            before=len(h.packets('STMs'));h.state(target)
-            h.until(lambda:len(h.packets('STMs'))==before+1)
-        h.state(track,6);h.until(lambda:'time 6' in h.commands)
-        print('PASS real yeney app pause/resume, next/previous and history seek: decoded CLI acknowledgements and SlimProto echoes without loops',flush=True)
-        audible=h.sonos.position['TrackURI']
-        for name,order in [('add',[0,1,2,3,4,5,99]),('move',[0,1,2,5,4,3,99]),('delete',[0,1,2,5,4,3]),('clear',[])]:
-            before=(h.base/'bridge.log').read_text().count('rebuild revision=')
-            h.order=order;h.revision+=1
-            if not order:h.index=0
-            h.until(lambda:(h.base/'bridge.log').read_text().count('rebuild revision=')>before)
-            assert h.sonos.position['TrackURI']==audible
-        print('PASS real yeney LMS add/delete/move/clear: encoded stable identities, future rebuilds preserve audible URI',flush=True)
+        h.lms.strm('q');h.until(lambda:h.sonos.transport_state=='STOPPED' and not h.items())
+        print('PASS relay field replay: q/q/q+s, sanitized album, one enqueue/Play/HELO, synchronous status, pause/resume/stop, no CLI mutation',flush=True)
     finally:h.close()
 
-def rearm_replay():
-    h=Binary(rates=(44100,),initial_stop=True,slow=True,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
+def soap_fault():
+    h=Binary(rates=(44100,),fail_add=True)
     try:
-        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
-        time.sleep(1)
+        h.until(lambda:len(h.packets('STMn'))==1)
+        time.sleep(.3)
+        assert len(h.packets('STMn'))==1 and not h.sonos.actions('Play')
+        assert not h.items() and h.sonos.crossfade
         log=(h.base/'bridge.log').read_text()
-        assert log.count('ownership acquired')==1,log
-        assert len(h.sonos.actions('AddURIToQueue'))==1,h.sonos.calls
-        assert len(h.sonos.actions('Play'))==1
-        assert not h.sonos.actions('AddMultipleURIsToQueue')
-        assert sum(p['op']=='HELO' for p in h.lms.packets)==1,h.lms.packets
-        assert h.lms.reconnect_replays==0
-        generations=log.count('state=prepare reason=finite-ready')
-        assert generations == 1, log
-        assert not [c for c in h.commands if not (c.startswith('status ') or c.endswith(' ?'))], h.commands
-        assert not h.packets('STMd') # retry while this progressive producer is still active
-        h.lms.strm('s',h.sources[-1],fmt='f',rate=44100)
-        h.until(lambda:'queue repeated strm s' in (h.base/'bridge.log').read_text())
-        time.sleep(1)
-        log=(h.base/'bridge.log').read_text()
-        assert log.count('state=prepare reason=finite-ready')==generations,log
-        assert sum(p['op']=='HELO' for p in h.lms.packets)==1
-        assert 'state=drain' not in log
-        print('PASS 23:14 field enqueue replay: AddURIToQueue accepted, no AddMultipleURIsToQueue, Play once, no fallback')
-        print('PASS field q/q/q+s replay: one preparation/takeover/enqueue/Play, zero CLI mutations, one HELO; repeated same-track s does not rearm',flush=True)
-    finally:h.close()
-
-def enqueue_fault():
-    h=Binary(rates=(44100,),initial_stop=True,fail_add=True,
-             binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
-    try:
-        h.until(lambda:'active=stream state=active reason=soap-error' in (h.base/'bridge.log').read_text(),timeout=25)
-        time.sleep(1)
-        log=(h.base/'bridge.log').read_text()
-        assert log.count('active=queue state=drain reason=soap-error')==1,log
-        assert log.count('release reason=mode-handoff')==1,log
-        assert len(h.sonos.actions('AddURIToQueue'))==1
-        assert not h.sonos.actions('AddMultipleURIsToQueue')
-        lines=[line for line in log.splitlines() if 'queue SOAP action=AddURIToQueue HTTP=500' in line]
-        assert len(lines)==1,log
-        assert 'errorCode="402" errorDescription="fixture rejection"' in lines[0],lines
-        body=json.loads(lines[0].split(' request=',1)[1])
-        action=ET.fromstring(body).find('{http://schemas.xmlsoap.org/soap/envelope/}Body')[0]
-        assert {n.tag:n.text or '' for n in action}==h.sonos.actions('AddURIToQueue')[0][1]
-        assert 'EnqueuedURIMetaData' in body and '&lt;DIDL-Lite' in body
-        print('PASS AddURIToQueue fault replay: exactly one soap-error fallback and release; complete action/HTTP/UPnP fault and exact DIDL request logged',flush=True)
-    finally:h.close()
-
-def metadata_replay():
-    album='Het beste uit pop in je moerstaal, Vol. 2'
-    h=Binary(codec='l',rates=(44100,),initial_stop=True,albums=['\x16'+album],expected_albums=[album],
-             binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
-    try:
-        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
-        log=(h.base/'bridge.log').read_text()
-        assert log.count('ownership acquired')==1,log
-        assert len(h.sonos.actions('AddURIToQueue'))==1 and len(h.sonos.actions('Play'))==1
-        assert not h.sonos.actions('AddMultipleURIsToQueue')
-        assert 'state=drain' not in log and 'fallback command=' not in log,log
-        metadata=h.sonos.actions('AddURIToQueue')[0][1]['EnqueuedURIMetaData']
-        item=ET.fromstring(metadata)[0]
-        assert next(n.text for n in item if n.tag.endswith('}album'))==album
-        changed=[line for line in log.splitlines() if 'metadata sanitized mode=queue' in line]
-        assert len(changed)==1 and 'field=album removed=1 replaced=0' in changed[0],changed
-        assert '\x16' not in metadata and '\x16' not in log
-        print('PASS 08:57 metadata replay: CLI %16 album sanitized, strict Sonos accepts AddURIToQueue, one takeover/Play, one field-count log and no fallback',flush=True)
-    finally:h.close()
-
-def rapid_selections():
-    h=Binary(rates=(44100,)*3)
-    try:
-        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
-        h.until(lambda:len(h.items())>=2)
-        h.model.sources=iter(());h.model.ready=False
-        for index in (1,0,1,0):
-            h.index=index;h.source_ms=0;h.model.streaming=index+1
-            before=len(h.packets('STMs'))
-            source=HTTP(h.bodies[index]);h.sources.append(source)
-            h.lms.strm('q');h.lms.strm('s',source,fmt='f')
-            h.until(lambda:len(h.packets('STMs'))==before+1 and h.model.playing==index+1)
-            assert h.model.playing==index+1
-        assert sum(p['op']=='HELO' for p in h.lms.packets)==1
-        assert not [c for c in h.commands if not (c.startswith('status ') or c.endswith(' ?'))]
-        print('PASS rapid LMS q/s selections: four next/previous starts before room status catches up, matching identity, no false seek/rearm/CLI mutation',flush=True)
-    finally:h.close()
-
-def slow_app():
-    h=Binary(rates=(44100,)*2,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
-    try:
-        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
-        h.until(lambda:len(h.items())>=2)
-        h.cli_delay=5
-        h.state(1,0,'PAUSED_PLAYBACK')
-        h.until(lambda:'mode ?' in h.commands,timeout=15)
-        h.until(lambda:len(h.packets('STMp'))==1,timeout=15)
-        h.state(1,0,'PLAYING')
-        h.until(lambda:len(h.packets('STMr'))==1,timeout=15)
-        h.state(2)
-        h.until(lambda:'playlist index ?' in h.commands,timeout=15)
-        h.until(lambda:len(h.packets('STMs'))==2,timeout=15)
-        time.sleep(1)
-        assert h.commands.count('pause 1')==1 and h.commands.count('playlist index 1')==1,h.commands
-        log=(h.base/'bridge.log').read_text()
-        assert 'state=drain' not in log,log
-        assert h.model.playing==2
-        print('PASS real yeney app pause/resume and next with 5 s LMS replies: matching audible identity, no echo loop or fallback',flush=True)
-    finally:h.close()
-
-def foreign():
-    h=Binary(binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
-    try:
-        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
-        h.until(lambda:len(h.items())>=2)
-        h.model.sources=iter(());h.model.ready=False
-        time.sleep(.5)
-        uri=h.items()[0]['uri'];c,r=request(uri);prefix=r.read(100)
-        h.refetch_audio=True;h.index=0
-        h.sonos.add_foreign();entry=h.sonos.items[-1].copy()
-        h.until(lambda:getattr(h.sonos,'stream_audio',b''),timeout=20)
-        h.until(lambda:'active=stream state=active reason=foreign-control' in (h.base/'bridge.log').read_text())
-        log=(h.base/'bridge.log').read_text()
-        assert log.count('release reason=mode-handoff')==1
-        assert log.count('active=queue state=drain reason=foreign-control')==1
-        assert h.sonos.items==[entry] and h.sonos.crossfade
-        assert h.model.playing==1
-        assert prefix+r.read();c.close()
-        print('PASS real yeney foreign edit: one release and stream fallback, confirmed tail endpoint, same LMS index/time, foreign entry preserved, handoff gap confirmed',flush=True)
-    finally:h.close()
-
-def seek_future():
-    h=Binary(slow=True,binary=Path(os.environ['YENEY_ACCEPTANCE_BINARY']) if 'YENEY_ACCEPTANCE_BINARY' in os.environ else None)
-    try:
-        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
-        old=h.items()[0]['uri'];h.model.sources=iter(());h.model.ready=False
-        path=h.base/'seek.wav';path.write_bytes(wav(44100,4))
-        target=h.base/'seek.flac'
-        subprocess.run(['flac','-s','-f','-o',str(target),str(path)],check=True)
-        h.bodies[0]=target.read_bytes();h.index=0;h.source_ms=20000;h.refetch_audio=True
-        source=HTTP(h.bodies[0]);h.sources.append(source)
-        h.lms.strm('q');h.lms.strm('s',source,fmt='f')
-        h.until(lambda:h.sonos.position['TrackURI']!=old and h.sonos.position['TrackURI'].startswith('http'))
-        h.until(lambda:'history=rerender' in (h.base/'bridge.log').read_text())
-        h.until(lambda:len(h.packets('STMs'))==2)
-        assert h.model.playing==1
-        assert h.commands.count('time 20')==0, h.commands
-        print('PASS real yeney LMS seek beyond produced history: one fresh asset/URL, decoder admission, LMS source-time target and matching identity',flush=True)
+        assert 'errorCode=' in log and 'request=' in log,log
+        assert all(c.startswith('status ') for c in h.commands),h.commands
+        print('PASS relay SOAP fault: full diagnostic, Stop/release, STMn once, no fallback or mutation loop',flush=True)
     finally:h.close()
 
 if __name__=='__main__':
-    rearm_replay()
-    enqueue_fault()
-    metadata_replay()
-    rapid_selections()
-    album()
-    album('l')
-    album(rates=(44100,48000,44100,48000))
-    album(fade=True)
-    controls()
-    slow_app()
-    foreign()
-    seek_future()
+    relay_replay();soap_fault()

@@ -1,4 +1,4 @@
-#include "room_mode.h"
+#include "room_status.h"
 #include "source_ownership.h"
 #include "resume_state.h"
 #include "upnp/speaker_control.h"

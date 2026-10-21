@@ -48,6 +48,7 @@ class CoreQueueSink : public yeney::Sink {
     std::deque<yeney::AudibleStart> audibleSignals;
     std::deque<yeney::AudibleState> speakerStates;
     bool speakerClock = false;
+    std::atomic_bool queueFailed{false};
     std::function<bool(char, uint32_t)> commandHandler;
     std::optional<yeney::PlaybackState> speakerState;
     std::optional<uint32_t> speakerElapsed;
@@ -105,6 +106,8 @@ public:
     void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
     bool speakerDriven() const override;
+    void failQueueTrack() { queueFailed = true; }
+    bool takeQueueFailure() override { return queueFailed.exchange(false); }
     bool takeAudibleState(yeney::AudibleState &) override;
     std::optional<uint32_t> audibleElapsedMs(uint64_t occurrence) const override;
     void audibleEnd(uint64_t occurrence);

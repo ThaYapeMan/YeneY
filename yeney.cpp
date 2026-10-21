@@ -986,10 +986,12 @@ int main(int argc, char** argv)
             std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer), playback, gServer, rawMac, gMac,
             [] { return SqueezeBoxURL(streamId.load()); });
     } else {
-        static auto* mode = new bridge::RoomMode(selectedSpeaker.name, selectedSpeaker.coordinator,
-            playback, bridge::RoomMode::Hooks{{}, {}, {}, [](const std::string& line) {
-                printf("yeney: %s\n", line.c_str());
-            }});
+        static auto* mode = new bridge::RoomMode;
+        bridge::ModeStatus initial;
+        initial.requested = playback.requested;
+        initial.active = bridge::playbackModeName(playback.selected);
+        initial.reason = playback.reason;
+        mode->publish(initial);
         bridge::setRoomMode(mode);
     }
     static StopTimer stopTimer;
