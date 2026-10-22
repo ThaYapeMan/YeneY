@@ -18,7 +18,19 @@ namespace bridge {
 namespace {
 std::atomic_bool roomStop{false};
 void stopRoom(int) { roomStop = true; }
-void logQueue(const std::string &s) { std::printf("yeney: queue %s\n", s.c_str()); }
+void logQueue(const std::string &s) {
+    std::printf("yeney: %s%s\n", s.compare(0, 6, "queue ") == 0 ? "" : "queue ", s.c_str());
+}
+unsigned pollSetting() {
+    if (const char *text = std::getenv("YENEY_QUEUE_POLL_MS")) {
+        char *end = nullptr;
+        long n = std::strtol(text, &end, 10);
+        if (*text && end && !*end && n >= 100 && n <= 2000)
+            return unsigned(n);
+        logQueue("invalid YENEY_QUEUE_POLL_MS; using 500");
+    }
+    return 500;
+}
 } // namespace
 // Only this worker mutates the speaker or relay state. Core callbacks enqueue
 // commands; HTTP readers serve immutable items and never advance playback.
@@ -51,6 +63,13 @@ struct QueueRoom::Impl {
     std::string state = "STOPPED", fault, transportStatus;
     std::chrono::steady_clock::time_point playAt{};
     bool waitingForPlay = false;
+    unsigned pollMs = pollSetting();
+    std::chrono::steady_clock::time_point nextPoll{}, fastUntil{};
+    std::shared_ptr<std::atomic_bool> eventDirty = std::make_shared<std::atomic_bool>(false);
+    void fastPoll() {
+        fastUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        nextPoll = {};
+    }
     upnp::QueueOwnershipIO ownershipIO() {
         upnp::QueueOwnershipIO io;
         io.browse = [this] { return coordinator.browse(); };
@@ -85,6 +104,12 @@ struct QueueRoom::Impl {
         if (const char *directory = std::getenv("STATE_DIRECTORY"))
             streamMetrics().configure(room.name, directory);
         route.registerWith(*http);
+        speaker->queueEvents([dirty = eventDirty](const upnp::GenaEvent &event) {
+            if (event.service == upnp::Service::AVTransport)
+                *dirty = true;
+            return true;
+        });
+        logQueue("settings poll_ms=" + std::to_string(pollMs));
         queue.useSpeakerClock();
         setRoomStatus(&status);
         publish();
@@ -158,6 +183,7 @@ struct QueueRoom::Impl {
             actions.play();
             playAt = std::chrono::steady_clock::now();
             waitingForPlay = true;
+            fastPoll();
         }
     }
     void append() {
@@ -244,6 +270,7 @@ struct QueueRoom::Impl {
                 actions.play();
                 playAt = std::chrono::steady_clock::now();
                 waitingForPlay = true;
+                fastPoll();
                 started = true;
             }
         }
@@ -251,11 +278,20 @@ struct QueueRoom::Impl {
     void observe() {
         if (!started)
             return;
+        const auto now = std::chrono::steady_clock::now();
+        const bool event = eventDirty->exchange(false);
+        if (!event && now < nextPoll)
+            return;
+        nextPoll = now + std::chrono::milliseconds(now < fastUntil ? 100 : pollMs);
         const auto p = actions.position().response;
         const auto info = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}}).response;
         const auto transport = info.value("CurrentTransportState");
         const auto reportedStatus = info.value("CurrentTransportStatus");
         const auto uri = p.value("TrackURI");
+        if (reportedStatus != transportStatus) {
+            transportStatus = reportedStatus;
+            logQueue("TransportStatus=" + transportStatus + " uri=" + uri);
+        }
         auto it = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; });
         if (!reportedStatus.empty() && reportedStatus != "OK")
             throw std::runtime_error("playback-fault action=Play uri=" + uri +
@@ -278,6 +314,13 @@ struct QueueRoom::Impl {
                                                                : yeney::PlaybackState::Stopped;
         if (playback == yeney::PlaybackState::Stopped && it != std::prev(items.end()))
             return;
+        const auto elapsed = uint64_t(h * 3600 + m * 60 + s);
+        const auto length = it->item->contentLength();
+        const auto rate = it->item->descriptor().rate;
+        if (transport == "PLAYING" && length && (*length - 44) / 6 <= (elapsed + 3) * rate)
+            fastPoll();
+        if (it->stream != current)
+            fastPoll();
         const auto previous = current;
         const auto old = state;
         current = it->stream;
@@ -343,6 +386,7 @@ struct QueueRoom::Impl {
         }
         changed.notify_all();
         worker.join();
+        speaker->queueEvents({});
         setRoomStatus(nullptr);
     }
     ~Impl() { shutdown(); }

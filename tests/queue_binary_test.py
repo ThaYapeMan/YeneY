@@ -311,6 +311,28 @@ def speaker_faults():
             print('PASS speaker playback fault: '+status+', Stop/release/STMn once')
         finally:h.close()
 
+def polling():
+    h=Binary(rates=(44100,44100))
+    try:
+        h.until(lambda:len(h.packets('STMs'))==1)
+        h.state(1,10)
+        time.sleep(3.6)
+        for action in ('GetPositionInfo','GetTransportInfo'):
+            before=len(h.sonos.actions(action));time.sleep(2)
+            count=len(h.sonos.actions(action))-before
+            assert count<=4,(action,count)
+        h.state(1,21)
+        before=len(h.sonos.actions('GetPositionInfo'));time.sleep(.8)
+        assert len(h.sonos.actions('GetPositionInfo'))-before>=4
+        h.until(lambda:len(h.items())==2)
+        h.state(2,0);h.until(lambda:len(h.packets('STMs'))==2,2)
+        text=(h.base/'bridge.log').read_text()
+        assert 'SOAP action=GetPositionInfo HTTP=200' not in text
+        assert 'SOAP action=GetTransportInfo HTTP=200' not in text
+        assert 'queue queue' not in text
+        print('PASS queue polling: steady <=2/s per action, 100 ms end/join window, timely STMs, no successful-poll logs or duplicate prefix')
+    finally:h.close()
+
 def soap_fault():
     h=Binary(rates=(44100,),fail_add=True)
     try:
@@ -325,4 +347,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults()
+    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling()
