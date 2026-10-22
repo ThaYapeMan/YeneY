@@ -288,6 +288,10 @@ bool OwnSpeakerControl::positionInfo(uint32_t& ms, std::string* text) {
     const auto activity = streamActivity ? streamActivity() : StreamActivity{};
     auto cached = [&] { const auto s = state.snapshot(); ms = s.positionMs; if (text && s.positionKnown) *text = s.positionText; return s.positionKnown; };
     {
+        std::lock_guard<std::mutex> lock(queueObserverMutex);
+        if (queueObserver) return cached();
+    }
+    {
         std::lock_guard<std::mutex> lock(runtimeMutex);
         const bool skip = !monitor.legacy ? !before.playing() : before.paused() && !activity.streaming && !freshStreamPosition;
         if (skip || positionReading || (Clock::now() < positionAt && !(monitor.legacy && freshStreamPosition))) return cached();
@@ -324,6 +328,10 @@ bool OwnSpeakerControl::readTransportInfo(TransportInfo& info) {
     apply(update); info = state.snapshot().transport; return info.available;
 }
 void OwnSpeakerControl::poll() {
+    {
+        std::lock_guard<std::mutex> lock(queueObserverMutex);
+        if (queueObserver) return; // The queue relay owns its adaptive SOAP schedule.
+    }
     const auto health = subscriptions ? subscriptions->health() : SubscriptionHealth{};
     const auto activity = streamActivity ? streamActivity() : StreamActivity{};
     MonitorWork work;
