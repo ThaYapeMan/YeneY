@@ -647,7 +647,14 @@ The default is the first eligible local lossless album with at least four
 tracks of 60 seconds or longer, and Sonos room volume 10 (range 0–100). LMS software volume is untouched. It plays until
 three joins, checks audible Sonos/LMS identity with at most two seconds of
 boundary mismatch, pauses ten seconds from LMS, resumes, then stops and plays
-again. The playlist is staged while stopped with `cmd:add`; one explicit LMS play
+again. It also automatically selects one local lossless track of at least ten
+seconds from each high-rate family: 88.2/176.4 kHz and 96/192 kHz. Each
+missing family is explicitly SKIP with a note, not a failure. These checks
+require PLAYING without a TransportStatus fault and confirm the room status
+`rendered_rate` is 44100 or 48000 respectively. Source/target rates and choices
+are recorded in summary.md and manifest.tsv. Run this qualification with the
+normal modern `YENEY_AUDIO=24/48` setting; legacy mode caps output at 44.1 kHz.
+The playlist is staged while stopped with `cmd:add`; one explicit LMS play
 starts the clock. Each start must reach PLAYING on an owned item within five seconds.
 Expected metadata follows YeneY's XML sanitisation and room title format.
 

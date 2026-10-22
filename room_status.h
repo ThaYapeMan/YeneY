@@ -10,6 +10,7 @@ struct ModeStatus {
     std::string requested = "stream", active = "stream", state = "active", reason = "default-stream";
     bool owned = false;
     uint64_t occurrence = 0;
+    uint32_t renderedRate = 0;
     std::vector<std::string> ownedUris;
     std::string currentUri, lastFault;
 };
@@ -43,8 +44,8 @@ public:
             << ",\"state\":" << q(v.state) << ",\"reason\":" << q(v.reason);
         if (v.active == "queue") {
             out << ",\"occurrence\":" << v.occurrence << ",\"owned\":" << (v.owned ? "true" : "false")
-                << ",\"current_owned_item\":" << q(v.currentUri) << ",\"last_fault\":" << q(v.lastFault)
-                << ",\"owned_item_uris\":[";
+                << ",\"rendered_rate\":" << v.renderedRate << ",\"current_owned_item\":" << q(v.currentUri)
+                << ",\"last_fault\":" << q(v.lastFault) << ",\"owned_item_uris\":[";
             for (size_t i = 0; i < v.ownedUris.size(); ++i) {
                 if (i)
                     out << ',';

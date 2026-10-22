@@ -137,3 +137,16 @@ rule or cross-family conversion is needed. The existing stream cap and
 wire capabilities are unchanged, so stream mode uses that same LMS rule.
 Legacy 44.1 kHz mode necessarily limits the 48 kHz family to 44.1 kHz.
 An incoming rate above the advertised cap fails with STMn before enqueue.
+
+### Speaker observation and failures
+
+The relay alone schedules queue position/transport queries: a 500 ms steady
+interval (`YENEY_QUEUE_POLL_MS`, 100–2000), 100 ms within three seconds after
+Play/Seek/track changes and within three seconds of item end. A seek is an
+LMS q+s/new Play. GENA triggers immediate refresh. The stream display does
+not issue a second set of queue queries. Successful polls are silent; changes
+of state, current item and TransportStatus are logged. Only PLAYING confirms
+an audible item. A non-OK TransportStatus or STOPPED for more than three
+seconds after Play faults once, stops/releases owned entries and sends STMn.
+Queue status includes `rendered_rate`; the owner suite verifies both high-rate
+families where the library contains suitable tracks.

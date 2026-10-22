@@ -235,6 +235,7 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | Setting | Values | Default |
 |---|---|---|
 | `YENEY_PLAYBACK_MODE` | `stream`: existing transport · `queue`: standalone owned queue opt-in · `auto`: stream, logged as `auto-phase4` | `stream` |
+| `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |
 | `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |
 | `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; invalid/overflowing values fail queue configuration | `256` |
 | `YENEY_STREAM_PACING` | `sonos`: follow the Sonos clock · `wall`: legacy host clock opt-out | `sonos` |
@@ -515,3 +516,15 @@ default; `YENEY_LMS_POSITION_FROM_MODEL=0` restores RelTime-only reporting. With
 `YENEY_TIMING_PUBLISH=1`,
 LampaStream can read the opt-in SHM timing contract; inspect it with
 `scripts/yeney-timing-read <mac>`.
+
+Queue audio is 24-bit with a 48 kHz speaker cap (44.1 kHz in legacy
+`YENEY_AUDIO=16/44`). LMS performs high-quality SoX downsampling before
+delivery: 88.2/176.4 kHz sources use 44.1 kHz and 96/192 kHz sources use
+48 kHz in modern mode, preserving rate families and integer ratios. The
+stream sink already advertises the same cap and is unchanged. Legacy mode
+limits both families to 44.1 kHz. Above-cap input and speaker playback errors
+stop/release queue playback and report failure to LMS. Queue diagnostics expose
+`rendered_rate` for the current owned item. `YENEY_QUEUE_POLL_MS` defaults
+to 500 ms; the relay checks every 100 ms during the first three seconds after
+Play/Seek/track changes and the final three seconds of an audible item. GENA
+events trigger fresh observations; successful position/transport polls are silent.

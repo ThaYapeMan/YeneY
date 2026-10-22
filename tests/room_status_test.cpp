@@ -6,13 +6,14 @@ int main() {
     bridge::RoomStatus status;
     bridge::ModeStatus value;
     value.requested=value.active="queue";value.state="PLAYING";
-    value.owned=true;value.occurrence=7;
+    value.owned=true;value.occurrence=7;value.renderedRate=44100;
     value.currentUri="http://local/item?x=1&y=2";value.ownedUris={value.currentUri};
     status.publish(value);
     auto json=bridge::RoomStatus::json(status.status());
     assert(json.find("\"state\":\"PLAYING\"")!=std::string::npos);
     assert(json.find("\"owned\":true")!=std::string::npos);
     assert(json.find("\"owned_item_uris\":[\""+value.currentUri+"\"]")!=std::string::npos);
+    assert(json.find("\"rendered_rate\":44100")!=std::string::npos);
     assert(json.find("generation")==std::string::npos&&json.find("epoch")==std::string::npos);
     value.state="STOPPED";value.owned=false;value.currentUri.clear();value.ownedUris.clear();value.lastFault="SOAP rejected";
     status.publish(value);

@@ -251,7 +251,7 @@ class Speaker:
         t = self.call('AVTransport','GetTransportInfo',InstanceID=0)
         metadata = fields(ET.fromstring(p['TrackMetaData'])[0]) if p.get('TrackMetaData','').startswith('<') else {}
         return dict(track=int(p['Track']), uri=p['TrackURI'], rel=seconds(p['RelTime']),
-                    state=t['CurrentTransportState'], metadata=metadata,
+                    state=t['CurrentTransportState'], status=t.get('CurrentTransportStatus','OK'), metadata=metadata,
                     duration=seconds(p['TrackDuration']) if p.get('TrackDuration','').count(':')==2 else None)
 
 
@@ -395,11 +395,18 @@ class Suite(PACING['Suite']):
                      (self.album_choice is None or str(self.album_choice)==key or self.album_choice==v[0].get('album'))),None)
         if not group: raise SuiteError('need selected album with four eligible local lossless tracks >=60 s')
         self.selected={'album':group}
+        for name,rates in (('high-rate-44100',(88200,176400,88.2,176.4)),
+                           ('high-rate-48000',(96000,192000,96,192))):
+            choice=next((t for t in tracks if t.get('id','').isdigit() and
+                         t.get('remote','0')=='0' and t.get('url','').startswith('file://') and
+                         QUEUE['codec'](t) and QUEUE['number'](t.get('duration'))>=10 and
+                         QUEUE['number'](t.get('samplerate')) in rates),None)
+            self.selected[name]=[choice] if choice else []
         with (self.work/'manifest.tsv').open('w',newline='') as f:
             writer=csv.writer(f,delimiter='\t');writer.writerow(['scenario','index','id','title','album','album_id','codec','samplerate','duration','url'])
             for name, entries in self.selected.items():
                 for i,t in enumerate(entries):
-                    writer.writerow([name,i,t['id'],t.get('title',''),t.get('album',''),t['album_id'],QUEUE['codec'](t),t['samplerate'],t['duration'],t['url']])
+                    writer.writerow([name,i,t['id'],t.get('title',''),t.get('album',''),t.get('album_id',''),QUEUE['codec'](t),t['samplerate'],t['duration'],t['url']])
 
     def diagnostic(self):
         s = json.loads((self.state_root/('stream-pacing-'+self.room.encode().hex()+'.json')).read_text())
@@ -526,6 +533,7 @@ class Suite(PACING['Suite']):
         with (self.work/'samples.jsonl').open('a') as f:
             f.write(json.dumps(row,sort_keys=True)+'\n')
         self.samples.append(row)
+        if s.get('status','OK')!='OK': self.problem('speaker TransportStatus='+s['status'])
         if p.get('last_fault'): self.problem('relay fault: '+p['last_fault'])
         if p.get('active') != 'queue' or p.get('requested') != 'queue' or p.get('last_fallback') or p.get('latched'):
             self.current['fallbacks'].append(p.get('last_fallback') or p.get('reason'))
@@ -640,6 +648,19 @@ class Suite(PACING['Suite']):
         self.mutate('stop')
         self.wait(tracks,lambda r:r['speaker']['state']=='STOPPED',5)
         self.load(tracks)
+        for name,target in (('high-rate-44100',44100),('high-rate-48000',48000)):
+            self.begin(name)
+            selected=self.selected[name]
+            if not selected:
+                self.current.update(verdict='SKIP',note='library has no eligible '+
+                                    ('88.2/176.4' if target==44100 else '96/192')+' kHz lossless track >=10 s')
+                print('SKIP '+name+': '+self.current['note'],flush=True)
+                continue
+            row=self.load(selected)
+            row,_=self.wait(selected,lambda r:r['playback'].get('rendered_rate')==target,3)
+            self.current['note']=str(selected[0]['samplerate'])+' -> '+str(target)+' Hz, 24-bit'
+            until=self.backend.now()+3
+            while self.backend.now()<until:self.sample(selected)
 
     def restore_item(self,label,expected,setter,getter,compare=None):
         compare=compare or (lambda a,b:a==b)
@@ -770,10 +791,10 @@ class Suite(PACING['Suite']):
             verdict = 'DEVICE SUITE FAILED: '+'; '.join(dict.fromkeys(self.errors)) if self.errors else 'DEVICE SUITE OK'
             (self.work/'result.txt').write_text(verdict+'\n')
             lines = ['# Queue device qualification','', '| Scenario | Verdict | Joins | Startup/seek max s | Boundary mismatch max s | Fallbacks | Note |', '|---|---|---:|---:|---:|---|---|']
-            for name in ('album','pause-resume','stop-new-play'):
+            for name in ('album','pause-resume','stop-new-play','high-rate-44100','high-rate-48000'):
                 if not any(r['name']==name for r in self.results):
                     self.results.append(dict(name=name,verdict='NOT RUN',joins=0,startup=None,mismatch=0,fallbacks=[],note='prior failure'))
-            order={name:i for i,name in enumerate(('album','pause-resume','stop-new-play'))}
+            order={name:i for i,name in enumerate(('album','pause-resume','stop-new-play','high-rate-44100','high-rate-48000'))}
             self.results.sort(key=lambda r:order.get(r['name'],len(order)))
             for r in self.results:
                 lines.append('| '+' | '.join(str(r[k]).replace('|','/') for k in ('name','verdict','joins','startup','mismatch','fallbacks','note'))+' |')

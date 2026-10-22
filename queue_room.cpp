@@ -135,8 +135,10 @@ struct QueueRoom::Impl {
         v.lastFault = fault;
         for (const auto &item : items) {
             v.ownedUris.push_back(item.uri);
-            if (item.stream == current)
+            if (item.stream == current) {
                 v.currentUri = item.uri;
+                v.renderedRate = item.item->descriptor().rate;
+            }
         }
         status.publish(std::move(v));
         // Bypass the periodic stream sampler's one-second throttle. Snapshot
@@ -276,7 +278,7 @@ struct QueueRoom::Impl {
         }
     }
     void observe() {
-        if (!started)
+        if (!started || faulted)
             return;
         const auto now = std::chrono::steady_clock::now();
         const bool event = eventDirty->exchange(false);

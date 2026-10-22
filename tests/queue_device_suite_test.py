@@ -182,7 +182,7 @@ class Backend:
         if self.model.owned:
             self.sonos.items=[dict(uri='http://127.0.0.1/music/queue.wav?session=fixture')]
         p=dict(state='PLAYING' if self.model.mode=='play' else 'PAUSED' if self.model.mode=='pause' else 'STOPPED',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='queue-opt-in',occurrence=self.model.index+1,epoch=self.model.epoch,
-               owned=self.model.owned,mirrored_ahead=3,last_fallback='soap-error' if self.model.fault=='fallback' else '',handoff_gap_ms=-1,latched=False)
+               rendered_rate=(44100 if not self.model.urls or int(self.model.track().get('samplerate','44100'))%44100==0 else 48000),owned=self.model.owned,mirrored_ahead=3,last_fallback='soap-error' if self.model.fault=='fallback' else '',handoff_gap_ms=-1,latched=False)
         path=self.root/('stream-pacing-'+b'Study'.hex()+'.json')
         path.write_text(json.dumps(dict(pid=self.pid,monotonic_ms=self.now()*1000,playback=p)))
     def run(self,*args):
@@ -290,7 +290,8 @@ class Tests(unittest.TestCase):
         self.assertEqual([a[1]['DesiredVolume'] for a in self.sonos.actions('SetVolume')],['10','23'])
         self.assertEqual(self.model.play_prior_modes,['stop','pause','stop'])
         self.assertEqual(self.suite.results[0]['joins'],3)
-        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play'])
+        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','high-rate-44100','high-rate-48000'])
+        self.assertTrue(all(r['verdict']=='SKIP' and 'library has no eligible' in r['note'] for r in self.suite.results[-2:]))
         with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:
             names={n.split('/',1)[-1] for n in tar.getnames()}
             self.assertTrue({'summary.md','samples.jsonl','joins.jsonl','manifest.tsv','journal.log','backup.json','before.json','result.txt'}<=names,names)
@@ -302,6 +303,19 @@ class Tests(unittest.TestCase):
         print('PASS queue device backup: foreign entries require an identity/content-verified saved queue')
         print('PASS relay startup measurement: playlist staged stopped with cmd:add; each timed Play starts a new run, resume follows pause')
         print('PASS queue device suite: full loopback CLI/SlimProto/SOAP sequence, album three joins, pause ten seconds, stop/new play, saved/restored volume, archive and exact restoration')
+    def test_high_rate_families(self):
+        for rate in (176400,192000):
+            n=str(len(self.model.byid)+1)
+            track=dict(id=n,title='High '+n,artist='Artist <one>',album='High '+n,album_id=n,
+                       type='flc',samplerate=str(rate),duration='60',url='file:///music/'+n+'.flac')
+            self.model.library.append(track);self.model.byid[n]=track
+        self.assertEqual(self.suite.execute(),0)
+        rows={r['name']:r for r in self.suite.results}
+        for name,target in (('high-rate-44100',44100),('high-rate-48000',48000)):
+            self.assertEqual(rows[name]['verdict'],'PASS')
+            self.assertIn(str(target)+' Hz',rows[name]['note'])
+        print('PASS device suite high-rate families: 176.4 -> 44.1 and 192 -> 48 kHz, status-verified, restored')
+
     def test_backup_not_needed(self):
         for label,entries,note in (
                 ('empty',[],'queue empty'),
