@@ -48,7 +48,9 @@ struct QueueRoom::Impl {
     uint64_t firstStream = 1, current = 0;
     queue_audio::PlaylistSnapshot playlist;
     queue_audio::PlaylistReader reader;
-    std::string state = "STOPPED", fault;
+    std::string state = "STOPPED", fault, transportStatus;
+    std::chrono::steady_clock::time_point playAt{};
+    bool waitingForPlay = false;
     upnp::QueueOwnershipIO ownershipIO() {
         upnp::QueueOwnershipIO io;
         io.browse = [this] { return coordinator.browse(); };
@@ -127,6 +129,7 @@ struct QueueRoom::Impl {
         releasing = false;
         items.clear();
         started = false;
+        waitingForPlay = false;
         current = 0;
         state = "STOPPED";
         publish();
@@ -151,19 +154,21 @@ struct QueueRoom::Impl {
             publish();
         } else if (c == 'p' && started)
             actions.pause();
-        else if (c == 'u' && started && state == "PAUSED")
+        else if (c == 'u' && started && state == "PAUSED") {
             actions.play();
+            playAt = std::chrono::steady_clock::now();
+            waitingForPlay = true;
+        }
     }
     void append() {
         if (faulted)
             return;
         for (const auto &record : queue.snapshot()) {
-            if (record.source.occurrence < firstStream || record.source.occurrence > UINT64_MAX / 2 ||
-                !record.incomplete.empty())
+            if (record.source.occurrence < firstStream || record.source.occurrence > UINT64_MAX / 2)
                 continue;
             if (!record.fault.empty())
                 throw std::runtime_error(record.fault);
-            if (!record.item)
+            if (!record.item || !record.incomplete.empty())
                 continue;
             if (std::any_of(items.begin(), items.end(),
                             [&](const auto &i) { return i.stream == record.source.occurrence; }))
@@ -237,6 +242,8 @@ struct QueueRoom::Impl {
                 actions.selectQueue(room.uuid);
                 actions.seekTrack(1);
                 actions.play();
+                playAt = std::chrono::steady_clock::now();
+                waitingForPlay = true;
                 started = true;
             }
         }
@@ -245,12 +252,24 @@ struct QueueRoom::Impl {
         if (!started)
             return;
         const auto p = actions.position().response;
-        const auto transport = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}})
-                                   .response.value("CurrentTransportState");
+        const auto info = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}}).response;
+        const auto transport = info.value("CurrentTransportState");
+        const auto reportedStatus = info.value("CurrentTransportStatus");
         const auto uri = p.value("TrackURI");
         auto it = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; });
+        if (!reportedStatus.empty() && reportedStatus != "OK")
+            throw std::runtime_error("playback-fault action=Play uri=" + uri +
+                                     " TransportStatus=" + reportedStatus);
+        if (waitingForPlay && transport == "STOPPED" &&
+            std::chrono::steady_clock::now() - playAt > std::chrono::seconds(3))
+            throw std::runtime_error("playback-fault action=Play uri=" + uri +
+                                     " TransportStatus=" + reportedStatus + " stopped-after-play");
         if (it == items.end())
             return; // app changes are deliberately not interpreted
+        if (transport == "PLAYING")
+            waitingForPlay = false;
+        if (waitingForPlay && transport == "STOPPED")
+            return;
         unsigned h = 0, m = 0, s = 0;
         if (sscanf(p.value("RelTime").c_str(), "%u:%u:%u", &h, &m, &s) != 3)
             return;
@@ -269,7 +288,8 @@ struct QueueRoom::Impl {
                               playback);
         if (current != previous || state != old) {
             publish();
-            logQueue("state=" + state + " audible occurrence=" + std::to_string(current));
+            logQueue("state=" + state + (state == "PLAYING" ? " audible occurrence=" : " occurrence=") +
+                     std::to_string(current));
         }
     }
     void run() {

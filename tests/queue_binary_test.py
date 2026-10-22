@@ -69,7 +69,8 @@ class Device(Handler):
             threading.Thread(target=fetch,daemon=True).start()
             return {},None
         values,fault=super().action(service,action,args)
-        if action=="GetTransportInfo":values["CurrentTransportStatus"]="OK"
+        if action=="Play" and getattr(self.server,"stopped_play",False):self.server.transport_state="STOPPED"
+        if action=="GetTransportInfo":values["CurrentTransportStatus"]=getattr(self.server,"transport_status","OK")
         return values,fault
     def do_GET(self):
         self.path = '/description.xml'
@@ -151,11 +152,12 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False):
         self.rates=rates; self.albums=albums if albums is not None else [f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=initial_stop; self.refetch_delay=8 if initial_stop and slow else 0; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
         self.sonos=Coordinator(('127.0.0.1',1400),Device)
+        self.sonos.stopped_play=stopped_play
         self.sonos.fail_add=fail_add
         self.sonos.follow_controls=True
         self.sonos.expected_albums=self.albums if expected_albums is None else expected_albums
@@ -292,6 +294,23 @@ def rate_guard():
         print("PASS queue above-cap 96000 Hz: STMn once, no AddURIToQueue")
     finally:h.close()
 
+def speaker_faults():
+    for status in ('ERROR_UNSUPPORTED_FREQ','OK'):
+        h=Binary(rates=(44100,),stopped_play=True)
+        try:
+            h.until(lambda:len(h.sonos.actions('Play'))==1)
+            with h.sonos.lock:
+                h.sonos.transport_state='STOPPED'
+                h.sonos.transport_status=status
+            h.until(lambda:len(h.packets('STMn'))==1,8)
+            time.sleep(.7)
+            assert len(h.packets('STMn'))==1 and not h.items()
+            text=(h.base/'bridge.log').read_text()
+            assert 'playback-fault action=Play uri=' in text and 'TransportStatus='+status in text
+            assert 'state=STOPPED audible' not in text
+            print('PASS speaker playback fault: '+status+', Stop/release/STMn once')
+        finally:h.close()
+
 def soap_fault():
     h=Binary(rates=(44100,),fail_add=True)
     try:
@@ -306,4 +325,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard()
+    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults()
