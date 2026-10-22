@@ -17,6 +17,7 @@ int main() {
     c.ramBytes = 6 * 64;
     {
         CoreQueueSink sink("Test", c, 1);
+        assert(sink.maxSampleRate() == (audioMode() == AudioMode::Legacy ? 44100u : 48000u));
         sink.coreEvent("strm", 1, 0);
         sink.trackDescriptor({1, 8000, 1000, 0, 0});
         sink.trackBoundary(0, {8000, 16, 2, false}, false);

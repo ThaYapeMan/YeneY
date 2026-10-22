@@ -124,3 +124,16 @@ Conceptual reference studied, never copied:
 [LMS-uPnP SlimProto control](https://github.com/philippe44/LMS-uPnP/blob/master/application/squeezelite/slimproto.c)
 and [renderer callbacks](https://github.com/philippe44/LMS-uPnP/blob/master/application/squeeze2upnp/squeeze2upnp.c).
 The original YeneY implementation and tests retain their existing license.
+
+### Speaker sample-rate limit
+
+Queue HELO now advertises the stream sink's 48 kHz maximum (44.1 kHz
+with `YENEY_AUDIO=16/44`); finite queue WAV output remains 24-bit.
+LMS 9.1.1's CapabilitiesHelper selects 44.1 kHz for 88.2/176.4 kHz
+sources under a 48 kHz cap, and 48 kHz for 96/192 kHz sources. Its
+standard FLAC transcoding rule uses SoX's default high-quality rate
+conversion, preserving 24-bit input precision. No custom transcoding
+rule or cross-family conversion is needed. The existing stream cap and
+wire capabilities are unchanged, so stream mode uses that same LMS rule.
+Legacy 44.1 kHz mode necessarily limits the 48 kHz family to 44.1 kHz.
+An incoming rate above the advertised cap fails with STMn before enqueue.

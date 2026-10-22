@@ -159,11 +159,18 @@ struct QueueRoom::Impl {
             return;
         for (const auto &record : queue.snapshot()) {
             if (record.source.occurrence < firstStream || record.source.occurrence > UINT64_MAX / 2 ||
-                !record.item || !record.incomplete.empty())
+                !record.incomplete.empty())
+                continue;
+            if (!record.fault.empty())
+                throw std::runtime_error(record.fault);
+            if (!record.item)
                 continue;
             if (std::any_of(items.begin(), items.end(),
                             [&](const auto &i) { return i.stream == record.source.occurrence; }))
                 continue;
+            if (record.source.rate > queue.maxSampleRate())
+                throw std::runtime_error("queue-rate-unsupported rate=" + std::to_string(record.source.rate) +
+                                         " cap=" + std::to_string(queue.maxSampleRate()));
             const auto length = record.item->contentLength();
             if (!length)
                 continue;

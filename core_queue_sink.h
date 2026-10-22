@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
+#include "audio_mode.h"
 #include "queue_item_store.h"
 #include <atomic>
 #include <condition_variable>
@@ -72,7 +73,7 @@ public:
     explicit CoreQueueSink(const std::string &room, Config config, double seconds = 30, double speed = 1);
     ~CoreQueueSink() override;
     bool decodeAhead() const override { return true; }
-    uint32_t maxSampleRate() const override { return 192000; }
+    uint32_t maxSampleRate() const override { return audioMode() == AudioMode::Legacy ? 44100 : 48000; }
     bool paced() const override { return false; }
     void trackDescriptor(const yeney::TrackDescriptor &) override;
     void coreEvent(const std::string &, uint64_t, uint64_t) override;

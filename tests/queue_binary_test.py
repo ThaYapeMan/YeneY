@@ -181,7 +181,7 @@ class Binary:
                     body=target.read_bytes()
                 self.bodies[i]=body
                 source=HTTP(body,first=16 if slow and i==0 else None,delay=8 if slow and i==0 else 0);self.sources.append(source)
-                yield source,dict(fmt=codec,rate=rate,transition=int(fade),period=10 if fade else 0)
+                yield source,dict(fmt=codec,rate=rate if rate in (44100,48000) else 44100,transition=int(fade),period=10 if fade else 0)
         self.lms.connection.settimeout(30)
         if initial_stop:
             for _ in range(3): self.lms.strm('q')
@@ -283,6 +283,15 @@ def idle_start():
         print('PASS relay idle start: final speaker STOPPED sends STMu once; new strm s without q releases old items and starts once',flush=True)
     finally:h.close()
 
+def rate_guard():
+    h=Binary(rates=(96000,))
+    try:
+        h.until(lambda:len(h.packets("STMn"))==1)
+        assert not h.sonos.actions("AddURIToQueue")
+        assert "unsupported rate" in (h.base/"bridge.log").read_text()
+        print("PASS queue above-cap 96000 Hz: STMn once, no AddURIToQueue")
+    finally:h.close()
+
 def soap_fault():
     h=Binary(rates=(44100,),fail_add=True)
     try:
@@ -297,4 +306,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();preparing_repeat();idle_start();soap_fault()
+    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard()

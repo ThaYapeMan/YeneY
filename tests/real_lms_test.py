@@ -193,6 +193,9 @@ for i,rate in ((4,44100),(5,48000)):
     cookie=cookie[:20]+struct.pack('!I',rate)
     count=(24*rate+4095)//4096
     (base/f'library/{i}.m4a').write_bytes(mp4(cookie,[packets[0]]*count,count*4096))
+for rate in (88200,96000):
+    path=base/f'hires-{rate}.wav';path.write_bytes(wav(rate,24,noise=True))
+    subprocess.run([str(HOME/'Bin/x86_64-linux/sox'),str(path),'-b','24',str(base/f'library/hires-{rate}.flac')],check=True)
 (base/'prefs/server.prefs').write_text('---\naudiodir: '+str(base/'library')+'\nplaylistdir: '+str(base/'playlists')+'\ncheckVersion: 0\nlanguage: EN\n')
 # Seed CLI preferences so first-start plugin migration cannot replace the port.
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
@@ -212,7 +215,7 @@ try:
     print('REAL LMS version: '+cli('version ?')[-1],flush=True)
     proxy=CLIProxy()
     cli('rescan')
-    wait(lambda:cli('rescan ?')[-1]=='0' and int(cli('info total songs ?')[-1])>=6,90,'library scan')
+    wait(lambda:cli('rescan ?')[-1]=='0' and int(cli('info total songs ?')[-1])>=8,90,'library scan')
     rows=cli('songs 0 100 tags:u');tracks=[]
     for field in rows:
         key,sep,value=field.partition(':')
@@ -220,7 +223,7 @@ try:
         elif tracks and sep:tracks[-1][key]=value
     tracks.sort(key=lambda t:t.get('url',''))
     (base/'library.json').write_text(json.dumps(tracks,indent=2))
-    ids=[t['id'] for t in tracks if t.get('url','').endswith('.flac')]
+    ids=[t['id'] for t in tracks if t.get('url','').endswith('.flac') and 'hires-' not in t.get('url','')]
     alac_ids=[t['id'] for t in tracks if t.get('url','').endswith('.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
     sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True
@@ -230,7 +233,10 @@ try:
     bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
                             stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
     wait(lambda:any(r['op']=='HELO' for r in tap.records),10,'HELO')
-    hello=next(r for r in tap.records if r['op']=='HELO');mac=':'.join(f'{v:02x}' for v in bytes.fromhex(hello['body'])[2:8])
+    hello=next(r for r in tap.records if r['op']=='HELO')
+    assert b'MaxSampleRate=48000' in bytes.fromhex(hello['body']),hello
+    print('PASS queue HELO MaxSampleRate=48000 (same as stream)',flush=True)
+    mac=':'.join(f'{v:02x}' for v in bytes.fromhex(hello['body'])[2:8])
     wait(lambda:cli('connected ?',mac)[-1]=='1',10,'player connected')
     def packets(event):return [r for r in tap.records if r.get('event')==event]
     def items():
@@ -303,6 +309,14 @@ try:
         wait(lambda:packets('STMd') and packets('STMd')[-1]['when']>=packets('STMs')[-1]['when'],10,'ALAC fully produced')
         cli('stop',mac)
     print('PASS real LMS ALAC sources: generated MP4 at 44.1/48 kHz, LMS default FLAC transcoding, finite queue starts, one connection HELO',flush=True)
+    for source_rate,target_rate in ((88200,44100),(96000,48000)):
+        track=next(t for t in tracks if t.get('url','').endswith(f'hires-{source_rate}.flac'))
+        starts=len(packets('STMs'));cli('playlistcontrol cmd:load track_id:'+track['id'],mac)
+        wait(lambda:len(packets('STMs'))>starts,20,'high-rate resampled start')
+        resource=items()[0]['resource']
+        assert resource['sampleFrequency']==str(target_rate) and resource['bitsPerSample']=='24',resource
+        print(f'PASS real LMS family resampling: {source_rate} Hz -> {target_rate} Hz, 24-bit, PLAYING',flush=True)
+        cli('stop',mac)
     remote_path=base/'radio.flac';remote_path.write_bytes((base/'library/0.flac').read_bytes())
     # LMS's remote scanner needs a probe-sized body; constant PCM compresses
     # below that size. Valid FLAC padding preserves the exact audio frames.
