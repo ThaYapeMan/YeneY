@@ -118,6 +118,7 @@ extern "C" void new_squeezebox_stream_id(void)
 
 static void dispatchTransportIntent()
 {
+    if (gQueueRoom && gQueueRoom->queueActive()) return;
     std::unique_lock<std::mutex> transport(transportMutex, std::try_to_lock);
     if (speakerRelinquished.load() || !transport.owns_lock() || stream_just_restarted() || !ourStreamStarted.load() || !gPlayer)
         return;
@@ -287,6 +288,7 @@ extern "C" void yeney_transport(char command)
 // after acquiring that lock so a q/s burst cannot pause a freshly installed URI.
 static void dispatchDeferredStop()
 {
+    if (gQueueRoom && gQueueRoom->queueActive()) return;
     {
         std::lock_guard<std::mutex> lock(stopMutex);
         if (!deferredStop.isDue(StopDebounce::Clock::now())) return;
@@ -312,6 +314,17 @@ static void dispatchDeferredStop()
         resumeState.completedQStop(streamId.load());
     }
     flush_squeezebox_response();
+}
+
+// Queue-room class boundary only; cancel the outgoing continuous session.
+extern "C" void yeney_queue_stream_handoff()
+{
+    std::lock_guard<std::mutex> transport(transportMutex);
+    { std::lock_guard<std::mutex> lock(stopMutex); deferredStop.cancel(); }
+    { std::lock_guard<std::mutex> lock(intentMutex); transportIntent.pending = false; }
+    end_squeezebox_response();
+    ourStreamStarted = false;
+    completedStream = streamId.load();
 }
 
 static void checkGetPairConfirmation()
@@ -589,6 +602,7 @@ static void ObserveDeviceTransport(const std::string& state, bool ownershipCheck
 // the resulting strm u feeds the held GET without another device command.
 void ResumeSqueezeBox(unsigned requested)
 {
+    if (gQueueRoom && gQueueRoom->queueActive()) return;
     if (!ourStreamStarted.load() || stream_just_restarted()) return;
     if (!ObserveSpeakerOwnership()) return;
     ObserveDeviceTransport(gPlayer->transportInfo().state, true);
@@ -727,7 +741,7 @@ void refreshStatus(bridge::Status& status)
 {
     status.update();
     std::string transportState = status.getTransportState();
-    if (auto* mode = bridge::roomMode(); mode && mode->status().active == "queue") {
+    if (gQueueRoom && gQueueRoom->queueActive()) {
         if (status.changed()) status.print();
         return;
     }
@@ -947,9 +961,10 @@ int main(int argc, char** argv)
     if (!gPlayer->discover(room, ip ? ip : "")) return EXIT_FAILURE;
     const auto selectedSpeaker = gPlayer->speaker();
     bridge::streamMetrics().configure(selectedSpeaker.name);
-    printf("yeney: stream pacing room=%s selected=%s\n", upnp::logValue(selectedSpeaker.name).c_str(),
-        bridge::streamPacingSonos() ? "sonos" : "wall");
     const auto playback = bridge::selectPlaybackMode(std::getenv("YENEY_PLAYBACK_MODE"), selectedSpeaker);
+    if (playback.selected == bridge::PlaybackMode::Stream)
+        printf("yeney: stream pacing room=%s selected=%s\n", upnp::logValue(selectedSpeaker.name).c_str(),
+            bridge::streamPacingSonos() ? "sonos" : "wall");
     if (playback.invalid)
         printf("yeney: invalid YENEY_PLAYBACK_MODE='%s'; using stream\n", upnp::logValue(playback.requested).c_str());
     printf("yeney: playback selection room=%s coordinator=%s requested=%s selected=%s reason=%s\n",

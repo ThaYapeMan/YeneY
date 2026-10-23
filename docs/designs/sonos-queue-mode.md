@@ -2,7 +2,7 @@
 
 The queue-mode base is a thin relay. LMS is the sole playback master. Stream
 mode remains the default and its transport, URLs and wire fixtures are unchanged.
-Explicit `YENEY_PLAYBACK_MODE=queue` selects the relay for a standalone room.
+Explicit `YENEY_PLAYBACK_MODE=queue` selects source-aware playback for a standalone room: local files use the finite relay and remote/unknown sources use the existing continuous stream path.
 Grouped rooms use stream with `group-rate-undecided`; `auto` still uses stream.
 There is no automatic fallback inside this queue release.
 
@@ -11,6 +11,32 @@ The previous advanced implementation is preserved by immutable annotated
 [Parked features and rebuild checklist](queue-parked-features.md) gives the
 files, commits, tests, device evidence and future rebuild order. It replaces
 all earlier claims of advanced controller/device qualification.
+
+## Per-track source/path selection
+
+Classification runs on the room worker at each LMS `strm s`, before opening
+its audio connection. A read-only CLI snapshot supplies the track admitted by
+LMS. `remote:1`, a negative id, any URL outside `file://`, or missing/ambiguous
+metadata selects stream. Only an explicitly local file selects the relay.
+No selection, readiness or class boundary causes an LMS CLI mutation or HELO.
+
+| Play/source | Active path | Boundary behaviour |
+|---|---|---|
+| New local file after q/idle | relay / local-source | Existing finite WAV takeover and startup |
+| New remote or unknown source | stream / remote-source | Existing stream metadata, artwork, PCM feeder, HTTP and pacing; no queue acquisition |
+| Next track has the same class | Current path | Existing append/continuous behaviour |
+| Local → remote | Keep relay until confirmed final-item end | Stop/release owned entries and restore crossfade; fresh continuous start |
+| Remote → local | Keep stream until submitted audio is audibly drained | Close the continuous session and Stop; fresh relay takeover/start |
+| Endless remote | stream / remote-source | Starts progressively; no finite length or end is required |
+
+A deferred class-changing start retains the original SlimProto request without
+connecting its audio source early. It suppresses the old path's final STMu
+while the already-admitted successor waits. An internal playback-buffer reset
+at drain clears old boundaries without reconnecting. Logs record `path-pending`,
+selection reason and `path-handoff ... gap_ms` from confirmed end/drain to
+confirmed PLAYING on the newly selected URI. A short class-change gap is
+accepted; a live track is never cut merely to change class. Explicit LMS q or
+selection cancels pending work. The ordinary stream-only room is unchanged.
 
 ## State table
 
@@ -26,11 +52,10 @@ it is not a playback generation and never causes a capability announcement.
 |---|---|---|
 | Genuine LMS connection | None | Exactly one HELO on that connection |
 | LMS `strm q` | Stop, remove exact owned URIs, restore CrossfadeMode | Normal core producer reset, STMf, STOPPED |
-| LMS `strm s` following q or idle | Render the selected source/offset; publish once exact length is known; acquire queue; AddURIToQueue; select `x-rincon-queue:<UDN>#0`; Seek TRACK_NR 1; Play once | Normal stream connection acknowledgements; remain STOPPED until speaker confirms playback |
-| LMS successor `strm s` after our STMd | Render and append with AddURIToQueue; never issue another Play for the successor | Await its confirmed audible start |
+| Local LMS `strm s` following q or idle | Render the selected source/offset; publish once exact length is known; acquire queue; AddURIToQueue; select `x-rincon-queue:<UDN>#0`; Seek TRACK_NR 1; Play once | Normal stream connection acknowledgements; remain STOPPED until speaker confirms playback |
+| Local successor `strm s` after our STMd | Render and append with AddURIToQueue; never issue another Play for the successor | Await its confirmed audible start |
 | GetPositionInfo identifies a prepared owned item and GetTransportInfo says PLAYING | Feed confirmed item/frame position to the core and synchronously publish status | STMs once for that stream, PLAYING |
 | Current item fully produced | None | STMd in a later core round than STMs; local successors may be requested early |
-| Remote item fully produced, audible remaining < configured delay | None | STMd; next service connection is not left idle for the full item |
 | LMS `strm p` / `strm u` | Pause / Play (resume only when paused) | Speaker-confirmed STMp/STMr, PAUSED/PLAYING |
 | Speaker STOPPED at the natural end of the final owned item | Feed confirmed final state to core | STMu once, STOPPED |
 | LMS seek (q+s with LMS source offset) | Same as a fresh play; no independent CLI/REL_TIME interpretation | New rendered stream, then confirmed STMs |
@@ -72,26 +97,30 @@ sent item; the sanitised formatted title is sent consistently.
 Sonos crossfade is off; LMS transitions are still rendered by the core. Queue
 crossfade and mixed-rate owner qualification are parked, not declared passed.
 
-`YENEY_QUEUE_NEXT_DELAY_S` defaults to 20 (valid 1–120). A remote flag or non-file
-source URL selects the delayed successor gate. `YENEY_QUEUE_DISK_MIB` remains a
+`YENEY_QUEUE_NEXT_DELAY_S` defaults to 20 (valid 1–120). The core retains
+its finite-remote successor gate for other queue hosts; production remote
+sources now use the continuous path instead. `YENEY_QUEUE_DISK_MIB` remains a
 per-room disk quota (default 256). Unknown exact length waits for sealing; the
 relay never guesses a WAV length from LMS duration or an HTTP Range offset.
 
 ## Status and extension points
 
 The suite reads the existing per-room `stream-pacing-<room-hex>.json` file's
-`playback` object. Queue fields: requested/active=`queue`, reason=`queue-opt-in`,
+`playback` object. Queue fields: requested/active=`queue`, path=`relay`/`stream`, reason=`local-source`/`remote-source`,
 state, occurrence, owned, owned_item_uris, current_owned_item, last_fault.
 Each observed state/ownership/item change publishes an atomic complete file on
 the same worker call, without waiting for the periodic stream metrics tick.
 Speaker polling is normally every 500 ms, with 100 ms start/end windows; publication cannot precede an observation.
-Stream diagnostic representation stays unchanged.
+Stream diagnostic representation stays unchanged in stream-only rooms. The queue room
+keeps requested/active=`queue` and exposes its per-play path separately.
 
 Future components attach to these boundaries, without changing the relay state
 table: (2) a separate failure/release observer and stream sink selector for
 fallback; (3) a speaker-evidence observer with explicit own-command matching for
 app actions; (4) a mirror supplying append/remove plans for future items; (5) a
-room eligibility/group policy outside the relay. None may fabricate an LMS start
+room eligibility/group policy outside the relay. Per-source path selection is
+now implemented, but automatic recovery from failures and group/auto policy
+remain separate future work. None may fabricate an LMS start
 or mutate LMS in response to LMS's own command. Tests for a future component
 must retain the base relay acceptance and stream wire fixtures.
 

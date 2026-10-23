@@ -386,3 +386,5 @@ test: room-status-test
 queue-source-test: tests/queue_source_test.cpp queue_source.h lms_artwork.h
 	$(CXX) -std=c++17 -Wall -Wextra -I. -o $@ tests/queue_source_test.cpp
 test: queue-source-test
+
+queue_room.o: queue_path_sink.h queue_source.h core_sonos.h

@@ -8,6 +8,7 @@
 namespace bridge {
 struct ModeStatus {
     std::string requested = "stream", active = "stream", state = "active", reason = "default-stream";
+    std::string path;
     bool owned = false;
     uint64_t occurrence = 0;
     uint32_t renderedRate = 0;
@@ -42,6 +43,8 @@ public:
         std::ostringstream out;
         out << "{\"requested\":" << q(v.requested) << ",\"active\":" << q(v.active)
             << ",\"state\":" << q(v.state) << ",\"reason\":" << q(v.reason);
+        if (!v.path.empty())
+            out << ",\"path\":" << q(v.path);
         if (v.active == "queue") {
             out << ",\"occurrence\":" << v.occurrence << ",\"owned\":" << (v.owned ? "true" : "false")
                 << ",\"rendered_rate\":" << v.renderedRate << ",\"current_owned_item\":" << q(v.currentUri)

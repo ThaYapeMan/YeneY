@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room.h"
 #include "core_queue_sink.h"
+#include "queue_path_sink.h"
 #include "queue_playlist.h"
 #include "queue_protocol.h"
 #include "queue_route.h"
+#include "queue_source.h"
 #include "queue_speaker_changes.h"
 #include "stream_metrics.h"
 #include "stream_session.h"
@@ -15,6 +17,7 @@
 #include <deque>
 #include <set>
 #include <thread>
+extern "C" void yeney_queue_stream_handoff();
 namespace bridge {
 namespace {
 std::atomic_bool roomStop{false};
@@ -38,8 +41,20 @@ unsigned pollSetting() {
 struct QueueRoom::Impl {
     upnp::Speaker room;
     std::string host, mac, session;
+    std::function<std::string()> streamUrl;
     std::shared_ptr<upnp::OwnSpeakerControl> speaker;
     queue_audio::CoreQueueSink queue;
+    QueuePathSink paths;
+    std::atomic_bool selectionDeferred{false};
+    bool selecting = false, selectionKnown = false, selectedLocal = true, stoppedPlay = true;
+    bool selectedNewPlay = true;
+    yeney::Command selectedCommand{'s', 0, false}, requestedCommand{'s', 0, false};
+    std::atomic<uint64_t> selectionRequest{0};
+    uint64_t selectedRequest = 0;
+    queue_audio::PlaylistEntry selectedTrack;
+    std::map<uint64_t, queue_audio::PlaylistEntry> sourceTracks;
+    std::chrono::steady_clock::time_point handoffAt{};
+    std::string pathReason = "local-source";
     queue_audio::Route route;
     upnp::QueueCoordinator coordinator;
     upnp::QueueActions actions;
@@ -156,9 +171,11 @@ struct QueueRoom::Impl {
         return io;
     }
     Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
-         std::shared_ptr<upnp::OwnSpeakerControl> s, std::string h, std::string m)
+         std::shared_ptr<upnp::OwnSpeakerControl> s, std::string h, std::string m, const uint8_t *rawMac,
+         std::function<std::string()> url)
         : room(std::move(r)), host(std::move(h)), mac(std::move(m)), session(streamSessionToken()),
-          speaker(std::move(s)), queue(room.name, queue_audio::Config::environment(), 60),
+          streamUrl(std::move(url)), speaker(std::move(s)),
+          queue(room.name, queue_audio::Config::environment(), 60), paths(queue, rawMac),
           route(room.name, session), coordinator(room, logQueue),
           actions([this](const auto &name, const auto &args) {
               if (sourceAway && (name == "Stop" || name == "Play" || name == "Pause" || name == "Seek")) {
@@ -183,13 +200,11 @@ struct QueueRoom::Impl {
         if (const char *directory = std::getenv("STATE_DIRECTORY"))
             streamMetrics().configure(room.name, directory);
         route.registerWith(*http);
-        speaker->queueEvents([dirty = eventDirty, changes = speakerChanges](const upnp::GenaEvent &event) {
-            if (event.service == upnp::Service::AVTransport) {
-                changes->event(event);
-                *dirty = true;
-            }
-            return true;
-        });
+        relayEvents(true);
+        paths.describeSource = [this](uint64_t id) {
+            std::lock_guard<std::mutex> lock(sourceMutex);
+            sourceTracks[id] = selectedTrack;
+        };
         logQueue("settings poll_ms=" + std::to_string(pollMs));
         queue.useSpeakerClock();
         setRoomStatus(&status);
@@ -219,10 +234,127 @@ struct QueueRoom::Impl {
         });
         worker = std::thread([this] { run(); });
     }
+    void relayEvents(bool enabled) {
+        if (!enabled) {
+            speaker->queueEvents({});
+            return;
+        }
+        speaker->queueEvents([dirty = eventDirty, changes = speakerChanges](const upnp::GenaEvent &event) {
+            if (event.service == upnp::Service::AVTransport) {
+                changes->event(event);
+                *dirty = true;
+            }
+            return true;
+        });
+    }
+    void received(const yeney::Command &c) {
+        if (c.letter == 's') {
+            if (milliseconds() < resumeEchoUntil && resumeFlush) {
+                selectionDeferred = false;
+                return;
+            }
+            if (!selectionDeferred.exchange(true)) {
+                std::lock_guard<std::mutex> lock(mutex);
+                requestedCommand = c;
+                commands.push_back({'I', ++selectionRequest});
+                changed.notify_all();
+            }
+        } else {
+            if (c.letter == 'q') {
+                ++selectionRequest;
+                paths.cancelSelection();
+                selectionDeferred = false;
+                if (!paths.isRelay()) {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    commands.push_back({'Q', 0});
+                    changed.notify_all();
+                }
+            }
+            paths.command(c);
+        }
+    }
+    void beginSelection(uint64_t request) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (request != selectionRequest)
+            return;
+        selectedRequest = request;
+        selectedCommand = requestedCommand;
+        selecting = true;
+        selectionKnown = false;
+        selectedNewPlay = stoppedPlay || state == "STOPPED";
+    }
+    void selectPath() {
+        if (!selecting || selectedRequest != selectionRequest)
+            return;
+        if (!selectionKnown) {
+            queue_audio::PlaylistEntry track;
+            try {
+                playlist = reader.read(host, mac);
+                const auto index = playlist.index + (selectedNewPlay ? 0 : 1);
+                if (index < playlist.entries.size())
+                    track = playlist.entries[index];
+            } catch (const std::exception &e) {
+                logQueue("source metadata unavailable; using stream: " + std::string(e.what()));
+            }
+            if (selectedRequest != selectionRequest) {
+                selecting = false;
+                return;
+            }
+            selectedLocal = !remotePlaybackSource(track.id, track.remote, track.url);
+            {
+                std::lock_guard<std::mutex> lock(sourceMutex);
+                selectedTrack = track;
+            }
+            selectionKnown = true;
+            if (!selectedNewPlay && selectedLocal != paths.isRelay()) {
+                paths.waitBoundary();
+                logQueue("path-pending path=" + std::string(selectedLocal ? "relay" : "stream") +
+                         " waiting=audible-end");
+            }
+        }
+        const bool switching = selectedLocal != paths.isRelay();
+        if (switching && !selectedNewPlay && !paths.atBoundary())
+            return;
+        if (switching) {
+            if (!selectedNewPlay)
+                handoffAt = std::chrono::steady_clock::now();
+            if (paths.isRelay()) {
+                if (ownership.active())
+                    actions.stop();
+                release();
+                queue.flush();
+                queue.waitIdle();
+            } else {
+                yeney_queue_stream_handoff();
+                speaker->stop();
+            }
+            relayEvents(selectedLocal);
+        }
+        pathReason = selectedLocal ? "local-source" : "remote-source";
+        logQueue("path=" + std::string(selectedLocal ? "relay" : "stream") + " reason=" + pathReason +
+                 " boundary=" + (selectedNewPlay ? "new-play" : "track-end"));
+        if (selectedLocal)
+            command('s', queue.latestOccurrence() + 1);
+        // Core resets only at a class boundary, without HELO or an LMS command.
+        paths.select(selectedLocal, switching, selectedCommand);
+        stoppedPlay = false;
+        selecting = selectionKnown = false;
+        selectionDeferred = false;
+        publish();
+    }
+    void handoffComplete() {
+        const auto gap = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - handoffAt)
+                             .count();
+        logQueue("path-handoff path=" + std::string(paths.isRelay() ? "relay" : "stream") +
+                 " gap_ms=" + std::to_string(gap));
+        handoffAt = {};
+    }
     void publish() {
         ModeStatus v;
         v.requested = v.active = "queue";
-        v.reason = "queue-opt-in";
+        v.reason = pathReason;
+        v.path = pathReason == "remote-source" ? "stream" : "relay";
         v.state = state;
         v.owned = ownership.active();
         v.occurrence = current;
@@ -307,7 +439,8 @@ struct QueueRoom::Impl {
             if (externalReleased)
                 stopAcknowledged = true;
             expectedState = "STOPPED";
-
+            selecting = selectionKnown = false;
+            stoppedPlay = true;
             firstStream = next;
             if (ownership.active() && !externalReleased)
                 actions.stop();
@@ -344,7 +477,7 @@ struct QueueRoom::Impl {
         }
     }
     void append() {
-        if (faulted || externalReleased || (started && sourceAway))
+        if (!paths.isRelay() || faulted || externalReleased || (started && sourceAway))
             return;
         for (const auto &record : queue.snapshot()) {
             if (record.source.occurrence < firstStream || record.source.occurrence > UINT64_MAX / 2)
@@ -371,18 +504,14 @@ struct QueueRoom::Impl {
                 continue;
             if (!record.fault.empty())
                 throw std::runtime_error(record.fault);
-            playlist = reader.read(host, mac);
-            // LMS admits at most one successor after this audible stream's
-            // STMd. Read its current index rather than retaining playlist
-            // ordinals across stops, seeks or edits.
-            const auto index = playlist.index + (started ? 1 : 0);
-            if (index >= playlist.entries.size())
-                throw std::runtime_error("queue-stream-metadata-missing");
-            const auto &track = playlist.entries[index];
+            queue_audio::PlaylistEntry track;
             {
                 std::lock_guard<std::mutex> lock(sourceMutex);
-                remote[record.source.occurrence] =
-                    track.remote == "1" || track.url.compare(0, 7, "file://") != 0;
+                auto found = sourceTracks.find(record.source.occurrence);
+                if (found == sourceTracks.end())
+                    throw std::runtime_error("queue-stream-metadata-missing");
+                track = found->second;
+                remote[record.source.occurrence] = false;
             }
             if (!ownership.active()) {
                 auto now = std::time(nullptr);
@@ -447,6 +576,26 @@ struct QueueRoom::Impl {
         }
     }
     void observe() {
+        if (!paths.isRelay()) {
+            auto info = speaker->transportInfo();
+            std::string uri;
+            if (handoffAt != std::chrono::steady_clock::time_point{}) {
+                if (!speaker->readTransportInfo(info) || !speaker->currentUri(uri))
+                    return;
+                if (uri != streamUrl())
+                    return;
+            }
+            const auto next = info.state == "PLAYING"           ? "PLAYING"
+                              : info.state == "PAUSED_PLAYBACK" ? "PAUSED"
+                                                                : "STOPPED";
+            if (state != next) {
+                state = next;
+                publish();
+            }
+            if (state == "PLAYING" && handoffAt != std::chrono::steady_clock::time_point{})
+                handoffComplete();
+            return;
+        }
         if (!started || faulted)
             return;
         const auto now = std::chrono::steady_clock::now();
@@ -575,6 +724,8 @@ struct QueueRoom::Impl {
             logQueue("state=" + state + (state == "PLAYING" ? " audible occurrence=" : " occurrence=") +
                      std::to_string(current));
         }
+        if (state == "PLAYING" && handoffAt != std::chrono::steady_clock::time_point{})
+            handoffComplete();
         if (!mutation.empty())
             speakerCommand(mutation, mutation == "pause 1" ? "speaker-pause" : "speaker-resume");
     }
@@ -590,8 +741,18 @@ struct QueueRoom::Impl {
                 pending.swap(commands);
             }
             try {
-                for (const auto &c : pending)
-                    command(c.first, c.second);
+                for (const auto &c : pending) {
+                    if (c.first == 'I')
+                        beginSelection(c.second);
+                    else if (c.first == 'Q') {
+                        selecting = selectionKnown = false;
+                        stoppedPlay = true;
+                        state = "STOPPED";
+                        publish();
+                    } else
+                        command(c.first, c.second);
+                }
+                selectPath();
                 if (deferredStop != std::chrono::steady_clock::time_point{} &&
                     std::chrono::steady_clock::now() >= deferredStop) {
                     deferredStop = {};
@@ -647,14 +808,15 @@ struct QueueRoom::Impl {
 };
 QueueRoom::QueueRoom(upnp::Speaker room, std::shared_ptr<upnp::StreamServer> http,
                      std::shared_ptr<upnp::OwnSpeakerControl> speaker, PlaybackSelection, std::string host,
-                     std::string mac, const uint8_t *, std::function<std::string()>)
-    : impl(new Impl(std::move(room), std::move(http), std::move(speaker), std::move(host), std::move(mac))) {}
+                     std::string mac, const uint8_t *rawMac, std::function<std::string()> url)
+    : impl(new Impl(std::move(room), std::move(http), std::move(speaker), std::move(host), std::move(mac),
+                    rawMac, std::move(url))) {}
 QueueRoom::~QueueRoom() = default;
-yeney::Sink &QueueRoom::sink() { return impl->queue; }
+yeney::Sink &QueueRoom::sink() { return impl->paths; }
 void QueueRoom::shutdown() { impl->shutdown(); }
-void QueueRoom::command(const yeney::Command &) {}
-bool QueueRoom::queueActive() const { return true; }
-bool QueueRoom::deferStart() { return false; }
+void QueueRoom::command(const yeney::Command &c) { impl->received(c); }
+bool QueueRoom::queueActive() const { return impl->paths.isRelay(); }
+bool QueueRoom::deferStart() { return impl->selectionDeferred; }
 bool QueueRoom::remoteSource(uint64_t id) const {
     std::lock_guard<std::mutex> lock(impl->sourceMutex);
     auto it = impl->remote.find(id);
@@ -674,6 +836,8 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     config.name = name;
     std::copy(mac, mac + 6, config.mac.begin());
     config.startOnSubmit = true;
+    config.observeCommand = [&room](const auto &c) { room.command(c); };
+    config.deferQueueStart = [&room] { return room.deferStart(); };
     config.queueNextDelayMs = queueNextDelayMs();
     config.queueRelativeClock = true;
     config.queueRemoteSource = [&room](uint64_t id) { return room.remoteSource(id); };

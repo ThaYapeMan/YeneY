@@ -87,3 +87,5 @@ field-cold-test
 /xml-sanitize-test
 
 /room-status-test
+
+/queue-source-test
