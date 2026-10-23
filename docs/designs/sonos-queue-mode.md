@@ -229,3 +229,22 @@ only unfinished assets are cancelled. Relay end detection uses the announced
 frame count, so a producer cancellation racing an observation cannot masquerade
 as an external speaker action. A cancelled partial item that actually stops is
 reported as a producer failure (STMn), never as an app-originated LMS stop.
+
+### Playable source counts and short EOFs
+
+Finite queue promises use the codec's native sample count and rate. For M4A,
+media/edit timescales, ALAC frameLength and iTunSMPB original/priming/padding
+select the playable sample interval. Padding already omitted by stts or a short
+final packet is not removed twice; a final zero-sample padding packet is legal.
+LMS's displayed sample-size label does not override the ALAC cookie.
+
+Both ALAC and FLAC reconcile counts before resampling and mixing. An EOF
+shortfall no greater than one codec packet **and** 100 ms is padded exactly,
+logged once and continues without Stop/STMn. Larger discrepancies remain
+source faults: cancel the incomplete asset, Stop/release once, report STMn,
+and keep the storage worker healthy. Source overruns are truncated to the
+published length and logged. Unknown lengths retain sealed publication;
+malformed packets/CRC errors and empty sources remain failures. Stream-mode
+rooms retain their existing pipeline and wire behavior.
+
+See [precise length rules and verification](queue-hires-decimation.md#playable-lengths-and-exceptional-eof-repair).

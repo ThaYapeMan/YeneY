@@ -65,3 +65,54 @@ Reproduce with `make -C third_party/yeney-core decimator-fixture`, then
 /tmp/yeney-protocol-lms/Bin/x86_64-linux/sox --report /tmp/quality.md`
 (on one command line). NumPy is a test dependency; the runtime has none.
 The private LMS 9.1.1 SoX binary is test-only. No GPL/LGPL source is incorporated.
+
+## Playable lengths and exceptional EOF repair
+
+Queue ALAC lengths use the native magic cookie's sample rate, bit depth and
+`frameLength`, not LMS's displayed sample-size label. `stts` durations are
+converted from the media timescale and bounded by packet count × frameLength.
+An `elst` media interval supplies the start and playable duration; empty edits
+produce no PCM. Existing rejection of unsupported edit rates or multiple media
+intervals remains in place.
+
+A consistent iTunSMPB original sample count selects `[priming, priming + original)`.
+Its padding describes the packet allocation and may already be absent from
+`stts` and the last packet. It must not be subtracted twice. Inconsistent or
+missing original counts retain the bounded priming/padding fallback. An aligned
+edit whose end differs from that precise count by less than one movie-timescale
+tick uses the sample-accurate count; a genuinely shorter edit still trims.
+Actual packet headers govern decoded frames, including a shorter final packet.
+A final explicit zero-sample ALAC packet contributes no PCM and is accepted only
+in the queue path; zero-sized interior packets remain invalid.
+
+For ALAC and FLAC, the queue decoder reconciles an immutable published promise
+before decimation, ReplayGain, volume or crossfade. At EOF, a positive decoded
+source shortfall can be zero-filled only if it is no larger than both one codec
+packet and 100 ms. The packet bound is ALAC frameLength or FLAC's STREAMINFO
+maximum block size (observed blocks for headerless input). The log is
+`source-short padded N frames source_frames=M`: N uses the output-rate frame
+clock and M identifies the source samples supplied. This fills exactly the
+missing duration, without adding an extra filter delay or join gap.
+
+This repair is exceptional: correct edit/gapless metadata and accurate final
+packet timing avoid padding entirely. CRC failures and malformed packet errors
+are not relabelled as harmless count discrepancies. Empty sources and larger
+shortfalls remain faults. Already-marked source faults cancel their incomplete
+assets rather than poisoning the storage worker during finalization; the relay
+stops/releases and reports one STMn. Late deferred fault bookkeeping is retired
+when the relay reports the failure.
+
+FLAC STREAMINFO totals and ALAC playable ranges also cap PCM delivery. Excess
+samples are discarded with one `source-long truncated` log rather than becoming
+a second queue item. Unknown counts stay unknown until EOF and keep sealed
+publication. Normal stream-mode clients do not enable this queue-only policy.
+
+`third_party/yeney-core/tests/length_test.py` generates independent packet/edit/
+gapless fixtures and compares exact counts and PCM. It optionally discovers
+M4A/FLAC files in `/mnt/c/HueSyncLXC/private-fixtures`, decodes them only to
+`/dev/null`, and reports a clear skip if absent. No owner media or excerpts enter
+the repository or the temporary LMS library. `tests/length_binary_test.py`
+checks small/large shortfalls and clean release through the real bridge. The
+real-LMS harness plays four-item albums at 44.1/88.2/96 kHz with edit lists,
+iTunSMPB, short and zero final packets, comparing complete WAV payloads against
+the continuous PCM/FIR reference at all three joins.
