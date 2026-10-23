@@ -63,6 +63,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/queue_device_cli_test.py
 	python3 tests/queue_protocol_setting_test.py
 	YENEY_ACCEPTANCE_BINARY=$(CURDIR)/yeney python3 tests/queue_binary_test.py
+	python3 tests/length_binary_test.py
 	./queue-source-test
 	./room-status-test
 	./queue-position-test

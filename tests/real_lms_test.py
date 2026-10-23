@@ -27,6 +27,7 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tests'))
 from queue_binary_test import Coordinator, Device, HTTP, wav, alac
 from decoders_test import alac_parts, mp4
+from length_test import alac as length_alac
 from hires_audio import pcm as hires_pcm, wave as hires_wave, alac as hires_alac, raw24
 import numpy as np
 HOME=Path(os.environ.get('YENEY_REAL_LMS_HOME','/tmp/yeney-real-lms-9.1.1'))
@@ -224,6 +225,21 @@ for kind in ('flac','alac'):
                                 '-T',f'TRACKNUMBER={track+1}','-o',str(path),str(source)],check=True)
             else:path.write_bytes(hires_alac(samples,rate))
         native_sources[kind,rate]=np.concatenate(parts)
+# Own fixtures only: no private owner files enter the LMS library.
+for rate in (44100,88200,96000):
+    parts=[]
+    for track in range(4):
+        samples=hires_pcm(rate,4,start=track*rate*4);parts.append(samples)
+        if track in (0,1):
+            stored=np.concatenate((np.zeros((113,2),dtype=np.int32),samples,np.zeros((219,2),dtype=np.int32)))
+            options=dict(trim=(113,len(samples))) if track==0 else dict(smpb=(113,219,len(samples)))
+        else:
+            stored=samples
+            capacity=((len(samples)+4095)//4096+(1 if track==3 else 0))*4096
+            options=dict(smpb=(0,capacity-len(samples),len(samples)))
+            if track==3:options.update(zero_tail=True,declared=capacity)
+        (base/'library'/f'native-lengthalac-{rate}-{track}.m4a').write_bytes(length_alac(stored,rate,**options))
+    native_sources['lengthalac',rate]=np.concatenate(parts)
 (base/'prefs/server.prefs').write_text('---\naudiodir: '+str(base/'library')+'\nplaylistdir: '+str(base/'playlists')+'\ncheckVersion: 0\nlanguage: EN\n')
 # Seed CLI preferences so first-start plugin migration cannot replace the port.
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
@@ -388,7 +404,7 @@ try:
             if index:select_item(index)
             wait(lambda:int(cli('playlist index ?',mac)[-1])==index,3,'native LMS identity')
             resource=items()[index]['resource']
-            target=44100 if rate==88200 else 48000
+            target=rate if rate<=48000 else 44100 if rate==88200 else 48000
             assert int(resource['sampleFrequency'])==target and resource['bitsPerSample']=='24',resource
             import http.client
             from urllib.parse import urlsplit
@@ -398,10 +414,17 @@ try:
             assert len(body)==44+expected_frames*6 and int(resource['size'])==len(body),(len(body),resource)
             collected.append(body[44:])
         raw=(source_pcm.astype(np.int64)*256).astype('<i4');raw.tofile(base/'native-reference.raw')
-        result=subprocess.check_output([str(ROOT/'third_party/yeney-core/decimator-fixture'),str(rate),str(base/'native-reference.raw'),str(base/'native-reference-out.raw')],text=True)
-        expected=np.fromfile(base/'native-reference-out.raw',dtype='<i4').reshape(-1,2).astype(np.int64)
-        expected=np.clip(np.where(expected>=0,(expected+128)//256,-((-expected+128)//256)),-2**23,2**23-1).astype('<i4')
+        if rate>48000:
+            result=subprocess.check_output([str(ROOT/'third_party/yeney-core/decimator-fixture'),str(rate),str(base/'native-reference.raw'),str(base/'native-reference-out.raw')],text=True)
+            expected=np.fromfile(base/'native-reference-out.raw',dtype='<i4').reshape(-1,2).astype(np.int64)
+            expected=np.clip(np.where(expected>=0,(expected+128)//256,-((-expected+128)//256)),-2**23,2**23-1).astype('<i4')
+        else:expected=source_pcm
         assert b''.join(collected)==raw24(expected),(kind,rate,'PCM discontinuity at join')
+        if kind=='lengthalac':
+            assert not [r for r in tap.records if r.get('event')=='STMn' and r['when']>=issued]
+            print(f'PASS real LMS M4A length album {rate} -> {target}: elst, iTunSMPB original/priming/padding, short/zero final packet; exact WAV bytes, three continuous joins, matching index, no STMn',flush=True)
+            cli('stop',mac)
+            continue
         before=len(packets('STMs'));seek_adds=len(sonos.actions('AddURIToQueue'));seek_start=time.monotonic();cli('time 2',mac)
         wait(lambda:len(packets('STMs'))>before,3,'native hi-res seek restart')
         seek_add=sonos.actions('AddURIToQueue')[-1][3]

@@ -329,8 +329,12 @@ void CoreQueueSink::finish(const yeney::ItemBoundary &b) {
         if (it != records.end())
             tail = it->second;
     }
-    if (r.item)
-        r.item->finish();
+    if (r.item) {
+        if (!r.fault.empty())
+            r.item->cancel(r.fault); // Expected source fault, not a broken storage worker.
+        else
+            r.item->finish();
+    }
     if (tail.item)
         tail.item->finish();
     {
