@@ -113,6 +113,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/stream_content_setting_test.py
 	python3 tests/list_rooms_test.py
 	python3 tests/lms_icon_test.py
+	python3 tests/installer_state_test.py
 	python3 tests/installer_test.py
 	python3 tests/migration_test.py
 	python3 tests/upnp_mock_test.py

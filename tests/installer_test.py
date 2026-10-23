@@ -95,7 +95,7 @@ class InstallerTests(unittest.TestCase):
         runner=Commands(rooms='Study\n'); runner.active.add('yeney@Study.service'); runner.enabled.add('yeney@Study.service')
         self.run_install(runner)
         original=self.config.read_bytes()
-        directory=self.unit_dir/'yeney@Study.service.d'; directory.mkdir()
+        directory=self.unit_dir/'yeney@Study.service.d'; directory.mkdir(exist_ok=True)
         debug=directory/'debug.conf'; debug.write_text('[Service]\nEnvironment=YENEY_DEBUG_STREAM=1\n')
         for ending in ('\n',''):
             override=directory/'player.conf'; override.write_text('[Service]\nEnvironment=YENEY_PLAYER=core'+ending)
@@ -639,6 +639,9 @@ if __name__ == '__main__':
             (unit_dir / 'yeney@.service').write_text((ROOT / 'packaging/yeney@.service').read_text())
             runner.active = {r'yeney@Sonos\x20Port.service', 'yeney@Study.service'}
             runner.enabled = set(runner.active)
+            for path, text in installer.state_dropins(unit_dir, installer.service_states(['Kitchen', 'Sonos Port', 'Study'], runner)).values():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text)
         if case in ('new', 'yes'):
             runner.build = 'build-b'
             runner.rooms += 'MBR\n'

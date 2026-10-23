@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-StateDirectory=yeney/%i
+# StateDirectory is supplied by the installer per room.
 ExecStart=/opt/yeney/yeney --room=%I
 Restart=on-failure
 RestartSec=5

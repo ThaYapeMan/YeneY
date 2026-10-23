@@ -5,6 +5,7 @@ import runpy
 import difflib
 import hashlib
 import queue
+import re
 import socket
 import threading
 import time
@@ -256,6 +257,19 @@ def service_plan(rooms, states, build_changed, build, server_changed, force):
     return plan, '; '.join(reasons)
 
 
+def state_name(room):
+    """Stable ASCII component, independent of systemd instance escaping."""
+    ascii_name = unicodedata.normalize('NFKD', room).encode('ascii', 'ignore').decode().lower()
+    slug = re.sub('[^a-z0-9]+', '-', ascii_name).strip('-')[:40].rstrip('-') or 'room'
+    return slug + '-' + hashlib.sha256(room.encode('utf-8')).hexdigest()[:16]
+
+
+def state_dropins(unit_dir, states):
+    return {room: (unit_dir / (unit + '.d') / 'zz-yeney-state.conf',
+                   '[Service]\nStateDirectory=\nStateDirectory=yeney/' + state_name(room) + '\n')
+            for room, (unit, _, _) in states.items()}
+
+
 def player_overrides(unit_dir, states, output):
     removable = []
     exact = b'[Service]\nEnvironment=YENEY_PLAYER=core'
@@ -439,6 +453,9 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         build_changed = read_text(stamp) != identity
         server_changed = (lms_value(merged) or '') != (current_server or '')
         plan, reason = service_plan(rooms, states, build_changed, build, server_changed, '--restart' in args)
+        state_units = state_dropins(unit_dir, states)
+        state_changes = {room: (path, text) for room, (path, text) in state_units.items()
+                         if read_text(path) != text}
         overrides = player_overrides(unit_dir, states, output)
         for room, _ in overrides:
             if rooms[room] and states[room][1] and room not in plan['Restart']:
@@ -460,7 +477,7 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         if migrate: print('Migration: rooms → rooms.migrated', file=output)
         if build_changed: print('Build record: update installed-build', file=output)
         actions = any(plan[kind] for kind in ('Start', 'Restart', 'Stop', 'Enable'))
-        work = merged != original or actions or template_changed or migrate or build_changed or bool(overrides)
+        work = merged != original or actions or template_changed or migrate or build_changed or bool(overrides) or bool(state_changes)
         if not work:
             print('Nothing to do.', file=output)
         elif interactive and not keep and not ask_yes('Apply? [Y/n] ', True, input_stream, output):
@@ -476,6 +493,11 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         unit_dir.mkdir(parents=True, exist_ok=True)
         if template_changed:
             atomic_write(target, template)
+        for path, text in state_changes.values():
+            if path.is_symlink() or path.parent.is_symlink():
+                raise ValueError(f"Refusing symlink state override: {path}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(path, text)
         removed = False
         for room, path in overrides:
             # Revalidate before unlink; custom edits and symlinks are preserved.
@@ -485,7 +507,7 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
                 path.unlink(); removed = True
             else:
                 print(f'Note: leaving changed override {path}.', file=output)
-        if template_changed or removed:
+        if template_changed or removed or state_changes:
             run(['systemctl', 'daemon-reload'], check=True)
         for kind in ('Stop', 'Enable', 'Start', 'Restart'):
             for room in plan[kind]:
