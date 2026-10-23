@@ -119,7 +119,7 @@ class CLI:
 
     def call(self,*args):
         args=list(map(str,args))
-        query=args[-1]=='?' or args[0] in ('players','titles','syncgroups') or (len(args)>1 and args[1]=='status')
+        query=args[-1]=='?' or args[0] in ('players','titles','syncgroups') or (len(args)>1 and args[1] in ('status','favorites','podcasts'))
         timeout=self.query_timeout if query else self.mutation_timeout
         request=' '.join(quote(a,safe=':/%?,&=+' if urlsplit(a).scheme in ('file','http','https') else ':,?') for a in args)
         self.log('CLI > '+request+' timeout_s='+str(timeout))
@@ -403,11 +403,36 @@ class Suite(PACING['Suite']):
                          QUEUE['codec'](t) and QUEUE['number'](t.get('duration'))>=10 and
                          QUEUE['number'](t.get('samplerate')) in rates),None)
             self.selected[name]=[choice] if choice else []
+        choice,self.remote_note=self.remote_choice()
+        self.selected['remote-source']=[choice] if choice else []
         with (self.work/'manifest.tsv').open('w',newline='') as f:
             writer=csv.writer(f,delimiter='\t');writer.writerow(['scenario','index','id','title','album','album_id','codec','samplerate','duration','url'])
             for name, entries in self.selected.items():
                 for i,t in enumerate(entries):
                     writer.writerow([name,i,t['id'],t.get('title',''),t.get('album',''),t.get('album_id',''),QUEUE['codec'](t),t['samplerate'],t['duration'],t['url']])
+
+    def remote_choice(self):
+        # Read-only OPML menus; bounded traversal, never change favourites/feeds.
+        notes=[]
+        for menu in ('favorites','podcasts'):
+            pending=[None];seen=set()
+            while pending and len(seen)<20:
+                ident=pending.pop(0)
+                if ident in seen:continue
+                seen.add(ident)
+                args=[self.mac,menu,'items','0','100','want_url:1']
+                if ident is not None:args.append('item_id:'+ident)
+                try:rows=records(self.cli.call(*args),'id')
+                except (SuiteError,OSError) as error:
+                    notes.append(menu+': '+str(error));break
+                for row in rows:
+                    url=row.get('url','')
+                    if url and not url.startswith('file:') and row.get('type','audio') not in ('opml','link','playlist'):
+                        return dict(id='',url=url,title=row.get('title') or row.get('name',''),
+                                    artist='',album='',remote='1',samplerate='',duration='0'),menu
+                    if row.get('id') and (row.get('hasitems')=='1' or row.get('type') in ('opml','link')):
+                        pending.append(row['id'])
+        return None,'no playable favourite or podcast entry'+('; '+'; '.join(notes) if notes else '')
 
     def diagnostic(self):
         s = json.loads((self.state_root/('stream-pacing-'+self.room.encode().hex()+'.json')).read_text())
@@ -522,14 +547,19 @@ class Suite(PACING['Suite']):
         if not 0 <= index < len(tracks):
             self.problem('LMS index outside scenario')
         expected = tracks[index]
+        is_remote=not expected.get('url','').startswith('file://')
         meta = s['metadata']
-        title, album = expected_metadata(expected,self.title_format)
-        identity = (s['state'] != 'PLAYING' or (meta.get('title')==title and
-                    (not album or meta.get('album')==album) and entry.get('id')==expected['id']))
+        title, album = expected_metadata(entry if is_remote else expected,self.title_format)
+        metadata_matches=meta.get('title')==title and (not album or meta.get('album')==album)
+        # Radio text can change while the existing stream path retains startup
+        # DIDL. Qualify its source/path and record text; local identity is strict.
+        identity = (s['state'] != 'PLAYING' or
+                    (entry.get('url')==expected['url'] if is_remote else
+                     metadata_matches and entry.get('id')==expected['id']))
         now = self.backend.now()
         row = dict(scenario=self.current['name'],monotonic=now,wall=time.time(),speaker=s,
                    lms=dict(index=index,time=float(status.get('time','0')),title=entry.get('title',''),id=entry.get('id','')),
-                   playback=p,identity=identity,probe_seconds=now-started,
+                   playback=p,identity=identity,metadata_matches=metadata_matches,probe_seconds=now-started,
                    http_requests_per_item=p.get('http_requests_per_item','not exposed'))
         with (self.work/'samples.jsonl').open('a') as f:
             f.write(json.dumps(row,sort_keys=True)+'\n')
@@ -540,9 +570,12 @@ class Suite(PACING['Suite']):
             self.current['fallbacks'].append(p.get('last_fallback') or p.get('reason'))
             self.problem('fallback '+str(self.current['fallbacks']))
         if s['state']=='PLAYING' and not preparing:
-            if '/music/queue.wav?' not in s['uri'] or not p.get('owned'):
+            if is_remote:
+                if p.get('path')!='stream' or p.get('reason')!='remote-source' or p.get('owned') or '/music/yeney.flac?' not in s['uri']:
+                    self.problem('remote source is not playing on the stream path')
+            elif '/music/queue.wav?' not in s['uri'] or not p.get('owned') or p.get('path','relay')!='relay':
                 self.problem('speaker is not playing an owned queue item')
-            if self.speaker.crossfade() != '0':
+            if not is_remote and self.speaker.crossfade() != '0':
                 self.problem('Sonos CrossfadeMode not disabled')
             if not identity:
                 if self.mismatch_since is None:
@@ -598,13 +631,19 @@ class Suite(PACING['Suite']):
         # cmd:load autoplays. Stage while stopped so the startup clock is
         # anchored to one genuine play, not a redundant later play command.
         self.pending_mutation('playlist','clear')
-        self.pending_mutation('playlistcontrol','cmd:add','track_id:'+','.join(t['id'] for t in tracks))
+        if all(t['id'] for t in tracks):
+            self.pending_mutation('playlistcontrol','cmd:add','track_id:'+','.join(t['id'] for t in tracks))
+        else:
+            for track in tracks:self.pending_mutation('playlist','add',track['url'])
         self.lms_ready(expected,'stop',queue=True,deadline=deadline)
         start = self.backend.now()
         self.pending_mutation('play')
         self.lms_ready(expected,'play',queue=True,deadline=deadline)
         self.due=start
-        row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'],max(0,5-(self.backend.now()-start)),preparing=True)
+        row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and
+                          ((r['playback'].get('path')=='stream' and '/music/yeney.flac?' in r['speaker']['uri'])
+                           if not tracks[0]['url'].startswith('file://') else
+                           (r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'])),max(0,5-(self.backend.now()-start)),preparing=True)
         delay = row['monotonic']-start
         self.current['startup'] = max(self.current['startup'],delay)
         self.last_sample = row
@@ -672,6 +711,22 @@ class Suite(PACING['Suite']):
             self.current['note']=str(selected[0]['samplerate'])+' -> '+str(target)+' Hz, 24-bit'
             until=self.backend.now()+3
             while self.backend.now()<until:self.sample(selected)
+        self.remote_scenario()
+
+    def remote_scenario(self):
+        selected=self.selected['remote-source']
+        self.begin('remote-source')
+        if not selected:
+            self.current.update(verdict='SKIP',note=self.remote_note)
+            print('SKIP remote-source: '+self.remote_note,flush=True)
+            return
+        self.load(selected)
+        until=self.backend.now()+5
+        while self.backend.now()<until:self.sample(selected)
+        self.current['note']='remote from '+self.remote_note+' started on stream path within 5 s'
+        self.begin('local-after-remote')
+        self.load(self.selected['album'])
+        self.current['note']='local album returned to relay path'
 
     def restore_item(self,label,expected,setter,getter,compare=None):
         compare=compare or (lambda a,b:a==b)

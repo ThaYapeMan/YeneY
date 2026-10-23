@@ -39,6 +39,7 @@ class Model:
                 n=str(len(self.library)+1)
                 self.library.append(dict(id=n,title='Title & '+n,artist='Artist <one>',album='Album '+str(album),album_id=str(album),
                                          type=kind,samplerate=str(rate),duration='60',url='file:///music/'+n+'.m4a'))
+        self.favourites=[];self.podcasts=[]
         self.speaker_metadata={};self.title_format='artist-title'
         self.byid={t['id']:t for t in self.library}
         self.urls=['file:///saved/one.flac','file:///saved/two.flac']
@@ -83,6 +84,9 @@ class Model:
         if args[0]=='titles':return ['count:'+str(len(self.library))]+[k+':'+v for t in self.library[int(args[1]):int(args[1])+int(args[2])] for k,v in t.items()]
         assert args[0]==MAC and '%' not in args[0],args
         cmd=args[1:]
+        if cmd[0] in ('favorites','podcasts'):
+            rows=self.favourites if cmd[0]=='favorites' else self.podcasts
+            return ['count:'+str(len(rows))]+[k+':'+str(v) for row in rows for k,v in row.items()]
         if cmd[0]=='status':
             entries=list(enumerate(self.urls))
             if cmd[1]=='-':entries=entries[self.index:self.index+1]
@@ -90,7 +94,7 @@ class Model:
             result=[f'playlist_cur_index:{self.index}',f'time:{self.time}']
             for i,url in entries:
                 t=next((t for t in self.byid.values() if t['url']==url),dict(id='',title='Saved'))
-                result += [f'playlist index:{i}',f'url:{url}',f'id:{t["id"]}',f'title:{t["title"]}']
+                result += [f'playlist index:{i}',f'url:{url}',f'id:{t["id"]}',f'title:{t["title"]}',f'artist:{t.get("artist","")}',f'album:{t.get("album","")}']
             return result
         if cmd[-1]=='?':
             if cmd[0]=='playerpref':return [self.prefs[cmd[1]]]
@@ -115,7 +119,9 @@ class Model:
         elif cmd[0] in ('play','stop'):
             if cmd[0]=='play':self.play_prior_modes.append(self.mode)
             self.mode=cmd[0];self.slim.strm('u' if cmd[0]=='play' else 'q')
-            if self.mode=='play' and self.queue:self.owned=True;self.backend.sonos.crossfade=False
+            if self.mode=='play' and self.queue:
+                self.owned=self.track()['url'].startswith('file://')
+                self.backend.sonos.crossfade=not self.owned
         else:raise AssertionError(args)
         self.backend.snapshot()
         return []
@@ -158,7 +164,7 @@ class SOAP(Handler):
             if not model.urls or model.mode=='stop':return dict(Track='0',TrackURI='',RelTime='00:00:00',TrackMetaData=''),None
             t=model.track();position=model.time
             if model.fault=='regression' and model.time>4:position=0
-            uri=f'http://127.0.0.1/music/queue.wav?epoch={model.epoch}&item={t["id"]}' if model.queue else 'http://127.0.0.1/music/stream.flac'
+            uri=f'http://127.0.0.1/music/queue.wav?epoch={model.epoch}&item={t["id"]}' if model.owned else 'http://127.0.0.1/music/yeney.flac?session=fixture&stream=1'
             from xml.sax.saxutils import escape
             title='Wrong' if model.fault=='identity' else t['artist']+' - '+t['title'] if model.title_format=='artist-title' and t.get('artist') else t['title']
             tags=dict(title=title,album=t['album']);tags.update(model.speaker_metadata.get(t['id'],{}))
@@ -187,7 +193,7 @@ class Backend:
     def snapshot(self):
         if self.model.owned:
             self.sonos.items=[dict(uri='http://127.0.0.1/music/queue.wav?session=fixture')]
-        p=dict(state='PLAYING' if self.model.mode=='play' else 'PAUSED' if self.model.mode=='pause' else 'STOPPED',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='queue-opt-in',occurrence=self.model.index+1,epoch=self.model.epoch,
+        p=dict(state='PLAYING' if self.model.mode=='play' else 'PAUSED' if self.model.mode=='pause' else 'STOPPED',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='local-source' if self.model.owned else 'remote-source',path='relay' if self.model.owned else 'stream',occurrence=self.model.index+1,epoch=self.model.epoch,
                rendered_rate=(44100 if not self.model.urls or int(self.model.track().get('samplerate','44100'))%44100==0 else 48000),owned=self.model.owned,mirrored_ahead=3,last_fallback='soap-error' if self.model.fault=='fallback' else '',handoff_gap_ms=-1,latched=False)
         path=self.root/('stream-pacing-'+b'Study'.hex()+'.json')
         path.write_text(json.dumps(dict(pid=self.pid,monotonic_ms=self.now()*1000,playback=p)))
@@ -298,8 +304,8 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.model.external_stops,1)
         self.assertEqual(next(r for r in self.suite.results if r['name']=='external-stop')['verdict'],'PASS')
         self.assertEqual(self.suite.results[0]['joins'],3)
-        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000'])
-        self.assertTrue(all(r['verdict']=='SKIP' and 'library has no eligible' in r['note'] for r in self.suite.results[-2:]))
+        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000','remote-source'])
+        self.assertTrue(all(r['verdict']=='SKIP' and 'library has no eligible' in r['note'] for r in self.suite.results[4:6]))
         with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:
             names={n.split('/',1)[-1] for n in tar.getnames()}
             self.assertTrue({'summary.md','samples.jsonl','joins.jsonl','manifest.tsv','journal.log','backup.json','before.json','result.txt'}<=names,names)
@@ -312,6 +318,31 @@ class Tests(unittest.TestCase):
         print('PASS device external-stop: direct SOAP Stop, LMS stopped within 3 s, owned items released')
         print('PASS relay startup measurement: playlist staged stopped with cmd:add; each timed Play starts a new run, resume follows pause')
         print('PASS queue device suite: full loopback CLI/SlimProto/SOAP sequence, album three joins, pause ten seconds, stop/new play, saved/restored volume, archive and exact restoration')
+    def test_remote_favourite(self):
+        track=dict(id='-42',url='http://radio.invalid/live',title='Radio fixture',artist='',album='',duration='120')
+        self.model.speaker_metadata['-42']=dict(title='Previous radio title')
+        self.model.byid['-42']=track
+        self.model.library.append(track)
+        self.model.favourites=[dict(id='0',type='audio',url=track['url'],name=track['title'])]
+        code,output=self.run_suite();self.assertEqual(code,0,output)
+        self.restored()
+        rows={r['name']:r for r in self.suite.results}
+        self.assertEqual(rows['remote-source']['verdict'],'PASS')
+        self.assertEqual(rows['local-after-remote']['verdict'],'PASS')
+        remote=[r for r in self.suite.samples if r['scenario']=='remote-source']
+        self.assertTrue(remote and all(r['playback']['path']=='stream' for r in remote))
+        self.assertIn('remote-source',(self.suite.work/'manifest.tsv').read_text())
+        print('PASS device remote-source: favourite streams within 5 s, local album returns to relay, manifest and owner state restored')
+
+    def test_remote_podcast_menu(self):
+        self.model.podcasts=[dict(id='episode',type='audio',url='podcast://https://podcast.invalid/episode.mp3',title='Podcast')]
+        self.suite.mac=MAC
+        choice,source=self.suite.remote_choice()
+        self.assertEqual(source,'podcasts')
+        self.assertTrue(choice['url'].startswith('podcast://'))
+        self.assertEqual(choice['id'],'')
+        print('PASS device remote selection: empty favourites falls through to a podcast; remote identity is its URL')
+
     def test_high_rate_families(self):
         for rate in (176400,192000):
             n=str(len(self.model.byid)+1)

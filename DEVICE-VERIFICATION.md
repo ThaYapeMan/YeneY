@@ -660,6 +660,18 @@ The playlist is staged while stopped with `cmd:add`; one explicit LMS play
 starts the clock. Each start must reach PLAYING on an owned item within five seconds.
 Expected metadata follows YeneY's XML sanitisation and room title format.
 
+The **remote-source** scenario selects a playable entry from LMS favourites or
+the podcast list, including bounded submenu browsing. It requires PLAYING on
+`/music/yeney.flac` with `path=stream`, reason `remote-source`, no relay ownership
+and the expected LMS source URL within five seconds. Metadata is recorded,
+but changing radio text is not a failure: the existing stream path sends DIDL
+at stream start, without new metadata polling. Local identity remains strict. It then starts the selected
+local album again and requires `path=relay`/`local-source`. A missing remote
+entry is explicitly SKIP with a note; the choice is recorded in manifest.tsv.
+Local tracks still use finite WAV items. Class changes in a mixed playlist wait
+for the current path to finish and log their measured handoff gap. No new owner
+command or deployment step is needed.
+
 The suite refuses grouped/inactive rooms and competing suite locks. It saves
 playlist identities/order, mode/index/time, repeat/shuffle/transition settings,
 volume and the room environment. It verifies a Before YeneY backup only when

@@ -146,3 +146,11 @@ On 23 October the relay gained the unambiguous subset of step 3: confirmed
 external stop/source change and pause/resume, with own-command suppression and
 a reason-checked LMS CLI choke point. Next/previous, seeks, ambiguous-intent
 handling and the advanced asynchronous CLI/outage machinery remain parked.
+
+On 23 October per-source selection covered part of rebuild steps **2/5**:
+queue-configured standalone rooms use the continuous stream path for remote
+or unknown LMS tracks and the finite relay for local files, with drained
+boundary handoffs and measured gaps. This is source routing, not fault-triggered
+fallback: automatic recovery/latching, grouping and `auto` remain parked.
+The owner suite now checks an available favourite/podcast and return to a local
+album; full crossfade/app-control/whole-list acceptance remains parked.

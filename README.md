@@ -273,7 +273,15 @@ Environment=YENEY_QUEUE_DISK_MIB=256
 Settings apply on room service restart. A grouped coordinator or member keeps
 stream mode with reason `group-rate-undecided`; an unconfirmed coordinator uses
 `coordinator-unconfirmed`. `auto` still uses stream. Queue mode owns only its
-prepared finite WAV entries. LMS controls play, pause, resume, stop and source
+prepared finite WAV entries for local files. At each LMS track start, remote
+flags, negative ids and non-file URLs (including podcasts, radio and streaming
+services) select the existing continuous stream path instead; unknown metadata
+also selects stream. Remote playback starts progressively without waiting for
+a finite download and does not acquire the Sonos queue. Local/remote class
+changes wait for the outgoing track to finish, then start the other path; a
+short measured gap is logged. Room diagnostics expose `path=relay|stream` and
+`reason=local-source|remote-source`. Pacing logs and socket-wait accumulation
+are suppressed on the relay path and unchanged on the stream path. LMS controls play, pause, resume, stop and source
 seeks; confirmed speaker starts advance LMS through SlimProto. Queue mode reports unambiguous speaker-originated stops and pause/resume to LMS
 through one logged CLI mutation path. LMS-originated commands never cause a CLI
 mutation. Source changes release owned entries without stopping the new source.
@@ -284,7 +292,9 @@ Owners can qualify a standalone room with
 `/usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23`,
 optionally `--album <id-or-name> --volume 10`. The suite saves/restores volume,
 LMS state and room configuration; it checks album joins, LMS pause/resume and
-stop/new play. Use the [systemd-run procedure](DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
+stop/new play, and a remote favourite/podcast when available, followed by a
+local album returning to the relay. Missing remote entries produce a documented
+skip. Use the [systemd-run procedure](DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
 to survive an SSH disconnect. [Relay status and limitations](docs/designs/sonos-queue-mode.md)
 are documented separately. Physical qualification awaits an owner run.
 
