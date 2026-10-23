@@ -175,3 +175,13 @@ Reference logic was studied in philippe44's LMS-uPnP renderer-state handling
 and squeezelite SQ_PAUSE/SQ_STOP handling. No reference implementation code is
 incorporated. App next/previous/seek mapping and general intent interpretation
 remain parked.
+
+LMS may echo an external resume as q+s when its delivered stream is exhausted.
+For a fully produced current item with no newer producer, the relay pairs that
+echo for three seconds and validates unchanged LMS index, source URL and time
+(within 500 ms). Existing core cached-run support completes the HTTP/STAT
+handshake while the same immutable item keeps playing: no Stop, enqueue or Play.
+A q without a paired s is honoured after 250 ms; a changed LMS selection is
+rendered normally. The gate sends no additional CLI commands and creates no
+epochs, generations or rearm cycle. A confirmed foreign transport source takes
+precedence over an error report, so error cleanup cannot Stop that source.

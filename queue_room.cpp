@@ -52,6 +52,7 @@ struct QueueRoom::Impl {
         uint64_t stream;
         std::string uri;
         std::shared_ptr<queue_audio::Item> item;
+        std::string sourceUrl;
     };
     std::vector<Entry> items;
     std::map<uint64_t, bool> remote;
@@ -67,6 +68,16 @@ struct QueueRoom::Impl {
     std::chrono::steady_clock::time_point playAt{};
     bool waitingForPlay = false, externalPaused = false;
     bool externalReleased = false, stopAcknowledged = false;
+    std::atomic<int64_t> resumeEchoUntil{0};
+    std::atomic_bool resumeFlush{false};
+    std::chrono::steady_clock::time_point deferredStop{};
+    uint64_t deferredNext = 0;
+    queue_audio::PlaylistSnapshot resumeSnapshot;
+    static int64_t milliseconds() {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
     std::string expectedState = "STOPPED";
     std::chrono::steady_clock::time_point ownUntil{};
     uint64_t lastElapsed = 0;
@@ -78,6 +89,15 @@ struct QueueRoom::Impl {
             (command == "pause 0" && reason == "speaker-resume");
         if (!allowed)
             throw std::logic_error("invalid speaker command");
+        if (command == "pause 0" && current == queue.latestOccurrence() && queue.queueItemProduced(current)) {
+            try {
+                resumeEchoUntil = 0;
+                resumeSnapshot = reader.read(host, mac);
+                resumeEchoUntil = milliseconds() + 3000;
+            } catch (const std::exception &e) {
+                logQueue("resume echo snapshot unavailable: " + std::string(e.what()));
+            }
+        }
         logQueue("LMS mutation reason=" + reason + " command=" + command);
         if (!queue_audio::controlLms(host, mac, command)) {
             std::string reply;
@@ -88,15 +108,23 @@ struct QueueRoom::Impl {
     }
     void externalStop(const std::string &reason) {
         expectedState = "STOPPED";
+        resumeEchoUntil = 0;
+        resumeFlush = false;
+        deferredStop = {};
         externalPaused = false;
-        externalReleased = true; stopAcknowledged = false;
+        externalReleased = true;
+        stopAcknowledged = false;
         firstStream = queue.latestOccurrence() + 1;
         // No Stop/URI switch here: another service may already own transport.
-        try { release(); }
-        catch (const std::exception &e) {
+        try {
+            release();
+        } catch (const std::exception &e) {
             fault = "external-release: " + std::string(e.what());
-            started = waitingForPlay = false; current = 0; state = "STOPPED";
-            logQueue(fault); publish();
+            started = waitingForPlay = false;
+            current = 0;
+            state = "STOPPED";
+            logQueue(fault);
+            publish();
         }
         speakerCommand("stop", reason);
     }
@@ -156,6 +184,19 @@ struct QueueRoom::Impl {
         setRoomStatus(&status);
         publish();
         queue.onQueueCommand([this](char c, uint32_t) {
+            if (milliseconds() < resumeEchoUntil && (c == 'q' || (c == 's' && resumeFlush))) {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (c == 'q') {
+                    resumeFlush = true;
+                    commands.push_back({'F', queue.latestOccurrence() + 1});
+                } else {
+                    resumeEchoUntil = 0;
+                    resumeFlush = false;
+                    commands.push_back({'C', queue.latestOccurrence() + 1});
+                }
+                changed.notify_all();
+                return true; // Keep immutable audio until the paired start is verified.
+            }
             if (c == 'q' || c == 's' || c == 'p' || c == 'u') {
                 std::lock_guard<std::mutex> lock(mutex);
                 commands.push_back({c, queue.latestOccurrence() + 1});
@@ -211,8 +252,45 @@ struct QueueRoom::Impl {
         publish();
     }
     void command(char c, uint64_t next) {
+        if (c == 'F') {
+            deferredNext = next;
+            deferredStop = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+            return;
+        }
+        if (c == 'C') {
+            deferredStop = {};
+            queue_audio::PlaylistSnapshot snapshot;
+            bool known = false;
+            try {
+                snapshot = reader.read(host, mac);
+                known = true;
+            } catch (const std::exception &e) {
+                logQueue("resume echo verification unavailable: " + std::string(e.what()));
+            }
+            const auto audible =
+                std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
+            const bool same =
+                known && audible != items.end() && snapshot.index == resumeSnapshot.index &&
+                snapshot.index < snapshot.entries.size() && snapshot.index < resumeSnapshot.entries.size() &&
+                snapshot.entries[snapshot.index].url == audible->sourceUrl &&
+                snapshot.entries[snapshot.index].url == resumeSnapshot.entries[snapshot.index].url &&
+                std::abs(int64_t(snapshot.timeMs) - int64_t(resumeSnapshot.timeMs)) <= 500;
+            if (same) {
+                queue.restartCached();
+                queue.confirmCachedStart();
+                fastPoll();
+                logQueue("resume echo adopted: same LMS item/time, retained audio, no renderer restart");
+            } else {
+                queue.flush();
+                command('q', next);
+                queue.resumeReceivedStart();
+                logQueue("resume echo changed item/time: honour LMS selection");
+            }
+            return;
+        }
         if (c == 'q') {
-            if (externalReleased) stopAcknowledged = true;
+            if (externalReleased)
+                stopAcknowledged = true;
             expectedState = "STOPPED";
             externalPaused = false;
             firstStream = next;
@@ -326,7 +404,7 @@ struct QueueRoom::Impl {
             if (result.response.value("NumTracksAdded") != "1" || after.uris != expected ||
                 after.update == before.update)
                 throw std::runtime_error("queue-enqueue-unconfirmed");
-            items.push_back({record.source.occurrence, metadata.url, record.item});
+            items.push_back({record.source.occurrence, metadata.url, record.item, track.url});
             publish();
             if (!started) {
                 actions.selectQueue(room.uuid);
@@ -371,6 +449,12 @@ struct QueueRoom::Impl {
             logQueue("TransportStatus=" + transportStatus + " uri=" + uri);
         }
         auto it = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; });
+        const auto avUri = media.value("CurrentURI");
+        if (now >= ownUntil && !waitingForPlay && expectedState == "PLAYING" && !avUri.empty() &&
+            avUri != "x-rincon-queue:" + room.uuid + "#0") {
+            externalStop("speaker-source-change");
+            return; // A fault on another source is not ours to stop.
+        }
         if (!reportedStatus.empty() && reportedStatus != "OK")
             throw std::runtime_error("playback-fault action=Play uri=" + uri +
                                      " TransportStatus=" + reportedStatus);
@@ -468,6 +552,14 @@ struct QueueRoom::Impl {
             try {
                 for (const auto &c : pending)
                     command(c.first, c.second);
+                if (deferredStop != std::chrono::steady_clock::time_point{} &&
+                    std::chrono::steady_clock::now() >= deferredStop) {
+                    deferredStop = {};
+                    resumeEchoUntil = 0;
+                    resumeFlush = false;
+                    queue.flush();
+                    command('q', deferredNext);
+                }
                 observe();
                 append();
             } catch (const std::exception &e) {
@@ -475,7 +567,8 @@ struct QueueRoom::Impl {
                 faulted = true;
                 logQueue("relay fault=" + fault);
                 try {
-                    if (!externalReleased) actions.stop();
+                    if (!externalReleased)
+                        actions.stop();
                 } catch (const std::exception &stop) {
                     logQueue(stop.what());
                 }

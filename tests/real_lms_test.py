@@ -299,13 +299,20 @@ try:
     wait(lambda:len(packets('STMs'))>before and len(sonos.actions('Play'))==plays+1,15,'stop/new play')
     identity(0 if controls_only else 3)
     print('PASS real LMS controls: next/previous, pause/resume, seek, playlist edit, stop/new play; one Play per start, no mutation echo',flush=True)
+    resume_plays=len(sonos.actions('Play'));resume_adds=len(sonos.actions('AddURIToQueue'))
     time.sleep(3.2)
     with sonos.lock:sonos.transport_state='PAUSED_PLAYBACK'
     wait(lambda:cli('mode ?',mac)[-1]=='pause',3,'external pause in LMS')
     wait(lambda:any(r['request']==mac+' pause 1' for r in proxy.records),3,'speaker pause mutation')
+    resume_at=time.monotonic()
     with sonos.lock:sonos.transport_state='PLAYING'
     wait(lambda:cli('mode ?',mac)[-1]=='play',3,'external resume in LMS')
     wait(lambda:any(r['request']==mac+' pause 0' for r in proxy.records),3,'speaker resume mutation')
+    time.sleep(.3)
+    if any(r.get('command')=='q' and r['when']>=resume_at for r in tap.records):
+        wait(lambda:'resume echo adopted' in (base/'bridge.log').read_text(),3,'cached resume echo adoption')
+    assert len(sonos.actions('Play'))==resume_plays and len(sonos.actions('AddURIToQueue'))==resume_adds,'external resume restarted renderer'
+    identity(0 if controls_only else 3)
     with sonos.lock:
         sonos.transport_state='STOPPED';sonos.position.update(TrackURI='',RelTime='00:00:00')
     wait(lambda:cli('mode ?',mac)[-1]=='stop' and not items(),3,'external stop/release in LMS')

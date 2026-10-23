@@ -152,14 +152,23 @@ class CLI(socketserver.ThreadingTCPServer):
                             owner.lms.strm('s',source,fmt='f',rate=owner.rates[index])
                         owner.lms.strm('u')
                     elif cmd=='pause 1':owner.lms.strm('p')
-                    elif cmd in ('play','pause 0'):owner.lms.strm('u')
+                    elif cmd in ('play','pause 0'):
+                        if cmd=='pause 0' and owner.resume_restart:
+                            owner.index=0
+                            if owner.resume_changed:owner.source_ms=5000
+                            owner.lms.strm('q')
+                            source=HTTP(owner.bodies[0]);owner.sources.append(source)
+                            owner.lms.strm('s',source,fmt='f',rate=owner.rates[0])
+                        else:owner.lms.strm('u')
                     elif cmd=='stop':owner.lms.strm('q')
         super().__init__(('127.0.0.1',9090),Client)
         self.worker=threading.Thread(target=self.serve_forever,daemon=True);self.worker.start()
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False):
+        self.resume_restart=resume_restart
+        self.resume_changed=resume_changed
         self.rates=rates; self.albums=albums if albums is not None else [f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=initial_stop; self.refetch_delay=8 if initial_stop and slow else 0; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
@@ -347,32 +356,43 @@ def polling():
     finally:h.close()
 
 def external_actions():
-    for kind in ('port-stop','source','pause'):
-        h=Binary(rates=(44100,),seconds=274 if kind=='port-stop' else 24)
+    for kind in ('port-stop','source','source-error','pause','pause-restart','pause-restart-changed'):
+        h=Binary(rates=(44100,),seconds=274 if kind=='port-stop' else 24,resume_restart=kind.startswith('pause-restart'),resume_changed=kind.endswith('-changed'))
         try:
             h.state(1)
             h.until(lambda:len(h.packets('STMs'))==1)
             h.state(1,122 if kind=='port-stop' else 5)
             time.sleep(3.4)
-            if kind=='pause':
+            if kind.startswith('pause'):
                 h.state(1,5,'PAUSED_PLAYBACK')
                 h.until(lambda:h.commands.count('pause 1')==1)
                 h.state(1,5,'PLAYING')
                 h.until(lambda:h.commands.count('pause 0')==1)
                 time.sleep(.7)
                 assert [c for c in h.commands if not c.startswith('status ')]==['pause 1','pause 0'],h.commands
+                if kind.endswith('-changed'):
+                    h.until(lambda:len(h.sonos.actions('Play'))==2)
+                    assert 'resume echo changed item/time' in (h.base/'bridge.log').read_text()
+                else:
+                    assert len(h.sonos.actions('Play'))==1 and len(h.sonos.actions('AddURIToQueue'))==1
+                if kind=='pause-restart':
+                    h.until(lambda:'resume echo adopted' in (h.base/'bridge.log').read_text())
+                h.lms.strm('q');h.until(lambda:not h.items())
+                assert h.commands.count('stop')==0,h.commands
             else:
                 stops=len(h.sonos.actions('Stop'))
                 with h.sonos.lock:
                     h.sonos.position.update(TrackURI='',RelTime='00:00:00')
-                    h.sonos.transport_state='PLAYING' if kind=='source' else 'STOPPED'
-                    if kind=='source':h.sonos.uri='http://new-service.invalid/music'
+                    h.sonos.transport_state='PLAYING' if kind.startswith('source') else 'STOPPED'
+                    if kind.startswith('source'):
+                        h.sonos.uri='http://new-service.invalid/music'
+                        if kind=='source-error':h.sonos.transport_status='ERROR_UNSUPPORTED_FREQ'
                 h.until(lambda:h.commands.count('stop')==1 and not h.items(),3)
                 time.sleep(.7)
                 assert h.commands.count('stop')==1 and len(h.sonos.actions('Stop'))==stops,h.commands
                 status=json.loads((h.base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
                 assert status['state']=='STOPPED' and not status['owned'],status
-                if kind=='source':assert h.sonos.uri=='http://new-service.invalid/music' and h.sonos.transport_state=='PLAYING'
+                if kind.startswith('source'):assert h.sonos.uri=='http://new-service.invalid/music' and h.sonos.transport_state=='PLAYING'
             print('PASS speaker-originated '+kind+': one intended CLI action, raw MAC/decoded echo, release or pause/resume, no command loop')
         finally:h.close()
 
