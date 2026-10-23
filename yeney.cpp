@@ -416,7 +416,10 @@ static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     // Include artwork and remote/source fields; title and id are always returned
-    std::string query = std::string(macFmt) + " status - 1 tags:aAlKuj\n";
+    std::string position = "-";
+    if (gQueueRoom && !gQueueRoom->queueActive() && gQueueRoom->streamMetadataIndex() >= 0)
+        position = std::to_string(gQueueRoom->streamMetadataIndex());
+    std::string query = std::string(macFmt) + " status " + position + " 1 tags:aAlKuj\n";
     send(fd, query.c_str(), query.size(), 0);
 
     std::string response;

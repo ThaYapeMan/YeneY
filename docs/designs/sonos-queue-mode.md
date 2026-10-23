@@ -36,7 +36,9 @@ at drain clears old boundaries without reconnecting. Logs record `path-pending`,
 selection reason and `path-handoff ... gap_ms` from confirmed end/drain to
 confirmed PLAYING on the newly selected URI. A short class-change gap is
 accepted; a live track is never cut merely to change class. Explicit LMS q or
-selection cancels pending work. The ordinary stream-only room is unchanged.
+selection cancels pending work. The ordinary stream-only room is unchanged. At a class boundary its existing
+metadata formatter queries the selected playlist index rather than racing LMS's
+update of the previous audible index; ordinary stream queries remain unchanged.
 
 ## State table
 

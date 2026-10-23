@@ -18,6 +18,7 @@ public:
     yeney::Sink &sink();
     void command(const yeney::Command &);
     bool queueActive() const;
+    int streamMetadataIndex() const;
     bool remoteSource(uint64_t occurrence) const;
     bool deferStart();
 };

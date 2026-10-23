@@ -46,6 +46,8 @@ struct QueueRoom::Impl {
     queue_audio::CoreQueueSink queue;
     QueuePathSink paths;
     std::atomic_bool selectionDeferred{false};
+    std::atomic<int> metadataIndex{-1};
+    int selectedIndex = -1;
     bool selecting = false, selectionKnown = false, selectedLocal = true, stoppedPlay = true;
     bool selectedNewPlay = true;
     yeney::Command selectedCommand{'s', 0, false}, requestedCommand{'s', 0, false};
@@ -261,11 +263,11 @@ struct QueueRoom::Impl {
             }
         } else {
             if (c.letter == 'q') {
+                std::lock_guard<std::mutex> lock(mutex);
                 ++selectionRequest;
                 paths.cancelSelection();
                 selectionDeferred = false;
                 if (!paths.isRelay()) {
-                    std::lock_guard<std::mutex> lock(mutex);
                     commands.push_back({'Q', 0});
                     changed.notify_all();
                 }
@@ -288,11 +290,14 @@ struct QueueRoom::Impl {
             return;
         if (!selectionKnown) {
             queue_audio::PlaylistEntry track;
+            selectedIndex = -1;
             try {
                 playlist = reader.read(host, mac);
                 const auto index = playlist.index + (selectedNewPlay ? 0 : 1);
-                if (index < playlist.entries.size())
+                if (index < playlist.entries.size()) {
                     track = playlist.entries[index];
+                    selectedIndex = int(index);
+                }
             } catch (const std::exception &e) {
                 logQueue("source metadata unavailable; using stream: " + std::string(e.what()));
             }
@@ -330,16 +335,24 @@ struct QueueRoom::Impl {
             }
             relayEvents(selectedLocal);
         }
+        metadataIndex = !selectedLocal && !selectedNewPlay ? selectedIndex : -1;
         pathReason = selectedLocal ? "local-source" : "remote-source";
         logQueue("path=" + std::string(selectedLocal ? "relay" : "stream") + " reason=" + pathReason +
                  " boundary=" + (selectedNewPlay ? "new-play" : "track-end"));
         if (selectedLocal)
             command('s', queue.latestOccurrence() + 1);
         // Core resets only at a class boundary, without HELO or an LMS command.
-        paths.select(selectedLocal, switching, selectedCommand);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (selectedRequest != selectionRequest) {
+                selecting = false;
+                return;
+            }
+            paths.select(selectedLocal, switching, selectedCommand);
+            selectionDeferred = false;
+        }
         stoppedPlay = false;
         selecting = selectionKnown = false;
-        selectionDeferred = false;
         publish();
     }
     void handoffComplete() {
@@ -436,6 +449,7 @@ struct QueueRoom::Impl {
             return;
         }
         if (c == 'q') {
+            handoffAt = {};
             if (externalReleased)
                 stopAcknowledged = true;
             expectedState = "STOPPED";
@@ -746,6 +760,7 @@ struct QueueRoom::Impl {
                         beginSelection(c.second);
                     else if (c.first == 'Q') {
                         selecting = selectionKnown = false;
+                        handoffAt = {};
                         stoppedPlay = true;
                         state = "STOPPED";
                         publish();
@@ -816,6 +831,7 @@ yeney::Sink &QueueRoom::sink() { return impl->paths; }
 void QueueRoom::shutdown() { impl->shutdown(); }
 void QueueRoom::command(const yeney::Command &c) { impl->received(c); }
 bool QueueRoom::queueActive() const { return impl->paths.isRelay(); }
+int QueueRoom::streamMetadataIndex() const { return impl->metadataIndex; }
 bool QueueRoom::deferStart() { return impl->selectionDeferred; }
 bool QueueRoom::remoteSource(uint64_t id) const {
     std::lock_guard<std::mutex> lock(impl->sourceMutex);
