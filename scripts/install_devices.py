@@ -239,12 +239,13 @@ def room_table(found, configured, states, output):
         print('  '.join(value.ljust(width) for value, width in zip(row, widths)).rstrip(), file=output)
 
 
-def service_plan(rooms, states, build_changed, build, server_changed, force):
+def service_plan(rooms, states, build_changed, build, server_changed, force, managed_changed=False):
     plan = {kind: [] for kind in ('Start', 'Restart', 'Stop', 'Keep', 'Enable')}
     reasons = []
     if force: reasons.append('forced')
     if build_changed: reasons.append('new build ' + build)
     if server_changed: reasons.append('LMS server changed')
+    if managed_changed: reasons.append('managed units changed')
     for room, wanted in rooms.items():
         _, active, enabled = states[room]
         if wanted:
@@ -515,7 +516,6 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         rooms = parse_rooms(merged, warn)
         build_changed = read_text(stamp) != identity
         server_changed = (lms_value(merged) or '') != (current_server or '')
-        plan, reason = service_plan(rooms, states, build_changed, build, server_changed, '--restart' in args)
         state_units = state_dropins(unit_dir, states)
         state_changes = {room: (path, text) for room, (path, text) in state_units.items()
                          if read_text(path) != text}
@@ -523,16 +523,20 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         workarounds = state_workarounds(unit_dir, states, warn)
         for room, source, destination in moves:
             print(f"Room state: move {source} -> {destination}", file=output)
+        overrides = player_overrides(unit_dir, states, output)
+        target = unit_dir / 'yeney@.service'
+        template = read_text(repo / 'packaging/yeney@.service')
+        if not template: raise ValueError('Missing packaging/yeney@.service')
+        template_changed = read_text(target) != template
+        pending = config_dir / 'unit-update-pending'
+        units_changed = template_changed or bool(state_changes) or bool(overrides) or bool(workarounds) or pending.exists()
+        plan, reason = service_plan(rooms, states, build_changed, build, server_changed,
+                                    '--restart' in args, units_changed)
+        for room, _, _ in moves:
             if rooms[room] and states[room][1] and room not in plan['Restart']:
                 plan['Restart'].append(room)
                 if room in plan['Keep']: plan['Keep'].remove(room)
                 reason = reason or 'room state migration'
-        overrides = player_overrides(unit_dir, states, output)
-        for room, _ in overrides:
-            if rooms[room] and states[room][1] and room not in plan['Restart']:
-                plan['Restart'].append(room)
-                if room in plan['Keep']: plan['Keep'].remove(room)
-                reason = reason or 'obsolete core selection override removed'
         print('Config:  ' + ('no changes' if merged == original else '\n' + ''.join(difflib.unified_diff(
             original.splitlines(keepends=True), merged.splitlines(keepends=True),
             fromfile='current config', tofile='proposed config'))), file=output)
@@ -540,15 +544,11 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
             if names:
                 suffix = f' ({reason}); playback stops briefly' if kind == 'Restart' else ''
                 print(f'{kind + ":":9}' + ', '.join(names) + suffix, file=output)
-        target = unit_dir / 'yeney@.service'
-        template = read_text(repo / 'packaging/yeney@.service')
-        if not template: raise ValueError('Missing packaging/yeney@.service')
-        template_changed = read_text(target) != template
         if template_changed: print('Service template: install/update', file=output)
         if migrate: print('Migration: rooms → rooms.migrated', file=output)
         if build_changed: print('Build record: update installed-build', file=output)
         actions = any(plan[kind] for kind in ('Start', 'Restart', 'Stop', 'Enable'))
-        work = merged != original or actions or template_changed or migrate or build_changed or bool(overrides) or bool(state_changes) or bool(moves) or bool(workarounds)
+        work = merged != original or actions or template_changed or migrate or build_changed or bool(overrides) or bool(state_changes) or bool(moves) or bool(workarounds) or units_changed
         if not work:
             print('Nothing to do.', file=output)
         elif interactive and not keep and not ask_yes('Apply? [Y/n] ', True, input_stream, output):
@@ -559,6 +559,7 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         return
     if work:
         config_dir.mkdir(parents=True, exist_ok=True)
+        if units_changed: atomic_write(pending, 'Managed unit update pending service actions.\n')
         if merged != original: atomic_write(config, merged)
         if migrate: os.replace(legacy, migrated)
         unit_dir.mkdir(parents=True, exist_ok=True)
@@ -576,16 +577,15 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
                 raise ValueError(f"Refusing symlink state override: {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
             atomic_write(path, text)
-        removed = False
         for room, path in overrides:
             # Revalidate before unlink; custom edits and symlinks are preserved.
             if not path.is_symlink() and not path.parent.is_symlink() and path.read_bytes() in (
                     b'[Service]\nEnvironment=YENEY_PLAYER=core',
                     b'[Service]\nEnvironment=YENEY_PLAYER=core\n'):
-                path.unlink(); removed = True
+                path.unlink()
             else:
                 print(f'Note: leaving changed override {path}.', file=output)
-        if template_changed or removed or state_changes or workarounds:
+        if units_changed:
             run(['systemctl', 'daemon-reload'], check=True)
         for kind in ('Stop', 'Enable', 'Start', 'Restart'):
             for room in plan[kind]:
@@ -601,13 +601,14 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
                     run(['systemctl', 'restart', unit], check=True)
         # A failed service action must never bless this build as installed.
         if build_changed: atomic_write(stamp, identity)
+        if units_changed: pending.unlink()
     host = lms_value(merged) or discovered_server
     checks, skipped = lms_check(host, [room for room in rooms if rooms[room]])
     if skipped: print(f'LMS check skipped ({skipped})', file=output)
     width = max([len(room) for room in rooms] + [4])
     for room, wanted in rooms.items():
         active = run(['systemctl', 'is-active', '--quiet', states[room][0]]).returncode == 0
-        state = 'running' if active else 'stopped' if wanted else 'disabled'
+        state = ('restarted' if room in plan['Restart'] else 'running') if active else 'stopped' if wanted else 'disabled'
         print((f'{room:<{width}}  {state:<8}  ' + (checks.get(room, '') if not skipped else '')).rstrip(), file=output)
     if not rooms: print('No rooms configured.', file=output)
     disabled_new = [room for room in new if not rooms[room]]

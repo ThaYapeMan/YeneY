@@ -187,7 +187,7 @@ class InstallerTests(unittest.TestCase):
             ['systemctl', 'enable', '--now', r'yeney@Sonos\x20Port.service'],
             ['systemctl', 'restart', 'yeney@Study.service'],
         ])
-        self.assertRegex(self.out.getvalue(), r'Study +running +LMS player')
+        self.assertRegex(self.out.getvalue(), r'Study +restarted +LMS player')
         self.assertRegex(self.out.getvalue(), r'Sonos Port +running +LMS player')
         self.assertRegex(self.out.getvalue(), r'Kitchen +disabled')
         self.assertIn('New rooms added as no: Kitchen — edit', self.out.getvalue())
@@ -474,7 +474,7 @@ class InstallerTests(unittest.TestCase):
         self.assertNotIn('Apply?', text)
         self.assertIn('room.Kitchen=no', self.config.read_text())
         self.assertIn('room.Study=yes', self.config.read_text())
-        self.assertFalse(runner.actions())
+        self.assertEqual(runner.actions(), [['systemctl', 'restart', 'yeney@Study.service']])
 
     def test_decline_keep_and_reconfigure_ask_every_room(self):
         runner = Commands('Study\nSonos Port\n')
@@ -590,7 +590,7 @@ class InstallerTests(unittest.TestCase):
                 self.assertIn('Keep:    Sonos Port, Study', text)
                 self.assertIn('Nothing to do.', text)
             if case in ('new', 'yes'):
-                self.assertIn('Restart: Sonos Port, Study (new build build-b); playback stops briefly', text)
+                self.assertIn('Restart: Sonos Port, Study (new build build-b; managed units changed); playback stops briefly', text)
                 self.assertIn('room.MBR=no', text)
                 self.assertNotIn('Apply?', text)
             if case == 'yes':

@@ -86,5 +86,37 @@ class StateTests(unittest.TestCase):
             self.assertEqual((a/'icon').read_text(), 'owner'); self.assertEqual((b/'icon').read_text(), 'new')
         print('PASS installer migration conflict preserves both state copies')
 
+    def test_restart_every_running_room_for_binary_and_units(self):
+        with tempfile.TemporaryDirectory(prefix='yeney-state-') as tmp:
+            base = Path(tmp); config = base/'config'; units = base/'units'
+            config.mkdir(); (config/'config').write_text('LMS_SERVER=host\n'+''.join(f'room.{r}=yes\n' for r in NAMES))
+            runner = Commands('\n'.join(NAMES)+'\n')
+            states = installer.service_states(NAMES, runner)
+            runner.active = {v[0] for v in states.values()}; runner.enabled = set(runner.active)
+            def apply():
+                output = io.StringIO()
+                installer.install(ROOT, config, units, [], runner, output, io.StringIO(),
+                                  lms_check=mock_lms, state_root=base/'state')
+                return output.getvalue()
+            apply(); runner.calls.clear()
+            self.assertIn('Nothing to do.', apply()); self.assertFalse(runner.actions())
+            runner.build = 'binary-changed'; runner.calls.clear()
+            text = apply()
+            self.assertEqual({a[-1] for a in runner.actions() if a[1]=='restart'}, runner.active)
+            self.assertNotIn(['systemctl','daemon-reload'], runner.calls)
+            for room in NAMES:
+                self.assertRegex(text, __import__('re').escape(room)+r' +restarted +LMS player')
+            for change in ('template', 'dropin', 'pending'):
+                if change == 'template': (units/'yeney@.service').write_text('# old unit\n')
+                elif change == 'dropin': next(iter(installer.state_dropins(units, states).values()))[0].write_text('# changed\n')
+                else: (config/'unit-update-pending').write_text('earlier restart failed\n')
+                runner.calls.clear(); apply()
+                self.assertEqual({a[-1] for a in runner.actions() if a[1]=='restart'}, runner.active)
+                reload = runner.calls.index(['systemctl','daemon-reload'])
+                self.assertTrue(all(reload < runner.calls.index(a) for a in runner.actions()))
+                self.assertFalse((config/'unit-update-pending').exists())
+                runner.calls.clear(); apply(); self.assertFalse(runner.actions())
+        print('PASS installer changed binary/template/drop-in restarts every running room; reload before restart; unchanged install keeps rooms')
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
