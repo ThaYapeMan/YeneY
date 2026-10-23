@@ -163,8 +163,13 @@ Keep:    Sonos Port, Study
 Nothing to do.
 ```
 
-Kept rooms are **not restarted**. Running rooms restart only for a changed or
-missing build record, an LMS setting changed in this run, or `--restart`.
+Kept rooms are **not restarted**. Every install restarts all enabled room services
+when the binary changes, including rooms already running. A changed service
+template or installer-managed drop-in also restarts all enabled rooms, after
+`systemctl daemon-reload`. Unchanged builds and configuration may be kept; an LMS
+setting changed in this run or `--restart` also requests a restart. Each restarted
+room is reported as `restarted` alongside its LMS player check. An interrupted
+unit update remains pending until its service actions succeed.
 `/etc/yeney/installed-build` records the commit (with `-dirty` when applicable)
 and binary SHA-256; it is written atomically only after service actions succeed.
 The plan lists Start, Restart (with its reason), Stop and Keep, plus any service
@@ -370,8 +375,21 @@ icons are preserved, and already-correct values are not rewritten or claimed.
 Disabling handling leaves an existing icon in place. Timeouts and malformed
 replies are logged without blocking or failing playback.
 
-The room service supplies `STATE_DIRECTORY` through `StateDirectory=yeney/%i`;
-confirmed icon ownership is stored there. Ad-hoc runs without a state directory
+The installer generates a per-room `zz-yeney-state.conf` systemd drop-in. It
+supplies `STATE_DIRECTORY` as `/var/lib/yeney/<slug>-<hash>`: an ASCII lowercase
+slug (at most 40 characters) and the first 16 hexadecimal SHA-256 digits of the
+original UTF-8 room name. Spaces, quotes and Unicode names are safe, and names
+that produce the same slug remain distinct. Confirmed icon ownership and queue
+state live there. `ExecStart` and the room argument remain unchanged. View a room's
+configured path with `systemctl show -p StateDirectory 'yeney@Study.service'`.
+
+On install, existing state from escaped or raw room-name directories is moved
+while that room is stopped. The temporary `/var/lib/yeney/sonos-port` workaround
+is migrated too. The installer removes the Port's `statedir.conf` automatically
+only if it contains exactly the three-line workaround (`[Service]`, empty
+`StateDirectory=`, then `StateDirectory=yeney/sonos-port`). Custom contents or
+symlinks are left in place with a warning. Identical state files can be merged;
+conflicting copies stop installation without overwriting either copy. Ad-hoc runs without a state directory
 skip automatic handling rather than writing an unrecorded preference.
 
 The SVG has a 24×24 viewBox, monochrome `#000` fills, outlined paths and

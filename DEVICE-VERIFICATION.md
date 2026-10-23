@@ -16,6 +16,31 @@ Unknown or external URIs do not count as successful stream detection in AUTO.
 Agents never SSH to or deploy on LXC 113; the owner runs physical tests there.
 
 
+## Room state and installation upgrades
+
+The installer renders each room's state path in its managed
+`zz-yeney-state.conf` drop-in. State lives at
+`/var/lib/yeney/<lowercase-ascii-slug>-<16-hex-hash>`, including LMS icon ownership
+and queue state. The hash is derived from the original UTF-8 room name, so rooms
+with spaces, quotes, accents or identical slugs have distinct stable paths.
+`systemctl show -p StateDirectory 'yeney@Study.service'` shows the selected path.
+
+Installation stops a room before moving its old escaped-name or raw-name state.
+For Sonos Port, it also migrates `/var/lib/yeney/sonos-port` and automatically
+removes `statedir.conf` only if it exactly contains the owner's three-line
+workaround: `[Service]`, `StateDirectory=`, `StateDirectory=yeney/sonos-port`.
+Other contents and symlinks are preserved with a warning. Conflicting state files
+are reported instead of overwritten. No manual workaround is needed.
+
+Every install restarts all enabled rooms when the binary changes, even if they
+were already running. Managed unit/drop-in changes cause `daemon-reload` before
+restarts. Unchanged installs can keep running services. The summary reports each
+`restarted` room and its LMS player connection check. Failed unit updates remain
+pending for the next install. These changes are verified with temporary state,
+mocked services and offline systemd unit verification; no owner device test is
+required for this installer-only change.
+
+
 ## Resume, double GET, and seek checks (physical Sonos required)
 
 Build and test locally in WSL2 with `make` and `make test`. LXC 113 is deployment
