@@ -330,6 +330,10 @@ def polling():
         assert 'SOAP action=GetPositionInfo HTTP=200' not in text
         assert 'SOAP action=GetTransportInfo HTTP=200' not in text
         assert 'queue queue' not in text
+        for field in ('TransportState','TransportStatus','CurrentTrack','CurrentTrackURI','NumberOfTracks','AVTransportURI'):
+            assert 'field='+field+' old=' in text,field
+        assert 'speaker-change source=GENA' in text and 'relay-change state=' in text
+        assert text.count('field=TransportStatus old=')==1,text
         print('PASS queue polling: steady <=2/s per action, 100 ms end/join window, timely STMs, no successful-poll logs or duplicate prefix')
     finally:h.close()
 

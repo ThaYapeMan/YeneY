@@ -174,7 +174,7 @@ class Handler(BaseHTTPRequestHandler):
             assert item['title'].startswith('Before YeneY ') and s.verified_save
             s.saved.remove(item); s.saved_update += 1
             return {}, None
-        if action == 'GetMediaInfo': return {'CurrentURI': s.uri}, None
+        if action == 'GetMediaInfo': return {'CurrentURI': s.uri, 'NrTracks': str(len(s.items))}, None
         if action == 'GetTransportSettings': return {'PlayMode': s.play_mode}, None
         if action == 'GetPositionInfo': return dict(s.position), None
         if action == 'GetTransportInfo': return {'CurrentTransportState': s.transport_state}, None

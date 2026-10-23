@@ -131,7 +131,7 @@ SoapResult QueueCoordinator::raw(const std::string &service, const std::string &
                  {{"Content-Type", "text/xml"}, {"SOAPACTION", "\"" + endpoint.urn + "#" + action + "\""}},
                  body, timeout);
     auto result = parseSoap(http.body, action);
-    const bool poll = action == "GetPositionInfo" || action == "GetTransportInfo";
+    const bool poll = action == "GetPositionInfo" || action == "GetTransportInfo" || action == "GetMediaInfo";
     if (log && (!poll || !http.error.empty() || http.status != 200 || !result.ok))
         log("queue SOAP action=" + action + " HTTP=" + std::to_string(http.status) +
             " fault=" + result.faultCode +

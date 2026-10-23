@@ -4,6 +4,7 @@
 #include "queue_playlist.h"
 #include "queue_protocol.h"
 #include "queue_route.h"
+#include "queue_speaker_changes.h"
 #include "stream_metrics.h"
 #include "stream_session.h"
 #include "upnp/queue_coordinator.h"
@@ -45,6 +46,8 @@ struct QueueRoom::Impl {
     std::set<std::string> owned;
     upnp::QueueOwnership ownership;
     RoomStatus status;
+    std::shared_ptr<SpeakerChanges> speakerChanges = std::make_shared<SpeakerChanges>();
+    std::string publishedState, publishedUri;
     struct Entry {
         uint64_t stream;
         std::string uri;
@@ -104,9 +107,11 @@ struct QueueRoom::Impl {
         if (const char *directory = std::getenv("STATE_DIRECTORY"))
             streamMetrics().configure(room.name, directory);
         route.registerWith(*http);
-        speaker->queueEvents([dirty = eventDirty](const upnp::GenaEvent &event) {
-            if (event.service == upnp::Service::AVTransport)
+        speaker->queueEvents([dirty = eventDirty, changes = speakerChanges](const upnp::GenaEvent &event) {
+            if (event.service == upnp::Service::AVTransport) {
+                changes->event(event);
                 *dirty = true;
+            }
             return true;
         });
         logQueue("settings poll_ms=" + std::to_string(pollMs));
@@ -139,6 +144,12 @@ struct QueueRoom::Impl {
                 v.currentUri = item.uri;
                 v.renderedRate = item.item->descriptor().rate;
             }
+        }
+        if (publishedState != v.state || publishedUri != v.currentUri) {
+            logQueue("relay-change state=" + publishedState + "->" + v.state + " current=" + publishedUri +
+                     "->" + v.currentUri);
+            publishedState = v.state;
+            publishedUri = v.currentUri;
         }
         status.publish(std::move(v));
         // Bypass the periodic stream sampler's one-second throttle. Snapshot
@@ -287,6 +298,13 @@ struct QueueRoom::Impl {
         nextPoll = now + std::chrono::milliseconds(now < fastUntil ? 100 : pollMs);
         const auto p = actions.position().response;
         const auto info = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}}).response;
+        const auto media = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response;
+        speakerChanges->report("poll", {{"TransportState", info.value("CurrentTransportState")},
+                                        {"TransportStatus", info.value("CurrentTransportStatus")},
+                                        {"CurrentTrack", p.value("Track")},
+                                        {"CurrentTrackURI", p.value("TrackURI")},
+                                        {"NumberOfTracks", media.value("NrTracks")},
+                                        {"AVTransportURI", media.value("CurrentURI")}});
         const auto transport = info.value("CurrentTransportState");
         const auto reportedStatus = info.value("CurrentTransportStatus");
         const auto uri = p.value("TrackURI");
