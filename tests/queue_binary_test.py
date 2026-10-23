@@ -69,6 +69,8 @@ class Device(Handler):
             threading.Thread(target=fetch,daemon=True).start()
             return {},None
         values,fault=super().action(service,action,args)
+        if action=='GetMediaInfo' and getattr(self.server,'media_hook',None):
+            hook=self.server.media_hook;self.server.media_hook=None;hook();time.sleep(.08)
         if action=="Play" and getattr(self.server,"stopped_play",False):self.server.transport_state="STOPPED"
         if action=="GetTransportInfo":values["CurrentTransportStatus"]=getattr(self.server,"transport_status","OK")
         return values,fault
@@ -166,9 +168,10 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False):
         self.resume_restart=resume_restart
         self.resume_changed=resume_changed
+        self.partial_source=partial_source
         self.rates=rates; self.albums=albums if albums is not None else [f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=initial_stop; self.refetch_delay=8 if initial_stop and slow else 0; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
@@ -198,7 +201,7 @@ class Binary:
                     subprocess.run(['flac','-s','-f','-o',str(target),str(path)],check=True)
                     body=target.read_bytes()
                 self.bodies[i]=body
-                source=HTTP(body,first=16 if slow and i==0 else None,delay=8 if slow and i==0 else 0);self.sources.append(source)
+                source=HTTP(body,first=14000 if partial_source and i==0 else 16 if slow and i==0 else None,delay=8 if (slow or partial_source) and i==0 else 0);self.sources.append(source)
                 yield source,dict(fmt=codec,rate=rate if rate in (44100,48000) else 44100,transition=int(fade),period=10 if fade else 0)
         self.lms.connection.settimeout(30)
         if initial_stop:
@@ -222,14 +225,15 @@ class Binary:
         with self.sonos.lock:return list(self.sonos.items)
     def state(self,track,seconds=0,state='PLAYING'):
         self.until(lambda:len(self.items())>=track and 'resource' in self.items()[track-1])
+        rel=f'{int(seconds)//3600:02}:{int(seconds)//60%60:02}:{int(seconds)%60:02}'
         with self.sonos.lock:
-            self.sonos.position=dict(Track=str(track),TrackURI=self.items()[track-1]['uri'],RelTime=f'00:00:{seconds:02}')
+            self.sonos.position=dict(Track=str(track),TrackURI=self.items()[track-1]['uri'],RelTime=rel)
             self.sonos.transport_state=state
             self.sonos.clock_base=time.monotonic()-seconds
         callback=getattr(self.sonos,'callback','')
         if callback:
             self.sequence+=1
-            fields=dict(CurrentTrack=str(track),CurrentTrackURI=self.items()[track-1]['uri'],RelativeTimePosition=f'00:00:{seconds:02}',TransportState=state)
+            fields=dict(CurrentTrack=str(track),CurrentTrackURI=self.items()[track-1]['uri'],RelativeTimePosition=rel,TransportState=state)
             change='<Event><InstanceID val="0">'+''.join('<'+k+' val='+quoteattr(v)+'/>' for k,v in fields.items())+'</InstanceID></Event>'
             body='<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0"><e:property><LastChange>'+escape(change)+'</LastChange></e:property></e:propertyset>'
             u=urlsplit(callback);c=http.client.HTTPConnection(u.netloc,timeout=3)
@@ -356,7 +360,7 @@ def polling():
     finally:h.close()
 
 def external_actions():
-    for kind in ('port-stop','source','source-error','source-error-guard','source-paused','resume-after-lms-pause','stop-after-lms-pause','pause','pause-restart','pause-restart-changed'):
+    for kind in ('port-stop','source','source-error','source-error-guard','source-foreign-item','source-paused','resume-after-lms-pause','stop-after-lms-pause','pause','pause-restart','pause-restart-changed'):
         h=Binary(rates=(44100,),seconds=274 if kind=='port-stop' else 24,resume_restart=kind.startswith('pause-restart'),resume_changed=kind.endswith('-changed'))
         try:
             h.state(1)
@@ -390,19 +394,23 @@ def external_actions():
                 with h.sonos.lock:
                     h.sonos.position.update(TrackURI='',RelTime='00:00:00')
                     h.sonos.transport_state='PLAYING' if kind.startswith('source') else 'STOPPED'
-                    if kind.startswith('source'):
+                    if kind=='source-foreign-item':
+                        h.sonos.items.append(dict(uri='http://foreign.invalid/app.flac'));h.sonos.update+=1
+                        h.sonos.position.update(Track='2',TrackURI='http://foreign.invalid/app.flac')
+                    elif kind.startswith('source'):
                         h.sonos.uri='http://new-service.invalid/music'
                         if kind.startswith('source-error'):h.sonos.transport_status='ERROR_UNSUPPORTED_FREQ'
                 if kind=='source-error-guard':
                     time.sleep(.3)
                     h.lms.strm('p');time.sleep(.2);h.lms.strm('u')
                     assert len(h.sonos.actions('Pause'))==0 and len(h.sonos.actions('Play'))==1
-                h.until(lambda:h.commands.count('stop')==1 and not h.items(),4 if kind=='source-error-guard' else 3)
+                h.until(lambda:h.commands.count('stop')==1 and not any('resource' in i for i in h.items()),4 if kind=='source-error-guard' else 3)
                 time.sleep(.7)
                 assert h.commands.count('stop')==1 and len(h.sonos.actions('Stop'))==stops,h.commands
                 status=json.loads((h.base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
                 assert status['state']=='STOPPED' and not status['owned'],status
-                if kind.startswith('source'):assert h.sonos.uri=='http://new-service.invalid/music' and h.sonos.transport_state=='PLAYING'
+                if kind=='source-foreign-item':assert h.items()==[dict(uri='http://foreign.invalid/app.flac')] and h.sonos.transport_state=='PLAYING'
+                elif kind.startswith('source'):assert h.sonos.uri=='http://new-service.invalid/music' and h.sonos.transport_state=='PLAYING'
             print('PASS speaker-originated '+kind+': one intended CLI action, raw MAC/decoded echo, release or pause/resume, no command loop')
         finally:h.close()
 
@@ -435,6 +443,33 @@ def lms_flush_before_item():
         print('PASS LMS flush before item: cancelled decoder is not a renderer fault, replacement plays once, no CLI echo')
     finally:h.close()
 
+def cancelled_audible_stop():
+    h=Binary(rates=(44100,),seconds=274,partial_source=True)
+    try:
+        h.until(lambda:len(h.packets('STMs'))==1)
+        assert 'item-end occurrence=1' not in (h.base/'bridge.log').read_text()
+        h.lms.strm('f');time.sleep(3.4)
+        with h.sonos.lock:h.sonos.position.update(TrackURI='',RelTime='00:00:00');h.sonos.transport_state='STOPPED'
+        h.until(lambda:len(h.packets('STMn'))==1)
+        assert not h.packets('STMu') and all(c.startswith('status ') for c in h.commands),h.commands
+        print('PASS cancelled audible asset: known LMS flush failure sends STMn, never an external-stop CLI command')
+    finally:h.close()
+
+def source_change_with_lms_stop():
+    h=Binary(rates=(44100,))
+    try:
+        h.until(lambda:len(h.packets('STMs'))==1)
+        stops=len(h.sonos.actions('Stop'))
+        with h.sonos.lock:
+            h.sonos.uri='http://new-service.invalid/music'
+            h.sonos.position.update(TrackURI='http://new-service.invalid/track')
+            h.sonos.media_hook=lambda:h.lms.strm('q')
+        h.until(lambda:not h.items())
+        assert len(h.sonos.actions('Stop'))==stops and h.sonos.transport_state=='PLAYING'
+        assert all(c.startswith('status ') for c in h.commands),h.commands
+        print('PASS concurrent source change/LMS stop: in-flight source evidence fences transport, no CLI echo or foreign Stop')
+    finally:h.close()
+
 def soap_fault():
     h=Binary(rates=(44100,),fail_add=True)
     try:
@@ -449,4 +484,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item()
+    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item();cancelled_audible_stop();source_change_with_lms_stop()

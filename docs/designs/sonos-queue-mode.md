@@ -192,3 +192,10 @@ producer; genuine storage and length faults retain their existing handling.
 A confirmed foreign source blocks transport commands and future appends during
 the echo window as well as after release. Source switches, forced stops and
 external resume are also recognised after an LMS-originated pause.
+
+A producer flush does not revoke fully rendered immutable WAV assets already
+accepted by the speaker. Their published length and bytes remain available;
+only unfinished assets are cancelled. Relay end detection uses the announced
+frame count, so a producer cancellation racing an observation cannot masquerade
+as an external speaker action. A cancelled partial item that actually stops is
+reported as a producer failure (STMn), never as an app-originated LMS stop.

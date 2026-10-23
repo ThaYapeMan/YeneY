@@ -53,6 +53,7 @@ struct QueueRoom::Impl {
         std::string uri;
         std::shared_ptr<queue_audio::Item> item;
         std::string sourceUrl;
+        uint64_t frames;
     };
     std::vector<Entry> items;
     std::map<uint64_t, bool> remote;
@@ -207,7 +208,7 @@ struct QueueRoom::Impl {
                 changed.notify_all();
                 return true; // Keep immutable audio until the paired start is verified.
             }
-            if (c == 'q' || c == 's' || c == 'p' || c == 'u') {
+            if (c == 'q' || c == 's' || c == 'p' || c == 'u' || c == 'f') {
                 std::lock_guard<std::mutex> lock(mutex);
                 commands.push_back({c, queue.latestOccurrence() + 1});
                 changed.notify_all();
@@ -262,6 +263,10 @@ struct QueueRoom::Impl {
         publish();
     }
     void command(char c, uint64_t next) {
+        if (c == 'f') {
+            ownUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            return;
+        }
         if (c == 'F') {
             deferredNext = next;
             deferredStop = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
@@ -356,7 +361,12 @@ struct QueueRoom::Impl {
             if (record.source.rate > queue.maxSampleRate())
                 throw std::runtime_error("queue-rate-unsupported rate=" + std::to_string(record.source.rate) +
                                          " cap=" + std::to_string(queue.maxSampleRate()));
-            const auto length = record.item->contentLength();
+            std::optional<uint64_t> length;
+            try {
+                length = record.item->contentLength();
+            } catch (const queue_audio::ItemCancelled &) {
+                continue;
+            }
             if (!length)
                 continue;
             if (!record.fault.empty())
@@ -393,7 +403,11 @@ struct QueueRoom::Impl {
             upnp::QueueMetadata metadata;
             // Fixed legacy route namespace, not a playback epoch. Stream
             // occurrence IDs are unique for the lifetime of this connection.
-            metadata.url = speaker->controllerUri() + route.publish(room.name, 1, 1, record.item);
+            try {
+                metadata.url = speaker->controllerUri() + route.publish(room.name, 1, 1, record.item);
+            } catch (const queue_audio::ItemCancelled &) {
+                continue;
+            }
             metadata.session = session;
             metadata.title = track.title;
             metadata.artist = track.artist;
@@ -416,7 +430,8 @@ struct QueueRoom::Impl {
             if (result.response.value("NumTracksAdded") != "1" || after.uris != expected ||
                 after.update == before.update)
                 throw std::runtime_error("queue-enqueue-unconfirmed");
-            items.push_back({record.source.occurrence, metadata.url, record.item, track.url});
+            items.push_back(
+                {record.source.occurrence, metadata.url, record.item, track.url, metadata.frames});
             publish();
             if (!started) {
                 actions.selectQueue(room.uuid);
@@ -448,6 +463,13 @@ struct QueueRoom::Impl {
                                         {"CurrentTrackURI", p.value("TrackURI")},
                                         {"NumberOfTracks", media.value("NrTracks")},
                                         {"AVTransportURI", media.value("CurrentURI")}});
+        const auto uri = p.value("TrackURI");
+        const auto avUri = media.value("CurrentURI");
+        if (media.child("CurrentURI"))
+            sourceAway = !avUri.empty() && avUri != "x-rincon-queue:" + room.uuid + "#0";
+        if (!uri.empty() &&
+            std::none_of(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; }))
+            sourceAway = true;
         {
             std::lock_guard<std::mutex> lock(mutex);
             if (!commands.empty())
@@ -455,17 +477,13 @@ struct QueueRoom::Impl {
         }
         const auto transport = info.value("CurrentTransportState");
         const auto reportedStatus = info.value("CurrentTransportStatus");
-        const auto uri = p.value("TrackURI");
         if (reportedStatus != transportStatus) {
             transportStatus = reportedStatus;
             logQueue("TransportStatus=" + transportStatus + " uri=" + uri);
         }
         auto it = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; });
-        const auto avUri = media.value("CurrentURI");
-        if (media.child("CurrentURI"))
-            sourceAway = !avUri.empty() && avUri != "x-rincon-queue:" + room.uuid + "#0";
         if (sourceAway) {
-            if (now >= ownUntil && !waitingForPlay)
+            if (now >= ownUntil)
                 externalStop("speaker-source-change");
             return; // Neither an error nor the echo guard authorises stopping a foreign source.
         }
@@ -479,15 +497,21 @@ struct QueueRoom::Impl {
         const auto previousItem =
             std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
         const bool finalItem = previousItem != items.end() && previousItem == std::prev(items.end());
-        const auto previousLength =
-            previousItem == items.end() ? std::optional<uint64_t>{} : previousItem->item->contentLength();
+        bool cancelledCurrent = false;
+        const auto checked = it != items.end() ? it : previousItem;
+        if (checked != items.end()) {
+            try {
+                (void)checked->item->contentLength();
+            } catch (const queue_audio::ItemCancelled &) {
+                cancelledCurrent = true;
+            }
+        }
         unsigned ph = 0, pm = 0, ps = 0;
         const bool positionValid = sscanf(p.value("RelTime").c_str(), "%u:%u:%u", &ph, &pm, &ps) == 3;
         const uint64_t reportedElapsed = positionValid ? uint64_t(ph * 3600 + pm * 60 + ps) : 0;
         const auto endEvidence = it == previousItem ? std::max(lastElapsed, reportedElapsed) : lastElapsed;
         const bool nearEnd =
-            finalItem && previousLength &&
-            (*previousLength - 44) / 6 <= (endEvidence + 2) * previousItem->item->descriptor().rate;
+            finalItem && previousItem->frames <= (endEvidence + 2) * previousItem->item->descriptor().rate;
         const auto source = media.value("CurrentURI");
         const bool sourceChanged = media.child("CurrentURI") &&
                                    source != "x-rincon-queue:" + room.uuid + "#0" &&
@@ -496,6 +520,8 @@ struct QueueRoom::Impl {
         const bool unsolicited = now >= ownUntil && !waitingForPlay;
         if (unsolicited && expectedState != "STOPPED" &&
             (sourceChanged || (!nearEnd && (transport == "STOPPED" || missingItem)))) {
+            if (cancelledCurrent && !sourceChanged)
+                throw std::runtime_error("queue cancelled item stopped after LMS flush");
             externalStop(sourceChanged ? "speaker-source-change" : "speaker-stop");
             return;
         }
@@ -529,9 +555,9 @@ struct QueueRoom::Impl {
             transport == "STOPPED" && nearEnd ? endEvidence : uint64_t(h * 3600 + m * 60 + s);
         if (transport != "STOPPED")
             lastElapsed = elapsed;
-        const auto length = it->item->contentLength();
+        const auto frames = it->frames;
         const auto rate = it->item->descriptor().rate;
-        if (transport == "PLAYING" && length && (*length - 44) / 6 <= (elapsed + 3) * rate)
+        if (transport == "PLAYING" && frames <= (elapsed + 3) * rate)
             fastPoll();
         if (it->stream != current)
             fastPoll();
@@ -576,6 +602,8 @@ struct QueueRoom::Impl {
                 }
                 observe();
                 append();
+            } catch (const queue_audio::ItemCancelled &) {
+                // Producer cancellation raced a snapshot; observe the next run.
             } catch (const std::exception &e) {
                 fault = e.what();
                 faulted = true;

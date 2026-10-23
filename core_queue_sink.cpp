@@ -403,8 +403,12 @@ bool CoreQueueSink::queueItemProduced(uint64_t id) const {
     }
     if (!item)
         return false;
-    const auto length = item->contentLength();
-    return length && item->producedFrames() >= (*length - 44) / 6;
+    try {
+        const auto length = item->contentLength();
+        return length && item->producedFrames() >= (*length - 44) / 6;
+    } catch (const ItemCancelled &) {
+        return false;
+    }
 }
 bool CoreQueueSink::speakerDriven() const {
     std::lock_guard<std::mutex> lock(mutex);
@@ -577,8 +581,16 @@ void CoreQueueSink::flush() {
             nextIndex = 0;
             descriptorOrder.clear();
         }
-        for (auto &i : items)
+        for (auto &i : items) {
+            try {
+                const auto length = i->contentLength();
+                if (length && i->producedFrames() == (*length - 44) / 6)
+                    continue;
+            } catch (const std::exception &) {
+                continue;
+            } // Already failed/cancelled.
             i->cancel("queue flushed");
+        }
     });
 }
 } // namespace queue_audio

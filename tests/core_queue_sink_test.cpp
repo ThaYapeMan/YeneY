@@ -439,5 +439,33 @@ int main() {
         std::cout << "PASS cancelled queue job: stale finish cannot poison worker; replacement producer "
                      "writes all frames\n";
     }
+    {
+        CoreQueueSink sink("CompletedFlush", c, 1);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, std::nullopt, 0, 0});
+        sink.trackBoundary(0, {8000, 16, 2, false}, false);
+        std::vector<yeney::Frame> pcm(100, {65536, -65536});
+        assert(sink.write(pcm.data(), 100, false) == 100);
+        sink.resolvedItemBoundary({1, 0, 100, 0, "sealed"});
+        sink.waitIdle();
+        auto item = sink.snapshot().front().item;
+        auto bytes = [&] {
+            std::vector<char> out(644);
+            auto reader = item->reader();
+            size_t n = 0;
+            while (n < out.size()) {
+                auto got = reader.read(out.data() + n, out.size() - n);
+                assert(got);
+                n += got;
+            }
+            return out;
+        };
+        auto before = bytes();
+        sink.flush();
+        sink.waitIdle();
+        assert(item->contentLength() == 644 && bytes() == before);
+        std::cout << "PASS immutable completed queue asset: LMS producer flush preserves exact WAV bytes and "
+                     "length\n";
+    }
     std::filesystem::remove_all(root);
 }
