@@ -39,7 +39,8 @@ inline std::string decodeLms(const std::string &input) {
 // acknowledgement, fresh connection per bounded query.
 inline bool controlLms(const std::string &host, const std::string &mac, const std::string &command,
                        unsigned port = 9090, std::string *reply = nullptr, unsigned timeoutMs = 0,
-                       const std::atomic_bool *cancel = nullptr) {
+                       const std::atomic_bool *cancel = nullptr, bool global = false,
+                       bool allowEmpty = false) {
     if (mac.size() != 17 || command.find_first_of("\r\n") != std::string::npos)
         return false;
     for (size_t i = 0; i < mac.size(); ++i)
@@ -63,7 +64,8 @@ inline bool controlLms(const std::string &host, const std::string &mac, const st
             timeoutMs ? timeoutMs
                       : (command.rfind("status ", 0) == 0 || command.find("?") == std::string::npos ? 30000
                                                                                                     : 3000));
-    const auto request = mac + " " + command + "\n";
+    const auto prefix = global ? std::string{} : mac + " ";
+    const auto request = prefix + command + "\n";
     std::string response;
     size_t sent = 0;
     while (std::chrono::steady_clock::now() < deadline && (!cancel || !*cancel)) {
@@ -91,7 +93,7 @@ inline bool controlLms(const std::string &host, const std::string &mac, const st
     if (end == std::string::npos)
         return false;
     // Split before decoding: encoded spaces belong to a single argument.
-    std::istringstream expectedInput(mac + " " + command), actualInput(response.substr(0, end));
+    std::istringstream expectedInput(prefix + command), actualInput(response.substr(0, end));
     std::vector<std::string> expected, actual;
     std::string word;
     while (expectedInput >> word)
@@ -101,10 +103,11 @@ inline bool controlLms(const std::string &host, const std::string &mac, const st
     const bool question = !expected.empty() && expected.back() == "?";
     if (question)
         expected.pop_back();
-    const bool query = question || command.rfind("status ", 0) == 0;
+    const bool query =
+        question || command.rfind("status ", 0) == 0 || (global && command.rfind("players ", 0) == 0);
     // Some clients encode the complete acknowledgement, including separators.
     // Accept only an exact decoded mutation echo in that representation.
-    if (!query && actual.size() == 1 && actual.front() == decodeLms(mac + " " + command))
+    if (!query && actual.size() == 1 && actual.front() == decodeLms(prefix + command))
         actual = expected;
     if (actual.size() < expected.size() || !std::equal(expected.begin(), expected.end(), actual.begin()))
         return false;
@@ -115,7 +118,7 @@ inline bool controlLms(const std::string &host, const std::string &mac, const st
             return false;
     if (reply)
         *reply = response.substr(0, end);
-    return !question || actual.size() > expected.size();
+    return !question || actual.size() > expected.size() || allowEmpty;
 }
 // Diagnostic-only client. One connection and one deadline cover all three
 // queries; the caller runs this outside the audio clock and core event loop.

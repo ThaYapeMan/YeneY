@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <stdexcept>
 
+#include "lms_icon.h"
 extern "C" {
 void yeney_transport(char);
 unsigned get_squeezebox_stream_id();
@@ -200,6 +201,7 @@ void runCoreClient(const char* server, const uint8_t* mac, const char* name) {
     for (int sig : {SIGINT, SIGTERM, SIGQUIT, SIGHUP}) std::signal(sig, stopCore);
     try {
         CoreSonosSink sink(mac);
+        bridge::LmsIcon icon(mac, [](const auto &line) { printf("%s\n", line.c_str()); });
         yeney::Config config;
         config.server = server ? server : "";
         auto colon = config.server.find(':');
@@ -209,6 +211,7 @@ void runCoreClient(const char* server, const uint8_t* mac, const char* name) {
             config.port = port; config.server.resize(colon);
         }
         config.name = name;
+        config.connectionReady = [&icon](const auto &host) { icon.connected(host); };
         std::copy(mac, mac + 6, config.mac.begin());
         config.log = [](const std::string& line) { printf("core: %s\n", line.c_str()); };
         config.observeCommand = [&](const yeney::Command& c) { sink.command(c); };

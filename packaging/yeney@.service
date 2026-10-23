@@ -5,6 +5,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+StateDirectory=yeney/%i
 ExecStart=/opt/yeney/yeney --room=%I
 Restart=on-failure
 RestartSec=5

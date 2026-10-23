@@ -17,6 +17,7 @@
 #include <deque>
 #include <set>
 #include <thread>
+#include "lms_icon.h"
 extern "C" void yeney_queue_stream_handoff();
 namespace bridge {
 namespace {
@@ -896,6 +897,7 @@ bool QueueRoom::remoteSource(uint64_t id) const {
 void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name, QueueRoom &room) {
     std::signal(SIGINT, stopRoom);
     std::signal(SIGTERM, stopRoom);
+    LmsIcon icon(mac, [](const auto &line) { std::printf("%s\n", line.c_str()); });
     yeney::Config config;
     std::string host = server ? server : "";
     auto colon = host.find(':');
@@ -905,6 +907,7 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     }
     config.server = host;
     config.name = name;
+    config.connectionReady = [&icon](const auto &peer) { icon.connected(peer); };
     std::copy(mac, mac + 6, config.mac.begin());
     config.startOnSubmit = true;
     config.observeCommand = [&room](const auto &c) { room.command(c); };
@@ -917,6 +920,7 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     yeney::Player player(config, room.sink());
     player.run(roomStop);
     room.shutdown();
+    icon.shutdown();
     std::exit(0);
 }
 } // namespace bridge
