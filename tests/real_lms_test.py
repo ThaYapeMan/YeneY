@@ -27,6 +27,8 @@ ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tests'))
 from queue_binary_test import Coordinator, Device, HTTP, wav, alac
 from decoders_test import alac_parts, mp4
+from hires_audio import pcm as hires_pcm, wave as hires_wave, alac as hires_alac, raw24
+import numpy as np
 HOME=Path(os.environ.get('YENEY_REAL_LMS_HOME','/tmp/yeney-real-lms-9.1.1'))
 OWNER_CLI=[]
 URL='https://downloads.lms-community.org/LyrionMusicServer_v9.1.1/lyrionmusicserver-9.1.1.tgz'
@@ -203,6 +205,25 @@ for i,rate in ((4,44100),(5,48000)):
 for rate in (88200,96000):
     path=base/f'hires-{rate}.wav';path.write_bytes(wav(rate,24,noise=True))
     subprocess.run([str(HOME/'Bin/x86_64-linux/sox'),str(path),'-b','24',str(base/f'library/hires-{rate}.flac')],check=True)
+unknown=bytearray((base/'library/hires-96000.flac').read_bytes())
+unknown[21]&=0xf0;unknown[22:26]=bytes(4)
+(base/'library/unknown-96000.flac').write_bytes(unknown)
+native_sources={}
+for kind in ('flac','alac'):
+    for rate in (88200,96000):
+        parts=[]
+        for track in range(4):
+            samples=hires_pcm(rate,4,start=track*rate*4)
+            parts.append(samples)
+            extension='flac' if kind=='flac' else 'm4a'
+            name=f'native-{kind}-{rate}-{track}.{extension}'
+            path=base/'library'/name
+            if kind=='flac':
+                source=base/(name+'.wav');source.write_bytes(hires_wave(samples,rate))
+                subprocess.run(['flac','-s','-f','-T',f'TITLE=Native {track}','-T',f'ALBUM=Native {kind} {rate}',
+                                '-T',f'TRACKNUMBER={track+1}','-o',str(path),str(source)],check=True)
+            else:path.write_bytes(hires_alac(samples,rate))
+        native_sources[kind,rate]=np.concatenate(parts)
 (base/'prefs/server.prefs').write_text('---\naudiodir: '+str(base/'library')+'\nplaylistdir: '+str(base/'playlists')+'\ncheckVersion: 0\nlanguage: EN\n')
 # Seed CLI preferences so first-start plugin migration cannot replace the port.
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
@@ -231,19 +252,19 @@ try:
         elif tracks and sep:tracks[-1][key]=value
     tracks.sort(key=lambda t:t.get('url',''))
     (base/'library.json').write_text(json.dumps(tracks,indent=2))
-    ids=[t['id'] for t in tracks if t.get('url','').endswith('.flac') and 'hires-' not in t.get('url','')]
-    alac_ids=[t['id'] for t in tracks if t.get('url','').endswith('.m4a')]
+    ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('0.flac','1.flac','2.flac','3.flac')]
+    alac_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('4.m4a','5.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
     sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True;sonos.consume_stream=True
-    sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None]
+    sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None]+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
     tap=Tap()
     env=dict(os.environ,YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(base))
     bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
                             stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
     wait(lambda:any(r['op']=='HELO' for r in tap.records),10,'HELO')
     hello=next(r for r in tap.records if r['op']=='HELO')
-    assert b'MaxSampleRate=48000' in bytes.fromhex(hello['body']),hello
-    print('PASS queue HELO MaxSampleRate=48000 (same as stream)',flush=True)
+    assert b'MaxSampleRate=192000' in bytes.fromhex(hello['body']),hello
+    print('PASS queue HELO MaxSampleRate=192000; ordinary stream remains 48000',flush=True)
     mac=':'.join(f'{v:02x}' for v in bytes.fromhex(hello['body'])[2:8])
     wait(lambda:cli('connected ?',mac)[-1]=='1',10,'player connected')
     def packets(event):return [r for r in tap.records if r.get('event')==event]
@@ -261,90 +282,145 @@ try:
         text=(base/'bridge.log').read_text()
         assert 'rearm-loop room=' not in text and 'state=drain' not in text,text[-8000:]
         assert all('reason=speaker-' in line for line in text.splitlines() if 'queue LMS mutation ' in line),text[-8000:]
-    cli('playlistcontrol cmd:load track_id:'+','.join(ids),mac)
-    wait(lambda:len(items())>=1,15,'initial takeover')
-    select_item(0);wait(lambda:len(packets('STMs'))>=1)
-    identity(0)
-    assert len(sonos.actions('Play'))==1,sonos.calls
-    controls_only=os.environ.get('YENEY_REAL_LMS_CONTROLS_ONLY')=='1'
-    for index in (() if controls_only else (1,2,3)):
-        # Keep the fake's RelTime continuous until the natural boundary.
-        for second in range(1,24):
-            time.sleep(1)
-            with sonos.lock:sonos.position['RelTime']=f'00:00:{second:02}'
-        select_item(index);wait(lambda:len(packets('STMs'))>=index+1)
-        identity(index)
-    if not controls_only:
-        assert len(sonos.actions('Play'))==1 and len(sonos.actions('AddURIToQueue'))==4
-        assert (base/'bridge.log').read_text().count('ownership acquired')==1
-    if not controls_only: print('PASS real LMS 9.1.1 album: FLAC 44.1/48 kHz, three audible joins, matching LMS index, no CLI mutation/rearm/restart',flush=True)
-    for index in ((1,0) if controls_only else (2,3)):
-        before=len(packets('STMs'));cli(f'playlist index {index}',mac)
-        wait(lambda:len(packets('STMs'))>before,15,'LMS next/previous acknowledgement')
-        identity(index)
-    cli('pause 1',mac);wait(lambda:sonos.transport_state=='PAUSED_PLAYBACK')
-    time.sleep(10);cli('play',mac);wait(lambda:sonos.transport_state=='PLAYING')
-    before=len(packets('STMs'))
-    cli('time 12',mac);wait(lambda:any(a[1].get('Unit')=='TRACK_NR' for a in sonos.actions('Seek')),10,'seek')
-    wait(lambda:len(packets('STMs'))>before and sonos.transport_state=='PLAYING',10,'seek confirmed start')
-    # A relay seek is a newly rendered remaining source, never REL_TIME on
-    # the previous asset. Its duration proves LMS applied the source offset.
-    duration=items()[0]['resource']['duration']
-    seconds=sum(int(v)*factor for v,factor in zip(duration.split(':'),(3600,60,1)))
-    assert 10<=seconds<=15,('seek remaining duration',duration)
-    wait(lambda:9<=float(cli('time ?',mac)[-1])<=14,3,'LMS seek source offset')
-    assert not any(a[1].get('Unit')=='REL_TIME' for a in sonos.actions('Seek'))
-    cli('playlist move 1 2',mac)
-    cli('playlistcontrol cmd:add track_id:'+ids[0],mac)
-    cli('playlist delete 4',mac)
-    time.sleep(1.2)
-    assert 'relay fault=queue flushed' not in (base/'bridge.log').read_text(),'LMS cancellation reported as renderer failure'
-    identity(0 if controls_only else 3)
-    stops=len(sonos.actions('Stop'))
-    cli('stop',mac);wait(lambda:sonos.transport_state=='STOPPED' and len(sonos.actions('Stop'))>stops)
-    wait(lambda:cli('mode ?',mac)[-1]=='stop',3,'explicit stop')
-    time.sleep(.2)
-    before=len(packets('STMs'));plays=len(sonos.actions('Play'));cli('play',mac)
-    wait(lambda:len(packets('STMs'))>before and len(sonos.actions('Play'))==plays+1,15,'stop/new play')
-    identity(0 if controls_only else 3)
-    print('PASS real LMS controls: next/previous, pause/resume, seek, playlist edit, stop/new play; one Play per start, no mutation echo',flush=True)
-    time.sleep(3.2)
-    resume_plays=len(sonos.actions('Play'));resume_adds=len(sonos.actions('AddURIToQueue'))
-    with sonos.lock:sonos.transport_state='PAUSED_PLAYBACK'
-    wait(lambda:cli('mode ?',mac)[-1]=='pause',3,'external pause in LMS')
-    wait(lambda:any(r['request']==mac+' pause 1' for r in proxy.records),3,'speaker pause mutation')
-    resume_at=time.monotonic()
-    with sonos.lock:sonos.transport_state='PLAYING'
-    wait(lambda:cli('mode ?',mac)[-1]=='play',3,'external resume in LMS')
-    wait(lambda:any(r['request']==mac+' pause 0' for r in proxy.records),3,'speaker resume mutation')
-    time.sleep(.3)
-    if any(r.get('command')=='q' and r['when']>=resume_at for r in tap.records):
-        wait(lambda:'resume echo adopted' in (base/'bridge.log').read_text(),3,'cached resume echo adoption')
-    assert len(sonos.actions('Play'))==resume_plays and len(sonos.actions('AddURIToQueue'))==resume_adds,'external resume restarted renderer'
-    identity(0 if controls_only else 3)
-    with sonos.lock:
-        sonos.transport_state='STOPPED';sonos.position.update(TrackURI='',RelTime='00:00:00')
-    wait(lambda:cli('mode ?',mac)[-1]=='stop' and not items(),3,'external stop/release in LMS')
-    wait(lambda:any(r['request']==mac+' stop' for r in proxy.records),3,'speaker stop mutation')
-    print('PASS real LMS speaker actions: pause 1 / pause 0 / stop once, each verified within 3 s, owned release, no echo loop',flush=True)
-    cli('stop',mac)
-    for position,rate in enumerate((44100,48000)):
-        cli('playlistcontrol cmd:load track_id:'+alac_ids[position],mac)
-        wait(lambda:any(i['metadata'].get('title','').split(' - ')[-1]==str(4+position)
-                        and i['resource'].get('sampleFrequency')==str(rate) for i in items()),15,'ALAC prepared')
-        assert sum(r['op']=='HELO' for r in tap.records)==1,tap.records
+    hires_only=os.environ.get('YENEY_REAL_LMS_HIRES_ONLY')=='1'
+    if not hires_only:
+        cli('playlistcontrol cmd:load track_id:'+','.join(ids),mac)
+        wait(lambda:len(items())>=1,15,'initial takeover')
+        select_item(0);wait(lambda:len(packets('STMs'))>=1)
         identity(0)
-        wait(lambda:packets('STMd') and packets('STMd')[-1]['when']>=packets('STMs')[-1]['when'],10,'ALAC fully produced')
+        assert len(sonos.actions('Play'))==1,sonos.calls
+        controls_only=os.environ.get('YENEY_REAL_LMS_CONTROLS_ONLY')=='1'
+        for index in (() if controls_only else (1,2,3)):
+            # Keep the fake's RelTime continuous until the natural boundary.
+            for second in range(1,24):
+                time.sleep(1)
+                with sonos.lock:sonos.position['RelTime']=f'00:00:{second:02}'
+            select_item(index);wait(lambda:len(packets('STMs'))>=index+1)
+            identity(index)
+        if not controls_only:
+            assert len(sonos.actions('Play'))==1 and len(sonos.actions('AddURIToQueue'))==4
+            assert (base/'bridge.log').read_text().count('ownership acquired')==1
+        if not controls_only: print('PASS real LMS 9.1.1 album: FLAC 44.1/48 kHz, three audible joins, matching LMS index, no CLI mutation/rearm/restart',flush=True)
+        for index in ((1,0) if controls_only else (2,3)):
+            before=len(packets('STMs'));cli(f'playlist index {index}',mac)
+            wait(lambda:len(packets('STMs'))>before,15,'LMS next/previous acknowledgement')
+            identity(index)
+        cli('pause 1',mac);wait(lambda:sonos.transport_state=='PAUSED_PLAYBACK')
+        time.sleep(10);cli('play',mac);wait(lambda:sonos.transport_state=='PLAYING')
+        before=len(packets('STMs'))
+        cli('time 12',mac);wait(lambda:any(a[1].get('Unit')=='TRACK_NR' for a in sonos.actions('Seek')),10,'seek')
+        wait(lambda:len(packets('STMs'))>before and sonos.transport_state=='PLAYING',10,'seek confirmed start')
+        # A relay seek is a newly rendered remaining source, never REL_TIME on
+        # the previous asset. Its duration proves LMS applied the source offset.
+        duration=items()[0]['resource']['duration']
+        seconds=sum(int(v)*factor for v,factor in zip(duration.split(':'),(3600,60,1)))
+        assert 10<=seconds<=15,('seek remaining duration',duration)
+        wait(lambda:9<=float(cli('time ?',mac)[-1])<=14,3,'LMS seek source offset')
+        assert not any(a[1].get('Unit')=='REL_TIME' for a in sonos.actions('Seek'))
+        cli('playlist move 1 2',mac)
+        cli('playlistcontrol cmd:add track_id:'+ids[0],mac)
+        cli('playlist delete 4',mac)
+        time.sleep(1.2)
+        assert 'relay fault=queue flushed' not in (base/'bridge.log').read_text(),'LMS cancellation reported as renderer failure'
+        identity(0 if controls_only else 3)
+        stops=len(sonos.actions('Stop'))
+        cli('stop',mac);wait(lambda:sonos.transport_state=='STOPPED' and len(sonos.actions('Stop'))>stops)
+        wait(lambda:cli('mode ?',mac)[-1]=='stop',3,'explicit stop')
+        time.sleep(.2)
+        before=len(packets('STMs'));plays=len(sonos.actions('Play'));cli('play',mac)
+        wait(lambda:len(packets('STMs'))>before and len(sonos.actions('Play'))==plays+1,15,'stop/new play')
+        identity(0 if controls_only else 3)
+        print('PASS real LMS controls: next/previous, pause/resume, seek, playlist edit, stop/new play; one Play per start, no mutation echo',flush=True)
+        time.sleep(3.2)
+        resume_plays=len(sonos.actions('Play'));resume_adds=len(sonos.actions('AddURIToQueue'))
+        with sonos.lock:sonos.transport_state='PAUSED_PLAYBACK'
+        wait(lambda:cli('mode ?',mac)[-1]=='pause',3,'external pause in LMS')
+        wait(lambda:any(r['request']==mac+' pause 1' for r in proxy.records),3,'speaker pause mutation')
+        resume_at=time.monotonic()
+        with sonos.lock:sonos.transport_state='PLAYING'
+        wait(lambda:cli('mode ?',mac)[-1]=='play',3,'external resume in LMS')
+        wait(lambda:any(r['request']==mac+' pause 0' for r in proxy.records),3,'speaker resume mutation')
+        time.sleep(.3)
+        if any(r.get('command')=='q' and r['when']>=resume_at for r in tap.records):
+            wait(lambda:'resume echo adopted' in (base/'bridge.log').read_text(),3,'cached resume echo adoption')
+        assert len(sonos.actions('Play'))==resume_plays and len(sonos.actions('AddURIToQueue'))==resume_adds,'external resume restarted renderer'
+        identity(0 if controls_only else 3)
+        with sonos.lock:
+            sonos.transport_state='STOPPED';sonos.position.update(TrackURI='',RelTime='00:00:00')
+        wait(lambda:cli('mode ?',mac)[-1]=='stop' and not items(),3,'external stop/release in LMS')
+        wait(lambda:any(r['request']==mac+' stop' for r in proxy.records),3,'speaker stop mutation')
+        print('PASS real LMS speaker actions: pause 1 / pause 0 / stop once, each verified within 3 s, owned release, no echo loop',flush=True)
         cli('stop',mac)
-    print('PASS real LMS ALAC sources: generated MP4 at 44.1/48 kHz, LMS default FLAC transcoding, finite queue starts, one connection HELO',flush=True)
-    for source_rate,target_rate in ((88200,44100),(96000,48000)):
-        track=next(t for t in tracks if t.get('url','').endswith(f'hires-{source_rate}.flac'))
-        starts=len(packets('STMs'));cli('playlistcontrol cmd:load track_id:'+track['id'],mac)
-        wait(lambda:len(packets('STMs'))>starts,20,'high-rate resampled start')
-        resource=items()[0]['resource']
-        assert resource['sampleFrequency']==str(target_rate) and resource['bitsPerSample']=='24',resource
-        print(f'PASS real LMS family resampling: {source_rate} Hz -> {target_rate} Hz, 24-bit, PLAYING',flush=True)
+        for position,rate in enumerate((44100,48000)):
+            cli('playlistcontrol cmd:load track_id:'+alac_ids[position],mac)
+            wait(lambda:any(i['metadata'].get('title','').split(' - ')[-1]==str(4+position)
+                            and i['resource'].get('sampleFrequency')==str(rate) for i in items()),15,'ALAC prepared')
+            assert sum(r['op']=='HELO' for r in tap.records)==1,tap.records
+            identity(0)
+            wait(lambda:packets('STMd') and packets('STMd')[-1]['when']>=packets('STMs')[-1]['when'],10,'ALAC fully produced')
+            cli('stop',mac)
+        print('PASS real LMS ALAC sources: generated MP4 at 44.1/48 kHz, finite queue starts, one connection HELO',flush=True)
+        for source_rate,target_rate in ((88200,44100),(96000,48000)):
+            track=next(t for t in tracks if t.get('url','').endswith(f'hires-{source_rate}.flac'))
+            starts=len(packets('STMs'));cli('playlistcontrol cmd:load track_id:'+track['id'],mac)
+            wait(lambda:len(packets('STMs'))>starts,20,'high-rate resampled start')
+            resource=items()[0]['resource']
+            assert resource['sampleFrequency']==str(target_rate) and resource['bitsPerSample']=='24',resource
+            assert f'decimation source={source_rate} target={target_rate}' in (base/'bridge.log').read_text()
+            print(f'PASS real LMS core decimation: native {source_rate} Hz -> {target_rate} Hz, 24-bit, PLAYING',flush=True)
+            cli('stop',mac)
+    for (kind,rate),source_pcm in native_sources.items():
+        selected=[t for t in tracks if f'native-{kind}-{rate}-' in t['url']]
+        assert len(selected)==4,selected
         cli('stop',mac)
+        adds_before=len(sonos.actions('AddURIToQueue'));issued=time.monotonic()
+        cli('playlistcontrol cmd:load track_id:'+','.join(t['id'] for t in selected),mac)
+        start_count=len(packets('STMs'))
+        wait(lambda:len(sonos.actions('AddURIToQueue'))>adds_before and items() and items()[0]['metadata']['album']==(f'Native {kind} {rate}' if kind=='flac' else 'No Album'),3,'native first exact publication')
+        first_add=sonos.actions('AddURIToQueue')[-1][3]
+        request=next(r for r in tap.records if r.get('command')=='s' and r['when']>=issued)
+        assert first_add-request['when']<=3,(kind,rate,'slow publication')
+        early_disc=[r for r in tap.records if r['op']=='DSCO' and request['when']<r['when']<first_add]
+        assert not early_disc,(kind,rate,'published only after DSCO')
+        collected=[]
+        for index in range(4):
+            wait(lambda:len(items())>index,10,'native prepared successor')
+            if index:select_item(index)
+            wait(lambda:int(cli('playlist index ?',mac)[-1])==index,3,'native LMS identity')
+            resource=items()[index]['resource']
+            target=44100 if rate==88200 else 48000
+            assert int(resource['sampleFrequency'])==target and resource['bitsPerSample']=='24',resource
+            import http.client
+            from urllib.parse import urlsplit
+            u=urlsplit(items()[index]['uri']);c=http.client.HTTPConnection(u.netloc,timeout=8)
+            c.request('GET',u.path+'?'+u.query);response=c.getresponse();body=response.read();c.close()
+            expected_frames=rate*4//(rate//target)
+            assert len(body)==44+expected_frames*6 and int(resource['size'])==len(body),(len(body),resource)
+            collected.append(body[44:])
+        raw=(source_pcm.astype(np.int64)*256).astype('<i4');raw.tofile(base/'native-reference.raw')
+        result=subprocess.check_output([str(ROOT/'third_party/yeney-core/decimator-fixture'),str(rate),str(base/'native-reference.raw'),str(base/'native-reference-out.raw')],text=True)
+        expected=np.fromfile(base/'native-reference-out.raw',dtype='<i4').reshape(-1,2).astype(np.int64)
+        expected=np.clip(np.where(expected>=0,(expected+128)//256,-((-expected+128)//256)),-2**23,2**23-1).astype('<i4')
+        assert b''.join(collected)==raw24(expected),(kind,rate,'PCM discontinuity at join')
+        before=len(packets('STMs'));seek_adds=len(sonos.actions('AddURIToQueue'));seek_start=time.monotonic();cli('time 2',mac)
+        wait(lambda:len(packets('STMs'))>before,3,'native hi-res seek restart')
+        seek_add=sonos.actions('AddURIToQueue')[-1][3]
+        seek_request=next(r for r in tap.records if r.get('command')=='s' and r['when']>=seek_start)
+        # Short seek payloads may finish during the SOAP takeover; exact
+        # source count is available before the boundary, independently of EOF.
+        if kind=='flac':
+            assert 'exact remaining=' in (base/'bridge.log').read_text().split('queue command strm s')[-1]
+        assert 1.8 <= (int(items()[0]['resource']['size'])-44)/6/target <= 2.2,items()[0]['resource']
+        print(f'PASS real LMS native {kind} album {rate} -> {target}: first publication {first_add-request["when"]:.3f} s before DSCO, exact WAV sizes, three PCM-continuous joins, matching LMS index; seek {time.monotonic()-seek_start:.3f} s',flush=True)
+        cli('stop',mac)
+    unknown_track=next(t for t in tracks if t['url'].endswith('unknown-96000.flac'))
+    cli('stop',mac);before_add=len(sonos.actions('AddURIToQueue'));issued=time.monotonic()
+    cli('playlistcontrol cmd:load track_id:'+unknown_track['id'],mac)
+    wait(lambda:len(sonos.actions('AddURIToQueue'))>before_add,15,'unknown-count sealed item')
+    when=sonos.actions('AddURIToQueue')[-1][3]
+    assert any(r['op']=='DSCO' and issued<r['when']<when for r in tap.records),'unknown count published before EOF'
+    cli('stop',mac)
+    print('PASS real LMS unknown STREAMINFO count: sealed publication remains after DSCO, exact produced length',flush=True)
     assert 'Stream pacing:' not in (base/'bridge.log').read_text(),'relay emitted stream pacing diagnostics'
     print('PASS real LMS local relay: no stream-pacing lines during album and controls',flush=True)
     def playback():
@@ -354,7 +430,8 @@ try:
     remote=Remote(remote_path.read_bytes())
     mp3=Remote((ROOT/'third_party/yeney-core/tests/fixtures/gapless-0.mp3').read_bytes(),kind='mp3')
     endless=Remote((ROOT/'third_party/yeney-core/tests/fixtures/gapless-0.mp3').read_bytes(),kind='mp3',endless=True)
-    extra_remotes.extend([mp3,endless])
+    remote96=Remote((base/'library/hires-96000.flac').read_bytes())
+    extra_remotes.extend([mp3,endless,remote96])
     def stage(urls):
         cli('stop',mac);cli('playlist clear',mac)
         for url in urls:cli('playlist add '+url,mac)
@@ -376,6 +453,10 @@ try:
         assert playback()['reason']=='remote-source' and not playback()['owned'],playback()
         print(f'PASS real LMS remote {label}: remote:1, stream path, audio start {delay:.3f} s (<3 s), title/artwork path, no queue mutation',flush=True)
     remote_start(remote,'HTTP FLAC')
+    remote_start(remote96,'HTTP 96000 Hz FLAC')
+    header=getattr(sonos,'stream_audio',b'')
+    assert header[:4]==b'fLaC' and int.from_bytes(header[18:26],'big')>>44==48000,header[:40]
+    print('PASS real LMS remote native 96000 -> stream 48000 Hz FLAC, 24-bit, progressive start unchanged',flush=True)
     remote_start(mp3,'HTTP MP3')
     remote_start(endless,'endless HTTP MP3')
     time.sleep(4)
@@ -404,7 +485,7 @@ try:
     assert 'path-handoff path=stream gap_ms=' in text and 'path-handoff path=relay gap_ms=' in text
     assert sum(r['op']=='HELO' for r in tap.records)==1
     mutations=[r['request'] for r in proxy.records if not (' status ' in r['request'] or r['request'].endswith(' ?'))]
-    assert mutations==[mac+' pause 1',mac+' pause 0',mac+' stop'],mutations
+    assert mutations==([] if hires_only else [mac+' pause 1',mac+' pause 0',mac+' stop']),mutations
     gaps=re.findall(r'path-handoff path=(relay|stream) gap_ms=(\d+)',text)
     print('PASS real LMS source boundaries: local -> remote -> local, preserved prior path until end, matching indexes 0/1/2, measured gaps '+repr(gaps)+', no CLI mutation or extra HELO',flush=True)
 
