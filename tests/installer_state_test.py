@@ -1,5 +1,7 @@
 """Safe state paths and upgrade tests; no live services or endpoints."""
 import io
+import hashlib
+from unittest.mock import patch
 import os
 from pathlib import Path
 import subprocess
@@ -117,6 +119,35 @@ class StateTests(unittest.TestCase):
                 self.assertFalse((config/'unit-update-pending').exists())
                 runner.calls.clear(); apply(); self.assertFalse(runner.actions())
         print('PASS installer changed binary/template/drop-in restarts every running room; reload before restart; unchanged install keeps rooms')
+
+    def test_binary_bytes_and_failed_unit_restart_are_retried(self):
+        with tempfile.TemporaryDirectory(prefix='yeney-state-') as tmp:
+            base = Path(tmp); config = base/'config'; units = base/'units'; binary = base/'binary'
+            config.mkdir(); (config/'config').write_text('LMS_SERVER=host\nroom.Study=yes\nroom.MBR=yes\n')
+            binary.write_bytes(b'first binary')
+            runner = Commands('Study\nMBR\n')
+            runner.active = {'yeney@Study.service', 'yeney@MBR.service'}; runner.enabled = set(runner.active)
+            def identity(*_): return 'same-commit', 'commit=same\nsha256='+hashlib.sha256(binary.read_bytes()).hexdigest()+'\n'
+            def apply(run=runner):
+                installer.install(ROOT, config, units, [], run, io.StringIO(), io.StringIO(),
+                                  lms_check=mock_lms, state_root=base/'state')
+            with patch.object(installer, 'build_identity', identity):
+                apply(); runner.calls.clear(); binary.write_bytes(b'rebuilt binary at same commit')
+                apply()
+                self.assertEqual(len([a for a in runner.actions() if a[1]=='restart']), 2)
+                previous = (config/'installed-build').read_bytes()
+                (units/'yeney@.service').write_text('# stale unit\n')
+                def fail(args, **kwargs):
+                    if args[:2] == ['systemctl', 'restart']: raise subprocess.CalledProcessError(1, args)
+                    return runner(args, **kwargs)
+                with self.assertRaises(subprocess.CalledProcessError): apply(fail)
+                self.assertTrue((config/'unit-update-pending').exists())
+                self.assertEqual((config/'installed-build').read_bytes(), previous)
+                runner.calls.clear(); apply()
+                self.assertEqual(len([a for a in runner.actions() if a[1]=='restart']), 2)
+                self.assertFalse((config/'unit-update-pending').exists())
+                runner.calls.clear(); apply(); self.assertFalse(runner.actions())
+        print('PASS installer rebuilt binary at same commit restarts all rooms; failed managed-unit restart retries on next install')
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
