@@ -131,3 +131,18 @@ verbatim at the bridge tag): `queue_app_control_test.py`,
 `queue_guard_stream_test.py`, `queue_lms_client_fixture.cpp`,
 `queue_lms_client_test.py`, `queue_lms_control_test.py`, `queue_mode_test.py`,
 `room_mode_test.cpp`, and `queue_device_ws_test.py`, all under `tests/`.
+
+## Additional owner request — 23 October 2026
+
+**FLAC queue items (instead of WAV)**: WAV is used because its exact size is
+known up front, Range seeking is trivial and starts take about 1.3 s. An earlier
+headerless-FLAC attempt took 9 s to start. FLAC would roughly halve network
+traffic (35–45 MB instead of about 70 MB per track). Open points are exact
+length or seek tables and progressive serving before the whole track is
+encoded. This is a future transport experiment, separate from the ordered
+feature rebuild; retain the finite WAV relay as the acceptance baseline.
+
+On 23 October the relay gained the unambiguous subset of step 3: confirmed
+external stop/source change and pause/resume, with own-command suppression and
+a reason-checked LMS CLI choke point. Next/previous, seeks, ambiguous-intent
+handling and the advanced asynchronous CLI/outage machinery remain parked.
