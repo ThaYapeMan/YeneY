@@ -89,3 +89,6 @@ field-cold-test
 /room-status-test
 
 /queue-source-test
+
+/lms-icon-test
+/lms-icon-connection-test

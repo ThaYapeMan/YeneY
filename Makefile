@@ -22,7 +22,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f queue-source-test room-status-test xml-sanitize-test queue-lms-client-test yeney-queue-acceptance queue-mode-fixture room-mode-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test queue-lms-client-test yeney-queue-acceptance queue-mode-fixture room-mode-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -39,6 +39,7 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
 # Preserve the legacy wire fixtures explicitly; settings tests also exercise the unset default.
+test: export YENEY_LMS_ICON =
 test: export YENEY_STREAM_PACING = wall
 test: export YENEY_PLAYBACK_MODE = stream
 test: export YENEY_START_LEAD_MS = 0
@@ -110,6 +111,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/title_format_setting_test.py
 	python3 tests/stream_content_setting_test.py
 	python3 tests/list_rooms_test.py
+	python3 tests/lms_icon_test.py
 	python3 tests/installer_test.py
 	python3 tests/migration_test.py
 	python3 tests/upnp_mock_test.py
@@ -393,3 +395,13 @@ queue-source-test: tests/queue_source_test.cpp queue_source.h lms_artwork.h
 test: queue-source-test
 
 queue_room.o: queue_path_sink.h queue_source.h core_sonos.h
+
+core_sonos.o queue_room.o: lms_icon.h queue_lms_cli.h
+
+lms-icon-test: tests/lms_icon_fixture.cpp lms_icon.h queue_lms_cli.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
+
+lms-icon-connection-test: tests/lms_icon_connection.cpp $(CORE_LIB)
+	g++ -std=c++17 -O2 -Wall -Wextra -Ithird_party/yeney-core -pthread -o $@ $< $(CORE_LIB) -lFLAC
+
+test: lms-icon-test lms-icon-connection-test
