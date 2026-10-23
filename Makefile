@@ -31,7 +31,10 @@ install: yeney yeney-queue-dryrun
 	install -m 0755 scripts/yeney-queue-suite /usr/local/bin/yeney-queue-suite
 	install -m 0755 scripts/yeney-stream-pacing-suite /usr/local/bin/yeney-stream-pacing-suite
 	install -m 0755 scripts/yeney-queue-device-suite /usr/local/bin/yeney-queue-device-suite
-	scripts/install-devices.sh
+	install -d -m 0755 /usr/local/share/yeney
+	install -m 0644 assets/sonos.svg /usr/local/share/yeney/sonos.svg
+	install -m 0755 scripts/yeney-install-lms-icon /usr/local/bin/yeney-install-lms-icon
+	scripts/install-devices.sh $(if $(LMS_PREFS_DIR),--lms-prefs-dir="$(LMS_PREFS_DIR)")
 encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h tests/encoder_test.cpp sbencoder.cpp sbencoder.h
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 

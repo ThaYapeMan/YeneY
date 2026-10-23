@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Install only YeneY's bundled Material icon, locally on the LMS host."""
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import tempfile
+
+
+def replace(path, data, mode=0o644):
+    fd, temporary = tempfile.mkstemp(prefix='.yeney-icon-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'wb') as out:
+            out.write(data); out.flush(); os.fsync(out.fileno()); os.fchmod(out.fileno(), mode)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def install_asset(prefs, asset, output=print):
+    prefs, asset = Path(prefs), Path(asset)
+    if not prefs.is_absolute() or not prefs.is_dir():
+        raise ValueError('LMS preferences directory must be an explicit existing absolute directory')
+    data = asset.read_bytes()
+    images = prefs / 'material-skin' / 'images'
+    target, state = images / 'sonos.svg', images / '.yeney-sonos-svg.json'
+    if any(p.is_symlink() for p in (prefs / 'material-skin', images, target, state, images / '.yeney-icon.lock')):
+        raise ValueError('Icon installation conflict: symlink in destination; owner files preserved')
+    for directory in (prefs / 'material-skin', images):
+        if not directory.exists():
+            directory.mkdir(mode=0o755); directory.chmod(0o755)
+    with (images / '.yeney-icon.lock').open('a') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        old = target.read_bytes() if target.exists() else None
+        digest = lambda value: hashlib.sha256(value).hexdigest()
+        managed = False
+        if state.exists():
+            try:
+                saved = json.loads(state.read_text())
+                managed = saved.get('installer') == 'yeney' and old is not None and saved.get('sha256') == digest(old)
+            except (ValueError, AttributeError):
+                pass
+        if old == data:
+            output('Material icon already present: ' + str(target))
+            return  # Do not claim an owner copy merely because it is identical.
+        if old is not None and not managed:
+            raise ValueError('Icon installation conflict: owner-managed ' + str(target) + ' preserved')
+        replace(target, data)
+        replace(state, (json.dumps(dict(installer='yeney', sha256=digest(data)))+'\n').encode())
+        output('Installed bundled Material icon: ' + str(target))
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--lms-prefs-dir', required=True, type=Path)
+    args = parser.parse_args()
+    base = Path(__file__).resolve().parents[1]
+    asset = base / 'assets' / 'sonos.svg'
+    if not asset.is_file():
+        asset = base / 'share' / 'yeney' / 'sonos.svg'
+    try:
+        install_asset(args.lms_prefs_dir, asset)
+    except (OSError, ValueError) as error:
+        parser.exit(1, 'Error: '+str(error)+'\n')
+
+
+if __name__ == '__main__':
+    main()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Config-driven service installation. Tests inject paths and a command runner."""
 from pathlib import Path
+import runpy
 import difflib
 import hashlib
 import queue
@@ -342,6 +343,21 @@ def check_lms(host, rooms, timeout=15, connect=socket.create_connection):
 
 def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.stdout, errors=sys.stderr,
             input_stream=sys.stdin, lms_check=check_lms):
+    prefs_options = [a.split('=', 1)[1] for a in args if a.startswith('--lms-prefs-dir=')]
+    if len(prefs_options) > 1:
+        raise ValueError('Specify --lms-prefs-dir only once')
+    args = [a for a in args if not a.startswith('--lms-prefs-dir=')]
+    prefs_record = config_dir / 'lms-prefs-dir'
+    prefs = prefs_options[0] if prefs_options else read_text(prefs_record).strip()
+    if prefs:
+        runpy.run_path(str(repo / 'scripts/yeney-install-lms-icon'))['install_asset'](
+            Path(prefs), repo / 'assets/sonos.svg', lambda text: print(text, file=output))
+        config_dir.mkdir(parents=True, exist_ok=True)
+        atomic_write(prefs_record, prefs + '\n')
+    else:
+        print('Material icon not installed: LMS prefs directory not configured. '
+              'Use make install LMS_PREFS_DIR=/absolute/prefs/path, or run '
+              '/usr/local/bin/yeney-install-lms-icon --lms-prefs-dir /absolute/prefs/path on the LMS host.', file=output)
     server, enabled, non_interactive = arguments(args)
     explicit = set(enabled)
     interactive = input_stream.isatty() and output.isatty() and not non_interactive
