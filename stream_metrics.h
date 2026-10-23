@@ -15,6 +15,12 @@ inline uint64_t streamMonoMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+inline bool streamPathActive() {
+    const auto *room = roomMode();
+    if (!room) return true;
+    const auto mode = room->status();
+    return mode.active != "queue" || mode.path == "stream";
+}
 struct StreamMeasurement { double encodedMs = 0, audibleMs = 0; bool valid = false; uint64_t connection = 0; bool locked = false; };
 // One room per process. Totals survive reconnects and stream changes; a pid
 // identifies restarts. No measurement influences admission or transport.
@@ -39,6 +45,7 @@ public:
         std::lock_guard<std::mutex> lock(mutex); provider = std::move(p);
     }
     StreamMeasurement sample() {
+        if (!streamPathActive()) return {};
         std::function<StreamMeasurement()> p;
         { std::lock_guard<std::mutex> lock(mutex); p = provider; }
         return p ? p() : StreamMeasurement{};
@@ -46,9 +53,10 @@ public:
     void socketWait(uint64_t us) {
         // A blocking send's residence time, excluding sub-millisecond syscall
         // overhead. Includes a timed-out send; does not change socket behavior.
-        if (us >= 1000) { socketBlockedUs += us; ++socketBlockedCalls; }
+        if (streamPathActive() && us >= 1000) { socketBlockedUs += us; ++socketBlockedCalls; }
     }
     void print(const StreamMeasurement &s) {
+        if (!streamPathActive()) return;
         printf("Stream pacing: mode=%s start_lead_ms=%u overwrites=%llu dropped=%llu socket_backpressure_ms=%.3f encoded_ms=%.3f audible_ms=%.3f lead_ms=%.3f valid=%d\n",
             streamPacingSonos() ? "sonos" : "wall", yeney_start_lead_ms(),
             (unsigned long long)overwrites.load(), (unsigned long long)dropped.load(),
@@ -80,7 +88,7 @@ public:
                 unlink(temporary.c_str());
             }
         }
-        if (now-lastLog < 60000 || (!overwrites && !dropped && !socketBlockedUs && (!s.valid || s.encodedMs == s.audibleMs))) return false;
+        if (!streamPathActive() || now-lastLog < 60000 || (!overwrites && !dropped && !socketBlockedUs && (!s.valid || s.encodedMs == s.audibleMs))) return false;
         lastLog = now;
         printf("yeney: stream-pacing room_hex=%s reason=%s ", roomHex.c_str(), dropped ? "reader-stalled" : "sample"); print(s);
         return true;
