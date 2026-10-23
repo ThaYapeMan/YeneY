@@ -330,8 +330,8 @@ void CoreQueueSink::finish(const yeney::ItemBoundary &b) {
             tail = it->second;
     }
     if (r.item) {
-        if (!r.fault.empty())
-            r.item->cancel(r.fault); // Expected source fault, not a broken storage worker.
+        if (!r.fault.empty() && r.promised && r.item->producedFrames() != *r.promised)
+            r.item->cancel(r.fault); // An unfulfillable promise is not a storage-worker failure.
         else
             r.item->finish();
     }

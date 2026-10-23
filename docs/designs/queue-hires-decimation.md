@@ -97,8 +97,9 @@ missing duration, without adding an extra filter delay or join gap.
 This repair is exceptional: correct edit/gapless metadata and accurate final
 packet timing avoid padding entirely. CRC failures and malformed packet errors
 are not relabelled as harmless count discrepancies. Empty sources and larger
-shortfalls remain faults. Already-marked source faults cancel their incomplete
-assets rather than poisoning the storage worker during finalization; the relay
+shortfalls remain faults. A known, unfulfillable promise on an already-marked source fault cancels its
+incomplete asset rather than poisoning the storage worker during finalization.
+An unknown-length fault retains its rendered prefix for draining. The relay
 stops/releases and reports one STMn. Late deferred fault bookkeeping is retired
 when the relay reports the failure.
 
