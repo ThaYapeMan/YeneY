@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_queue_sink.h"
 #include "queue_report.h"
+#include <algorithm>
 #include <cassert>
 #include <fcntl.h>
 #include <future>
@@ -412,6 +413,31 @@ int main() {
         assert(sink.takeQueueFailure() && !sink.takeQueueFailure());
         std::cout << "PASS relay delivery gate: STMd waits for all promised storage frames; renderer failure "
                      "consumed once\n";
+    }
+    {
+        CoreQueueSink sink("CancelledJob", c, 1);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 100, 0, 0});
+        sink.trackBoundary(0, {8000, 16, 2, false}, false);
+        std::vector<yeney::Frame> pcm(100, {65536, -65536});
+        assert(sink.write(pcm.data(), 50, false) == 50);
+        sink.waitIdle();
+        sink.snapshot().front().item->cancel("queue flushed");
+        sink.resolvedItemBoundary({1, 0, 50, 0, "no-transition"});
+        sink.waitIdle(); // A cancelled old finish must not become workerFault.
+        sink.flush();
+        sink.coreEvent("strm", 2, 0);
+        sink.trackDescriptor({2, 8000, 100, 0, 0});
+        sink.trackBoundary(50, {8000, 16, 2, false}, false);
+        sink.waitIdle();
+        assert(sink.write(pcm.data(), 100, false) == 100);
+        sink.waitIdle();
+        auto records = sink.snapshot();
+        auto replacement = std::find_if(records.begin(), records.end(),
+                                        [](const auto &r) { return r.source.occurrence == 2; });
+        assert(replacement != records.end() && replacement->actual == 100 && replacement->fault.empty());
+        std::cout << "PASS cancelled queue job: stale finish cannot poison worker; replacement producer "
+                     "writes all frames\n";
     }
     std::filesystem::remove_all(root);
 }

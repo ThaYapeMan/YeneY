@@ -290,6 +290,7 @@ try:
     cli('playlistcontrol cmd:add track_id:'+ids[0],mac)
     cli('playlist delete 4',mac)
     time.sleep(1.2)
+    assert 'relay fault=queue flushed' not in (base/'bridge.log').read_text(),'LMS cancellation reported as renderer failure'
     identity(0 if controls_only else 3)
     stops=len(sonos.actions('Stop'))
     cli('stop',mac);wait(lambda:sonos.transport_state=='STOPPED' and len(sonos.actions('Stop'))>stops)

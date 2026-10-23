@@ -435,7 +435,7 @@ void Item::finish() {
 void Item::cancel(const std::string &reason) {
     std::lock_guard<std::mutex> lock(store->mutex);
     if (!state->fault)
-        store->fail(*state, std::make_exception_ptr(std::runtime_error(reason)));
+        store->fail(*state, std::make_exception_ptr(ItemCancelled(reason)));
 }
 Reader Item::reader(uint64_t pos) const { return Reader(store, state, pos); }
 Reader::Reader(std::shared_ptr<StoreState> s, std::shared_ptr<ItemState> i, uint64_t pos)

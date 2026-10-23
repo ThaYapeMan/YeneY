@@ -32,7 +32,7 @@ it is not a playback generation and never causes a capability announcement.
 | Current item fully produced | None | STMd in a later core round than STMs; local successors may be requested early |
 | Remote item fully produced, audible remaining < configured delay | None | STMd; next service connection is not left idle for the full item |
 | LMS `strm p` / `strm u` | Pause / Play (resume only when paused) | Speaker-confirmed STMp/STMr, PAUSED/PLAYING |
-| Speaker STOPPED on final owned item | Feed confirmed final state to core | STMu once, STOPPED |
+| Speaker STOPPED at the natural end of the final owned item | Feed confirmed final state to core | STMu once, STOPPED |
 | LMS seek (q+s with LMS source offset) | Same as a fresh play; no independent CLI/REL_TIME interpretation | New rendered stream, then confirmed STMs |
 | SOAP or asset failure | Log fault; Stop; remove exact owned items; restore crossfade | One renderer-rejection STMn, STOPPED; no stream fallback/retry loop |
 | External stop/source change, outside the 3 s own-command window, before the final 2 s | Release exact owned items without Stop or URI switch | One raw-MAC LMS stop, STOPPED |
@@ -185,3 +185,10 @@ A q without a paired s is honoured after 250 ms; a changed LMS selection is
 rendered normally. The gate sends no additional CLI commands and creates no
 epochs, generations or rearm cycle. A confirmed foreign transport source takes
 precedence over an error report, so error cleanup cannot Stop that source.
+
+Intentional finite-item cancellation has a distinct exception type. Stale
+worker jobs for cancelled items are discarded without poisoning the next
+producer; genuine storage and length faults retain their existing handling.
+A confirmed foreign source blocks transport commands and future appends during
+the echo window as well as after release. Source switches, forced stops and
+external resume are also recognised after an LMS-originated pause.

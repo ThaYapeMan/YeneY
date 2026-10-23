@@ -20,6 +20,9 @@ struct Descriptor {
 struct PublicationSuperseded : std::runtime_error {
     PublicationSuperseded() : std::runtime_error("pending item superseded by publication") {}
 };
+struct ItemCancelled : std::runtime_error {
+    using std::runtime_error::runtime_error;
+};
 struct LengthFault : std::runtime_error {
     const uint64_t expected, actual;
     LengthFault(uint64_t expected, uint64_t actual);

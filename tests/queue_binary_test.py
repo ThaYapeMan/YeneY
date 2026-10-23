@@ -356,14 +356,20 @@ def polling():
     finally:h.close()
 
 def external_actions():
-    for kind in ('port-stop','source','source-error','pause','pause-restart','pause-restart-changed'):
+    for kind in ('port-stop','source','source-error','source-error-guard','source-paused','resume-after-lms-pause','stop-after-lms-pause','pause','pause-restart','pause-restart-changed'):
         h=Binary(rates=(44100,),seconds=274 if kind=='port-stop' else 24,resume_restart=kind.startswith('pause-restart'),resume_changed=kind.endswith('-changed'))
         try:
             h.state(1)
             h.until(lambda:len(h.packets('STMs'))==1)
             h.state(1,122 if kind=='port-stop' else 5)
-            time.sleep(3.4)
-            if kind.startswith('pause'):
+            if kind in ('source-paused','resume-after-lms-pause','stop-after-lms-pause'):
+                h.lms.strm('p');h.until(lambda:len(h.packets('STMp'))==1)
+                assert all(c.startswith('status ') for c in h.commands),h.commands
+            if kind != 'source-error-guard':time.sleep(3.4)
+            if kind=='resume-after-lms-pause':
+                h.state(1,5,'PLAYING');h.until(lambda:h.commands.count('pause 0')==1)
+                assert h.commands.count('pause 1')==0,h.commands
+            elif kind.startswith('pause'):
                 h.state(1,5,'PAUSED_PLAYBACK')
                 h.until(lambda:h.commands.count('pause 1')==1)
                 h.state(1,5,'PLAYING')
@@ -386,8 +392,12 @@ def external_actions():
                     h.sonos.transport_state='PLAYING' if kind.startswith('source') else 'STOPPED'
                     if kind.startswith('source'):
                         h.sonos.uri='http://new-service.invalid/music'
-                        if kind=='source-error':h.sonos.transport_status='ERROR_UNSUPPORTED_FREQ'
-                h.until(lambda:h.commands.count('stop')==1 and not h.items(),3)
+                        if kind.startswith('source-error'):h.sonos.transport_status='ERROR_UNSUPPORTED_FREQ'
+                if kind=='source-error-guard':
+                    time.sleep(.3)
+                    h.lms.strm('p');time.sleep(.2);h.lms.strm('u')
+                    assert len(h.sonos.actions('Pause'))==0 and len(h.sonos.actions('Play'))==1
+                h.until(lambda:h.commands.count('stop')==1 and not h.items(),4 if kind=='source-error-guard' else 3)
                 time.sleep(.7)
                 assert h.commands.count('stop')==1 and len(h.sonos.actions('Stop'))==stops,h.commands
                 status=json.loads((h.base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
@@ -411,6 +421,20 @@ def natural_empty_end():
         print('PASS natural final end with empty URI: STMu once, no LMS stop mutation')
     finally:h.close()
 
+def lms_flush_before_item():
+    h=Binary(rates=(44100,),slow=True,initial_stop=True)
+    try:
+        time.sleep(.2)
+        h.lms.strm('f')
+        source=HTTP(h.bodies[0]);h.sources.append(source)
+        h.lms.strm('s',source,fmt='f',rate=44100)
+        h.until(lambda:len(h.packets('STMs'))==1)
+        assert not h.packets('STMn') and len(h.sonos.actions('Play'))==1
+        assert 'relay fault=queue flushed' not in (h.base/'bridge.log').read_text()
+        assert all(c.startswith('status ') for c in h.commands),h.commands
+        print('PASS LMS flush before item: cancelled decoder is not a renderer fault, replacement plays once, no CLI echo')
+    finally:h.close()
+
 def soap_fault():
     h=Binary(rates=(44100,),fail_add=True)
     try:
@@ -425,4 +449,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end()
+    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item()

@@ -66,8 +66,8 @@ struct QueueRoom::Impl {
     queue_audio::PlaylistReader reader;
     std::string state = "STOPPED", fault, transportStatus;
     std::chrono::steady_clock::time_point playAt{};
-    bool waitingForPlay = false, externalPaused = false;
-    bool externalReleased = false, stopAcknowledged = false;
+    bool waitingForPlay = false;
+    bool externalReleased = false, stopAcknowledged = false, sourceAway = false;
     std::atomic<int64_t> resumeEchoUntil{0};
     std::atomic_bool resumeFlush{false};
     std::chrono::steady_clock::time_point deferredStop{};
@@ -111,7 +111,7 @@ struct QueueRoom::Impl {
         resumeEchoUntil = 0;
         resumeFlush = false;
         deferredStop = {};
-        externalPaused = false;
+
         externalReleased = true;
         stopAcknowledged = false;
         firstStream = queue.latestOccurrence() + 1;
@@ -160,10 +160,20 @@ struct QueueRoom::Impl {
           speaker(std::move(s)), queue(room.name, queue_audio::Config::environment(), 60),
           route(room.name, session), coordinator(room, logQueue),
           actions([this](const auto &name, const auto &args) {
+              if (sourceAway && (name == "Stop" || name == "Play" || name == "Pause" || name == "Seek")) {
+                  logQueue(name + " skipped: confirmed transport source is not the room queue");
+                  upnp::SoapResult result;
+                  result.ok = true;
+                  return result;
+              }
               if (name == "Play" || name == "Pause" || name == "Stop" || name == "Seek" ||
                   name == "SetAVTransportURI")
                   ownUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-              return releasing ? coordinator.releaseTransport(name, args) : coordinator.transport(name, args);
+              auto result =
+                  releasing ? coordinator.releaseTransport(name, args) : coordinator.transport(name, args);
+              if (name == "SetAVTransportURI" && result.ok)
+                  sourceAway = false;
+              return result;
           }),
           ownership(ownershipIO(), session) {
         auto colon = host.find(':');
@@ -292,7 +302,7 @@ struct QueueRoom::Impl {
             if (externalReleased)
                 stopAcknowledged = true;
             expectedState = "STOPPED";
-            externalPaused = false;
+
             firstStream = next;
             if (ownership.active() && !externalReleased)
                 actions.stop();
@@ -317,17 +327,19 @@ struct QueueRoom::Impl {
             expectedState = "PAUSED";
             if (state != "PAUSED")
                 actions.pause();
-        } else if (c == 'u' && started && state == "PAUSED") {
+        } else if (c == 'u' && started) {
             expectedState = "PLAYING";
-            externalPaused = false;
-            actions.play();
-            playAt = std::chrono::steady_clock::now();
-            waitingForPlay = true;
-            fastPoll();
+
+            if (state == "PAUSED" && !sourceAway) {
+                actions.play();
+                playAt = std::chrono::steady_clock::now();
+                waitingForPlay = true;
+                fastPoll();
+            }
         }
     }
     void append() {
-        if (faulted || externalReleased)
+        if (faulted || externalReleased || (started && sourceAway))
             return;
         for (const auto &record : queue.snapshot()) {
             if (record.source.occurrence < firstStream || record.source.occurrence > UINT64_MAX / 2)
@@ -410,7 +422,7 @@ struct QueueRoom::Impl {
                 actions.selectQueue(room.uuid);
                 actions.seekTrack(1);
                 expectedState = "PLAYING";
-                externalPaused = false;
+
                 actions.play();
                 playAt = std::chrono::steady_clock::now();
                 waitingForPlay = true;
@@ -450,10 +462,12 @@ struct QueueRoom::Impl {
         }
         auto it = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; });
         const auto avUri = media.value("CurrentURI");
-        if (now >= ownUntil && !waitingForPlay && expectedState == "PLAYING" && !avUri.empty() &&
-            avUri != "x-rincon-queue:" + room.uuid + "#0") {
-            externalStop("speaker-source-change");
-            return; // A fault on another source is not ours to stop.
+        if (media.child("CurrentURI"))
+            sourceAway = !avUri.empty() && avUri != "x-rincon-queue:" + room.uuid + "#0";
+        if (sourceAway) {
+            if (now >= ownUntil && !waitingForPlay)
+                externalStop("speaker-source-change");
+            return; // Neither an error nor the echo guard authorises stopping a foreign source.
         }
         if (!reportedStatus.empty() && reportedStatus != "OK")
             throw std::runtime_error("playback-fault action=Play uri=" + uri +
@@ -480,18 +494,18 @@ struct QueueRoom::Impl {
                                    (!source.empty() || !nearEnd);
         const bool missingItem = it == items.end();
         const bool unsolicited = now >= ownUntil && !waitingForPlay;
-        if (unsolicited && (expectedState == "PLAYING" || externalPaused) &&
+        if (unsolicited && expectedState != "STOPPED" &&
             (sourceChanged || (!nearEnd && (transport == "STOPPED" || missingItem)))) {
             externalStop(sourceChanged ? "speaker-source-change" : "speaker-stop");
             return;
         }
         std::string mutation;
         if (unsolicited && expectedState == "PLAYING" && transport == "PAUSED_PLAYBACK") {
-            externalPaused = true;
+
             expectedState = "PAUSED";
             mutation = "pause 1";
-        } else if (unsolicited && externalPaused && transport == "PLAYING" && !missingItem) {
-            externalPaused = false;
+        } else if (unsolicited && expectedState == "PAUSED" && transport == "PLAYING" && !missingItem) {
+
             expectedState = "PLAYING";
             mutation = "pause 0";
         }

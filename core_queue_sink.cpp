@@ -46,6 +46,9 @@ void CoreQueueSink::work() {
         }
         try {
             job.run();
+        } catch (const ItemCancelled &) {
+            // A queued job may still reference an item retired by LMS flush.
+            // Drop that job; cancellation must not poison the next producer.
         } catch (const std::exception &e) {
             std::lock_guard<std::mutex> lock(mutex);
             workerFault = e.what();
