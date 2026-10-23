@@ -135,6 +135,10 @@ class QueueClient(socketserver.StreamRequestHandler):
                     record += podcast+' '+fields(title=f'Title & {i}', artist='Artist <one>',
                                                   album='Album & fixture')+' '
                 self.wfile.write((line+' '+record+'\n').encode())
+            elif getattr(self.server, 'tearing_down', False) and command == 'pause 1':
+                # Stream shutdown may be observed as a renderer pause while the
+                # process is still exiting. Only teardown permits this echo.
+                self.wfile.write((line+'\n').encode())
             else:
                 raise AssertionError('unexpected queue CLI command: '+line)
             self.wfile.flush()
@@ -160,6 +164,9 @@ try:
     assert not queue.sonos.actions('AddURIToQueue') and not queue.sonos.actions('SaveQueue')
 
 finally:
-    (Path('/tmp')/'yeney-source-artwork-queue-bridge.log').write_text((queue.base/'bridge.log').read_text())
-    queue.close()
+    queue.cli.tearing_down = True
+    try:
+        queue.close()
+    finally:
+        (Path('/tmp')/'yeney-source-artwork-queue-bridge.log').write_text((queue.base/'bridge.log').read_text())
 print('PASS queue-configured remote artwork (real yeney/CLI/SOAP): podcast streams immediately with proxy URL, no finite enqueue or queue backup', flush=True)
