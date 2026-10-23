@@ -528,12 +528,15 @@ default; `YENEY_LMS_POSITION_FROM_MODEL=0` restores RelTime-only reporting. With
 LampaStream can read the opt-in SHM timing contract; inspect it with
 `scripts/yeney-timing-read <mac>`.
 
-Queue audio is 24-bit with a 48 kHz speaker cap (44.1 kHz in legacy
-`YENEY_AUDIO=16/44`). LMS performs high-quality SoX downsampling before
-delivery: 88.2/176.4 kHz sources use 44.1 kHz and 96/192 kHz sources use
-48 kHz in modern mode, preserving rate families and integer ratios. The
-stream sink already advertises the same cap and is unchanged. Legacy mode
-limits both families to 44.1 kHz. Above-cap input and speaker playback errors
+Queue audio is 24-bit with a 48 kHz speaker cap. Modern queue-configured
+rooms advertise 192 kHz and yeney-core converts native local FLAC/ALAC with
+an integer-ratio linear-phase FIR: 88.2/176.4 kHz → 44.1 kHz and 96/192 kHz
+→ 48 kHz. Exact source counts give exact WAV lengths immediately, without
+waiting for LMS/SoX to finish a conversion. Remote sources use the stream
+path and the same conversion when necessary. Rates at or below 48 kHz pass
+through unchanged. Ordinary stream-mode rooms retain LMS/SoX conversion
+and their 48 kHz advertisement. Legacy `YENEY_AUDIO=16/44` retains the
+44.1 kHz advertisement and LMS conversion. Unsupported rate families and speaker errors
 stop/release queue playback and report failure to LMS. Queue diagnostics expose
 `rendered_rate` for the current owned item. `YENEY_QUEUE_POLL_MS` defaults
 to 500 ms; the relay checks every 100 ms during the first three seconds after

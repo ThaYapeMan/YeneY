@@ -704,3 +704,9 @@ LMS CLI uses fresh connections, a 30-second mutation deadline and short query
 deadlines. Slow loads wait for verified readiness before scenario measurements.
 Playlist restoration uses stable local IDs or exact remote URLs, retries failed
 items once on fresh connections and continues with the remaining preferences.
+
+High-rate queue scenarios require PLAYING within 3 seconds of LMS play and
+report the measured startup. Modern queue rooms receive native hi-res files
+and yeney-core converts within the rate family (88.2/176.4 → 44.1 kHz;
+96/192 → 48 kHz), preserving exact WAV lengths. Ordinary stream rooms and
+legacy 44.1 kHz mode retain LMS/SoX conversion.

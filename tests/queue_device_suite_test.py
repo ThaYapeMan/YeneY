@@ -354,6 +354,8 @@ class Tests(unittest.TestCase):
         for name,target in (('high-rate-44100',44100),('high-rate-48000',48000)):
             self.assertEqual(rows[name]['verdict'],'PASS')
             self.assertIn(str(target)+' Hz',rows[name]['note'])
+            self.assertLessEqual(rows[name]['startup'],3)
+            self.assertIn('limit 3 s',rows[name]['note'])
         print('PASS device suite high-rate families: 176.4 -> 44.1 and 192 -> 48 kHz, status-verified, restored')
 
     def test_backup_not_needed(self):

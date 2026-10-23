@@ -160,16 +160,15 @@ The original YeneY implementation and tests retain their existing license.
 
 ### Speaker sample-rate limit
 
-Queue HELO now advertises the stream sink's 48 kHz maximum (44.1 kHz
-with `YENEY_AUDIO=16/44`); finite queue WAV output remains 24-bit.
-LMS 9.1.1's CapabilitiesHelper selects 44.1 kHz for 88.2/176.4 kHz
-sources under a 48 kHz cap, and 48 kHz for 96/192 kHz sources. Its
-standard FLAC transcoding rule uses SoX's default high-quality rate
-conversion, preserving 24-bit input precision. No custom transcoding
-rule or cross-family conversion is needed. The existing stream cap and
-wire capabilities are unchanged, so stream mode uses that same LMS rule.
-Legacy 44.1 kHz mode necessarily limits the 48 kHz family to 44.1 kHz.
-An incoming rate above the advertised cap fails with STMn before enqueue.
+Modern queue-configured rooms advertise 192 kHz. Native local FLAC/ALAC
+is converted in yeney-core before ReplayGain, volume and crossfade: 88.2/176.4
+to 44.1 kHz; 96/192 to 48 kHz. Exact ceil frame counts permit publication
+before DSCO. Unknown source counts retain sealed publication. Remote sources
+stay on the stream path, with the same converter for high-rate input.
+Rates ≤48 kHz pass through. Unsupported higher families fail with STMn.
+Ordinary stream rooms retain their existing 48 kHz HELO and LMS/SoX conversion;
+legacy rooms retain 44.1 kHz advertisement and LMS conversion.
+See [filter design and measurements](queue-hires-decimation.md).
 
 ### Speaker observation and failures
 

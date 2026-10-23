@@ -619,7 +619,7 @@ class Suite(PACING['Suite']):
             if self.backend.now()-start > timeout:
                 self.problem('evidence deadline exceeded')
 
-    def load(self, tracks, fade=0):
+    def load(self, tracks, fade=0, startup_limit=5):
         self.mutate('stop')
         self.mutate('playlist','shuffle','0'); self.mutate('playlist','repeat','0')
         for k,v in zip(PREFS,('1' if fade else '0','10','0')):
@@ -643,12 +643,12 @@ class Suite(PACING['Suite']):
         row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and
                           ((r['playback'].get('path')=='stream' and '/music/yeney.flac?' in r['speaker']['uri'])
                            if not tracks[0]['url'].startswith('file://') else
-                           (r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'])),max(0,5-(self.backend.now()-start)),preparing=True)
+                           (r['playback'].get('owned') and '/music/queue.wav?' in r['speaker']['uri'])),max(0,startup_limit-(self.backend.now()-start)),preparing=True)
         delay = row['monotonic']-start
         self.current['startup'] = max(self.current['startup'],delay)
         self.last_sample = row
-        if delay > 5:
-            self.problem('startup >5 s')
+        if delay > startup_limit:
+            self.problem('startup >'+str(startup_limit)+' s')
         self.record_start(row,'play')
         return row
 
@@ -706,9 +706,9 @@ class Suite(PACING['Suite']):
                                     ('88.2/176.4' if target==44100 else '96/192')+' kHz lossless track >=10 s')
                 print('SKIP '+name+': '+self.current['note'],flush=True)
                 continue
-            row=self.load(selected)
+            row=self.load(selected,startup_limit=3)
             row,_=self.wait(selected,lambda r:r['playback'].get('rendered_rate')==target,3)
-            self.current['note']=str(selected[0]['samplerate'])+' -> '+str(target)+' Hz, 24-bit'
+            self.current['note']=str(selected[0]['samplerate'])+' -> '+str(target)+' Hz, 24-bit; startup '+str(self.current['startup'])+' s (limit 3 s)'
             until=self.backend.now()+3
             while self.backend.now()<until:self.sample(selected)
         self.remote_scenario()
