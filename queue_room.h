@@ -21,6 +21,7 @@ public:
     int streamMetadataIndex() const;
     bool remoteSource(uint64_t occurrence) const;
     bool deferStart();
+    std::optional<yeney::FlacSourceInfo> flacSourceInfo(uint64_t, std::optional<yeney::FlacSourceInfo>);
 };
 void runQueueCoreClient(const char *, const uint8_t *, const char *, QueueRoom &);
 } // namespace bridge

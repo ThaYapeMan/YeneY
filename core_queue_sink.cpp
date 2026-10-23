@@ -410,6 +410,16 @@ bool CoreQueueSink::queueItemProduced(uint64_t id) const {
         return false;
     }
 }
+bool CoreQueueSink::queuePrefixProduced(uint64_t id, uint64_t frames) const {
+    std::shared_ptr<Item> item;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto i = records.find(id);
+        if (i != records.end())
+            item = i->second.item;
+    }
+    return item && item->producedFrames() >= frames;
+}
 bool CoreQueueSink::speakerDriven() const {
     std::lock_guard<std::mutex> lock(mutex);
     return speakerClock;

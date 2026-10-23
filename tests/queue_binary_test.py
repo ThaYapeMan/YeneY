@@ -322,12 +322,12 @@ def idle_start():
     finally:h.close()
 
 def rate_guard():
-    h=Binary(rates=(96000,))
+    h=Binary(rates=(64000,))
     try:
         h.until(lambda:len(h.packets("STMn"))==1)
         assert not h.sonos.actions("AddURIToQueue")
-        assert "unsupported rate" in (h.base/"bridge.log").read_text()
-        print("PASS queue above-cap 96000 Hz: STMn once, no AddURIToQueue")
+        assert "unsupported decimation rate" in (h.base/"bridge.log").read_text()
+        print("PASS queue unsupported-family 64000 Hz: STMn once, no AddURIToQueue")
     finally:h.close()
 
 def speaker_faults():

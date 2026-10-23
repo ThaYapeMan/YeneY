@@ -10,6 +10,7 @@ class QueuePathSink : public yeney::Sink {
     CoreSonosSink stream;
     std::atomic_bool relayPath{true}, ready{false}, reset{false}, waiting{false}, boundary{false};
     bool nextRelay = true;
+    std::atomic_bool successor{false};
     yeney::Command start{'s', 0, false};
     yeney::Sink &target() { return relayPath ? static_cast<yeney::Sink &>(relay) : stream; }
     const yeney::Sink &target() const { return relayPath ? static_cast<const yeney::Sink &>(relay) : stream; }
@@ -53,7 +54,13 @@ public:
         if (!relayPath)
             stream.command(c);
     }
-    uint32_t maxSampleRate() const override { return relay.maxSampleRate(); }
+    uint32_t maxSampleRate() const override { return audioMode() == AudioMode::Legacy ? 44100 : 192000; }
+    uint32_t conversionRate() const override { return audioMode() == AudioMode::Legacy ? 0 : 48000; }
+    bool sourceMayContinue() const override { return successor; }
+    void mayContinue(bool value) { successor = value; }
+    bool queuePrefixProduced(uint64_t id, uint64_t n) const override {
+        return target().queuePrefixProduced(id, n);
+    }
     bool decodeAhead() const override { return relayPath; }
     bool speakerDriven() const override { return relayPath; }
     bool paced() const override { return false; }

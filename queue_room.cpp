@@ -55,6 +55,7 @@ struct QueueRoom::Impl {
     uint64_t selectedRequest = 0;
     queue_audio::PlaylistEntry selectedTrack;
     std::map<uint64_t, queue_audio::PlaylistEntry> sourceTracks;
+    std::map<std::string, yeney::FlacSourceInfo> flacCounts;
     std::chrono::steady_clock::time_point handoffAt{};
     std::string pathReason = "local-source";
     queue_audio::Route route;
@@ -236,6 +237,50 @@ struct QueueRoom::Impl {
         });
         worker = std::thread([this] { run(); });
     }
+    std::optional<yeney::FlacSourceInfo> sourceInfo(uint64_t occurrence,
+                                                    std::optional<yeney::FlacSourceInfo> info) {
+        std::string id;
+        {
+            std::lock_guard<std::mutex> lock(sourceMutex);
+            auto found = sourceTracks.find(occurrence);
+            if (found == sourceTracks.end())
+                return info;
+            id = found->second.id;
+            if (id.empty() || id.find_first_not_of("0123456789") != std::string::npos)
+                return info;
+            if (info) {
+                flacCounts[id] = *info;
+                return info;
+            }
+            auto cached = flacCounts.find(id);
+            if (cached != flacCounts.end())
+                return cached->second;
+        }
+        // Metadata only, never PCM/audio from this request. Headerless native
+        // seeks retain the original source's frame number, not a Range offset.
+        auto result = upnp::httpRequest("GET", {host, "/music/" + id + "/download", 9000},
+                                        {{"Range", "bytes=0-8191"}}, {}, 700);
+        if ((result.status != 200 && result.status != 206) || !result.error.empty() ||
+            result.body.size() < 42)
+            return std::nullopt;
+        auto p = reinterpret_cast<const unsigned char *>(result.body.data());
+        if (std::string(result.body.data(), 4) != "fLaC" || (p[4] & 127) || p[5] || p[6] || p[7] != 34)
+            return std::nullopt;
+        yeney::FlacSourceInfo fetched;
+        fetched.fixedBlockSize = unsigned(p[10]) * 256 + p[11];
+        fetched.totalSamples = p[21] & 15;
+        for (unsigned n = 22; n < 26; ++n)
+            fetched.totalSamples = (fetched.totalSamples << 8) | p[n];
+        if (!fetched.totalSamples || fetched.fixedBlockSize < 16)
+            return std::nullopt;
+        {
+            std::lock_guard<std::mutex> lock(sourceMutex);
+            flacCounts[id] = fetched;
+        }
+        logQueue("native FLAC exact metadata track_id=" + id +
+                 " source_frames=" + std::to_string(fetched.totalSamples));
+        return fetched;
+    }
     void relayEvents(bool enabled) {
         if (!enabled) {
             speaker->queueEvents({});
@@ -335,6 +380,12 @@ struct QueueRoom::Impl {
             }
             relayEvents(selectedLocal);
         }
+        bool continues = false;
+        if (selectedIndex >= 0 && size_t(selectedIndex + 1) < playlist.entries.size()) {
+            const auto &next = playlist.entries[size_t(selectedIndex + 1)];
+            continues = (!remotePlaybackSource(next.id, next.remote, next.url)) == selectedLocal;
+        }
+        paths.mayContinue(continues);
         metadataIndex = !selectedLocal && !selectedNewPlay ? selectedIndex : -1;
         pathReason = selectedLocal ? "local-source" : "remote-source";
         logQueue("path=" + std::string(selectedLocal ? "relay" : "stream") + " reason=" + pathReason +
@@ -833,6 +884,10 @@ void QueueRoom::command(const yeney::Command &c) { impl->received(c); }
 bool QueueRoom::queueActive() const { return impl->paths.isRelay(); }
 int QueueRoom::streamMetadataIndex() const { return impl->metadataIndex; }
 bool QueueRoom::deferStart() { return impl->selectionDeferred; }
+std::optional<yeney::FlacSourceInfo> QueueRoom::flacSourceInfo(uint64_t id,
+                                                               std::optional<yeney::FlacSourceInfo> info) {
+    return impl->sourceInfo(id, info);
+}
 bool QueueRoom::remoteSource(uint64_t id) const {
     std::lock_guard<std::mutex> lock(impl->sourceMutex);
     auto it = impl->remote.find(id);
@@ -855,6 +910,7 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     config.observeCommand = [&room](const auto &c) { room.command(c); };
     config.deferQueueStart = [&room] { return room.deferStart(); };
     config.queueNextDelayMs = queueNextDelayMs();
+    config.flacSourceInfo = [&room](uint64_t id, auto info) { return room.flacSourceInfo(id, info); };
     config.queueRelativeClock = true;
     config.queueRemoteSource = [&room](uint64_t id) { return room.remoteSource(id); };
     config.log = [](const auto &line) { std::printf("core: %s\n", line.c_str()); };
