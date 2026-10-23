@@ -647,7 +647,9 @@ The default is the first eligible local lossless album with at least four
 tracks of 60 seconds or longer, and Sonos room volume 10 (range 0–100). LMS software volume is untouched. It plays until
 three joins, checks audible Sonos/LMS identity with at most two seconds of
 boundary mismatch, pauses ten seconds from LMS, resumes, then stops and plays
-again. It also automatically selects one local lossless track of at least ten
+again. The **external-stop** scenario sends Stop directly to the speaker over
+SOAP, as a Sonos-app stop would, and requires LMS stopped plus relay ownership
+released within three seconds. It also automatically selects one local lossless track of at least ten
 seconds from each high-rate family: 88.2/176.4 kHz and 96/192 kHz. Each
 missing family is explicitly SKIP with a note, not a failure. These checks
 require PLAYING without a TransportStatus fault and confirm the room status
@@ -681,10 +683,9 @@ pct pull 113 /tmp/yeney-queue-device-suite-latest.tar.gz /tmp/yeney-queue-device
 ```
 
 Optional listening: listen for a gap/click at each join, confirm pause holds and
-resume continues, and confirm stop/new play starts once. Sonos-app actions,
+resume continues, and confirm stop/new play starts once. Sonos-app next/previous and seeks,
 crossfade/mixed-rate owner scenarios, seeks/controls, stream reference and
-WebSocket precision measurement are parked for the staged rebuild. App actions
-do not control LMS in this release. Stream remains the default; queue faults
+WebSocket precision measurement are parked for the staged rebuild. Unambiguous speaker stops and pause/resume are reported to LMS; app next/previous and seeks remain parked. Stream remains the default; queue faults
 stop/release without automatically switching transport.
 
 LMS CLI uses fresh connections, a 30-second mutation deadline and short query

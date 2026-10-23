@@ -143,6 +143,12 @@ class SOAP(Handler):
         if action=='SetVolume':
             assert service=='RenderingControl' and args['InstanceID']=='0' and args['Channel']=='Master'
             self.server.volume=int(args['DesiredVolume']);return {},None
+        if action=='Stop':
+            if model.fault=='external-stop':return {},None
+            model.owned=False;self.server.items=[];self.server.crossfade=True
+            model.external_stops=getattr(model,'external_stops',0)+1
+            model.wire(MAC,'stop')
+            return {},None
         if action=='SaveQueue' and self.server.fail_save:
             return {},'800'
         if action=='Browse' and service=='ContentDirectory' and args['ObjectID']!='SQ:':
@@ -289,8 +295,10 @@ class Tests(unittest.TestCase):
         self.restored();self.assertIn('DEVICE SUITE OK',output)
         self.assertEqual([a[1]['DesiredVolume'] for a in self.sonos.actions('SetVolume')],['10','23'])
         self.assertEqual(self.model.play_prior_modes,['stop','pause','stop'])
+        self.assertEqual(self.model.external_stops,1)
+        self.assertEqual(next(r for r in self.suite.results if r['name']=='external-stop')['verdict'],'PASS')
         self.assertEqual(self.suite.results[0]['joins'],3)
-        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','high-rate-44100','high-rate-48000'])
+        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000'])
         self.assertTrue(all(r['verdict']=='SKIP' and 'library has no eligible' in r['note'] for r in self.suite.results[-2:]))
         with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:
             names={n.split('/',1)[-1] for n in tar.getnames()}
@@ -301,6 +309,7 @@ class Tests(unittest.TestCase):
         self.assertIn('Before YeneY backup verified: SQ:',(self.suite.work/'summary.md').read_text())
         self.assertIn('Q:0 before takeover: entries=1 owned=0 foreign=1',(self.suite.work/'commands.log').read_text())
         print('PASS queue device backup: foreign entries require an identity/content-verified saved queue')
+        print('PASS device external-stop: direct SOAP Stop, LMS stopped within 3 s, owned items released')
         print('PASS relay startup measurement: playlist staged stopped with cmd:add; each timed Play starts a new run, resume follows pause')
         print('PASS queue device suite: full loopback CLI/SlimProto/SOAP sequence, album three joins, pause ten seconds, stop/new play, saved/restored volume, archive and exact restoration')
     def test_high_rate_families(self):
@@ -359,7 +368,7 @@ class Tests(unittest.TestCase):
                 self.backend.suite=self.suite
         print('PASS queue device suite: Ctrl-C, SIGHUP, SIGTERM and errors restore only the selected room')
     def test_failures(self):
-        for fault in ('identity','fallback','regression'):
+        for fault in ('identity','fallback','regression','external-stop'):
             with self.subTest(fault=fault):
                 self.model.fault=fault
                 code,output=self.run_suite();self.assertEqual(code,1,output);self.restored()

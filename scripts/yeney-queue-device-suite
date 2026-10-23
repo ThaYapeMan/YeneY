@@ -36,8 +36,9 @@ PREFS = ('transitionType', 'transitionDuration', 'transitionSmart')
 CHECKLIST = """Optional listening checklist:
 - Listen for a gap or click at each join; uninterrupted audio is expected.
 - Confirm LMS pause holds and resume continues the same item.
-- Confirm stop/new play starts once. Sonos-app control qualification is parked;
-  do not expect app actions to change LMS in this relay release."""
+- Confirm stop/new play starts once. Sonos-app stop and pause/resume should
+  appear in LMS within three seconds outside the own-command window.
+- Sonos-app next/previous and seeks remain parked."""
 
 
 def xml_sanitize(text):
@@ -648,6 +649,16 @@ class Suite(PACING['Suite']):
         self.mutate('stop')
         self.wait(tracks,lambda r:r['speaker']['state']=='STOPPED',5)
         self.load(tracks)
+        self.begin('external-stop')
+        self.speaker.call('AVTransport','Stop',InstanceID=0)
+        start=self.backend.now()
+        while True:
+            row=self.sample(tracks)
+            mode=self.cli.call(self.mac,'mode','?')[-1]
+            if mode=='stop' and row['playback'].get('state')=='STOPPED' and not row['playback'].get('owned') and not row['playback'].get('owned_item_uris'):
+                break
+            if self.backend.now()-start>=3:self.problem('speaker Stop not reported to LMS/released within 3 s')
+        self.current['note']='direct speaker SOAP Stop -> LMS stop and owned release in '+str(self.backend.now()-start)+' s'
         for name,target in (('high-rate-44100',44100),('high-rate-48000',48000)):
             self.begin(name)
             selected=self.selected[name]
@@ -791,10 +802,10 @@ class Suite(PACING['Suite']):
             verdict = 'DEVICE SUITE FAILED: '+'; '.join(dict.fromkeys(self.errors)) if self.errors else 'DEVICE SUITE OK'
             (self.work/'result.txt').write_text(verdict+'\n')
             lines = ['# Queue device qualification','', '| Scenario | Verdict | Joins | Startup/seek max s | Boundary mismatch max s | Fallbacks | Note |', '|---|---|---:|---:|---:|---|---|']
-            for name in ('album','pause-resume','stop-new-play','high-rate-44100','high-rate-48000'):
+            for name in ('album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000'):
                 if not any(r['name']==name for r in self.results):
                     self.results.append(dict(name=name,verdict='NOT RUN',joins=0,startup=None,mismatch=0,fallbacks=[],note='prior failure'))
-            order={name:i for i,name in enumerate(('album','pause-resume','stop-new-play','high-rate-44100','high-rate-48000'))}
+            order={name:i for i,name in enumerate(('album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000'))}
             self.results.sort(key=lambda r:order.get(r['name'],len(order)))
             for r in self.results:
                 lines.append('| '+' | '.join(str(r[k]).replace('|','/') for k in ('name','verdict','joins','startup','mismatch','fallbacks','note'))+' |')
