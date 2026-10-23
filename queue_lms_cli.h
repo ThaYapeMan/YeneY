@@ -34,7 +34,8 @@ inline std::string decodeLms(const std::string &input) {
     }
     return out;
 }
-// Read-only metadata adapter used by the relay. Raw MAC, exact decoded
+// Bounded CLI adapter. Relay mutations must pass its speaker-command choke
+// point. Raw MAC, exact decoded
 // acknowledgement, fresh connection per bounded query.
 inline bool controlLms(const std::string &host, const std::string &mac, const std::string &command,
                        unsigned port = 9090, std::string *reply = nullptr, unsigned timeoutMs = 0,

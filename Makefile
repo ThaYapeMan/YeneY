@@ -359,7 +359,7 @@ stream-metrics-lifetime-test: tests/stream_metrics_lifetime_test.cpp stream_metr
 	g++ -std=c++17 -g -O1 -Wall -Wextra -fsanitize=address -fno-omit-frame-pointer -I. -pthread -o $@ $<
 test: stream-metrics-lifetime-test
 
-queue_room.o: queue_room.cpp queue_room.h room_status.h room_status.h queue_playlist.h queue_lms_cli.h upnp/queue_actions.h core_queue_sink.h
+queue_room.o: queue_room.cpp queue_speaker_changes.h queue_room.h room_status.h room_status.h queue_playlist.h queue_lms_cli.h upnp/queue_actions.h core_queue_sink.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ queue_room.cpp
 
 

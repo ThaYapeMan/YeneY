@@ -65,7 +65,32 @@ struct QueueRoom::Impl {
     queue_audio::PlaylistReader reader;
     std::string state = "STOPPED", fault, transportStatus;
     std::chrono::steady_clock::time_point playAt{};
-    bool waitingForPlay = false;
+    bool waitingForPlay = false, externalPaused = false;
+    std::string expectedState = "STOPPED";
+    std::chrono::steady_clock::time_point ownUntil{};
+    uint64_t lastElapsed = 0;
+    // The only outgoing CLI mutation path: called solely from speaker evidence.
+    void speakerCommand(const std::string &command, const std::string &reason) {
+        const bool allowed = (command == "stop" && (reason == "speaker-stop" || reason == "speaker-source-change")) ||
+            (command == "pause 1" && reason == "speaker-pause") || (command == "pause 0" && reason == "speaker-resume");
+        if (!allowed)
+            throw std::logic_error("invalid speaker command");
+        logQueue("LMS mutation reason=" + reason + " command=" + command);
+        if (!queue_audio::controlLms(host, mac, command)) {
+            std::string reply;
+            const bool verified = queue_audio::controlLms(host, mac, "mode ?", 9090, &reply, 3000);
+            logQueue("LMS mutation uncertain command=" + command +
+                     " verification=" + (verified ? queue_audio::decodeLms(reply) : "unavailable"));
+        }
+    }
+    void externalStop(const std::string &reason) {
+        expectedState = "STOPPED";
+        externalPaused = false;
+        firstStream = queue.latestOccurrence() + 1;
+        // No Stop/URI switch here: another service may already own transport.
+        release();
+        speakerCommand("stop", reason);
+    }
     unsigned pollMs = pollSetting();
     std::chrono::steady_clock::time_point nextPoll{}, fastUntil{};
     std::shared_ptr<std::atomic_bool> eventDirty = std::make_shared<std::atomic_bool>(false);
@@ -98,6 +123,9 @@ struct QueueRoom::Impl {
           speaker(std::move(s)), queue(room.name, queue_audio::Config::environment(), 60),
           route(room.name, session), coordinator(room, logQueue),
           actions([this](const auto &name, const auto &args) {
+              if (name == "Play" || name == "Pause" || name == "Stop" || name == "Seek" ||
+                  name == "SetAVTransportURI")
+                  ownUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
               return releasing ? coordinator.releaseTransport(name, args) : coordinator.transport(name, args);
           }),
           ownership(ownershipIO(), session) {
@@ -169,11 +197,14 @@ struct QueueRoom::Impl {
         started = false;
         waitingForPlay = false;
         current = 0;
+        lastElapsed = 0;
         state = "STOPPED";
         publish();
     }
     void command(char c, uint64_t next) {
         if (c == 'q') {
+            expectedState = "STOPPED";
+            externalPaused = false;
             firstStream = next;
             if (ownership.active())
                 actions.stop();
@@ -190,9 +221,13 @@ struct QueueRoom::Impl {
             faulted = false;
             fault.clear();
             publish();
-        } else if (c == 'p' && started)
-            actions.pause();
-        else if (c == 'u' && started && state == "PAUSED") {
+        } else if (c == 'p' && started) {
+            expectedState = "PAUSED";
+            if (state != "PAUSED")
+                actions.pause();
+        } else if (c == 'u' && started && state == "PAUSED") {
+            expectedState = "PLAYING";
+            externalPaused = false;
             actions.play();
             playAt = std::chrono::steady_clock::now();
             waitingForPlay = true;
@@ -280,6 +315,8 @@ struct QueueRoom::Impl {
             if (!started) {
                 actions.selectQueue(room.uuid);
                 actions.seekTrack(1);
+                expectedState = "PLAYING";
+                externalPaused = false;
                 actions.play();
                 playAt = std::chrono::steady_clock::now();
                 waitingForPlay = true;
@@ -320,8 +357,41 @@ struct QueueRoom::Impl {
             std::chrono::steady_clock::now() - playAt > std::chrono::seconds(3))
             throw std::runtime_error("playback-fault action=Play uri=" + uri +
                                      " TransportStatus=" + reportedStatus + " stopped-after-play");
+        const auto previousItem =
+            std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
+        const bool finalItem = previousItem != items.end() && previousItem == std::prev(items.end());
+        const auto previousLength =
+            previousItem == items.end() ? std::optional<uint64_t>{} : previousItem->item->contentLength();
+        unsigned ph=0, pm=0, ps=0;
+        const bool positionValid = sscanf(p.value("RelTime").c_str(), "%u:%u:%u", &ph, &pm, &ps) == 3;
+        const uint64_t reportedElapsed = positionValid ? uint64_t(ph * 3600 + pm * 60 + ps) : 0;
+        const auto endEvidence = it == previousItem ? std::max(lastElapsed, reportedElapsed) : lastElapsed;
+        const bool nearEnd =
+            finalItem && previousLength &&
+            (*previousLength - 44) / 6 <= (endEvidence + 2) * previousItem->item->descriptor().rate;
+        const auto source = media.value("CurrentURI");
+        const bool sourceChanged = media.child("CurrentURI") && source != "x-rincon-queue:" + room.uuid + "#0" && (!source.empty() || !nearEnd);
+        const bool missingItem = it == items.end();
+        const bool unsolicited = now >= ownUntil && !waitingForPlay;
+        if (unsolicited && (expectedState == "PLAYING" || externalPaused) &&
+            (sourceChanged || (!nearEnd && (transport == "STOPPED" || missingItem)))) {
+            externalStop(sourceChanged ? "speaker-source-change" : "speaker-stop");
+            return;
+        }
+        std::string mutation;
+        if (unsolicited && expectedState == "PLAYING" && transport == "PAUSED_PLAYBACK") {
+            externalPaused = true;
+            expectedState = "PAUSED";
+            mutation = "pause 1";
+        } else if (unsolicited && externalPaused && transport == "PLAYING" && !missingItem) {
+            externalPaused = false;
+            expectedState = "PLAYING";
+            mutation = "pause 0";
+        }
+        if (missingItem && nearEnd && transport == "STOPPED")
+            it = previousItem;
         if (it == items.end())
-            return; // app changes are deliberately not interpreted
+            return;
         if (transport == "PLAYING")
             waitingForPlay = false;
         if (waitingForPlay && transport == "STOPPED")
@@ -334,26 +404,31 @@ struct QueueRoom::Impl {
                                                                : yeney::PlaybackState::Stopped;
         if (playback == yeney::PlaybackState::Stopped && it != std::prev(items.end()))
             return;
-        const auto elapsed = uint64_t(h * 3600 + m * 60 + s);
+        const auto elapsed =
+            transport == "STOPPED" && nearEnd ? endEvidence : uint64_t(h * 3600 + m * 60 + s);
+        if (transport != "STOPPED")
+            lastElapsed = elapsed;
         const auto length = it->item->contentLength();
         const auto rate = it->item->descriptor().rate;
         if (transport == "PLAYING" && length && (*length - 44) / 6 <= (elapsed + 3) * rate)
             fastPoll();
         if (it->stream != current)
             fastPoll();
+        if (transport == "STOPPED" && nearEnd) expectedState = "STOPPED";
         const auto previous = current;
         const auto old = state;
         current = it->stream;
         state = playback == yeney::PlaybackState::Playing  ? "PLAYING"
                 : playback == yeney::PlaybackState::Paused ? "PAUSED"
                                                            : "STOPPED";
-        queue.speakerPosition(current, uint64_t(h * 3600 + m * 60 + s) * it->item->descriptor().rate,
-                              playback);
+        queue.speakerPosition(current, elapsed * it->item->descriptor().rate, playback);
         if (current != previous || state != old) {
             publish();
             logQueue("state=" + state + (state == "PLAYING" ? " audible occurrence=" : " occurrence=") +
                      std::to_string(current));
         }
+        if (!mutation.empty())
+            speakerCommand(mutation, mutation == "pause 1" ? "speaker-pause" : "speaker-resume");
     }
     void run() {
         for (;;) {
