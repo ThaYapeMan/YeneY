@@ -66,13 +66,16 @@ struct QueueRoom::Impl {
     std::string state = "STOPPED", fault, transportStatus;
     std::chrono::steady_clock::time_point playAt{};
     bool waitingForPlay = false, externalPaused = false;
+    bool externalReleased = false, stopAcknowledged = false;
     std::string expectedState = "STOPPED";
     std::chrono::steady_clock::time_point ownUntil{};
     uint64_t lastElapsed = 0;
     // The only outgoing CLI mutation path: called solely from speaker evidence.
     void speakerCommand(const std::string &command, const std::string &reason) {
-        const bool allowed = (command == "stop" && (reason == "speaker-stop" || reason == "speaker-source-change")) ||
-            (command == "pause 1" && reason == "speaker-pause") || (command == "pause 0" && reason == "speaker-resume");
+        const bool allowed =
+            (command == "stop" && (reason == "speaker-stop" || reason == "speaker-source-change")) ||
+            (command == "pause 1" && reason == "speaker-pause") ||
+            (command == "pause 0" && reason == "speaker-resume");
         if (!allowed)
             throw std::logic_error("invalid speaker command");
         logQueue("LMS mutation reason=" + reason + " command=" + command);
@@ -86,9 +89,15 @@ struct QueueRoom::Impl {
     void externalStop(const std::string &reason) {
         expectedState = "STOPPED";
         externalPaused = false;
+        externalReleased = true; stopAcknowledged = false;
         firstStream = queue.latestOccurrence() + 1;
         // No Stop/URI switch here: another service may already own transport.
-        release();
+        try { release(); }
+        catch (const std::exception &e) {
+            fault = "external-release: " + std::string(e.what());
+            started = waitingForPlay = false; current = 0; state = "STOPPED";
+            logQueue(fault); publish();
+        }
         speakerCommand("stop", reason);
     }
     unsigned pollMs = pollSetting();
@@ -203,16 +212,21 @@ struct QueueRoom::Impl {
     }
     void command(char c, uint64_t next) {
         if (c == 'q') {
+            if (externalReleased) stopAcknowledged = true;
             expectedState = "STOPPED";
             externalPaused = false;
             firstStream = next;
-            if (ownership.active())
+            if (ownership.active() && !externalReleased)
                 actions.stop();
             release();
             faulted = false;
             fault.clear();
             playlist = {};
             publish();
+        } else if (c == 's' && externalReleased && stopAcknowledged) {
+            externalReleased = false;
+            firstStream = next;
+            playlist = {};
         } else if (c == 's' && state == "STOPPED" && (started || faulted)) {
             if (started || faulted)
                 release();
@@ -235,11 +249,13 @@ struct QueueRoom::Impl {
         }
     }
     void append() {
-        if (faulted)
+        if (faulted || externalReleased)
             return;
         for (const auto &record : queue.snapshot()) {
             if (record.source.occurrence < firstStream || record.source.occurrence > UINT64_MAX / 2)
                 continue;
+            if (record.item && !record.incomplete.empty())
+                continue; // LMS cancelled this render, not a speaker rejection.
             if (!record.fault.empty())
                 throw std::runtime_error(record.fault);
             if (!record.item || !record.incomplete.empty())
@@ -342,6 +358,11 @@ struct QueueRoom::Impl {
                                         {"CurrentTrackURI", p.value("TrackURI")},
                                         {"NumberOfTracks", media.value("NrTracks")},
                                         {"AVTransportURI", media.value("CurrentURI")}});
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!commands.empty())
+                return; // SlimProto arrived while SOAP was in flight.
+        }
         const auto transport = info.value("CurrentTransportState");
         const auto reportedStatus = info.value("CurrentTransportStatus");
         const auto uri = p.value("TrackURI");
@@ -362,7 +383,7 @@ struct QueueRoom::Impl {
         const bool finalItem = previousItem != items.end() && previousItem == std::prev(items.end());
         const auto previousLength =
             previousItem == items.end() ? std::optional<uint64_t>{} : previousItem->item->contentLength();
-        unsigned ph=0, pm=0, ps=0;
+        unsigned ph = 0, pm = 0, ps = 0;
         const bool positionValid = sscanf(p.value("RelTime").c_str(), "%u:%u:%u", &ph, &pm, &ps) == 3;
         const uint64_t reportedElapsed = positionValid ? uint64_t(ph * 3600 + pm * 60 + ps) : 0;
         const auto endEvidence = it == previousItem ? std::max(lastElapsed, reportedElapsed) : lastElapsed;
@@ -370,7 +391,9 @@ struct QueueRoom::Impl {
             finalItem && previousLength &&
             (*previousLength - 44) / 6 <= (endEvidence + 2) * previousItem->item->descriptor().rate;
         const auto source = media.value("CurrentURI");
-        const bool sourceChanged = media.child("CurrentURI") && source != "x-rincon-queue:" + room.uuid + "#0" && (!source.empty() || !nearEnd);
+        const bool sourceChanged = media.child("CurrentURI") &&
+                                   source != "x-rincon-queue:" + room.uuid + "#0" &&
+                                   (!source.empty() || !nearEnd);
         const bool missingItem = it == items.end();
         const bool unsolicited = now >= ownUntil && !waitingForPlay;
         if (unsolicited && (expectedState == "PLAYING" || externalPaused) &&
@@ -414,7 +437,8 @@ struct QueueRoom::Impl {
             fastPoll();
         if (it->stream != current)
             fastPoll();
-        if (transport == "STOPPED" && nearEnd) expectedState = "STOPPED";
+        if (transport == "STOPPED" && nearEnd)
+            expectedState = "STOPPED";
         const auto previous = current;
         const auto old = state;
         current = it->stream;
@@ -444,14 +468,14 @@ struct QueueRoom::Impl {
             try {
                 for (const auto &c : pending)
                     command(c.first, c.second);
-                append();
                 observe();
+                append();
             } catch (const std::exception &e) {
                 fault = e.what();
                 faulted = true;
                 logQueue("relay fault=" + fault);
                 try {
-                    actions.stop();
+                    if (!externalReleased) actions.stop();
                 } catch (const std::exception &stop) {
                     logQueue(stop.what());
                 }
@@ -465,7 +489,7 @@ struct QueueRoom::Impl {
             }
         }
         try {
-            if (ownership.active())
+            if (ownership.active() && !externalReleased)
                 actions.stop();
             release();
         } catch (const std::exception &e) {

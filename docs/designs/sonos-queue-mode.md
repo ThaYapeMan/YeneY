@@ -18,8 +18,8 @@ One serialized worker owns SOAP and an ordered list of immutable WAV assets,
 each identified by the core's monotonically allocated LMS stream occurrence.
 The only player states are **STOPPED**, **PLAYING**, **PAUSED**. Pending render
 records are data, not a separate player state. No playback epochs, generations,
-rearms, intent guessing, readiness continuation or LMS CLI mutations exist in
-the relay. A fixed legacy route namespace keeps the existing WAV URL shape;
+rearms, intent guessing or readiness continuation exist in the relay. The only
+CLI mutations report unambiguous speaker-originated stop/pause/resume. A fixed legacy route namespace keeps the existing WAV URL shape;
 it is not a playback generation and never causes a capability announcement.
 
 | Input/evidence | Renderer work | SlimProto result / next state |
@@ -35,6 +35,8 @@ it is not a playback generation and never causes a capability announcement.
 | Speaker STOPPED on final owned item | Feed confirmed final state to core | STMu once, STOPPED |
 | LMS seek (q+s with LMS source offset) | Same as a fresh play; no independent CLI/REL_TIME interpretation | New rendered stream, then confirmed STMs |
 | SOAP or asset failure | Log fault; Stop; remove exact owned items; restore crossfade | One renderer-rejection STMn, STOPPED; no stream fallback/retry loop |
+| External stop/source change, outside the 3 s own-command window, before the final 2 s | Release exact owned items without Stop or URI switch | One raw-MAC LMS stop, STOPPED |
+| External pause/resume, outside the own-command window | Report confirmed state; suppress the resulting LMS echo | One LMS pause 1 / pause 0, PAUSED/PLAYING |
 | Service shutdown | Stop and release exact owned entries; restore crossfade | Process exits |
 
 These messages let LMS's StreamingController own song advancement: STMs reports
@@ -82,7 +84,7 @@ The suite reads the existing per-room `stream-pacing-<room-hex>.json` file's
 state, occurrence, owned, owned_item_uris, current_owned_item, last_fault.
 Each observed state/ownership/item change publishes an atomic complete file on
 the same worker call, without waiting for the periodic stream metrics tick.
-Speaker polling is every 100 ms; publication cannot precede an observation.
+Speaker polling is normally every 500 ms, with 100 ms start/end windows; publication cannot precede an observation.
 Stream diagnostic representation stays unchanged.
 
 Future components attach to these boundaries, without changing the relay state
@@ -150,3 +152,26 @@ an audible item. A non-OK TransportStatus or STOPPED for more than three
 seconds after Play faults once, stops/releases owned entries and sends STMn.
 Queue status includes `rendered_rate`; the owner suite verifies both high-rate
 families where the library contains suitable tracks.
+
+### Speaker-originated control (23 October 2026)
+
+TransportState, TransportStatus, CurrentTrack, CurrentTrackURI, NumberOfTracks
+and AVTransportURI changes are logged with old/new values from GENA and polls;
+unchanged polls are silent. Relay state/current-item publication also logs one
+change line. GetMediaInfo supplies transport URI and count alongside position
+and transport polls. An empty CurrentTrackURI is meaningful stop evidence.
+
+Own transport commands suppress external classification for three seconds;
+SlimProto queued while SOAP is in flight is handled before classification.
+The final two seconds of the last owned item remain natural STMu. The last
+confirmed item position is retained when a renderer clears URI/RelTime at end.
+Other definite stops release ownership and publish STOPPED before one CLI stop.
+External pause/resume sends pause 1 / pause 0 once. Echoed LMS controls neither
+repeat the speaker command nor create another CLI mutation. Only the dedicated
+speaker-command function may mutate LMS; it validates command and reason, uses
+a fresh bounded connection and never blindly retries an uncertain mutation.
+
+Reference logic was studied in philippe44's LMS-uPnP renderer-state handling
+and squeezelite SQ_PAUSE/SQ_STOP handling. No reference implementation code is
+incorporated. App next/previous/seek mapping and general intent interpretation
+remain parked.

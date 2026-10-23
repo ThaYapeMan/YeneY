@@ -274,10 +274,11 @@ Settings apply on room service restart. A grouped coordinator or member keeps
 stream mode with reason `group-rate-undecided`; an unconfirmed coordinator uses
 `coordinator-unconfirmed`. `auto` still uses stream. Queue mode owns only its
 prepared finite WAV entries. LMS controls play, pause, resume, stop and source
-seeks; confirmed speaker starts advance LMS through SlimProto. Queue mode sends
-no LMS CLI mutations and has no automatic fallback or Sonos-app mapping in this
-relay release. Failures stop/release the owned entries and report STMn.
-Whole-list mirroring, app mapping, fallback and group/auto policy are parked at
+seeks; confirmed speaker starts advance LMS through SlimProto. Queue mode reports unambiguous speaker-originated stops and pause/resume to LMS
+through one logged CLI mutation path. LMS-originated commands never cause a CLI
+mutation. Source changes release owned entries without stopping the new source.
+There is no automatic fallback in this relay release. Failures stop/release the owned entries and report STMn.
+Whole-list mirroring, app next/previous/seek mapping, fallback and group/auto policy are parked at
 `queue-full-v1`; see the [rebuild checklist](docs/designs/queue-parked-features.md).
 Owners can qualify a standalone room with
 `/usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23`,

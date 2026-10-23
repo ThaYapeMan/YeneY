@@ -252,7 +252,7 @@ try:
         assert not tap.errors,tap.errors
         text=(base/'bridge.log').read_text()
         assert 'rearm-loop room=' not in text and 'state=drain' not in text,text[-8000:]
-        assert 'queue LMS mutation ' not in text,text[-8000:]
+        assert all('reason=speaker-' in line for line in text.splitlines() if 'queue LMS mutation ' in line),text[-8000:]
     cli('playlistcontrol cmd:load track_id:'+','.join(ids),mac)
     wait(lambda:len(items())>=1,15,'initial takeover')
     select_item(0);wait(lambda:len(packets('STMs'))>=1)
@@ -299,6 +299,18 @@ try:
     wait(lambda:len(packets('STMs'))>before and len(sonos.actions('Play'))==plays+1,15,'stop/new play')
     identity(0 if controls_only else 3)
     print('PASS real LMS controls: next/previous, pause/resume, seek, playlist edit, stop/new play; one Play per start, no mutation echo',flush=True)
+    time.sleep(3.2)
+    with sonos.lock:sonos.transport_state='PAUSED_PLAYBACK'
+    wait(lambda:cli('mode ?',mac)[-1]=='pause',3,'external pause in LMS')
+    wait(lambda:any(r['request']==mac+' pause 1' for r in proxy.records),3,'speaker pause mutation')
+    with sonos.lock:sonos.transport_state='PLAYING'
+    wait(lambda:cli('mode ?',mac)[-1]=='play',3,'external resume in LMS')
+    wait(lambda:any(r['request']==mac+' pause 0' for r in proxy.records),3,'speaker resume mutation')
+    with sonos.lock:
+        sonos.transport_state='STOPPED';sonos.position.update(TrackURI='',RelTime='00:00:00')
+    wait(lambda:cli('mode ?',mac)[-1]=='stop' and not items(),3,'external stop/release in LMS')
+    wait(lambda:any(r['request']==mac+' stop' for r in proxy.records),3,'speaker stop mutation')
+    print('PASS real LMS speaker actions: pause 1 / pause 0 / stop once, each verified within 3 s, owned release, no echo loop',flush=True)
     cli('stop',mac)
     for position,rate in enumerate((44100,48000)):
         cli('playlistcontrol cmd:load track_id:'+alac_ids[position],mac)
@@ -338,7 +350,8 @@ try:
     assert packets('STMd')[-1]['when']-started>=3.5,tap.records[-12:]
     assert sum(r['op']=='HELO' for r in tap.records)==1
     assert (base/'bridge.log').read_text().count('ownership acquired')>=1
-    assert not [r for r in proxy.records if not (' status ' in r['request'] or r['request'].endswith(' ?'))],proxy.records
+    mutations=[r['request'] for r in proxy.records if not (' status ' in r['request'] or r['request'].endswith(' ?'))]
+    assert mutations==[mac+' pause 1',mac+' pause 0',mac+' stop'],mutations
     print('PASS real LMS remote HTTP: local radio-like FLAC, full production plus <20 s audible gate, no idle successor/CLI restart, one connection HELO',flush=True)
 
 finally:

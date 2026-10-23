@@ -106,6 +106,11 @@ class CLI(socketserver.ThreadingTCPServer):
                     mac,cmd=line.split(' ',1)
                     assert mac==owner.mac and '%' not in mac, line
                     owner.commands.append(cmd)
+                    if not cmd.startswith('status ') and not cmd.endswith('?'):
+                        reasons={'stop':('speaker-stop','speaker-source-change'),'pause 1':('speaker-pause',),'pause 0':('speaker-resume',)}
+                        assert cmd in reasons,('unapproved LMS mutation',cmd)
+                        text=(owner.base/'bridge.log').read_text()
+                        assert any('LMS mutation reason='+r+' command='+cmd in text for r in reasons[cmd]),('mutation without speaker reason',cmd)
                     if cmd in ('pause 1','play') or (cmd.startswith('playlist index ') and not cmd.endswith('?')):
                         time.sleep(getattr(owner,'cli_delay',0))
                     if cmd in ('mode ?','playlist index ?','time ?'):
@@ -132,7 +137,8 @@ class CLI(socketserver.ThreadingTCPServer):
                         owner.model.streaming=int(cmd.split()[-1])+1
                     if cmd.startswith('time '):owner.cli_time=float(cmd.split()[-1])
                     if cmd=='pause 1':owner.cli_mode='pause'
-                    elif cmd=='play':owner.cli_mode='play'
+                    elif cmd in ('play','pause 0'):owner.cli_mode='play'
+                    elif cmd=='stop':owner.cli_mode='stop'
                     if cmd.startswith('time ') or cmd.startswith('playlist index '):
                         owner.lms.strm('q')
                         if owner.refetch_audio:
@@ -146,13 +152,14 @@ class CLI(socketserver.ThreadingTCPServer):
                             owner.lms.strm('s',source,fmt='f',rate=owner.rates[index])
                         owner.lms.strm('u')
                     elif cmd=='pause 1':owner.lms.strm('p')
-                    elif cmd=='play':owner.lms.strm('u')
+                    elif cmd in ('play','pause 0'):owner.lms.strm('u')
+                    elif cmd=='stop':owner.lms.strm('q')
         super().__init__(('127.0.0.1',9090),Client)
         self.worker=threading.Thread(target=self.serve_forever,daemon=True);self.worker.start()
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24):
         self.rates=rates; self.albums=albums if albums is not None else [f'Album & fixture {i//2}' if fade else 'Album & fixture' for i in range(len(rates))]; self.order=list(range(len(rates))); self.index=None; self.source_ms=0; self.revision=1; self.sequence=0; self.refetch_audio=initial_stop; self.refetch_delay=8 if initial_stop and slow else 0; self.bodies={}; self.commands=[];self.model=None;self.sources=[];self.errors=[];self.stopping=False
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
@@ -174,7 +181,7 @@ class Binary:
             raise AssertionError((self.base/'bridge.log').read_text())
         def sources():
             for i,rate in enumerate(rates):
-                path=self.base/f'{i}.wav';path.write_bytes(wav(rate))
+                path=self.base/f'{i}.wav';path.write_bytes(wav(rate,seconds))
                 target=path.with_suffix('.m4a' if codec=='l' else '.flac')
                 if codec=='l':
                     body=alac()
@@ -256,6 +263,7 @@ def relay_replay():
         h.lms.strm('p');h.until(lambda:len(h.packets('STMp'))==1)
         h.lms.strm('u');h.until(lambda:len(h.packets('STMr'))==1)
         h.lms.strm('q');h.until(lambda:h.sonos.transport_state=='STOPPED' and not h.items())
+        assert all(c.startswith('status ') for c in h.commands),h.commands
         print('PASS relay field replay: q/q/q+s, sanitized album, one enqueue/Play/HELO, synchronous status, pause/resume/stop, no CLI mutation',flush=True)
     finally:h.close()
 
@@ -317,7 +325,7 @@ def polling():
         h.until(lambda:len(h.packets('STMs'))==1)
         h.state(1,10)
         time.sleep(3.6)
-        for action in ('GetPositionInfo','GetTransportInfo'):
+        for action in ('GetPositionInfo','GetTransportInfo','GetMediaInfo'):
             before=len(h.sonos.actions(action));time.sleep(2)
             count=len(h.sonos.actions(action))-before
             assert count<=4,(action,count)
@@ -329,12 +337,58 @@ def polling():
         text=(h.base/'bridge.log').read_text()
         assert 'SOAP action=GetPositionInfo HTTP=200' not in text
         assert 'SOAP action=GetTransportInfo HTTP=200' not in text
+        assert 'SOAP action=GetMediaInfo HTTP=200' not in text
         assert 'queue queue' not in text
         for field in ('TransportState','TransportStatus','CurrentTrack','CurrentTrackURI','NumberOfTracks','AVTransportURI'):
             assert 'field='+field+' old=' in text,field
         assert 'speaker-change source=GENA' in text and 'relay-change state=' in text
         assert text.count('field=TransportStatus old=')==1,text
         print('PASS queue polling: steady <=2/s per action, 100 ms end/join window, timely STMs, no successful-poll logs or duplicate prefix')
+    finally:h.close()
+
+def external_actions():
+    for kind in ('port-stop','source','pause'):
+        h=Binary(rates=(44100,),seconds=274 if kind=='port-stop' else 24)
+        try:
+            h.state(1)
+            h.until(lambda:len(h.packets('STMs'))==1)
+            h.state(1,122 if kind=='port-stop' else 5)
+            time.sleep(3.4)
+            if kind=='pause':
+                h.state(1,5,'PAUSED_PLAYBACK')
+                h.until(lambda:h.commands.count('pause 1')==1)
+                h.state(1,5,'PLAYING')
+                h.until(lambda:h.commands.count('pause 0')==1)
+                time.sleep(.7)
+                assert [c for c in h.commands if not c.startswith('status ')]==['pause 1','pause 0'],h.commands
+            else:
+                stops=len(h.sonos.actions('Stop'))
+                with h.sonos.lock:
+                    h.sonos.position.update(TrackURI='',RelTime='00:00:00')
+                    h.sonos.transport_state='PLAYING' if kind=='source' else 'STOPPED'
+                    if kind=='source':h.sonos.uri='http://new-service.invalid/music'
+                h.until(lambda:h.commands.count('stop')==1 and not h.items(),3)
+                time.sleep(.7)
+                assert h.commands.count('stop')==1 and len(h.sonos.actions('Stop'))==stops,h.commands
+                status=json.loads((h.base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
+                assert status['state']=='STOPPED' and not status['owned'],status
+                if kind=='source':assert h.sonos.uri=='http://new-service.invalid/music' and h.sonos.transport_state=='PLAYING'
+            print('PASS speaker-originated '+kind+': one intended CLI action, raw MAC/decoded echo, release or pause/resume, no command loop')
+        finally:h.close()
+
+def natural_empty_end():
+    h=Binary(rates=(44100,))
+    try:
+        h.state(1);h.until(lambda:len(h.packets('STMs'))==1)
+        h.state(1,23)
+        time.sleep(.7) # allow one steady poll to retain the final RelTime
+        time.sleep(3.2)
+        with h.sonos.lock:
+            h.sonos.position.update(TrackURI='',RelTime='00:00:00');h.sonos.transport_state='STOPPED'
+        h.until(lambda:len(h.packets('STMu'))==1)
+        time.sleep(.7)
+        assert all(c.startswith('status ') for c in h.commands),h.commands
+        print('PASS natural final end with empty URI: STMu once, no LMS stop mutation')
     finally:h.close()
 
 def soap_fault():
@@ -351,4 +405,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling()
+    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end()
