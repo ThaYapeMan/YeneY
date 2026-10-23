@@ -2,36 +2,74 @@
 
 **YeneY turns every Sonos speaker into a real Lyrion Music Server player.** Lyrion
 Music Server (LMS) was formerly called Logitech Media Server or Squeezebox Server.
-Your Sonos rooms appear in LMS next to your Squeezebox players. You control them from any LMS app: Material Skin,
-the web interface, iPeng or Squeezer. The music keeps LMS's full sound processing
-and reaches the speaker as lossless 24-bit FLAC, gapless, including internet radio
-and the streaming services you use through LMS.
+Your Sonos rooms appear in LMS next to your Squeezebox players, with their own Sonos
+icon in Material Skin. You control them from any LMS app: Material Skin, the web
+interface, iPeng or Squeezer. LMS stays in charge of the playlist and the sound.
+
+**What YeneY does better than other LMS-to-Sonos bridges:**
+
+- **Sound quality.** Lossless 24-bit audio. At 44.1 and 48 kHz the samples LMS
+  produces reach the Sonos unchanged (bit-perfect when ReplayGain is off; YeneY
+  never applies LMS volume to the audio). Hi-res files (88.2–192 kHz) are converted
+  to the Sonos maximum by YeneY's own converter, measured equal to SoX at its
+  highest quality setting (`rate -v`): passband ripple below ±0.0002 dB and
+  aliasing below −120 dBFS ([measurements](docs/designs/queue-hires-decimation.md)).
+- **Track details.** In queue mode every LMS track is its own item in the Sonos
+  queue, with its own title, artist, album, artwork and duration in the Sonos app.
+  Podcast and radio artwork comes through LMS's image proxy. Damaged tags are
+  cleaned so they can never stop playback.
+- **Fast starts.** Local tracks start in about 1.3 s, hi-res tracks in under
+  0.5 s, podcasts and radio in under a second.
+- **Sonos-app pause and stop reach LMS.** Pause, resume and stop on the Sonos side
+  are passed back to LMS, without echo loops.
+- **Integration with LMS.** YeneY behaves like a well-mannered squeezelite player:
+  LMS's playlist index stays in step with what the speaker plays, YeneY sets its
+  own player icon, and it never sends LMS commands in reaction to LMS's own
+  messages.
 
 No Sonos-specific app, no pairing step per track, and no cloud service: YeneY runs
 on your own network, on any small Linux machine, container or VM.
 
 **YeneY** is pronounced **YEN-ee**. The palindrome nods to *Sonos*.
 
+## Two playback modes
+
+| Mode | How it plays | Best for |
+|---|---|---|
+| **Stream** (default) | One continuous 24-bit FLAC stream per room, paced on the Sonos clock | Grouped rooms; everything LMS can play |
+| **Queue** (per-room opt-in, `YENEY_PLAYBACK_MODE=queue`) | Local files: one Sonos queue item per LMS track (exact-length 24-bit WAV, hi-res converted by YeneY). Podcasts, radio and streaming services switch to the stream path automatically | Standalone rooms: per-track titles and artwork, fast starts, hi-res |
+
+Queue mode was rebuilt in October 2026 as a small relay that follows LMS strictly,
+in the spirit of philippe44's LMS-uPnP. The earlier, larger design is preserved at
+the `queue-full-v1` tag; its features return one at a time on top of the relay
+(see the [rebuild checklist](docs/designs/queue-parked-features.md)).
+
 ## YeneY compared with LMS-uPnP
 
 [philippe44/LMS-uPnP](https://github.com/philippe44/LMS-uPnP) (UPnPBridge) is the
 mature, general-purpose bridge between LMS and UPnP/DLNA speakers, Sonos being one
 of many. It has two modes: *per track* (the speaker plays one track at a time) and
-*flow* (one continuous stream). YeneY always uses one continuous stream, built
-for Sonos only.
+*flow* (one continuous stream). It works with almost any UPnP renderer and has
+years of use behind it. YeneY is built for Sonos only, and for Sonos it does
+clearly more in **sound quality, track details, start times, Sonos-app pause and
+LMS integration**:
 
 | | YeneY | LMS-uPnP, per track | LMS-uPnP, flow mode |
 |---|---|---|---|
+| Lossless, 24-bit | ✔ 24-bit throughout; bit-perfect at 44.1/48 kHz with ReplayGain off | ✔ FLAC for files; radio passed through as is | ~ lossless, but changing titles need MP3/AAC |
+| Hi-res sources (88.2–192 kHz) | ✔ converted by YeneY's own converter, measured equal to SoX `rate -v`; start under 0.5 s (queue mode) | ~ depends on LMS transcoding and the speaker | ~ resampled to the flow rate |
 | LMS sound processing | ✔ ReplayGain, crossfade, DSP | ~ ReplayGain and resampling, no crossfade (none at all in pass-through mode) | ✔ ReplayGain, resampling and crossfade |
-| Lossless | ✔ 24-bit FLAC, including radio and streaming services | ✔ FLAC for files; radio passed through as is | ~ lossless, but changing titles need MP3/AAC |
-| Gapless | ✔ one continuous stream | ~ via SetNextAVTransportURI; depends on the speaker | ✔ gapless and crossfade |
-| Pause/resume from LMS and the Sonos app | ✔ without errors; Sonos-app pause and play passed back to LMS (see [Pause and resume on Sonos](docs/how-it-works.md#pause-and-resume-on-sonos)) | ✔ native per-track pause | ~ Sonos sees a live stream; pause needs a workaround (`live_pause`) |
-| Synchronises with other LMS players | ✘ not yet: the Sonos starts playback seconds after other LMS players and reports its position in whole seconds | ? not verified | ? not verified |
-| Artist and title in the Sonos app | ~ "artist - title" at the start of each stream; does not yet change between tracks of a continuous album *(work in progress)* | ✔ per track | ~ only with MP3/AAC (ICY) |
-| Next/Previous in the Sonos app | ✘ *(under investigation)* | ? not verified | ✘ live stream |
-| Seeking in the Sonos app | ✘ only from LMS *(under investigation)* | ? not verified | ✘ live stream |
+| Gapless | ✔ stream mode: one continuous stream; queue mode: exact-length items, sample-continuous joins | ~ via SetNextAVTransportURI; depends on the speaker | ✔ gapless and crossfade |
+| Title, artist, album and artwork per track in the Sonos app | ✔ queue mode, including podcast artwork; stream mode: at the start of each stream | ✔ per track | ~ only with MP3/AAC (ICY) |
+| Start time | ✔ local ~1.3 s, hi-res < 0.5 s, podcasts/radio < 1 s | ? not measured | ? not measured |
+| Pause/stop in the Sonos app reaches LMS | ✔ pause, resume and stop, without echo loops | ✔ | ~ Sonos sees a live stream; pause needs a workaround (`live_pause`) |
+| Damaged tags (control characters, invalid UTF-8) | ✔ cleaned; playback never fails on them | ? not verified | ? not verified |
+| Own player icon in Material Skin | ✔ set automatically | ✔ DLNA icon | ✔ DLNA icon |
+| Next/Previous and seeking in the Sonos app | ✘ not yet (from LMS: ✔) | ? not verified | ✘ live stream |
+| Grouped Sonos rooms | ~ stream mode only; queue mode for standalone rooms | ✔ | ✔ |
+| Synchronises with other LMS players | ✘ not yet | ? not verified | ? not verified |
 | Other UPnP/DLNA speakers | ✘ Sonos only | ✔ | ✔ |
-| Maturity | new; tested on two Play:1 speakers, a Sonos Port and a grouped room | mature, years of use on many devices | mature |
+| Maturity | new; tested daily on two Play:1 speakers and a Sonos Port | mature, years of use on many devices | mature |
 
 ✔ yes · ✘ no · ~ partly · ? not verified yet
 
@@ -39,23 +77,25 @@ for Sonos only.
 
 | Choose YeneY if you… | Choose LMS-uPnP if you… |
 |---|---|
-| control playback from LMS: Material Skin, the web interface, iPeng | mainly control playback from the Sonos app |
-| want the full LMS sound: ReplayGain, crossfade, DSP, in lossless 24-bit | want the right track title and Next/Previous in the Sonos app today |
-| want pause and resume to work from both LMS and the Sonos app, without error messages | have speakers from other brands as well |
+| want the best sound on Sonos: 24-bit, bit-perfect at 44.1/48 kHz, top-quality hi-res conversion | have speakers from other brands as well |
+| want correct titles and artwork per track, and fast starts | want Next/Previous and seeking in the Sonos app today |
+| control playback from LMS (Material Skin, the web interface, iPeng) and want Sonos-app pause and stop to reach LMS | group Sonos rooms a lot |
 | only have Sonos speakers | prefer a long-proven solution |
 
-**Why YeneY exists.** LMS-uPnP makes you choose between two modes, and each gives
-something up. YeneY does everything in one mode: always lossless, gapless, with all
-LMS processing. It also solves a Sonos limit that affects any continuous stream: a
-Sonos cannot resume a paused radio-style FLAC stream without an error. YeneY works
-around that, and passes pause and play in the Sonos app back to LMS. The gap in the
-Sonos app itself (titles, Next/Previous, seeking) is being worked on; see
-[Why a continuous stream](docs/how-it-works.md#why-a-continuous-stream-and-how-this-differs-from-track-by-track-upnp).
+**Why YeneY exists.** LMS-uPnP is a general bridge: it serves many kinds of
+renderers well, and Sonos is one of them. YeneY is made only for Sonos and LMS, and
+uses that focus where it matters most: the sound (24-bit, bit-perfect at
+44.1/48 kHz, hi-res conversion as good as SoX's best), the track details in the
+Sonos app, start times, pause and stop from the Sonos app, and a clean integration
+with LMS. It also solves a Sonos limit that affects any continuous stream: a Sonos
+cannot resume a paused radio-style FLAC stream without an error. Background:
+[Why a continuous stream](docs/how-it-works.md#why-a-continuous-stream-and-how-this-differs-from-track-by-track-upnp)
+and [Sonos queue mode](docs/designs/sonos-queue-mode.md).
 
 ## What you need
 
 - **Sonos speakers on the S2 software.** Tested on a Play:1 (firmware 86.10) and a
-  Sonos Port (97.1). S1-only speakers have not been tested.
+  Sonos Port (97.2). S1-only speakers have not been tested.
 - **Lyrion Music Server** on your network (formerly Logitech Media Server).
 - **A Linux machine for YeneY**, for example a Debian or Ubuntu container or VM.
   It needs to reach the Sonos speakers and LMS on the local network. One small
@@ -67,7 +107,9 @@ For every Sonos room, YeneY registers a player with LMS, exactly like a Squeezeb
 would. LMS sends it the music; YeneY encodes it as one continuous FLAC stream and
 tells the Sonos speaker to play that stream, while keeping play, pause, stop,
 volume, position and track information in step on both sides. LMS stays in charge
-of the playlist and the sound; the Sonos simply plays what it receives. The full
+of the playlist and the sound; the Sonos simply plays what it receives. In queue
+mode, local tracks are instead published one by one as exact-length items in the
+Sonos queue, while podcasts and radio keep using the stream. The full
 story, including the Sonos pause problem YeneY solves, is in
 [How YeneY works](docs/how-it-works.md).
 
@@ -301,7 +343,9 @@ stop/new play, and a remote favourite/podcast when available, followed by a
 local album returning to the relay. Missing remote entries produce a documented
 skip. Use the [systemd-run procedure](DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
 to survive an SSH disconnect. [Relay status and limitations](docs/designs/sonos-queue-mode.md)
-are documented separately. Physical qualification awaits an owner run.
+are documented separately. The relay passed the owner device suite on Study and
+on the Sonos Port (21–23 October 2026), including LMS pause/resume, stop/new play,
+external stops, remote sources and 88.2/176.4 and 96/192 kHz tracks.
 
 On 19 October 2026, the owner qualified Study on bridge `5a686ad` with
 `/usr/local/bin/yeney-stream-pacing-suite --room Study --hours 2`: **PACING OK**.
@@ -475,9 +519,13 @@ Yes, for noncommercial use, under the
 
 ## Where it falls short
 
-- The Sonos app shows the artist and title at the start of a stream, but does not
-  yet update them between tracks of a continuous album.
 - Next, Previous and seeking work from LMS, not yet from the Sonos app.
+- Queue mode is for standalone rooms; grouped rooms use stream mode.
+- Queue mode has no automatic fallback to stream mode yet; a failure stops the
+  room and is reported to LMS.
+- In stream mode the Sonos app shows the artist and title at the start of a
+  stream, but does not update them between tracks of a continuous album. Use
+  queue mode for per-track titles.
 - Sonos rooms do not yet play in sync with other LMS players.
 - Sonos only: other UPnP/DLNA speakers are not supported.
 
