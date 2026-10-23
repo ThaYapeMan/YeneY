@@ -34,6 +34,8 @@ void drain(CoreSonosSink& s) {
     assert(s.drained(0));
 }
 int main() {
+    // Exercise immediate shutdown while the feeder enters its idle wait.
+    for (unsigned i=0; i<1000; ++i) { CoreSonosSink idle; std::this_thread::yield(); }
     CoreSonosSink s; bool legacy=sonos_audio_legacy();
     assert(s.maxSampleRate()==(legacy?44100:48000));
     yeney::Frame f[]={{0x12345600,-0x12345600},{INT32_MAX,INT32_MIN},{0x12340000,-0x12340000}};
@@ -78,5 +80,5 @@ with tempfile.TemporaryDirectory(prefix='yeney-core-sink-') as tmp:
     for mode in ('24/48','16/44'):
         env={**os.environ}; env.pop('YENEY_AUDIO',None)
         if mode=='16/44':env['YENEY_AUDIO']=mode
-        subprocess.run([str(exe)],env=env,check=True)
-        print(f'PASS: core sink {mode}: packing, continuity/rate IDs, anchors, buffering/monotonic clock, pause, bounded nonblocking queue, flush and shutdown')
+        subprocess.run([str(exe)],env=env,check=True,timeout=30)
+        print(f'PASS: core sink {mode}: packing, continuity/rate IDs, anchors, buffering/monotonic clock, pause, bounded nonblocking queue, flush and shutdown; 1000 immediate idle shutdowns')

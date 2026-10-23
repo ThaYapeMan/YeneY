@@ -37,9 +37,14 @@ CoreSonosSink::CoreSonosSink(const uint8_t* mac, uint64_t (*clock)()) : clockMs(
     feeder = std::thread(&CoreSonosSink::feed, this);
 }
 CoreSonosSink::~CoreSonosSink() {
-    running.store(false);
+    {
+        // Publish the wait predicate under its mutex so the feeder cannot
+        // miss the shutdown notification between testing it and sleeping.
+        std::lock_guard<std::mutex> lock(mutex);
+        running.store(false);
+        ++generation;
+    }
     coreRunning.store(false);
-    ++generation;
     changed.notify_all();
     feeder.join();
 }
