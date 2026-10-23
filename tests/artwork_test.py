@@ -115,8 +115,8 @@ with tempfile.TemporaryDirectory(prefix='yeney-artwork-') as directory:
             assert not cli.errors, cli.errors
         print('PASS stream artwork (real yeney/CLI/SOAP): '+name, flush=True)
 
-# Check the production QueueRoom asset binding too, beyond snapshot/DIDL units.
-# Keep this fixture's existing title/album assertions; only artwork fields differ.
+# A queue-configured remote source must now use the existing stream DIDL.
+# The snapshot/DIDL units above still cover finite metadata serialization.
 sys.path.insert(0, str(ROOT/'tests'))
 import queue_binary_test as queue_binary
 
@@ -155,9 +155,11 @@ class QueueCLI(CLI):
 queue_binary.CLI = QueueCLI
 queue = queue_binary.Binary()
 try:
-    queue.until(lambda: any('resource' in item for item in queue.items()))
-    item = next(item for item in queue.items() if 'resource' in item)
-    assert item['metadata']['albumArtURI'] == BASE+podcast_art, item
+    queue.until(lambda: hasattr(queue.sonos,'stream_metadata') and queue.sonos.transport_state=='PLAYING' and getattr(queue.sonos,'stream_audio',b''))
+    assert queue.sonos.stream_metadata['albumArtURI']==BASE+podcast_art,queue.sonos.stream_metadata
+    assert not queue.sonos.actions('AddURIToQueue') and not queue.sonos.actions('SaveQueue')
+
 finally:
+    (Path('/tmp')/'yeney-source-artwork-queue-bridge.log').write_text((queue.base/'bridge.log').read_text())
     queue.close()
-print('PASS queue artwork (real yeney QueueRoom/CLI/SOAP): podcast', flush=True)
+print('PASS queue-configured remote artwork (real yeney/CLI/SOAP): podcast streams immediately with proxy URL, no finite enqueue or queue backup', flush=True)

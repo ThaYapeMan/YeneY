@@ -55,17 +55,32 @@ def alac(seconds=24):
 
 class Device(Handler):
     def action(self,service,action,args):
+        if action=='GetPositionInfo' and self.server.uri.startswith('http://') and getattr(self.server,'consume_stream',False):
+            seconds=int(time.monotonic()-getattr(self.server,'stream_started',time.monotonic()))
+            self.server.position['RelTime']=f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
         if action=='GetPositionInfo' and getattr(self.server,'clocked',False):
             seconds=max(0,int(time.monotonic()-getattr(self.server,'clock_base',time.monotonic())))
             self.server.position['RelTime']=f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
         if action=='SetAVTransportURI' and args['CurrentURI'].startswith('http://'):
-            if args.get('CurrentURIMetaData'): ET.fromstring(args['CurrentURIMetaData'])
+            if args.get('CurrentURIMetaData'):
+                metadata=ET.fromstring(args['CurrentURIMetaData'])
+                self.server.stream_metadata={n.tag.rsplit('}',1)[-1]:n.text for n in metadata.iter()}
             self.server.uri=args['CurrentURI'];self.server.stream_uri=args['CurrentURI'];return {},None
         if action=='Play' and self.server.uri.startswith('http://'):
             self.server.transport_state='PLAYING'
+            self.server.stream_started=time.monotonic()
+            self.server.position=dict(Track='1',TrackURI=self.server.uri,RelTime='00:00:00')
             def fetch():
                 c,r=request(self.server.uri)
-                self.server.stream_audio=r.read(128);c.close()
+                try:
+                    if getattr(self.server,'consume_stream',False):
+                        while not self.server.closing:
+                            data=r.read(4096)
+                            if not data:break
+                            self.server.stream_audio=getattr(self.server,'stream_audio',b'')+data
+                    else:self.server.stream_audio=r.read(128)
+                except (OSError,http.client.HTTPException):pass
+                finally:c.close()
             threading.Thread(target=fetch,daemon=True).start()
             return {},None
         values,fault=super().action(service,action,args)
@@ -352,6 +367,7 @@ def polling():
         assert 'SOAP action=GetTransportInfo HTTP=200' not in text
         assert 'SOAP action=GetMediaInfo HTTP=200' not in text
         assert 'queue queue' not in text
+        assert 'Stream pacing:' not in text and 'stream-pacing room_hex=' not in text
         for field in ('TransportState','TransportStatus','CurrentTrack','CurrentTrackURI','NumberOfTracks','AVTransportURI'):
             assert 'field='+field+' old=' in text,field
         assert 'speaker-change source=GENA' in text and 'relay-change state=' in text

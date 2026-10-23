@@ -6,6 +6,7 @@ never incorporated into the bridge. Every spawned process is reaped on failure.
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import json
 import os
+import re
 from pathlib import Path
 import select
 import signal
@@ -101,19 +102,25 @@ class CLIProxy(socketserver.ThreadingTCPServer):
     def close(self):self.closing=True;self.shutdown();self.server_close();self.worker.join()
 
 class Remote:
-    def __init__(self,body):
+    def __init__(self,body,kind="flac",endless=False):
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_HEAD(self):self.respond(False)
             def do_GET(self):self.respond(True)
             def respond(self,content):
-                self.send_response(200);self.send_header('Content-Type','audio/flac')
-                self.send_header('Content-Length',str(len(body)));self.end_headers()
+                self.send_response(200);self.send_header('Content-Type','audio/mpeg' if kind=='mp3' else 'audio/flac')
+                if not endless:self.send_header('Content-Length',str(len(body)))
+                else:self.send_header('icy-name','Loopback endless radio')
+                self.end_headers()
                 if content:
-                    try:self.wfile.write(body)
+                    try:
+                        while True:
+                            self.wfile.write(body);self.wfile.flush()
+                            if not endless:break
+                            time.sleep(.03)
                     except (BrokenPipeError,ConnectionResetError):pass
         self.server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
-        self.url='http://127.0.0.1:'+str(self.server.server_port)+'/test-radio.flac'
+        self.url='http://127.0.0.1:'+str(self.server.server_port)+'/test-radio.'+kind
         self.worker=threading.Thread(target=self.server.serve_forever);self.worker.start()
     def close(self):self.server.shutdown();self.server.server_close();self.worker.join()
 
@@ -200,6 +207,7 @@ for rate in (88200,96000):
 # Seed CLI preferences so first-start plugin migration cannot replace the port.
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
 lms=bridge=tap=sonos=remote=proxy=None
+extra_remotes=[]
 lms_log=(base/'lms.log').open('w');bridge_log=(base/'bridge.log').open('w')
 try:
     command=['perl',str(HOME/'slimserver.pl'),'--prefsdir',str(base/'prefs'),'--cachedir',str(base/'cache'),
@@ -226,10 +234,10 @@ try:
     ids=[t['id'] for t in tracks if t.get('url','').endswith('.flac') and 'hires-' not in t.get('url','')]
     alac_ids=[t['id'] for t in tracks if t.get('url','').endswith('.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
-    sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True
+    sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True;sonos.consume_stream=True
     sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None]
     tap=Tap()
-    env=dict(os.environ,YENEY_PLAYBACK_MODE='queue',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(base))
+    env=dict(os.environ,YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(base))
     bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
                             stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
     wait(lambda:any(r['op']=='HELO' for r in tap.records),10,'HELO')
@@ -300,8 +308,8 @@ try:
     wait(lambda:len(packets('STMs'))>before and len(sonos.actions('Play'))==plays+1,15,'stop/new play')
     identity(0 if controls_only else 3)
     print('PASS real LMS controls: next/previous, pause/resume, seek, playlist edit, stop/new play; one Play per start, no mutation echo',flush=True)
-    resume_plays=len(sonos.actions('Play'));resume_adds=len(sonos.actions('AddURIToQueue'))
     time.sleep(3.2)
+    resume_plays=len(sonos.actions('Play'));resume_adds=len(sonos.actions('AddURIToQueue'))
     with sonos.lock:sonos.transport_state='PAUSED_PLAYBACK'
     wait(lambda:cli('mode ?',mac)[-1]=='pause',3,'external pause in LMS')
     wait(lambda:any(r['request']==mac+' pause 1' for r in proxy.records),3,'speaker pause mutation')
@@ -337,30 +345,68 @@ try:
         assert resource['sampleFrequency']==str(target_rate) and resource['bitsPerSample']=='24',resource
         print(f'PASS real LMS family resampling: {source_rate} Hz -> {target_rate} Hz, 24-bit, PLAYING',flush=True)
         cli('stop',mac)
+    assert 'Stream pacing:' not in (base/'bridge.log').read_text(),'relay emitted stream pacing diagnostics'
+    print('PASS real LMS local relay: no stream-pacing lines during album and controls',flush=True)
+    def playback():
+        return json.loads((base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
     remote_path=base/'radio.flac';remote_path.write_bytes((base/'library/0.flac').read_bytes())
-    # LMS's remote scanner needs a probe-sized body; constant PCM compresses
-    # below that size. Valid FLAC padding preserves the exact audio frames.
     subprocess.run(['metaflac','--add-padding=65536',str(remote_path)],check=True)
     remote=Remote(remote_path.read_bytes())
-    cli('stop',mac);cli('playlist clear',mac);cli('playlist add '+remote.url,mac)
-    wait(lambda:cli('playlist tracks ?',mac)[-1]=='1',15,'remote playlist addition')
-    cli('playlistcontrol cmd:add track_id:'+ids[0],mac)
-    wait(lambda:cli('playlist tracks ?',mac)[-1]=='2',15,'remote successor addition')
-    starts=len(packets('STMs'));done=len(packets('STMd'))
-    cli('playlist index 0',mac);cli('play',mac)
-    wait(lambda:len(packets('STMs'))>starts,15,'remote HTTP start')
-    started=packets('STMs')[-1]['when'];identity(0)
-    for second in range(1,7):
-        time.sleep(1)
-        with sonos.lock:sonos.position['RelTime']=f'00:00:{second:02}'
-        if second<=3:assert len(packets('STMd'))==done,tap.records[-12:]
-    wait(lambda:len(packets('STMd'))>done,3,'remote near-end STMd')
-    assert packets('STMd')[-1]['when']-started>=3.5,tap.records[-12:]
+    mp3=Remote((ROOT/'third_party/yeney-core/tests/fixtures/gapless-0.mp3').read_bytes(),kind='mp3')
+    endless=Remote((ROOT/'third_party/yeney-core/tests/fixtures/gapless-0.mp3').read_bytes(),kind='mp3',endless=True)
+    extra_remotes.extend([mp3,endless])
+    def stage(urls):
+        cli('stop',mac);cli('playlist clear',mac)
+        for url in urls:cli('playlist add '+url,mac)
+        wait(lambda:int(cli('playlist tracks ?',mac)[-1])==len(urls),15,'staged source playlist')
+    def remote_start(source,label):
+        stage([source.url])
+        fields=cli('status 0 1 tags:u',mac)
+        additions=len(sonos.actions('AddURIToQueue'));before=len(packets('STMs'))
+        sonos.stream_audio=b''
+        started=time.monotonic();cli('play',mac)
+        wait(lambda:playback().get('path')=='stream' and sonos.transport_state=='PLAYING'
+             and len(getattr(sonos,'stream_audio',b''))>128,3,label+' immediate continuous audio')
+        delay=time.monotonic()-started
+        fields=cli('status 0 1 tags:u',mac)
+        assert 'remote:1' in fields,fields
+        wait(lambda:len(packets('STMs'))>before,3,label+' STMs')
+        identity(0)
+        assert len(sonos.actions('AddURIToQueue'))==additions,'remote touched Sonos queue'
+        assert playback()['reason']=='remote-source' and not playback()['owned'],playback()
+        print(f'PASS real LMS remote {label}: remote:1, stream path, audio start {delay:.3f} s (<3 s), title/artwork path, no queue mutation',flush=True)
+    remote_start(remote,'HTTP FLAC')
+    remote_start(mp3,'HTTP MP3')
+    remote_start(endless,'endless HTTP MP3')
+    time.sleep(4)
+    assert sonos.transport_state=='PLAYING' and playback()['path']=='stream'
+    cli('stop',mac)
+    stage([next(t['url'] for t in tracks if t['id']==ids[0]),remote.url,
+           next(t['url'] for t in tracks if t['id']==ids[1])])
+    mixed_log_start=len((base/'bridge.log').read_text())
+    before=len(packets('STMs'));cli('play',mac)
+    wait(lambda:playback().get('path')=='relay' and len(packets('STMs'))>before,10,'mixed initial local relay')
+    identity(0)
+    # The strict speaker supplies the natural final-item boundary. No URI
+    # switch or Stop may precede this evidence, even though next strm s arrived.
+    wait(lambda:'path=relay reason=local-source' in (base/'bridge.log').read_text())
+    wait(lambda:'path-pending path=stream waiting=audible-end' in (base/'bridge.log').read_text()[mixed_log_start:],10,'remote successor held until boundary')
+    assert playback()['path']=='relay' and sonos.uri.startswith('x-rincon-queue:'),playback()
+    with sonos.lock:
+        sonos.position['RelTime']='00:00:24';sonos.transport_state='STOPPED'
+    wait(lambda:playback()['path']=='stream' and sonos.uri.startswith('http://'),5,'local -> remote boundary')
+    identity(1)
+    assert sonos.stream_metadata['title']==remote.url,sonos.stream_metadata
+    wait(lambda:playback()['path']=='relay' and len(items())>=1 and sonos.transport_state=='PLAYING',35,'remote -> local drained boundary')
+    identity(2)
+    wait(lambda:(base/'bridge.log').read_text()[mixed_log_start:].count('path-handoff path=')>=2,3,'both measured handoff gaps')
+    text=(base/'bridge.log').read_text()
+    assert 'path-handoff path=stream gap_ms=' in text and 'path-handoff path=relay gap_ms=' in text
     assert sum(r['op']=='HELO' for r in tap.records)==1
-    assert (base/'bridge.log').read_text().count('ownership acquired')>=1
     mutations=[r['request'] for r in proxy.records if not (' status ' in r['request'] or r['request'].endswith(' ?'))]
     assert mutations==[mac+' pause 1',mac+' pause 0',mac+' stop'],mutations
-    print('PASS real LMS remote HTTP: local radio-like FLAC, full production plus <20 s audible gate, no idle successor/CLI restart, one connection HELO',flush=True)
+    gaps=re.findall(r'path-handoff path=(relay|stream) gap_ms=(\d+)',text)
+    print('PASS real LMS source boundaries: local -> remote -> local, preserved prior path until end, matching indexes 0/1/2, measured gaps '+repr(gaps)+', no CLI mutation or extra HELO',flush=True)
 
 finally:
     failures=[]
@@ -382,6 +428,7 @@ finally:
         cleanup(ownership_restored)
         cleanup(sonos.close)
     if remote:cleanup(remote.close)
+    for source in extra_remotes:cleanup(source.close)
     cleanup(lambda:stop(lms));bridge_log.close();lms_log.close()
     (base/'owner-cli.json').write_text(json.dumps(OWNER_CLI,indent=2))
     if failures:raise failures[0]
