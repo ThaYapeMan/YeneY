@@ -38,5 +38,53 @@ class StateTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
         print('PASS installer safe stable unique state names and offline systemd verification')
 
+    def test_migrate_all_legacy_paths_and_exact_workaround(self):
+        with tempfile.TemporaryDirectory(prefix='yeney-state-') as tmp:
+            base = Path(tmp); config = base/'etc/yeney'; units = base/'units'; state = base/'state'
+            config.mkdir(parents=True); state.mkdir()
+            config.joinpath('config').write_text('LMS_SERVER=host\nroom.Sonos Port=yes\n')
+            runner = Commands('Sonos Port\n')
+            unit = installer.service_states(['Sonos Port'], runner)['Sonos Port'][0]
+            runner.active.add(unit); runner.enabled.add(unit)
+            override = units/(unit+'.d')/'statedir.conf'; override.parent.mkdir(parents=True)
+            override.write_text('[Service]\nStateDirectory=\nStateDirectory=yeney/sonos-port\n')
+            old_names = [r'Sonos\x20Port', 'Sonos Port', 'sonos-port']
+            for n, old in enumerate(old_names):
+                directory = state/old; directory.mkdir()
+                (directory/f'history-{n}').mkdir(); (directory/f'history-{n}'/'asset').write_bytes(bytes([n]))
+                (directory/'icon.json').write_text('{"svg":"sonos"}')
+            output = io.StringIO()
+            installer.install(ROOT, config, units, [], runner, output, io.StringIO(),
+                              lms_check=mock_lms, state_root=state)
+            new = state/installer.state_name('Sonos Port')
+            self.assertEqual(new.joinpath('icon.json').read_text(), '{"svg":"sonos"}')
+            for n, old in enumerate(old_names):
+                self.assertFalse((state/old).exists())
+                self.assertEqual((new/f'history-{n}'/'asset').read_bytes(), bytes([n]))
+            self.assertFalse(override.exists())
+            stop = runner.calls.index(['systemctl', 'stop', unit])
+            restart = runner.calls.index(['systemctl', 'restart', unit])
+            self.assertLess(stop, restart)
+            for custom in ('[Service]\nStateDirectory=yeney/custom\n',
+                           '[Service]\nStateDirectory=\nStateDirectory=yeney/sonos-port\n# custom\n'):
+                override.write_text(custom); warnings = []
+                self.assertEqual(installer.state_workarounds(units, { 'Sonos Port': (unit, True, True)}, warnings.append), [])
+                self.assertEqual(len(warnings), 1)
+                self.assertEqual(override.read_text(), custom)
+            override.unlink(); target = base/'owner'; target.write_text('[Service]\nStateDirectory=\nStateDirectory=yeney/sonos-port\n')
+            override.symlink_to(target); warnings = []
+            self.assertFalse(installer.state_workarounds(units, {'Sonos Port': (unit, True, True)}, warnings.append))
+            self.assertTrue(override.is_symlink()); self.assertEqual(len(warnings), 1)
+        print('PASS installer migration preserves icon/history, stops writer, removes only exact workaround, preserves owner edits/symlinks')
+
+    def test_migration_conflicts_preserve_both(self):
+        with tempfile.TemporaryDirectory(prefix='yeney-state-') as tmp:
+            state = Path(tmp)
+            a = state/'Study'; b = state/installer.state_name('Study'); a.mkdir(); b.mkdir()
+            (a/'icon').write_text('owner'); (b/'icon').write_text('new')
+            with self.assertRaises(ValueError): installer.state_migrations(state, {'Study': ('yeney@Study.service', True, True)})
+            self.assertEqual((a/'icon').read_text(), 'owner'); self.assertEqual((b/'icon').read_text(), 'new')
+        print('PASS installer migration conflict preserves both state copies')
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

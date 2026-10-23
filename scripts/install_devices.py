@@ -270,6 +270,69 @@ def state_dropins(unit_dir, states):
             for room, (unit, _, _) in states.items()}
 
 
+def state_migrations(state_root, states):
+    moves = []
+    for room, (unit, _, _) in states.items():
+        destination = state_root / state_name(room)
+        candidates = [unit[len('yeney@'):-len('.service')], room]
+        if room == 'Sonos Port': candidates.append('sonos-port')
+        for name in dict.fromkeys(candidates):
+            # Raw room names containing a slash never denote a direct old state directory.
+            if name in ('.', '..') or '/' in name or name == destination.name: continue
+            source = state_root / name
+            if not source.exists() and not source.is_symlink(): continue
+            validate_state_move(source, destination)
+            moves.append((room, source, destination))
+    # Check collisions across multiple legacy locations before changing any service or file.
+    seen = {}
+    for _, source, destination in moves:
+        for path in source.rglob('*'):
+            target = destination / path.relative_to(source)
+            if path.is_file() and target in seen and path.read_bytes() != seen[target].read_bytes():
+                raise ValueError(f'Conflicting legacy room state: {path} and {seen[target]}')
+            if path.is_file(): seen[target] = path
+    return moves
+
+
+def validate_state_move(source, destination):
+    if source.is_symlink() or destination.is_symlink() or not source.is_dir():
+        raise ValueError(f'Refusing unsafe state migration: {source} -> {destination}')
+    for path in [source, *source.rglob('*')]:
+        target = destination / path.relative_to(source)
+        if path.is_symlink() or target.is_symlink():
+            raise ValueError(f'Refusing symlink in room state: {path} -> {target}')
+        if target.exists() and (path.is_dir() != target.is_dir() or
+                                (path.is_file() and path.read_bytes() != target.read_bytes())):
+            raise ValueError(f'Conflicting room state: {path} -> {target}; both preserved')
+
+
+def move_state(source, destination):
+    validate_state_move(source, destination)
+    if not destination.exists():
+        source.rename(destination)
+        return
+    for child in source.iterdir():
+        target = destination / child.name
+        if child.is_dir(): move_state(child, target)
+        elif target.exists(): child.unlink()  # Preflight proved identical regular files.
+        else: child.rename(target)
+    source.rmdir()
+
+
+def state_workarounds(unit_dir, states, warn):
+    removable = []
+    exact = b'[Service]\nStateDirectory=\nStateDirectory=yeney/sonos-port'
+    for room, (unit, _, _) in states.items():
+        if room != 'Sonos Port': continue
+        path = unit_dir / (unit + '.d') / 'statedir.conf'
+        if not path.exists() and not path.is_symlink(): continue
+        if not path.is_symlink() and not path.parent.is_symlink() and path.read_bytes() in (exact, exact + b'\n'):
+            removable.append(path)
+        else:
+            warn(f'Leaving {path}: not the exact temporary StateDirectory workaround.')
+    return removable
+
+
 def player_overrides(unit_dir, states, output):
     removable = []
     exact = b'[Service]\nEnvironment=YENEY_PLAYER=core'
@@ -356,7 +419,7 @@ def check_lms(host, rooms, timeout=15, connect=socket.create_connection):
 
 
 def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.stdout, errors=sys.stderr,
-            input_stream=sys.stdin, lms_check=check_lms):
+            input_stream=sys.stdin, lms_check=check_lms, state_root=Path('/var/lib/yeney')):
     prefs_options = [a.split('=', 1)[1] for a in args if a.startswith('--lms-prefs-dir=')]
     if len(prefs_options) > 1:
         raise ValueError('Specify --lms-prefs-dir only once')
@@ -456,6 +519,14 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         state_units = state_dropins(unit_dir, states)
         state_changes = {room: (path, text) for room, (path, text) in state_units.items()
                          if read_text(path) != text}
+        moves = state_migrations(state_root, states)
+        workarounds = state_workarounds(unit_dir, states, warn)
+        for room, source, destination in moves:
+            print(f"Room state: move {source} -> {destination}", file=output)
+            if rooms[room] and states[room][1] and room not in plan['Restart']:
+                plan['Restart'].append(room)
+                if room in plan['Keep']: plan['Keep'].remove(room)
+                reason = reason or 'room state migration'
         overrides = player_overrides(unit_dir, states, output)
         for room, _ in overrides:
             if rooms[room] and states[room][1] and room not in plan['Restart']:
@@ -477,7 +548,7 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         if migrate: print('Migration: rooms → rooms.migrated', file=output)
         if build_changed: print('Build record: update installed-build', file=output)
         actions = any(plan[kind] for kind in ('Start', 'Restart', 'Stop', 'Enable'))
-        work = merged != original or actions or template_changed or migrate or build_changed or bool(overrides) or bool(state_changes)
+        work = merged != original or actions or template_changed or migrate or build_changed or bool(overrides) or bool(state_changes) or bool(moves) or bool(workarounds)
         if not work:
             print('Nothing to do.', file=output)
         elif interactive and not keep and not ask_yes('Apply? [Y/n] ', True, input_stream, output):
@@ -493,6 +564,13 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         unit_dir.mkdir(parents=True, exist_ok=True)
         if template_changed:
             atomic_write(target, template)
+        for room in dict.fromkeys(room for room, _, _ in moves):
+            if states[room][1]: run(['systemctl', 'stop', states[room][0]], check=True)
+        for _, source, destination in moves:
+            move_state(source, destination)
+        for path in workarounds:
+            # Never remove an owner edit made after planning.
+            if path in state_workarounds(unit_dir, states, lambda _: None): path.unlink()
         for path, text in state_changes.values():
             if path.is_symlink() or path.parent.is_symlink():
                 raise ValueError(f"Refusing symlink state override: {path}")
@@ -507,7 +585,7 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
                 path.unlink(); removed = True
             else:
                 print(f'Note: leaving changed override {path}.', file=output)
-        if template_changed or removed or state_changes:
+        if template_changed or removed or state_changes or workarounds:
             run(['systemctl', 'daemon-reload'], check=True)
         for kind in ('Stop', 'Enable', 'Start', 'Restart'):
             for room in plan[kind]:
