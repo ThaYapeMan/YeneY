@@ -29,6 +29,7 @@ install: yeney yeney-queue-dryrun
 	install -d -m 0755 /var/lib/yeney
 	install -m 0755 yeney-queue-dryrun /usr/local/bin/yeney-queue-dryrun
 	install -m 0755 scripts/yeney-queue-suite /usr/local/bin/yeney-queue-suite
+	install -m 0644 scripts/yeney_room_state.py /usr/local/bin/yeney_room_state.py
 	install -m 0755 scripts/yeney-stream-pacing-suite /usr/local/bin/yeney-stream-pacing-suite
 	install -m 0755 scripts/yeney-queue-device-suite /usr/local/bin/yeney-queue-device-suite
 	install -d -m 0755 /usr/local/share/yeney
@@ -113,6 +114,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/stream_content_setting_test.py
 	python3 tests/list_rooms_test.py
 	python3 tests/lms_icon_test.py
+	python3 tests/room_state_lookup_test.py
 	python3 tests/installer_state_test.py
 	python3 tests/installer_test.py
 	python3 tests/migration_test.py
@@ -407,3 +409,6 @@ lms-icon-connection-test: tests/lms_icon_connection.cpp $(CORE_LIB)
 	g++ -std=c++17 -O2 -Wall -Wextra -Ithird_party/yeney-core -pthread -o $@ $< $(CORE_LIB) -lFLAC
 
 test: lms-icon-test lms-icon-connection-test
+
+# Both playback paths and timing persistence share the room state policy.
+yeney.o queue_room.o sonos-position.o core_sonos.o sonos-status.o sbencoder.o: room_state_directory.h stream_metrics.h timing_probe_runtime.h timing_drift_state.h

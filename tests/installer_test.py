@@ -27,6 +27,7 @@ class Commands:
         self.build = 'build-a'
         self.details = None
         self.calls = []
+        self.state_dirs = {}
         self.active, self.enabled, self.missing = set(), set(), set()
 
     def __call__(self, args, **kwargs):
@@ -41,12 +42,15 @@ class Commands:
             value = '' if args[1] == 'status' else self.build
             return subprocess.CompletedProcess(args, 0, value + '\n', '')
         if args[0] == 'systemd-escape':
-            return subprocess.run(args, **kwargs)
+            result = subprocess.run(args, **kwargs)
+            self.state_dirs[result.stdout.strip()] = 'yeney/' + installer.state_name(args[-1])
+            return result
         assert args[0] == 'systemctl', args
         action, unit = args[1], args[-1]
         code, output = 0, ''
         if action == 'is-active': code = 0 if unit in self.active else 3
         elif action == 'is-enabled': code = 0 if unit in self.enabled else 1
+        elif action == 'show' and 'StateDirectory' in args: output = self.state_dirs.get(unit, '')
         elif action == 'show': output = 'not-found\n' if unit in self.missing else 'loaded\n'
         elif action == 'enable':
             self.enabled.add(unit)

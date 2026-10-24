@@ -65,6 +65,7 @@ class FakeBackend:
             return 'Study\tPort\t127.0.0.1\tStudy\t'+('Study,Kitchen' if self.grouped else 'Study')
         if args[0]=='journalctl': return 'fake Study journal'
         assert args[0]=='systemctl',args
+        if args[1]=='show' and 'StateDirectory' in args: return ''
         if args[1]=='show':
             if 'MainPID' in args: return str(self.pid)
             return 'YENEY_EXISTING=kept'+(' YENEY_STREAM_PACING=sonos' if self.suite.dropin and self.suite.dropin.exists() else '')

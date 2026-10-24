@@ -203,6 +203,7 @@ class Backend:
         if args[0].endswith('/yeney'):return 'Study\tPort\t127.0.0.1\tStudy\t'+('Study,Kitchen' if self.grouped else 'Study')
         if args[0]=='journalctl':return 'room Study journal only'
         assert args[0]=='systemctl',args
+        if args[1]=='show' and 'StateDirectory' in args: return ''
         if args[1]=='show':return str(self.pid) if 'MainPID' in args else self.environment+(' YENEY_PLAYBACK_MODE=queue' if self.suite.dropin and self.suite.dropin.exists() else '')
         if args[1]=='is-active' and not self.running:raise m.SuiteError('not running')
         if args[1] in ('restart','stop'):

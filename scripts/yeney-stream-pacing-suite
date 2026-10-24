@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import re
+import runpy
 import signal
 import socket
 import subprocess
@@ -17,6 +18,8 @@ import tempfile
 import time
 from urllib.parse import quote, unquote
 
+
+STATE = runpy.run_path(str(Path(__file__).resolve().parent/'yeney_room_state.py'))
 
 class SuiteError(Exception):
     pass
@@ -84,10 +87,12 @@ class Backend:
 
 class Suite:
     def __init__(self, room, server, hours=2, *, backend=None, cli=None,
-                 unit_root=Path('/etc/systemd/system'), state_root=Path('/var/lib/yeney'),
+                 unit_root=Path('/etc/systemd/system'), state_root=None, state_base=Path('/var/lib'),
                  output=Path('/tmp'), executable='/opt/yeney/yeney'):
         self.room, self.server, self.hours = room, server, hours
-        self.unit_root, self.state_root, self.output = Path(unit_root), Path(state_root), Path(output)
+        self.unit_root, self.state_root, self.output = Path(unit_root), Path(state_root) if state_root is not None else STATE['LEGACY_ROOT'], Path(output)
+        self.state_base = Path(state_base)
+        self.legacy_state_root = self.state_root
         self.executable = executable
         self.output.mkdir(parents=True, exist_ok=True)
         self.work = Path(tempfile.mkdtemp(prefix='yeney-stream-pacing-', dir=self.output))
@@ -160,7 +165,8 @@ class Suite:
             raise SuiteError('invalid room or server')
         if not math.isfinite(self.hours) or not 0 < self.hours <= 168:
             raise SuiteError('hours must be positive and at most 168')
-        self.unit = self.backend.run('systemd-escape','--template=yeney@.service','--',self.room)
+        self.unit, self.state_root = STATE['room_state'](self.room, self.backend.run,
+            state_base=self.state_base, legacy_root=self.legacy_state_root)
         if not self.unit.startswith('yeney@') or not self.unit.endswith('.service') or '/' in self.unit or '\n' in self.unit:
             raise SuiteError('invalid escaped service unit')
         self.backend.run('systemctl','is-active','--quiet',self.unit)

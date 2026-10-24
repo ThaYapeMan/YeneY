@@ -18,6 +18,8 @@ import tempfile
 import termios
 import unicodedata
 
+ROOM_STATE = runpy.run_path(str(Path(__file__).resolve().parent/'yeney_room_state.py'))
+
 ROOM_HEADER = ('# Sonos rooms found on the network.\n'
                '# yes = bridge this room to LMS, no = ignore it.\n')
 LMS_COMMENT = '# LMS host or IP (no port). Empty = automatic discovery on the local network.\n'
@@ -282,6 +284,9 @@ def state_migrations(state_root, states):
             if name in ('.', '..') or '/' in name or name == destination.name: continue
             source = state_root / name
             if not source.exists() and not source.is_symlink(): continue
+            if source.is_symlink():
+                resolved, new = source.resolve(), destination.resolve()
+                if resolved == new or new in resolved.parents: continue
             validate_state_move(source, destination)
             moves.append((room, source, destination))
     # Check collisions across multiple legacy locations before changing any service or file.
@@ -318,6 +323,29 @@ def move_state(source, destination):
         elif target.exists(): child.unlink()  # Preflight proved identical regular files.
         else: child.rename(target)
     source.rmdir()
+
+
+def clean_legacy_status(state_root, rooms, run, output):
+    def text(*args):
+        return run(list(args), capture_output=True, text=True, check=True, timeout=5).stdout.strip()
+    own = []
+    for room in rooms:
+        _, directory = ROOM_STATE['room_state'](room, text, state_base=state_root.parent,
+                                                legacy_root=state_root)
+        if directory == state_root: continue
+        own.append(directory.resolve())
+        stale = state_root / ('stream-pacing-' + room.encode().hex() + '.json')
+        if stale.is_symlink() or stale.is_file():
+            stale.unlink()
+            print(f'Removed stale room status: {stale}', file=output)
+    if not state_root.is_dir(): return
+    for path in state_root.iterdir():
+        if not path.is_symlink(): continue
+        try: target = path.resolve()
+        except (OSError, RuntimeError): continue
+        if any(target == directory or directory in target.parents for directory in own):
+            path.unlink()
+            print(f'Removed stale room state symlink: {path}', file=output)
 
 
 def state_workarounds(unit_dir, states, warn):
@@ -602,6 +630,7 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         # A failed service action must never bless this build as installed.
         if build_changed: atomic_write(stamp, identity)
         if units_changed: pending.unlink()
+    clean_legacy_status(state_root, rooms, run, output)
     host = lms_value(merged) or discovered_server
     checks, skipped = lms_check(host, [room for room in rooms if rooms[room]])
     if skipped: print(f'LMS check skipped ({skipped})', file=output)

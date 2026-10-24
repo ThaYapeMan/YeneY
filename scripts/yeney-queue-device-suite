@@ -448,7 +448,8 @@ class Suite(PACING['Suite']):
         if not self.room or any(c in self.room for c in '\r\n\0=') or not self.server or any(c.isspace() or c in ':\0' for c in self.server):
             raise SuiteError('invalid room or server')
         self.lock()
-        self.unit = self.backend.run('systemd-escape','--template=yeney@.service','--',self.room)
+        self.unit, self.state_root = PACING['STATE']['room_state'](self.room, self.backend.run,
+            state_base=self.state_base, legacy_root=self.legacy_state_root)
         if not self.unit.startswith('yeney@') or not self.unit.endswith('.service') or '/' in self.unit or '\n' in self.unit:
             raise SuiteError('invalid room service unit')
         self.backend.run('systemctl','is-active','--quiet',self.unit)
