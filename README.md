@@ -383,6 +383,25 @@ that produce the same slug remain distinct. Confirmed icon ownership and queue
 state live there. `ExecStart` and the room argument remain unchanged. View a room's
 configured path with `systemctl show -p StateDirectory 'yeney@Study.service'`.
 
+In both stream and queue mode, the room's `stream-pacing-<UTF-8-room-hex>.json`
+status file and drift-prior persistence use this directory. Only manual runs
+without `STATE_DIRECTORY` use `/var/lib/yeney`. Queue storage and confirmed icon
+ownership already follow the same room directory.
+
+`/usr/local/bin/yeney-queue-device-suite` and
+`/usr/local/bin/yeney-stream-pacing-suite` discover it automatically through
+`systemd-escape` and `systemctl show … -p StateDirectory --value`, using their
+bundled shared `yeney_room_state.py` helper. No copied files, symlinks or path
+flags are needed. Failed or ambiguous systemd lookups are errors; only an empty
+StateDirectory property selects the legacy directory. Installation removes old
+status files for migrated rooms and global symlinks pointing into their state
+directories, leaving other files alone.
+
+The owner-tool audit also covers `yeney-lms-position-check` (journal and LMS CLI),
+`yeney-timing-read` (the unchanged `/dev/shm` timing/audio objects), and
+`yeney-queue-suite` (its isolated `/tmp` workspace). Those tools do not read the
+room's persistent status/state files, so their data sources remain unchanged.
+
 On install, existing state from escaped or raw room-name directories is moved
 while that room is stopped. The temporary `/var/lib/yeney/sonos-port` workaround
 is migrated too. The installer removes the Port's `statedir.conf` automatically

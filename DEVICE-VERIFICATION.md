@@ -25,6 +25,16 @@ and queue state. The hash is derived from the original UTF-8 room name, so rooms
 with spaces, quotes, accents or identical slugs have distinct stable paths.
 `systemctl show -p StateDirectory 'yeney@Study.service'` shows the selected path.
 
+Both stream and queue mode write `stream-pacing-<UTF-8-room-hex>.json` and drift
+state there. Manual processes without `STATE_DIRECTORY` retain `/var/lib/yeney`.
+The installed `/usr/local/bin/yeney-queue-device-suite` and
+`/usr/local/bin/yeney-stream-pacing-suite` use their bundled shared systemd lookup
+to find the room directory automatically. No symlink or copied-status workaround
+is needed. Only a room with no StateDirectory property uses the legacy location;
+failed systemd queries are reported instead of reading stale global status.
+Installation removes migrated rooms' old global status files and global symlinks
+pointing into their room directories, leaving other files untouched.
+
 Installation stops a room before moving its old escaped-name or raw-name state.
 For Sonos Port, it also migrates `/var/lib/yeney/sonos-port` and automatically
 removes `statedir.conf` only if it exactly contains the owner's three-line
@@ -528,7 +538,8 @@ The start-lead zero case keeps the legacy 250 ms allowance in `wall` mode.
 Room status includes cumulative overwritten/dropped packet counts, blocking
 socket-send residence time (calls lasting at least 1 ms), encoded and estimated
 audible milliseconds, and their difference. Active non-zero diagnostics log at
-most once per minute. `/var/lib/yeney/stream-pacing-<hex UTF-8 room name>.json`
+most once per minute. `$STATE_DIRECTORY/stream-pacing-<hex UTF-8 room name>.json`
+(`/var/lib/yeney` only for manual runs without `STATE_DIRECTORY`)
 is atomically refreshed once per second, including PID and monotonic timestamp;
 counters survive track changes/reconnects and reset on service restart. Measuring
 lead does not steer the audible reporting clock. Socket time includes time in a
