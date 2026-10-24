@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Jaap van Vliet
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
+#include "room_state_directory.h"
 #include "timing_brackets.h"
 #include "stream_pacing.h"
 #include "timing_drift_state.h"
@@ -278,7 +279,7 @@ class Diagnostics {
 public:
     explicit Diagnostics(double (*clock)() = monotonicNow)
         : nowClock(clock), stale(enabled() ? staleSeconds() : 60), raw(rawEnabled()) {}
-    void speaker(const std::string &udn, const std::string &directory = "/var/lib/yeney") {
+    void speaker(const std::string &udn, const std::string &directory = bridge::roomStateDirectory()) {
         std::lock_guard<std::mutex> lock(mutex);
         if (udn.empty() || speakerUdn == udn) return;
         speakerUdn = udn;

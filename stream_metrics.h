@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
+#include "room_state_directory.h"
 #include "stream_pacing.h"
 #include "room_status.h"
 #include "start_lead.h"
@@ -36,7 +37,7 @@ public:
         for (unsigned char c : s) { char b[3]; snprintf(b, sizeof b, "%02x", c); out += b; }
         return out;
     }
-    void configure(const std::string &room, const std::string &directory = "/var/lib/yeney") {
+    void configure(const std::string &room, const std::string &directory = bridge::roomStateDirectory()) {
         std::lock_guard<std::mutex> lock(mutex);
         roomHex = hex(room);
         path = directory + "/stream-pacing-" + roomHex + ".json";

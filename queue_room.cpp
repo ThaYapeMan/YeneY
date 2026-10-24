@@ -201,8 +201,6 @@ struct QueueRoom::Impl {
         auto colon = host.find(':');
         if (colon != std::string::npos)
             host.resize(colon);
-        if (const char *directory = std::getenv("STATE_DIRECTORY"))
-            streamMetrics().configure(room.name, directory);
         route.registerWith(*http);
         relayEvents(true);
         paths.describeSource = [this](uint64_t id) {

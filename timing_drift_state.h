@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
+#include "room_state_directory.h"
 #include <cmath>
 #include <cstdlib>
 #include <cstdio>
@@ -24,7 +25,7 @@ public:
                std::isfinite(v.sigma) && v.sigma > 0 && v.sigma <= 15 &&
                v.timestamp <= now && now - v.timestamp <= 7 * 86400;
     }
-    void speaker(const std::string &udn, const std::string &directory = "/var/lib/yeney") {
+    void speaker(const std::string &udn, const std::string &directory = bridge::roomStateDirectory()) {
         path = directory + "/drift-";
         for (unsigned char c : udn) { char hex[3]; snprintf(hex, sizeof hex, "%02x", c); path += hex; }
         path += ".state";
