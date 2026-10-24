@@ -248,3 +248,24 @@ malformed packets/CRC errors and empty sources remain failures. Stream-mode
 rooms retain their existing pipeline and wire behavior.
 
 See [precise length rules and verification](queue-hires-decimation.md#playable-lengths-and-exceptional-eof-repair).
+
+## Relay source map (24 October cleanup)
+
+The state table and its single serialized worker are unchanged. All modules
+share the private `QueueRoom::Impl` declaration in `queue_room_internal.h`;
+member order, mutexes, atomics and lock acquisition order are retained.
+
+| File | Responsibility |
+|---|---|
+| `queue_room.cpp` | Construction, callbacks, lifetime, public facade and core-client entry point |
+| `queue_relay.cpp` | Owned queue transport/state table, append/release, poll scheduling and the sole worker loop |
+| `queue_path.cpp` | Source metadata/counts, relay-versus-stream selection and boundary handoff |
+| `queue_speaker.cpp` | Speaker observations and external stop/pause/source-change detection |
+| `queue_lms_commands.cpp` | The single reason-checked speaker-originated LMS mutation choke point |
+| `queue_status.cpp` | Synchronous room status and existing relay-change log publication |
+
+No threads, queues, locks or owner log formats were added or changed.
+`tests/queue_refactor_compare.py --baseline c3baa3d` checks the mechanical
+method/state extraction; it is a one-off comparison tool rather than freezing
+future features to these method bodies. The next app-action feature can extend
+the speaker detector and LMS command module while retaining the relay state table.

@@ -1,7 +1,9 @@
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
-OBJS = queue_room.o core_queue_sink.o core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
+QUEUE_ROOM_OBJS = queue_room.o queue_relay.o queue_path.o queue_speaker.o queue_lms_commands.o queue_status.o
+
+OBJS = $(QUEUE_ROOM_OBJS) core_queue_sink.o core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
 all: yeney libqueueitems.a yeney-queue-dryrun
 
@@ -22,7 +24,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test queue-lms-client-test yeney-queue-acceptance queue-mode-fixture room-mode-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test queue-audible-fixture libqueuecontroller.a queue-controller-fixture queue-controller-guard-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test install
 install: yeney yeney-queue-dryrun
@@ -40,6 +42,7 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
 # Preserve the legacy wire fixtures explicitly; settings tests also exercise the unset default.
+test: export YENEY_DEBUG =
 test: export YENEY_LMS_ICON =
 test: export YENEY_STREAM_PACING = wall
 test: export YENEY_PLAYBACK_MODE = stream
@@ -370,8 +373,8 @@ stream-metrics-lifetime-test: tests/stream_metrics_lifetime_test.cpp stream_metr
 	g++ -std=c++17 -g -O1 -Wall -Wextra -fsanitize=address -fno-omit-frame-pointer -I. -pthread -o $@ $<
 test: stream-metrics-lifetime-test
 
-queue_room.o: queue_room.cpp queue_speaker_changes.h queue_room.h room_status.h room_status.h queue_playlist.h queue_lms_cli.h upnp/queue_actions.h core_queue_sink.h
-	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ queue_room.cpp
+$(QUEUE_ROOM_OBJS): %.o: %.cpp queue_room_internal.h queue_room.h room_status.h queue_playlist.h queue_lms_cli.h upnp/queue_actions.h core_queue_sink.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
 
 
 
@@ -413,3 +416,5 @@ test: lms-icon-test lms-icon-connection-test
 yeney.o queue_room.o sonos-position.o core_sonos.o sonos-status.o sbencoder.o: room_state_directory.h stream_metrics.h timing_probe_runtime.h timing_drift_state.h
 
 yeney.o upnp/own_speaker_control.o sbstreamer.o: debug_settings.h
+
+$(QUEUE_ROOM_OBJS): queue_room_internal.h queue_room.h core_queue_sink.h queue_path_sink.h queue_playlist.h queue_source.h queue_speaker_changes.h stream_metrics.h
