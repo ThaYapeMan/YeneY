@@ -154,3 +154,16 @@ boundary handoffs and measured gaps. This is source routing, not fault-triggered
 fallback: automatic recovery/latching, grouping and `auto` remain parked.
 The owner suite now checks an available favourite/podcast and return to a local
 album; full crossfade/app-control/whole-list acceptance remains parked.
+
+## 24 October tidy removal record
+
+The unused `QueueActions::addMultiple`, `seekTime`, `clear` and `media` wrappers
+and `QueueCoordinator::verifyLease` convenience wrapper were removed after the
+relay passed Study and Port qualification. Retrieve them from
+`git show c3baa3d:upnp/queue_actions.cpp` and
+`git show c3baa3d:upnp/queue_coordinator.h` (the full controller remains at
+`queue-full-v1`). Batch enqueue remains unqualified and the fake rejects it
+with 402. Step 3 may restore a REL_TIME builder after its app-seek policy is
+qualified; step 4 may revisit batching only after fresh device verification.
+The production AddURIToQueue, owned range removal, backup and lease fencing
+are retained. `wav_writer::serveWav` is retained because `queue_route.cpp` uses it.

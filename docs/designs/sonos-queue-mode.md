@@ -88,7 +88,7 @@ Every append uses Browse-before/after fencing and requires NumTracksAdded=1.
 
 Production uses only **AddURIToQueue** with InstanceID=0,
 DesiredFirstTrackNumberEnqueued=0 and EnqueueAsNext=0. The retained unit-tested
-AddMultipleURIsToQueue helper is **not device-verified**: Study returned 402 on
+The removed AddMultipleURIsToQueue helper was **not device-verified**: Study returned 402 on
 20 October 2026. Its rejection is unexplained and may have been the invalid
 U+0016 album XML identified the next morning. It is not a production path.
 

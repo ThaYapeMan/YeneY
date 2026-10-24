@@ -17,24 +17,14 @@ int main() {
     });
     q.add("http://host/one", "didl");
     assert(action == "AddURIToQueue" && args["EnqueuedURI"] == "http://host/one");
-    q.addMultiple({{"http://host/one", "didl1"}, {"http://host/two", "didl2"}}, 42);
-    assert(action == "AddMultipleURIsToQueue" && args["UpdateID"] == "42" && args["NumberOfURIs"] == "2");
-    assert(args["EnqueuedURIs"] == "http://host/one http://host/two");
     q.remove(43, 2, 3);
     assert(args["UpdateID"] == "43" && args["StartingIndex"] == "2" && args["NumberOfTracks"] == "3");
-    fault = "804";
-    assert(q.clear().ok);
-    fault = "701";
-    assert(!q.clear().ok);
-    fault = "";
     q.save("Before YeneY 2026-10-18 12:34");
     assert(args["Title"] == "Before YeneY 2026-10-18 12:34");
     q.selectQueue("RINCON_TEST");
     assert(args["CurrentURI"] == "x-rincon-queue:RINCON_TEST#0");
     q.seekTrack(2);
     assert(args["Unit"] == "TRACK_NR" && args["Target"] == "2");
-    q.seekTime("0:01:30");
-    assert(args["Unit"] == "REL_TIME");
     q.pause();
     assert(action == "Pause" && args.size() == 1);
     q.play();
@@ -43,12 +33,10 @@ int main() {
     assert(action == "Stop");
     q.position();
     assert(action == "GetPositionInfo");
-    q.media();
-    assert(action == "GetMediaInfo");
     q.crossfade();
     assert(action == "GetCrossfadeMode");
     q.crossfade(false);
     assert(args["CrossfadeMode"] == "0");
-    std::cout << "PASS queue actions: batch/removal UpdateID, empty-queue 804, backup, queue URI, track/time "
+    std::cout << "PASS queue actions: removal UpdateID, backup, queue URI, track "
                  "seek and native transport/crossfade\n";
 }

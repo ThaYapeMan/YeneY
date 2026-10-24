@@ -17,7 +17,7 @@ struct ByteRange {
     bool partial;
 };
 ByteRange wavRange(const std::string &header, uint64_t length);
-// Standalone handler only; not registered with production playback/routes.
+// Finite WAV handler shared by the production route and storage tests.
 bool serveWav(upnp::StreamRequest &, const std::shared_ptr<Item> &,
               std::chrono::milliseconds wait = std::chrono::seconds(15));
 } // namespace queue_audio
