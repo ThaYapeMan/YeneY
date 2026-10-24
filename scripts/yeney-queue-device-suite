@@ -12,6 +12,7 @@ from pathlib import Path
 import runpy
 import shutil
 import shlex
+import re
 import signal
 import socket
 import sys
@@ -256,12 +257,17 @@ class Speaker:
                     duration=seconds(p['TrackDuration']) if p.get('TrackDuration','').count(':')==2 else None)
 
 
+class RemoteNotStarted(SuiteError):
+    pass
+
+
 class Suite(PACING['Suite']):
-    def __init__(self, room, server, *, speaker=None, album=None, volume=10, **kwargs):
+    def __init__(self, room, server, *, speaker=None, album=None, volume=10, remote=None, **kwargs):
         super().__init__(room, server, **kwargs)
         # Parent constructor creates only an archive workspace, never a service.
         self.cli = kwargs.get('cli') or CLI(server, self.log)
         self.album_choice, self.test_volume = album, volume
+        self.remote_argument, self.remote_pool = remote, []
         if not 0 <= volume <= 100: raise SuiteError("volume must be 0–100")
         self.speaker = speaker
         self.results, self.selected = [], {}
@@ -411,28 +417,62 @@ class Suite(PACING['Suite']):
                 for i,t in enumerate(entries):
                     writer.writerow([name,i,t['id'],t.get('title',''),t.get('album',''),t.get('album_id',''),QUEUE['codec'](t),t['samplerate'],t['duration'],t['url']])
 
+    @staticmethod
+    def remote_container(row):
+        url=row.get('url','')
+        if url.startswith('podcast://'):url=url[len('podcast://'):]
+        path=urlsplit(url).path.lower().rstrip('/')
+        return (row.get('hasitems')=='1' or row.get('type','').lower() in
+                ('playlist','link','outline','opml','feed','rss') or
+                path.endswith(('.rss','.xml','.opml','.atom','.m3u','.m3u8','.pls','.asx')))
+
     def remote_choice(self):
-        # Read-only OPML menus; bounded traversal, never change favourites/feeds.
-        notes=[]
+        # Read-only menu traversal. A favourite can be a feed despite type=audio.
+        notes=[]; pool=[]; requested=self.remote_argument
+        direct=bool(requested and ('://' in requested or urlsplit(requested).scheme in ('http','https','podcast','mms','rtsp')))
+        def track(row,menu):
+            return dict(id='',url=row['url'],title=row.get('title') or row.get('name',''),
+                        artist='',album='',remote='1',samplerate='',duration='0',remote_menu=menu)
+        if direct and not self.remote_container(dict(url=requested)) and not requested.startswith('file:'):
+            self.remote_pool=[track(dict(url=requested,title=requested),'explicit --remote')]
+            return self.remote_pool[0],'explicit --remote'
         for menu in ('favorites','podcasts'):
-            pending=[None];seen=set()
-            while pending and len(seen)<20:
-                ident=pending.pop(0)
-                if ident in seen:continue
-                seen.add(ident)
+            pending=[(None,not requested)];seen=set()
+            while pending and len(seen)<20 and len(pool)<5:
+                ident,selected=pending.pop(0)
+                key=(ident,selected)
+                if key in seen:continue
+                seen.add(key)
                 args=[self.mac,menu,'items','0','100','want_url:1']
                 if ident is not None:args.append('item_id:'+ident)
                 try:rows=records(self.cli.call(*args),'id')
                 except (SuiteError,OSError) as error:
-                    notes.append(menu+': '+str(error));break
+                    notes.append(menu+': '+str(error));continue
                 for row in rows:
                     url=row.get('url','')
-                    if url and not url.startswith('file:') and row.get('type','audio') not in ('opml','link','playlist'):
-                        return dict(id='',url=url,title=row.get('title') or row.get('name',''),
-                                    artist='',album='',remote='1',samplerate='',duration='0'),menu
-                    if row.get('id') and (row.get('hasitems')=='1' or row.get('type') in ('opml','link')):
-                        pending.append(row['id'])
-        return None,'no playable favourite or podcast entry'+('; '+'; '.join(notes) if notes else '')
+                    match=bool(requested and (url==requested or requested in (row.get('title'),row.get('name'))))
+                    eligible=selected or match
+                    container=self.remote_container(row)
+                    if eligible and url and not url.startswith('file:') and not container:
+                        if all(t['url']!=url for t in pool):pool.append(track(row,menu))
+                        if len(pool)==5:break
+                    if row.get('id') and (container or not url):
+                        pending.append((row['id'],eligible))
+        self.remote_pool=pool
+        if pool:return pool[0],pool[0]['remote_menu']
+        return None,('no playable audio for --remote '+repr(requested) if requested else
+                     'no playable favourite or podcast episode')+('; '+'; '.join(notes) if notes else '')
+
+    def remote_strm(self, since, deadline):
+        # STMc acknowledges a new strm s on both relay and stream paths. The
+        # queue-command line is earlier evidence when coming from a local item.
+        while True:
+            text=self.backend.run('journalctl','-u',self.unit,'--since','@'+format(since,'.6f'),
+                                  '--until','@'+format(since+5,'.6f'),'--no-pager','-o','cat')
+            if re.search(r'(?:^|\n)core: (?:STMc(?:\s|$)|queue command strm s(?:\s|$))',text):return
+            if self.backend.now()>=deadline:
+                raise RemoteNotStarted('LMS sent no strm s within 5 s')
+            self.backend.sleep(min(.2,deadline-self.backend.now()))
 
     def diagnostic(self):
         s = json.loads((self.state_root/('stream-pacing-'+self.room.encode().hex()+'.json')).read_text())
@@ -620,7 +660,7 @@ class Suite(PACING['Suite']):
             if self.backend.now()-start > timeout:
                 self.problem('evidence deadline exceeded')
 
-    def load(self, tracks, fade=0, startup_limit=5):
+    def load(self, tracks, fade=0, startup_limit=5, require_remote_strm=False):
         self.mutate('stop')
         self.mutate('playlist','shuffle','0'); self.mutate('playlist','repeat','0')
         for k,v in zip(PREFS,('1' if fade else '0','10','0')):
@@ -638,7 +678,9 @@ class Suite(PACING['Suite']):
             for track in tracks:self.pending_mutation('playlist','add',track['url'])
         self.lms_ready(expected,'stop',queue=True,deadline=deadline)
         start = self.backend.now()
+        play_wall = time.time()
         self.pending_mutation('play')
+        if require_remote_strm:self.remote_strm(play_wall,start+5)
         self.lms_ready(expected,'play',queue=True,deadline=deadline)
         self.due=start
         row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and
@@ -715,16 +757,28 @@ class Suite(PACING['Suite']):
         self.remote_scenario()
 
     def remote_scenario(self):
-        selected=self.selected['remote-source']
+        candidates=(self.remote_pool or self.selected['remote-source'])[:5]
         self.begin('remote-source')
+        rejected=[];selected=None
+        for attempt,track in enumerate(candidates,1):
+            self.log('remote candidate '+str(attempt)+' '+track['url'])
+            with (self.work/'manifest.tsv').open('a',newline='') as f:
+                csv.writer(f,delimiter='\t').writerow(['remote-candidate',attempt,track['id'],track.get('title',''),
+                    track.get('album',''),track.get('album_id',''),QUEUE['codec'](track),track['samplerate'],track['duration'],track['url']])
+            try:
+                self.load([track],require_remote_strm=True)
+                selected=[track];break
+            except RemoteNotStarted as error:
+                rejected.append(track['url']+': '+str(error))
+                self.log('remote candidate rejected: '+rejected[-1])
+                self.mutate('stop');self.pending_mutation('playlist','clear')
         if not selected:
-            self.current.update(verdict='SKIP',note=self.remote_note)
-            print('SKIP remote-source: '+self.remote_note,flush=True)
+            self.current.update(verdict='SKIP',note='no playable remote candidate: '+self.remote_note+('; '+'; '.join(rejected) if rejected else ''))
+            print('SKIP remote-source: '+self.current['note'],flush=True)
             return
-        self.load(selected)
         until=self.backend.now()+5
         while self.backend.now()<until:self.sample(selected)
-        self.current['note']='remote from '+self.remote_note+' started on stream path within 5 s'
+        self.current['note']='remote from '+selected[0].get('remote_menu',self.remote_note)+' started on stream path within 5 s'
         self.begin('local-after-remote')
         self.load(self.selected['album'])
         self.current['note']='local album returned to relay path'
@@ -902,10 +956,11 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--room',required=True)
     parser.add_argument('--server',required=True)
+    parser.add_argument('--remote',help='LMS favourite name, playable remote URL, or podcast episode URL')
     parser.add_argument('--album',help='LMS album ID or exact name; first eligible album by default')
     parser.add_argument('--volume',type=int,default=10,choices=range(101),metavar='0–100')
     args=parser.parse_args()
-    suite=Suite(args.room,args.server,album=args.album,volume=args.volume)
+    suite=Suite(args.room,args.server,album=args.album,volume=args.volume,remote=args.remote)
     if os.geteuid()!=0:
         suite.setup=lambda:(_ for _ in ()).throw(SuiteError('run as root'))
     return suite.execute()

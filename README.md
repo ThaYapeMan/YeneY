@@ -662,3 +662,9 @@ stop/release queue playback and report failure to LMS. Queue diagnostics expose
 to 500 ms; the relay checks every 100 ms during the first three seconds after
 Play/Seek/track changes and the final three seconds of an audible item. GENA
 events trigger fresh observations; successful position/transport polls are silent.
+
+The queue device suite accepts `--remote <favourite name or episode URL>` to
+choose its remote-source scenario. Feed/container entries are browsed for playable
+episodes; candidates that produce no SlimProto start within five seconds are
+unloaded, up to five attempts. If none is playable the scenario reports SKIP.
+See [device verification](DEVICE-VERIFICATION.md#remote-source-selection-in-the-queue-device-suite).

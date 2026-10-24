@@ -39,7 +39,7 @@ class Model:
                 n=str(len(self.library)+1)
                 self.library.append(dict(id=n,title='Title & '+n,artist='Artist <one>',album='Album '+str(album),album_id=str(album),
                                          type=kind,samplerate=str(rate),duration='60',url='file:///music/'+n+'.m4a'))
-        self.favourites=[];self.podcasts=[]
+        self.favourites=[];self.podcasts=[];self.favourite_children={};self.unplayable=set();self.started_urls=[];self.started_url=""
         self.speaker_metadata={};self.title_format='artist-title'
         self.byid={t['id']:t for t in self.library}
         self.urls=['file:///saved/one.flac','file:///saved/two.flac']
@@ -85,7 +85,8 @@ class Model:
         assert args[0]==MAC and '%' not in args[0],args
         cmd=args[1:]
         if cmd[0] in ('favorites','podcasts'):
-            rows=self.favourites if cmd[0]=='favorites' else self.podcasts
+            ident=next((v[8:] for v in cmd if v.startswith('item_id:')),None)
+            rows=(self.favourite_children.get(ident,[]) if ident is not None else self.favourites) if cmd[0]=='favorites' else (self.podcasts if ident is None else [])
             return ['count:'+str(len(rows))]+[k+':'+str(v) for row in rows for k,v in row.items()]
         if cmd[0]=='status':
             entries=list(enumerate(self.urls))
@@ -117,8 +118,14 @@ class Model:
         elif cmd[0]=='time':self.time=float(cmd[1]);self.slim.strm('f');self.slim.strm('s')
         elif cmd[0]=='pause':self.mode='pause';self.slim.strm('p')
         elif cmd[0] in ('play','stop'):
-            if cmd[0]=='play':self.play_prior_modes.append(self.mode)
-            self.mode=cmd[0];self.slim.strm('u' if cmd[0]=='play' else 'q')
+            if cmd[0]=='play':
+                self.play_prior_modes.append(self.mode)
+                if self.urls and self.urls[self.index] not in self.unplayable:
+                    if self.mode!='pause':
+                        self.slim.strm('s');self.started_url=self.urls[self.index];self.started_urls.append(self.started_url)
+                    self.slim.strm('u')
+            else:self.slim.strm('q')
+            self.mode=cmd[0]
             if self.mode=='play' and self.queue:
                 self.owned=self.track()['url'].startswith('file://')
                 self.backend.sonos.crossfade=not self.owned
@@ -201,7 +208,7 @@ class Backend:
         self.calls.append(args)
         if args[0]=='systemd-escape':return 'yeney@Study.service'
         if args[0].endswith('/yeney'):return 'Study\tPort\t127.0.0.1\tStudy\t'+('Study,Kitchen' if self.grouped else 'Study')
-        if args[0]=='journalctl':return 'room Study journal only'
+        if args[0]=='journalctl':return 'core: STMc\nroom Study journal only' if self.model.mode=='play' and self.model.urls and self.model.started_url==self.model.urls[self.model.index] and self.model.started_url not in self.model.unplayable else 'room Study journal only'
         assert args[0]=='systemctl',args
         if args[1]=='show' and 'StateDirectory' in args: return ''
         if args[1]=='show':return str(self.pid) if 'MainPID' in args else self.environment+(' YENEY_PLAYBACK_MODE=queue' if self.suite.dropin and self.suite.dropin.exists() else '')
@@ -334,6 +341,27 @@ class Tests(unittest.TestCase):
         self.assertTrue(remote and all(r['playback']['path']=='stream' for r in remote))
         self.assertIn('remote-source',(self.suite.work/'manifest.tsv').read_text())
         print('PASS device remote-source: favourite streams within 5 s, local album returns to relay, manifest and owner state restored')
+
+    def test_remote_feed_retry_transaction(self):
+        feed='https://plus.bnr.invalid/show.rss?t=fixture'
+        urls=['https://audio.invalid/bad.mp3','https://audio.invalid/episode.mp3']
+        episodes=[]
+        for i,url in enumerate(urls):
+            t=dict(id=str(-42-i),url=url,title='Episode '+str(i),artist='',album='',duration='120')
+            self.model.byid[t['id']]=t;self.model.library.append(t)
+            episodes.append(dict(id='episode'+str(i),type='audio',url=url,title=t['title']))
+        self.model.favourites=[dict(id='feed',type='audio',url=feed,name='Boekestijn & De Wijk | Plus')]
+        self.model.favourite_children['feed']=episodes
+        self.model.unplayable.add(urls[0]);self.suite.remote_argument='Boekestijn & De Wijk | Plus'
+        code,output=self.run_suite();self.assertEqual(code,0,output);self.restored()
+        rows={r['name']:r for r in self.suite.results}
+        self.assertEqual(rows['remote-source']['verdict'],'PASS')
+        self.assertEqual(rows['local-after-remote']['verdict'],'PASS')
+        self.assertNotIn(urls[0],self.model.started_urls);self.assertIn(urls[1],self.model.started_urls)
+        self.assertNotIn((MAC,'playlist','add',feed),self.model.calls)
+        self.assertIn('remote candidate rejected:',(self.suite.work/'commands.log').read_text())
+        self.assertIn('remote-candidate',(self.suite.work/'manifest.tsv').read_text())
+        print('PASS device field RSS favourite: explicit feed browsed through fake LMS CLI, no-strm episode unloaded after 5 s, next audio episode streams, local relay and owner state restored')
 
     def test_remote_podcast_menu(self):
         self.model.podcasts=[dict(id='episode',type='audio',url='podcast://https://podcast.invalid/episode.mp3',title='Podcast')]

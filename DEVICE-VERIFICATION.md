@@ -746,3 +746,21 @@ report the measured startup. Modern queue rooms receive native hi-res files
 and yeney-core converts within the rate family (88.2/176.4 → 44.1 kHz;
 96/192 → 48 kHz), preserving exact WAV lengths. Ordinary stream rooms and
 legacy 44.1 kHz mode retain LMS/SoX conversion.
+
+## Remote-source selection in the queue device suite
+
+`/usr/local/bin/yeney-queue-device-suite` skips menu containers and RSS/XML/OPML,
+Atom and playlist URLs. It browses favourite/podcast feed children for the first
+playable episode instead of placing a feed URL into the LMS playlist. Up to five
+audio candidates are tried. Each must produce a new `strm s` within five seconds
+of Play, confirmed from the room journal's existing STMc/queue-command messages;
+otherwise it is stopped/unloaded and the next candidate is tried. No playable
+candidate produces a clear remote-source SKIP, not a playback failure. Once LMS
+starts a candidate, the existing speaker-start and stream-path checks still apply.
+Candidate choices and rejection reasons are recorded in the manifest and command log.
+
+Use `--remote 'Favourite name'`, `--remote 'https://…/episode.mp3'`, or a
+`podcast://` episode URL to select the remote item explicitly. An explicit feed
+URL/name is resolved through the existing LMS menus; the suite never adds a feed
+or changes favourites. For example, append `--remote 'Boekestijn & De Wijk | Plus'`
+to `/usr/local/bin/yeney-queue-device-suite --room 'Sonos Port' --server LMS_HOST`.

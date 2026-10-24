@@ -63,6 +63,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/stream_pacing_setting_test.py
 	./stream-metrics-test
 	python3 tests/stream_pacing_suite_test.py
+	python3 tests/remote_selection_test.py
 	python3 tests/queue_device_suite_test.py
 	python3 tests/queue_device_cli_test.py
 	python3 tests/queue_protocol_setting_test.py
