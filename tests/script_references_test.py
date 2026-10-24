@@ -8,8 +8,9 @@ errors=[]
 for name in files:
     p=ROOT/name
     if not p.is_file() or name.startswith(('scripts/archive/','tests/archive/','third_party/')):continue
-    if p.suffix not in ('.md','.py','.sh','.cpp','.h') and name not in ('Makefile','CLAUDE.md'):continue
+    if p.suffix not in ('.md','.py','.sh','.cpp','.h','.service') and not name.startswith('scripts/') and name not in ('Makefile','CLAUDE.md'):continue
     for line in p.read_text(errors='replace').splitlines():
+        line=line.replace('/opt/yeney/scripts/','scripts/')
         # Literal paths only; parameterized examples/regexes are not file names.
         for path in re.findall(r'(?<![\w/:])scripts/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*',line):
             path=path.rstrip('.')
