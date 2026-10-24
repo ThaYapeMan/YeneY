@@ -285,19 +285,21 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |
 | `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |
 | `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; invalid/overflowing values fail queue configuration | `256` |
+| `YENEY_LMS_ICON` | Material icon name; explicitly empty disables preference handling | `sonos` |
+| `YENEY_START_LEAD_MS` | Startup reserve, 0–10000 milliseconds | `1000` |
+| `YENEY_UPNP` | `yeney` or `own`; unsupported names warn and use YeneY | `yeney` |
 | `YENEY_STREAM_PACING` | `sonos`: follow the Sonos clock · `wall`: legacy host clock opt-out | `sonos` |
 | `YENEY_AUDIO` | `24/48`: 24-bit FLAC at the source's 44.1/48 kHz rate · `16/44`: legacy 16-bit/44.1 kHz | `24/48` |
 | `YENEY_TITLE_FORMAT` | `artist-title`: "artist - title" · `title`: title only | `artist-title` |
 | `YENEY_STREAM_CONTENT` | `structured`, `plain` or `off`: the radio-text field for other controllers | `structured` |
 | `YENEY_PAUSE` | `stop`: the Sonos-safe pause · `pause`: plain UPnP Pause (fallback) | `stop` |
-| `YENEY_DEBUG_EVENTS` | `1`: log every received GENA service/state/sequence; other values: off | off |
-| `YENEY_POLL` | `events`: event-driven · `legacy`: the older polling schedule, for A/B tests | `events` |
-| `YENEY_STOPPED_MEDIAINFO` | `0` or `1`: poll media info while stopped | `0` |
+| `YENEY_DEBUG` | Comma-separated `events`, `stream`, `legacy-poll`, `stopped-mediainfo`; diagnostics and polling experiments only | empty |
 | `YENEY_TIMING_PROBE` | `1`: measurement-only coordinator playback-clock probe; unset/`0`: off | off |
 | `YENEY_TIMING_RAW` | `1`: per-request and edge observations, only with TIMING_PROBE enabled | off |
 | `YENEY_TIMING_STALE_S` | 10–600 seconds without a usable edge before probe expiry | `60` |
 | `YENEY_TIMING_LOCKED_EVERY_S` | 1–60 seconds between locked clock probes | `5` |
 | `YENEY_LMS_POSITION_FROM_MODEL` | `1`: continuous locked-clock LMS position; `0`: RelTime-only. Requires an active timing probe model. | 1 |
+| `YENEY_TIMING_PRIOR` | Use the persisted per-UDN drift prior | `1` |
 | `YENEY_TIMING_PUBLISH` | `1`: publish the LampaStream timing contract and core audio tap, only with TIMING_PROBE | off |
 | `YENEY_AUDIBLE_OFFSET_MS` | -500–500 ms acoustic calibration, added to published audible times | `0` |
 
@@ -532,6 +534,12 @@ Yes, for noncommercial use, under the
 The technical background of each point is in
 [How YeneY works](docs/how-it-works.md#where-it-falls-short).
 
+The old `YENEY_DEBUG_EVENTS=1`, `YENEY_DEBUG_STREAM=1`, `YENEY_POLL=legacy`
+and `YENEY_STOPPED_MEDIAINFO=1` names still work, with one deprecation warning
+each at startup. Canonical debug tokens enable the selected experiments; an
+enabled legacy alias also keeps its previous effect. All timing/LampaStream and
+user-facing playback settings retain their names and defaults.
+
 ## For developers
 
 ### Building and testing
@@ -630,7 +638,7 @@ Copyright (C) 2026 Jaap van Vliet
 
 Grouped HTTP recovery and investigation: [Decisions and findings](docs/grouped-range-recovery.md).
 
-Grouped playback reserve: `YENEY_START_LEAD_MS=1000` (default; valid 0–10000; 0 retains legacy pacing). Set `YENEY_DEBUG_STREAM=1` for per-response lead and TCP diagnostics. See [decisions and device trials](docs/start-lead.md).
+Grouped playback reserve: `YENEY_START_LEAD_MS=1000` (default; valid 0–10000; 0 retains legacy pacing). Set `YENEY_DEBUG=stream` for per-response lead and TCP diagnostics. See [decisions and device trials](docs/start-lead.md).
 
 The opt-in playback-clock probe is documented in
 [Timing probe](docs/timing-probe.md). Enable it with `YENEY_TIMING_PROBE=1`; it

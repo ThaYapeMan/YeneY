@@ -1,4 +1,5 @@
 #pragma once
+#include "debug_settings.h"
 #include "upnp/stream_server.h"
 #include <chrono>
 #include <algorithm>
@@ -34,7 +35,7 @@ public:
     explicit StreamDebugRequest(upnp::StreamRequest& request,
         std::function<std::chrono::steady_clock::time_point()> clock = std::chrono::steady_clock::now)
         : request(request), now(std::move(clock)) {
-        const char* value = std::getenv("YENEY_DEBUG_STREAM"); enabled = value && !strcmp(value,"1");
+        enabled = bridge::debugOption("stream", "YENEY_DEBUG_STREAM");
     }
     ~StreamDebugRequest() { if (enabled && begun) { request.peerClosed(); line(true); } }
     void encoder(std::function<uint64_t()> clock, bool continuation = false) {

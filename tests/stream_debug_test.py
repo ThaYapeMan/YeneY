@@ -37,12 +37,13 @@ with tempfile.TemporaryDirectory(prefix='yeney-stream-debug-') as tmp:
     cpp=Path(tmp)/'test.cpp';cpp.write_text(source)
     binary=Path(tmp)/'test'
     subprocess.run(['g++','-std=c++17','-Wall','-Wextra','-I',str(root),str(cpp),'-o',str(binary)],check=True)
-    for setting in (None,'true','1'):
-        env=dict(os.environ);env.pop('YENEY_DEBUG_STREAM',None)
-        if setting is not None:env['YENEY_DEBUG_STREAM']=setting
+    for setting in (None,'true','1','canonical'):
+        env=dict(os.environ);env.pop('YENEY_DEBUG_STREAM',None);env.pop('YENEY_DEBUG',None)
+        if setting == 'canonical':env['YENEY_DEBUG']='stream'
+        elif setting is not None:env['YENEY_DEBUG_STREAM']=setting
         run=subprocess.run([str(binary)],env=env,capture_output=True,text=True,check=True)
         lines=run.stdout.splitlines()
-        if setting!='1':assert not lines
+        if setting not in ('1','canonical'):assert not lines
         else:
             periodic=[line for line in lines if not line.endswith(' final')]
             assert [float(line.split('t=')[1].split()[0]) for line in periodic]==list(range(1,31))+[40,50],lines

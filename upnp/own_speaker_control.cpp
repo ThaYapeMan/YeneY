@@ -1,4 +1,5 @@
 #include "own_speaker_control.h"
+#include "../debug_settings.h"
 #include "discovery.h"
 #include "http.h"
 #include "../timing_probe_runtime.h"
@@ -13,11 +14,11 @@ OwnSpeakerControl::OwnSpeakerControl(std::function<unsigned()> port, unsigned co
       eventCallback(std::move(callback)), eventServer(std::move(server)) {
     (void)streamContentMode();
     const char* mode = std::getenv("YENEY_POLL");
-    monitor.legacy = mode && std::string(mode) == "legacy";
+    monitor.legacy = bridge::debugOption("legacy-poll", "YENEY_POLL", "legacy");
     if (mode && std::string(mode) != "events" && std::string(mode) != "legacy")
         printf("yeney: setting key=YENEY_POLL invalid=%s fallback=events\n", logValue(mode).c_str());
     const char* media = std::getenv("YENEY_STOPPED_MEDIAINFO");
-    monitor.stoppedMediaInfo = media && std::string(media) == "1";
+    monitor.stoppedMediaInfo = bridge::debugOption("stopped-mediainfo", "YENEY_STOPPED_MEDIAINFO");
     if (media && std::string(media) != "0" && std::string(media) != "1")
         printf("yeney: setting key=YENEY_STOPPED_MEDIAINFO invalid=%s fallback=0\n", logValue(media).c_str());
     if (timing_probe::enabled()) {
@@ -78,7 +79,7 @@ bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
     }
     apply(update);
     static const bool debugEvents = [] {
-        const char* value = std::getenv("YENEY_DEBUG_EVENTS"); return value && std::string(value) == "1";
+        return bridge::debugOption("events", "YENEY_DEBUG_EVENTS");
     }();
     if (debugEvents) printf("yeney: event service=%s TransportState=%s seq=%u\n",
         serviceName(event.service), logValue(state.snapshot().transport.state).c_str(), event.sequence);

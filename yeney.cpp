@@ -11,6 +11,7 @@
 // FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 
 #include "legacy_environment.h"
+#include "debug_settings.h"
 #include "lms_artwork.h"
 #include "upnp/own_speaker_control.h"
 #include "upnp/backend.h"
@@ -910,6 +911,7 @@ int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     warnLegacyEnvironment();
+    bridge::warnDebugSettings();
     if (findOption(argc, argv, "--file") || findFlag(argc, argv, "--file")) {
         fprintf(stderr, "--file is no longer supported\n");
         return EXIT_FAILURE;

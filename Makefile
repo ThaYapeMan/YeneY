@@ -116,6 +116,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/lms_icon_test.py
 	python3 tests/room_state_lookup_test.py
 	python3 tests/installer_state_test.py
+	python3 tests/debug_settings_test.py
 	python3 tests/script_references_test.py
 	python3 tests/installer_test.py
 	python3 tests/upnp_mock_test.py
@@ -410,3 +411,5 @@ test: lms-icon-test lms-icon-connection-test
 
 # Both playback paths and timing persistence share the room state policy.
 yeney.o queue_room.o sonos-position.o core_sonos.o sonos-status.o sbencoder.o: room_state_directory.h stream_metrics.h timing_probe_runtime.h timing_drift_state.h
+
+yeney.o upnp/own_speaker_control.o sbstreamer.o: debug_settings.h
