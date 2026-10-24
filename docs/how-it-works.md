@@ -157,14 +157,14 @@ bridge with `YENEY_TITLE_FORMAT=title` and start a fresh LMS stream first:
 the diagnostic deliberately prefixes the current title without deduplication.
 Restart the LMS stream to restore the bridge's configured metadata.
 
-`scripts/stream-probe.py` is a separate device-test aid that serves an audio source
+`scripts/archive/stream-probe.py` is a separate device-test aid that serves an audio source
 from this host on port 18080 and points the speaker at it without using the bridge.
 Stop the room's bridge service before running it, then restart that service when
 finished. For example, on the bridge host:
 
 ```sh
 sudo systemctl stop 'yeney@Study'
-python3 scripts/stream-probe.py 192.0.2.145 flac-radio 'http://<lms>:9000/music/<id>/download'
+python3 scripts/archive/stream-probe.py 192.0.2.145 flac-radio 'http://<lms>:9000/music/<id>/download'
 sudo systemctl start 'yeney@Study'
 ```
 
@@ -177,7 +177,7 @@ when enabled, and samples the speaker's stored metadata and position every five
 seconds, printing changes. Ctrl+C stops the speaker and the probe server.
 
 **URI scheme, ICY and FLAC playback.** Device probes on 28 September 2026 with
-`scripts/stream-probe.py` showed that a CurrentURI beginning with
+`scripts/archive/stream-probe.py` showed that a CurrentURI beginning with
 `x-rincon-mp3radio://` selects Sonos's radio client. It sends `Icy-MetaData: 1`
 and a User-Agent ending in `Nullsoft Winamp3` for MP3 and FLAC alike. A CurrentURI
 beginning with `http://` uses the normal HTTP client and never requested ICY in
@@ -281,7 +281,7 @@ What made it so difficult:
 Proving that meant building dedicated tooling first:
 `scripts/device-test.sh` runs fixed scenarios against a real speaker and
 captures the bridge journal, the LMS event stream and status, and the network
-traffic of each run. `scripts/reference-test.sh` with `scripts/reference-relay.py`
+traffic of each run. `scripts/archive/reference-test.sh` with `scripts/archive/reference-relay.py`
 puts known-good sources (a live MP3 station, a headerless FLAC station, a clean
 FLAC file) in front of the same speaker with the same UPnP command. It took at
 least a dozen captured runs, and hours of reading packet captures and

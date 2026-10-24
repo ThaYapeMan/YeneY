@@ -50,7 +50,7 @@ cd /opt/yeney
 git pull --ff-only
 # In LMS: select Study (Sonos), press Stop (not Pause).
 sudo systemctl stop yeney@Study
-python3 scripts/sonos-queue-probe --replace-queue
+python3 scripts/archive/sonos-queue-probe --replace-queue
 # After the probe, including an interrupted or failed run:
 sudo systemctl start yeney@Study
 # In LMS: select Study (Sonos), press Play to restore normal YeneY playback.
@@ -66,7 +66,7 @@ Study is found by SSDP and ZoneGroupTopology. To avoid multicast discovery or to
 choose the reachable LAN interface explicitly:
 
 ```bash
-python3 scripts/sonos-queue-probe --lms LMS_HOST --ip STUDY_IP \
+python3 scripts/archive/sonos-queue-probe --lms LMS_HOST --ip STUDY_IP \
   --lan-ip 192.168.178.31 --port 8099 --replace-queue
 ```
 
@@ -276,7 +276,7 @@ itself remains standard-library-only. There is no frontend to check.
 After the normal Q1–Q6 (and Q7 if requested), these flags add independent steps:
 
 ```bash
-python3 scripts/sonos-queue-probe --replace-queue \
+python3 scripts/archive/sonos-queue-probe --replace-queue \
   --native-crossfade --length-mismatch
 ```
 

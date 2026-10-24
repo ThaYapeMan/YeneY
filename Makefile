@@ -116,8 +116,8 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/lms_icon_test.py
 	python3 tests/room_state_lookup_test.py
 	python3 tests/installer_state_test.py
+	python3 tests/script_references_test.py
 	python3 tests/installer_test.py
-	python3 tests/migration_test.py
 	python3 tests/upnp_mock_test.py
 	python3 tests/own_display_test.py
 	./position-test
@@ -135,13 +135,11 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/yeney_timeline_test.py
 	python3 tests/lms_discovery_test.py
 	python3 tests/device_test_script_test.py
-	python3 tests/replaygain_probe_test.py
 	python3 tests/pause_mode_test.py
 	python3 tests/audio_mode_test.py
 	python3 tests/obsolete_player_test.py
 	python3 tests/core_sonos_test.py
 	python3 tests/player_engine_test.py
-	python3 tests/sonos_queue_probe_test.py
 	python3 tests/queue_dryrun_test.py
 	python3 tests/queue_suite_test.py
 	$(MAKE) -C third_party/yeney-core decimator-fixture

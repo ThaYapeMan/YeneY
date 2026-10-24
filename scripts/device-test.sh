@@ -86,7 +86,7 @@ RG_MODE_SAVED=''
 RG_CAPTURE_PID=''
 RG_REPORT=''
 RG_ACTIVE=0
-RG_HELPER=${AUTO_HELPER%/*}/replaygain_probe.py
+RG_HELPER=${AUTO_HELPER%/*}/archive/replaygain_probe.py
 
 
 say()  { printf '%s\n' "$*" >&2; }

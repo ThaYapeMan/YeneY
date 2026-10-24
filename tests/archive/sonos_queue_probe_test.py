@@ -30,8 +30,8 @@ import sys
 
 sys.dont_write_bytecode = True
 
-ROOT = Path(__file__).resolve().parents[1]
-loader = importlib.machinery.SourceFileLoader('queue_probe', str(ROOT / 'scripts/sonos-queue-probe'))
+ROOT = Path(__file__).resolve().parents[2]
+loader = importlib.machinery.SourceFileLoader('queue_probe', str(ROOT / 'scripts/archive/sonos-queue-probe'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 p = importlib.util.module_from_spec(spec)
 sys.modules[loader.name] = p

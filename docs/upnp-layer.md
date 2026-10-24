@@ -44,7 +44,7 @@ are served.
 
 `streamDidl()` retains an `http://` CurrentURI for FLAC with
 `x-rincon-mp3radio:*:audio/flac:*` protocolInfo. Device probes on 28 September 2026
-using `scripts/stream-probe.py` showed why: the URI scheme selects the client.
+using `scripts/archive/stream-probe.py` showed why: the URI scheme selects the client.
 The normal HTTP client plays FLAC without requesting ICY. Changing CurrentURI to
 `x-rincon-mp3radio://` selects the radio client, which requests `Icy-MetaData: 1`
 with a User-Agent ending in `Nullsoft Winamp3` for both MP3 and FLAC. In that

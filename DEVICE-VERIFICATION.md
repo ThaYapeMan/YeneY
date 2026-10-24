@@ -249,7 +249,7 @@ if LMS is unreachable, the report retains the value to restore manually.
 Each run has its own full-payload `tcpdump -s 0` capture, filtered to LMS TCP 3483
 and stream-port responses (1400–1409) to the coordinator. The ordinary 512-byte
 capture is not used for this measurement. The stdlib-only Python helper
-`scripts/replaygain_probe.py` reassembles TCP, reads the packed Slimproto `strm s`
+`scripts/archive/replaygain_probe.py` reassembles TCP, reads the packed Slimproto `strm s`
 gain, and selects the largest FLAC HTTP response. It removes HTTP chunking,
 retains a truncated final chunk and decodes with `flac -d --decode-through-errors`.
 The local LMS stream request's player ID selects the intended player; missing or

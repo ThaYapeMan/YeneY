@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 
-script = Path(__file__).resolve().parents[1] / 'scripts/migrate-from-sonos-lms.sh'
+script = Path(__file__).resolve().parents[2] / 'scripts/archive/migrate-from-sonos-lms.sh'
 old_units = ['sonos-lms@Study.service', r'sonos-lms@Sonos\x20Port.service', 'sonos-lms@MBR.service']
 settings = {
     'SONOS_LMS_UPNP': 'YENEY_UPNP', 'SONOS_LMS_PAUSE': 'YENEY_PAUSE',
@@ -177,7 +177,7 @@ if command[0] == 'install-devices.sh':
         print(f'PASS: migration preserves three rooms including Sonos Port, settings, order and repeat-run safety (scenario={scenario})')
 
 # Migration diagnostics: old settings must warn, never configure the new binary.
-root = Path(__file__).resolve().parents[1]
+root = Path(__file__).resolve().parents[2]
 names = {
     'SONOS_LMS_UPNP': 'YENEY_UPNP',
     'SONOS_LMS_PAUSE': 'YENEY_PAUSE',

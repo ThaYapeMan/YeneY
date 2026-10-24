@@ -36,7 +36,7 @@ HELO. Existing core rendering policy remains independently tested.
 
 ## Owner suite scenarios parked with the old implementation
 
-At the tags, `scripts/yeney-queue-device-suite`, `scripts/yeney_queue_ws.py`,
+At the tags, `scripts/yeney-queue-device-suite`, `queue-full-v1:scripts/yeney_queue_ws.py`,
 `tests/queue_device_suite_test.py`, `tests/queue_device_cli_test.py` and
 `tests/queue_device_ws_test.py` preserve the complete unattended suite.
 Step 2 restores fallback and stream-reference comparisons; step 3 restores

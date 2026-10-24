@@ -13,8 +13,8 @@ import sys
 import tempfile
 
 sys.dont_write_bytecode = True
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location('probe', ROOT / 'scripts/replaygain_probe.py')
+ROOT = Path(__file__).resolve().parents[2]
+spec = importlib.util.spec_from_file_location('probe', ROOT / 'scripts/archive/replaygain_probe.py')
 probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
 PLAYER = '00:11:22:33:44:55'
@@ -159,7 +159,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-rg-probe-') as directory:
             flac = tmp/f'{name}-source.flac'
             subprocess.run(['flac', '-f', '-s', '-o', str(flac), str(source)], check=True, capture_output=True)
             capture(tmp/f'{name}.pcap', flac.read_bytes(), sent, 276)
-        report = subprocess.run([sys.executable, str(ROOT/'scripts/replaygain_probe.py'),
+        report = subprocess.run([sys.executable, str(ROOT/'scripts/archive/replaygain_probe.py'),
             '--track', str(tmp/'track.pcap'), '--off', str(tmp/'off.pcap'), '--speaker', SONOS,
             '--player', PLAYER, '--tag-db=-8.01'], capture_output=True, text=True)
         assert report.returncode == 0, report.stdout + report.stderr

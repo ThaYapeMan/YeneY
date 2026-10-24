@@ -532,43 +532,6 @@ Yes, for noncommercial use, under the
 The technical background of each point is in
 [How YeneY works](docs/how-it-works.md#where-it-falls-short).
 
-## Upgrading from sonos-lms
-
-YeneY was previously called sonos-lms. On the machine that runs it, pull in the
-old checkout and run the migration as root:
-
-```sh
-cd /opt/sonos-lms
-git pull --ff-only
-sudo scripts/migrate-from-sonos-lms.sh
-cd /opt/yeney
-journalctl -u 'yeney@*' -f
-```
-
-The script finds enabled `sonos-lms@<room>` services in
-`/etc/systemd/system/*.wants/` and also includes currently active instances.
-It prints each room's source before changing anything. If the old checkout exists
-but no rooms are found, it stops with an error. To include rooms explicitly by
-display name, run `sudo scripts/migrate-from-sonos-lms.sh --rooms "Study,Sonos Port,MBR"`.
-These names are added to any discovered rooms; an interrupted migration resumes
-its recorded room list.
-
-The script records and stops the selected services, moves
-`/opt/sonos-lms` and `/etc/sonos-lms` to `/opt/yeney` and `/etc/yeney`, and moves
-the room drop-ins (including names with spaces). It renames their settings,
-removes `SONOS_LMS_EVENT_PORT` lines, updates the Git remote, removes the old
-unit template, reloads systemd, builds, and installs the same rooms as
-`yeney@<room>`. Playback stops during migration. It stops at the first error;
-if interrupted after the checkout moves, rerun
-`sudo /opt/yeney/scripts/migrate-from-sonos-lms.sh`. After success, rerunning
-finds nothing to do. Conflicting old and new directories are never overwritten.
-
-Only the new `YENEY_` settings are read. Startup warns once per old
-`SONOS_LMS_*` or `SONOS_SQUEEZEBOX_*` variable, naming its replacement when one
-exists; unknown settings are obsolete. Update any settings outside the migrated
-drop-ins yourself. The old stream path is rejected like a stale session so a
-speaker holding a pre-upgrade URI cannot attach it to a new stream.
-
 ## For developers
 
 ### Building and testing
