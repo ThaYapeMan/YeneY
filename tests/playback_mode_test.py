@@ -7,6 +7,7 @@ import signal
 import socket
 import subprocess
 import threading
+import tempfile
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -77,19 +78,20 @@ def receive(sock, size):
     return data
 
 
+state = tempfile.TemporaryDirectory(prefix='yeney-group-policy-')
 server = ThreadingHTTPServer((HOST, 1400), Speaker)
 server.daemon_threads = True
 worker = threading.Thread(target=server.serve_forever)
 worker.start()
 try:
-    cases = [(None, 'solo', 'default-stream'), ('stream', 'solo', 'configured-stream'),
+    cases = [(None, 'solo', 'default-queue'), ('stream', 'solo', 'configured-stream'),
              ('auto', 'solo', 'auto-phase4'), ('invalid', 'solo', 'invalid-setting'),
-             ('', 'solo', 'invalid-setting'), ('queue', 'coordinator', 'group-rate-undecided'),
-             ('queue', 'member', 'group-rate-undecided')]
-    reference = None
+             ('', 'solo', 'invalid-setting'), ('queue', 'coordinator', 'queue-opt-in'),
+             ('queue', 'member', 'queue-opt-in')]
+    references = {}
     for mode, group, reason in cases:
         server.group, server.actions = group, []
-        env = dict(os.environ, YENEY_TIMING_PROBE='0', YENEY_TIMING_PUBLISH='0')
+        env = dict(os.environ, YENEY_TIMING_PROBE='0', YENEY_TIMING_PUBLISH='0', STATE_DIRECTORY=state.name)
         env.pop('YENEY_PLAYBACK_MODE', None)
         if mode is not None:
             env['YENEY_PLAYBACK_MODE'] = mode
@@ -107,28 +109,34 @@ try:
                     header = receive(connection, 8)
                     assert header[:4] == b'HELO', header
                     hello = header+receive(connection, int.from_bytes(header[4:], 'big'))
-                    if reference is None:
-                        reference = hello
-                    assert hello == reference, (mode, group, hello, reference)
+                    selected = 'queue' if mode in (None,'queue') else 'stream'
+                    if selected not in references: references[selected] = hello
+                    assert hello == references[selected], (mode, group, hello, references[selected])
+                    assert (b'MaxSampleRate=192000' in hello) == (selected=='queue'), hello
                     process.send_signal(signal.SIGTERM)
                     try:
                         output = process.communicate(timeout=20)[0]
                     except subprocess.TimeoutExpired as error:
                         raise AssertionError((mode, group, error.output)) from error
                     assert process.returncode == 0, output
-                selected = 'stream'
+                selected = 'queue' if mode in (None,'queue') else 'stream'
                 assert f'selected={selected} reason={reason}' in output, output
                 assert output.count('playback selection room=') == 1, output
                 assert 'queue playback unavailable:' not in output, output
                 assert ('invalid YENEY_PLAYBACK_MODE=' in output) == (reason == 'invalid-setting'), output
                 assert set(server.actions) <= {'GetZoneGroupState', 'GetTransportInfo', 'GetVolume',
                                                'GetPositionInfo', 'GetMediaInfo'}, server.actions
+            except BaseException:
+                if process.poll() is None: process.terminate()
+                print(process.communicate(timeout=10)[0],flush=True)
+                raise
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.communicate(timeout=5)
-    print('PASS playback mode startup: actual yeney, default/stream/auto/invalid/grouped queue byte-identical HELO, one startup log, no queue mutation')
+    print('PASS playback mode startup: actual yeney, default queue/grouped queue same HELO; explicit stream/auto/invalid byte-identical HELO, one startup log, no queue mutation')
 finally:
     server.shutdown()
     server.server_close()
     worker.join()
+    state.cleanup()

@@ -3,7 +3,7 @@
 #include "upnp/speaker_control.h"
 #include <string>
 namespace bridge {
-// Explicit standalone queue playback qualified through the real binary.
+// Source-aware queue playback is the built-in default. Eligibility is live.
 inline constexpr bool queuePlaybackReady = true;
 enum class PlaybackMode { Stream, Queue };
 struct PlaybackSelection {
@@ -16,26 +16,21 @@ struct PlaybackSelection {
 inline PlaybackSelection selectPlaybackMode(const char *value, const upnp::Speaker &speaker,
                                             bool ready = queuePlaybackReady) {
     PlaybackSelection result;
-    result.requested = value ? value : "stream";
+    result.requested = value ? value : "queue";
     if (result.requested == "stream") {
-        result.reason = value ? "configured-stream" : "default-stream";
+        result.reason = "configured-stream";
     } else if (result.requested == "auto") {
         result.reason = "auto-phase4";
     } else if (result.requested != "queue") {
         result.invalid = true;
         result.reason = "invalid-setting";
-    } else if (speaker.members.size() > 1 ||
-               (!speaker.coordinator.empty() && speaker.coordinator != speaker.name)) {
-        result.reason = "group-rate-undecided";
-    } else if (speaker.uuid.empty() || speaker.ip.empty() || speaker.name.empty() ||
-               speaker.coordinator != speaker.name || speaker.members.size() != 1 ||
-               speaker.members.front() != speaker.name) {
+    } else if (speaker.uuid.empty() || speaker.ip.empty() || speaker.name.empty()) {
         result.reason = "coordinator-unconfirmed";
     } else if (!ready) {
         result.reason = "queue-unavailable";
     } else {
         result.selected = PlaybackMode::Queue;
-        result.reason = "queue-opt-in";
+        result.reason = value ? "queue-opt-in" : "default-queue";
     }
     return result;
 }

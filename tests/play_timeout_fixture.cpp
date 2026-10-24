@@ -30,6 +30,9 @@ static void acknowledge_squeezebox_resume(unsigned) {}
 static std::string SqueezeBoxURL(unsigned) {
     return "http://bridge/music/yeney.flac?session=test-session&stream=7";
 }
+static std::atomic_bool streamMemberBlocked{false};
+static bool permitRoomPlayback(unsigned) { return true; }
+static void displayLmsTrack(const TrackInfo &) {}
 #include "production_play_timeout.inc"
 int main(int argc, char** argv) {
     assert(argc == 2);

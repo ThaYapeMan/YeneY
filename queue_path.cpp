@@ -87,6 +87,7 @@ void QueueRoom::Impl::beginSelection(uint64_t request) {
     std::lock_guard<std::mutex> lock(mutex);
     if (request != selectionRequest)
         return;
+    if (stoppedPlay && stopAcknowledged) roomStopped = false;
     selectedRequest = request;
     selectedCommand = requestedCommand;
     selecting = true;
@@ -97,6 +98,19 @@ void QueueRoom::Impl::selectPath() {
     if (!selecting || selectedRequest != selectionRequest)
         return;
     if (!selectionKnown) {
+        const auto live = coordinator.currentRoom();
+        if (live.coordinator != room.name) {
+            if (!roomStopped) {
+                std::printf("yeney: room is group member room=%s coordinator=%s; not playing\n",
+                            room.name.c_str(), live.coordinator.c_str());
+                roomFault("group-member", true);
+            }
+            selecting = false;
+            return;
+        }
+        if (externalReleased && ownership.active()) release();
+        roomStopped = false;
+
         queue_audio::PlaylistEntry track;
         selectedIndex = -1;
         try {

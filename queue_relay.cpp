@@ -40,6 +40,17 @@ void QueueRoom::Impl::release() {
     publish();
 }
 void QueueRoom::Impl::command(char c, uint64_t next) {
+    if (c == 'M' || c == 'R') {
+        if (!roomStopped) {
+            if (c == 'M') {
+                const auto live = speaker->speaker();
+                std::printf("yeney: room is group member room=%s coordinator=%s; not playing\n",
+                            room.name.c_str(), live.coordinator.c_str());
+            }
+            roomFault(c == 'M' ? "group-member" : "topology-unavailable", c == 'M');
+        }
+        return;
+    }
     if (c == 'f') {
         ownUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         return;
@@ -90,7 +101,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         firstStream = next;
         if (ownership.active() && !externalReleased)
             actions.stop();
-        release();
+        if (!roomStopped) release();
         faulted = false;
         fault.clear();
         playlist = {};
@@ -131,14 +142,14 @@ void QueueRoom::Impl::append() {
         if (record.item && !record.incomplete.empty())
             continue; // LMS cancelled this render, not a speaker rejection.
         if (!record.fault.empty())
-            throw std::runtime_error(record.fault);
+            { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
         if (!record.item || !record.incomplete.empty())
             continue;
         if (std::any_of(items.begin(), items.end(),
                         [&](const auto &i) { return i.stream == record.source.occurrence; }))
             continue;
         if (record.source.rate > queue.maxSampleRate())
-            throw std::runtime_error("queue-rate-unsupported rate=" + std::to_string(record.source.rate) +
+            throw TrackFault("queue-rate-unsupported rate=" + std::to_string(record.source.rate) +
                                      " cap=" + std::to_string(queue.maxSampleRate()));
         std::optional<uint64_t> length;
         try {
@@ -149,7 +160,7 @@ void QueueRoom::Impl::append() {
         if (!length)
             continue;
         if (!record.fault.empty())
-            throw std::runtime_error(record.fault);
+            { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
         queue_audio::PlaylistEntry track;
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
@@ -220,6 +231,27 @@ void QueueRoom::Impl::append() {
         }
     }
 }
+void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
+    if (roomStopped) return;
+    roomStopped = true;
+    fault = reason;
+    faulted = true;
+    selecting = selectionKnown = false;
+    paths.cancelSelection();
+    if (!member) {
+        try { if (!externalReleased) actions.stop(); }
+        catch (const std::exception &e) { logQueue(e.what()); }
+        try { release(); }
+        catch (const std::exception &e) { logQueue("release failed=" + std::string(e.what())); }
+    }
+    // A member must never write to either its old queue or the new coordinator.
+    expectedState = state = "STOPPED";
+    started = waitingForPlay = false;
+    externalReleased = true;
+    stopAcknowledged = false;
+    publish();
+    speakerCommand("stop", member ? "group-member" : reason == "track-fault-limit" ? reason : "room-fault");
+}
 void QueueRoom::Impl::run() {
     for (;;) {
         std::deque<std::pair<char, uint64_t>> pending;
@@ -236,6 +268,7 @@ void QueueRoom::Impl::run() {
                 if (c.first == 'I')
                     beginSelection(c.second);
                 else if (c.first == 'Q') {
+                    if (externalReleased) stopAcknowledged = true;
                     selecting = selectionKnown = false;
                     handoffAt = {};
                     stoppedPlay = true;
@@ -258,24 +291,33 @@ void QueueRoom::Impl::run() {
         } catch (const queue_audio::ItemCancelled &) {
             // Producer cancellation raced a snapshot; observe the next run.
         } catch (const std::exception &e) {
+            if (roomStopped) continue;
             fault = e.what();
-            faulted = true;
             logQueue("relay fault=" + fault);
-            try {
-                if (!externalReleased)
-                    actions.stop();
-            } catch (const std::exception &stop) {
-                logQueue(stop.what());
+            const bool trackFault = dynamic_cast<const TrackFault *>(&e) != nullptr;
+            if (!trackFault) {
+                roomFault(fault, fault.compare(0, 17, "room-group-member") == 0);
+                continue;
             }
-            try {
-                release();
-            } catch (const std::exception &cleanup) {
-                logQueue(cleanup.what());
+            const auto now = std::chrono::steady_clock::now();
+            while (!trackFaults.empty() && now - trackFaults.front() > std::chrono::seconds(10))
+                trackFaults.pop_front();
+            trackFaults.push_back(now);
+            if (trackFaults.size() >= 2) {
+                logQueue("track-fault-limit: two track faults within 10 s; stopping room");
+                roomFault("track-fault-limit");
+                continue;
             }
+            faulted = true;
+            try { if (!externalReleased) actions.stop(); }
+            catch (const std::exception &stop) { logQueue(stop.what()); }
+            try { release(); }
+            catch (const std::exception &cleanup) { logQueue(cleanup.what()); }
             queue.failQueueTrack();
             publish();
         }
     }
+    if (roomStopped) return;
     try {
         if (ownership.active() && !externalReleased)
             actions.stop();

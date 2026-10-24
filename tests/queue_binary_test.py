@@ -93,6 +93,8 @@ class Device(Handler):
         self.path = '/description.xml'
         super().do_GET()
     def do_SUBSCRIBE(self):
+        if 'ZoneGroupTopology' in self.path:
+            self.server.topology_callback = self.headers.get('CALLBACK', '').strip('<>') or getattr(self.server, 'topology_callback', '')
         if 'AVTransport' in self.path:
             self.server.callback = self.headers.get('CALLBACK', '').strip('<>') or getattr(self.server, 'callback', '')
         self.send_response(200); self.send_header('SID','uuid:binary'); self.send_header('TIMEOUT','Second-1800')
@@ -124,7 +126,7 @@ class CLI(socketserver.ThreadingTCPServer):
                     assert mac==owner.mac and '%' not in mac, line
                     owner.commands.append(cmd)
                     if not cmd.startswith('status ') and not cmd.endswith('?'):
-                        reasons={'stop':('speaker-stop','speaker-source-change'),'pause 1':('speaker-pause',),'pause 0':('speaker-resume',)}
+                        reasons={'stop':('speaker-stop','speaker-source-change','room-fault','group-member','track-fault-limit'),'pause 1':('speaker-pause',),'pause 0':('speaker-resume',)}
                         assert cmd in reasons,('unapproved LMS mutation',cmd)
                         text=(owner.base/'bridge.log').read_text()
                         assert any('LMS mutation reason='+r+' command='+cmd in text for r in reasons[cmd]),('mutation without speaker reason',cmd)
@@ -143,8 +145,8 @@ class CLI(socketserver.ThreadingTCPServer):
                             current=owner.index if owner.index is not None else max(0,owner.model.playing-1)
                             entries=entries[current:current+1]
                         for at,i in entries:
-                            fields += [f'playlist index:{at}', f'id:track {i}:encoded',f'title:Title & {i}',
-                                       'artist:Artist <one>',f'album:{owner.albums[i] if i<len(owner.albums) else "Album & fixture"}',f'url:file:///fixture/{i}']
+                            fields += [f'playlist index:{at}', f'id:{-100-i}' if owner.remote_sources else f'id:track {i}:encoded',f'title:Title & {i}',
+                                       'duration:24','artist:Artist <one>',f'album:{owner.albums[i] if i<len(owner.albums) else "Album & fixture"}',f'url:http://fixture.invalid/{i}' if owner.remote_sources else f'url:file:///fixture/{i}']
                         reply=' '.join(quote(f,safe='') for f in fields)
                     else: reply=''
                     self.wfile.write((quote(line,safe=': ')+(' '+reply if reply else '')+'\n').encode())
@@ -183,7 +185,8 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False):
+        self.remote_sources=remote_sources
         self.resume_restart=resume_restart
         self.resume_changed=resume_changed
         self.partial_source=partial_source
@@ -191,12 +194,15 @@ class Binary:
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
         self.sonos=Coordinator(('127.0.0.1',1400),Device)
+        self.sonos.grouped=grouped or member
+        if member:self.sonos.coordinator_uuid="RINCON_OTHER"
+        self.sonos.consume_stream=consume_stream
         self.sonos.stopped_play=stopped_play
         self.sonos.fail_add=fail_add
         self.sonos.follow_controls=True
         self.sonos.expected_albums=self.albums if expected_albums is None else expected_albums
         self.cli=CLI(self);self.lms=LMS();self.log=open(self.base/'bridge.log','w')
-        env=dict(os.environ,YENEY_PLAYBACK_MODE='queue',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(self.base))
+        env=dict(os.environ,YENEY_PLAYBACK_MODE=mode,YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(self.base))
         self.proc=subprocess.Popen([str(binary or ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',
                                    '--server=127.0.0.1:'+str(self.lms.listener.getsockname()[1])],stdout=self.log,stderr=self.log,env=env)
         try:
@@ -338,13 +344,13 @@ def speaker_faults():
             with h.sonos.lock:
                 h.sonos.transport_state='STOPPED'
                 h.sonos.transport_status=status
-            h.until(lambda:len(h.packets('STMn'))==1,8)
+            h.until(lambda:h.commands.count('stop')==1,8)
             time.sleep(.7)
-            assert len(h.packets('STMn'))==1 and not h.items()
+            assert not h.packets('STMn') and h.commands.count('stop')==1 and not h.items()
             text=(h.base/'bridge.log').read_text()
             assert 'playback-fault action=Play uri=' in text and 'TransportStatus='+status in text
             assert 'state=STOPPED audible' not in text
-            print('PASS speaker playback fault: '+status+', Stop/release/STMn once')
+            print('PASS speaker playback fault: '+status+', Stop/release/LMS stop once; no STMn')
         finally:h.close()
 
 def polling():
@@ -489,14 +495,14 @@ def source_change_with_lms_stop():
 def soap_fault():
     h=Binary(rates=(44100,),fail_add=True)
     try:
-        h.until(lambda:len(h.packets('STMn'))==1)
+        h.until(lambda:h.commands.count('stop')==1)
         time.sleep(.3)
-        assert len(h.packets('STMn'))==1 and not h.sonos.actions('Play')
+        assert not h.packets('STMn') and not h.sonos.actions('Play')
         assert not h.items() and h.sonos.crossfade
         log=(h.base/'bridge.log').read_text()
         assert 'errorCode=' in log and 'request=' in log,log
-        assert all(c.startswith('status ') for c in h.commands),h.commands
-        print('PASS relay SOAP fault: full diagnostic, Stop/release, STMn once, no fallback or mutation loop',flush=True)
+        assert h.commands.count('stop')==1,h.commands
+        print('PASS relay SOAP fault: full diagnostic, Stop/release, LMS stop once, no STMn or playlist advance',flush=True)
     finally:h.close()
 
 if __name__=='__main__':

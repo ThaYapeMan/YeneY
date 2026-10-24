@@ -12,7 +12,9 @@ void QueueRoom::Impl::externalStop(const std::string &reason) {
     firstStream = queue.latestOccurrence() + 1;
     // No Stop/URI switch here: another service may already own transport.
     try {
-        release();
+        const auto live = coordinator.currentRoom();
+        if (live.coordinator == room.name) release();
+        else { roomStopped = true; started = waitingForPlay = false; current = 0; state = "STOPPED"; publish(); }
     } catch (const std::exception &e) {
         fault = "external-release: " + std::string(e.what());
         started = waitingForPlay = false;
@@ -24,6 +26,11 @@ void QueueRoom::Impl::externalStop(const std::string &reason) {
     speakerCommand("stop", reason);
 }
 void QueueRoom::Impl::observe() {
+    const auto live = speaker->speaker();
+    if (live.coordinator != room.name && (!stoppedPlay || started || state == "PLAYING" || state == "PAUSED") && !externalReleased) {
+        externalStop("speaker-source-change");
+        return;
+    }
     if (!paths.isRelay()) {
         auto info = speaker->transportInfo();
         std::string uri;
@@ -116,7 +123,7 @@ void QueueRoom::Impl::observe() {
     if (unsolicited && expectedState != "STOPPED" &&
         (sourceChanged || (!nearEnd && (transport == "STOPPED" || missingItem)))) {
         if (cancelledCurrent && !sourceChanged)
-            throw std::runtime_error("queue cancelled item stopped after LMS flush");
+            throw TrackFault("queue cancelled item stopped after LMS flush");
         externalStop(sourceChanged ? "speaker-source-change" : "speaker-stop");
         return;
     }
@@ -153,8 +160,10 @@ void QueueRoom::Impl::observe() {
     const auto rate = it->item->descriptor().rate;
     if (transport == "PLAYING" && frames <= (elapsed + 3) * rate)
         fastPoll();
-    if (it->stream != current)
+    if (it->stream != current) {
         fastPoll();
+        if (current && transport == "PLAYING" && queue.queueItemProduced(current)) trackFaults.clear();
+    }
     if (transport == "STOPPED" && nearEnd)
         expectedState = "STOPPED";
     const auto previous = current;

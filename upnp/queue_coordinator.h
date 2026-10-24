@@ -28,6 +28,8 @@ public:
     // Only exact owned removals and restoring crossfade may bypass the play
     // lease.
     SoapResult releaseTransport(const std::string &, const SoapArguments &);
+    // Fresh topology at each new play; transport writes also fence live identity.
+    Speaker currentRoom();
     QueueSnapshot browse();
     std::vector<SavedQueue> playlists();
     void destroyPlaylist(const std::string &id);

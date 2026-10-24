@@ -216,10 +216,9 @@ class Speaker:
         groups = [n for n in root.iter() if local(n.tag) == 'ZoneGroup' and any(
             c.get('UUID') == self.udn for c in n.iter())]
         if len(groups) != 1 or groups[0].get('Coordinator') != self.udn:
-            raise SuiteError('room grouped or coordinator changed')
+            raise SuiteError('room is a member of another Sonos group; refusing control')
         members = [c for c in groups[0].iter() if local(c.tag) in ('ZoneGroupMember','Satellite')]
-        if len(members) != 1:
-            raise SuiteError('room grouped; refusing control')
+        return len(members)
 
     def browse(self, object_id):
         result, start, update = [], 0, None
@@ -301,7 +300,7 @@ class Suite(PACING['Suite']):
 
     def isolated(self):
         if self.speaker:
-            self.speaker.standalone()
+            self.group_members = self.speaker.standalone()
             words = self.cli.call('syncgroups','?')
             if '?' in words:
                 raise SuiteError('LMS sync isolation unverified')
@@ -494,9 +493,11 @@ class Suite(PACING['Suite']):
             raise SuiteError('invalid room service unit')
         self.backend.run('systemctl','is-active','--quiet',self.unit)
         self.mac = self.player()
-        super().isolated()  # discovery must identify exactly one standalone room
         rows = [r.split('\t') for r in self.backend.run(self.executable,'--list-rooms','--details').splitlines()]
-        ip = next(r[2] for r in rows if len(r)==5 and r[0]==self.room)
+        matches = [r for r in rows if len(r)==5 and r[0]==self.room]
+        if len(matches)!=1 or matches[0][3]!=self.room:
+            raise SuiteError('room is a member of another Sonos group; refusing control')
+        ip = matches[0][2]
         self.speaker = self.speaker or Speaker(ip,self.log)
         self.speaker_ip = ip
         self.isolated()
@@ -716,6 +717,13 @@ class Suite(PACING['Suite']):
     def measure(self):
         tracks=self.selected['album']
         self.album('album',tracks)
+        if getattr(self,'group_members',1)>1:
+            self.album('group-coordinator',tracks)
+            self.current['note']='owner-formed group; queue path, per-item speaker titles, three joins and LMS identity verified'
+        else:
+            self.begin('group-coordinator')
+            self.current.update(verdict='SKIP',note='selected room is standalone; owner must form a group first')
+            print('SKIP group-coordinator: '+self.current['note'],flush=True)
         self.begin('pause-resume')
         self.mutate('pause','1')
         self.wait(tracks,lambda r:r['speaker']['state']=='PAUSED_PLAYBACK',5)

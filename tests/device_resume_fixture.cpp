@@ -1,3 +1,4 @@
+static bool stopLmsForMemberSource() { return false; }
 #include "stream_room_stub.h"
 #include "room_status.h"
 #include "source_ownership.h"
@@ -142,6 +143,9 @@ static int productionPrintf(const char* format, ...) {
 }
 #define printf productionPrintf
 #define yeney_transport production_yeney_transport
+static std::atomic_bool streamMemberBlocked{false};
+static bool permitRoomPlayback(unsigned) { return true; }
+static void displayLmsTrack(const TrackInfo &) {}
 #include "production_resume.inc"
 #undef yeney_transport
 // Model one core StopTimer poll after a command, before observing its outcome.

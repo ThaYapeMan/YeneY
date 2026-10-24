@@ -1,3 +1,4 @@
+extern "C" void yeney_stream_track_changed() __attribute__((weak));
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
 namespace bridge {
@@ -108,6 +109,11 @@ QueueRoom::~QueueRoom() = default;
 yeney::Sink &QueueRoom::sink() { return impl->paths; }
 void QueueRoom::shutdown() { impl->shutdown(); }
 void QueueRoom::command(const yeney::Command &c) { impl->received(c); }
+void QueueRoom::refusePlayback(bool member) {
+    std::lock_guard<std::mutex> lock(impl->mutex);
+    impl->commands.push_back({member ? 'M' : 'R', 0});
+    impl->changed.notify_all();
+}
 bool QueueRoom::queueActive() const { return impl->paths.isRelay(); }
 int QueueRoom::streamMetadataIndex() const { return impl->metadataIndex; }
 bool QueueRoom::deferStart() { return impl->selectionDeferred; }
@@ -140,9 +146,10 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     config.deferQueueStart = [&room] { return room.deferStart(); };
     config.queueNextDelayMs = queueNextDelayMs();
     config.flacSourceInfo = [&room](uint64_t id, auto info) { return room.flacSourceInfo(id, info); };
+    config.queueHostFailures = true;
     config.queueRelativeClock = true;
     config.queueRemoteSource = [&room](uint64_t id) { return room.remoteSource(id); };
-    config.log = [](const auto &line) { std::printf("core: %s\n", line.c_str()); };
+    config.log = [](const auto &line) { std::printf("core: %s\n", line.c_str()); if ((line.rfind("STMs ", 0) == 0 || line.rfind("STMt ", 0) == 0) && yeney_stream_track_changed) yeney_stream_track_changed(); };
     yeney::Player player(config, room.sink());
     player.run(roomStop);
     room.shutdown();

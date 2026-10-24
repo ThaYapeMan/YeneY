@@ -4,7 +4,7 @@
 #include <iostream>
 int main() {
     upnp::Speaker room{"127.0.0.1", "RINCON_TEST", "Study", "Study", {"Study"}};
-    for (const char *value : {static_cast<const char *>(nullptr), "stream", "auto", "bad", "Queue", ""}) {
+    for (const char *value : {"stream", "auto", "bad", "Queue", ""}) {
         auto selection = bridge::selectPlaybackMode(value, room);
         assert(selection.selected == bridge::PlaybackMode::Stream);
         assert(selection.invalid ==
@@ -16,19 +16,21 @@ int main() {
            guarded.reason == "queue-unavailable");
     auto queued = bridge::selectPlaybackMode("queue", room);
     assert(queued.selected == bridge::PlaybackMode::Queue && queued.reason == "queue-opt-in");
+    assert(bridge::selectPlaybackMode(nullptr, room).selected == bridge::PlaybackMode::Queue);
+    assert(bridge::selectPlaybackMode(nullptr, room).reason == "default-queue");
     room.members.push_back("Other");
-    assert(bridge::selectPlaybackMode("queue", room).reason == "group-rate-undecided");
+    assert(bridge::selectPlaybackMode("queue", room).selected == bridge::PlaybackMode::Queue);
     room.coordinator = "Other";
-    assert(bridge::selectPlaybackMode("queue", room).selected == bridge::PlaybackMode::Stream);
+    assert(bridge::selectPlaybackMode("queue", room).selected == bridge::PlaybackMode::Queue);
     room.members = {"Study"};
-    assert(bridge::selectPlaybackMode("queue", room).reason == "group-rate-undecided");
+    assert(bridge::selectPlaybackMode("queue", room).selected == bridge::PlaybackMode::Queue);
     room.coordinator = "Study";
     room.members.clear();
-    assert(bridge::selectPlaybackMode("queue", room).reason == "coordinator-unconfirmed");
+    assert(bridge::selectPlaybackMode("queue", room).selected == bridge::PlaybackMode::Queue);
     room.members = {"Study"};
     room.uuid.clear();
     assert(bridge::selectPlaybackMode("queue", room).selected == bridge::PlaybackMode::Stream);
-    std::cout << "PASS playback mode policy: stream default, explicit standalone "
+    std::cout << "PASS playback mode policy: queue default, explicit stream, coordinator/member eligibility live, "
                  "queue, closed readiness flag, "
                  "deferred auto, invalid values, "
                  "grouped coordinators/members and unknown topology\n";

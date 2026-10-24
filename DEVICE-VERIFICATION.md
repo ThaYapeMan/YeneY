@@ -641,9 +641,10 @@ Other rooms can be qualified with
 ## Queue mode phase 3 qualification status
 
 Phase 3b parts 1–8 are complete in loopback tests through the real production
-`yeney` binary. Explicit `YENEY_PLAYBACK_MODE=queue` is available only for a
-confirmed standalone room; stream remains the default, and grouped rooms use
-stream with `group-rate-undecided`. `auto` remains deferred and selects stream.
+`yeney` binary. Queue is the default for standalone rooms and group coordinators. Existing
+`YENEY_PLAYBACK_MODE=queue` owner overrides are redundant but harmless; the
+installer leaves them in place. Explicit `stream` and deferred `auto` select
+stream. A member of another group reports one LMS stop without transport writes.
 The settings and limits are recorded in [README](README.md#settings) and the
 [queue design status](docs/designs/sonos-queue-mode.md#phase-3-implementation-checkpoint).
 
@@ -708,7 +709,7 @@ Local tracks still use finite WAV items. Class changes in a mixed playlist wait
 for the current path to finish and log their measured handoff gap. No new owner
 command or deployment step is needed.
 
-The suite refuses grouped/inactive rooms and competing suite locks. It saves
+The suite refuses member/inactive rooms and competing suite locks. It accepts an owner-formed group only when the selected room is its coordinator. It saves
 playlist identities/order, mode/index/time, repeat/shuffle/transition settings,
 volume and the room environment. It verifies a Before YeneY backup only when
 foreign queue entries exist; empty/owned-only queues explicitly need no backup.
@@ -733,7 +734,7 @@ pct pull 113 /tmp/yeney-queue-device-suite-latest.tar.gz /tmp/yeney-queue-device
 Optional listening: listen for a gap/click at each join, confirm pause holds and
 resume continues, and confirm stop/new play starts once. Sonos-app next/previous and seeks,
 crossfade/mixed-rate owner scenarios, seeks/controls, stream reference and
-WebSocket precision measurement are parked for the staged rebuild. Unambiguous speaker stops and pause/resume are reported to LMS; app next/previous and seeks remain parked. Stream remains the default; queue faults
+WebSocket precision measurement are parked for the staged rebuild. Unambiguous speaker stops and pause/resume are reported to LMS; app next/previous and seeks remain parked. Queue is the default; room-level faults stop LMS once without skipping tracks; source faults
 stop/release without automatically switching transport.
 
 LMS CLI uses fresh connections, a 30-second mutation deadline and short query
@@ -764,3 +765,14 @@ Use `--remote 'Favourite name'`, `--remote 'https://…/episode.mp3'`, or a
 URL/name is resolved through the existing LMS menus; the suite never adds a feed
 or changes favourites. For example, append `--remote 'Boekestijn & De Wijk | Plus'`
 to `/usr/local/bin/yeney-queue-device-suite --room 'Sonos Port' --server LMS_HOST`.
+
+### Owner-formed group coordinator
+
+`/usr/local/bin/yeney-queue-device-suite` includes `group-coordinator`. Form the
+group yourself in the Sonos app before running the same suite command. If the
+selected room leads multiple speakers, the scenario plays the local album for
+three joins and checks relay path, per-item speaker titles and LMS identity.
+Standalone rooms report SKIP with a clear note. The suite never creates,
+changes or dissolves a Sonos group. Gaining/losing members while remaining
+coordinator must not interrupt playback; joining another coordinator uses the
+existing external-source stop path. Playback through a member is not supported.

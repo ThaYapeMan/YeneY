@@ -7,10 +7,11 @@ void QueueRoom::Impl::publish() {
     v.reason = pathReason;
     v.path = pathReason == "remote-source" ? "stream" : "relay";
     v.state = state;
-    v.owned = ownership.active();
+    v.owned = ownership.active() && !externalReleased;
     v.occurrence = current;
     v.lastFault = fault;
     for (const auto &item : items) {
+        if (externalReleased) break;
         v.ownedUris.push_back(item.uri);
         if (item.stream == current) {
             v.currentUri = item.uri;

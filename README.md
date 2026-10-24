@@ -36,8 +36,8 @@ on your own network, on any small Linux machine, container or VM.
 
 | Mode | How it plays | Best for |
 |---|---|---|
-| **Stream** (default) | One continuous 24-bit FLAC stream per room, paced on the Sonos clock | Grouped rooms; everything LMS can play |
-| **Queue** (per-room opt-in, `YENEY_PLAYBACK_MODE=queue`) | Local files: one Sonos queue item per LMS track (exact-length 24-bit WAV, hi-res converted by YeneY). Podcasts, radio and streaming services switch to the stream path automatically | Standalone rooms: per-track titles and artwork, fast starts, hi-res |
+| **Stream** (explicit `YENEY_PLAYBACK_MODE=stream`) | One continuous 24-bit FLAC stream per room, paced on the Sonos clock | Continuous sources; everything LMS can play |
+| **Queue** (default) | Local files: one Sonos queue item per LMS track (exact-length 24-bit WAV, hi-res converted by YeneY). Podcasts, radio and streaming services switch to the stream path automatically | Standalone rooms and group coordinators: per-track titles and artwork, fast starts, hi-res |
 
 Queue mode was rebuilt in October 2026 as a small relay that follows LMS strictly,
 in the spirit of philippe44's LMS-uPnP. The earlier, larger design is preserved at
@@ -281,7 +281,7 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 
 | Setting | Values | Default |
 |---|---|---|
-| `YENEY_PLAYBACK_MODE` | `stream`: existing transport · `queue`: standalone owned queue opt-in · `auto`: stream, logged as `auto-phase4` | `stream` |
+| `YENEY_PLAYBACK_MODE` | `queue`: source-aware relay/stream on the coordinator · `stream`: explicit continuous transport · `auto`: stream, logged as `auto-phase4` | `queue` |
 | `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |
 | `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |
 | `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; invalid/overflowing values fail queue configuration | `256` |
@@ -319,9 +319,16 @@ Environment=YENEY_PLAYBACK_MODE=queue
 Environment=YENEY_QUEUE_DISK_MIB=256
 ```
 
-Settings apply on room service restart. A grouped coordinator or member keeps
-stream mode with reason `group-rate-undecided`; an unconfirmed coordinator uses
-`coordinator-unconfirmed`. `auto` still uses stream. Queue mode owns only its
+Settings apply on room service restart. Queue is built in; existing owner
+`Environment=YENEY_PLAYBACK_MODE=queue` overrides are redundant but harmless and
+are never removed by the installer. Explicit `stream` remains supported; `auto`
+and invalid settings still select stream and log the effective mode. At every
+new track, live topology must identify this room as coordinator. Adding or
+removing members does not change its per-source path. A member of another group
+writes no transport commands and reports one LMS stop, rather than controlling
+the other room or walking the playlist.
+
+Queue mode owns only its
 prepared finite WAV entries for local files. At each LMS track start, remote
 flags, negative ids and non-file URLs (including podcasts, radio and streaming
 services) select the existing continuous stream path instead; unknown metadata
@@ -332,12 +339,12 @@ short measured gap is logged. Room diagnostics expose `path=relay|stream` and
 `reason=local-source|remote-source`. Pacing logs and socket-wait accumulation
 are suppressed on the relay path and unchanged on the stream path. LMS controls play, pause, resume, stop and source
 seeks; confirmed speaker starts advance LMS through SlimProto. Queue mode reports unambiguous speaker-originated stops and pause/resume to LMS
-through one logged CLI mutation path. LMS-originated commands never cause a CLI
-mutation. Source changes release owned entries without stopping the new source.
-There is no automatic fallback in this relay release. Failures stop/release the owned entries and report STMn.
-Whole-list mirroring, app next/previous/seek mapping, fallback and group/auto policy are parked at
+through one logged CLI mutation path. Normal LMS commands never echo as CLI mutations; a confirmed room fault or
+member refusal reports one explicit LMS stop. Source changes release owned entries without stopping the new source.
+There is no automatic fallback in this relay release. Source failures report STMn; room-level faults stop LMS once without skipping tracks.
+Whole-list mirroring, app next/previous/seek mapping, automatic fallback and auto selection are parked at
 `queue-full-v1`; see the [rebuild checklist](docs/designs/queue-parked-features.md).
-Owners can qualify a standalone room with
+Owners can qualify a standalone room or an owner-formed group coordinator with
 `/usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23`,
 optionally `--album <id-or-name> --volume 10`. The suite saves/restores volume,
 LMS state and room configuration; it checks album joins, LMS pause/resume and
@@ -505,8 +512,8 @@ Yes. YeneY sends one continuous stream, so albums play gapless and LMS crossfade
 works.
 
 **Can I group Sonos rooms?**
-Yes. When rooms are grouped in the Sonos app, bridging a member room controls the
-whole group.
+Yes. Play through the group coordinator. A member room refuses playback with
+one LMS stop and never changes the group or controls another room.
 
 **Does it synchronise with my Squeezebox players?**
 Not yet. The Sonos starts a few seconds after other LMS players. Precise
@@ -522,7 +529,7 @@ Yes, for noncommercial use, under the
 ## Where it falls short
 
 - Next, Previous and seeking work from LMS, not yet from the Sonos app.
-- Queue mode is for standalone rooms; grouped rooms use stream mode.
+- Queue mode is the default for standalone rooms and group coordinators; group members stop cleanly.
 - Queue mode has no automatic fallback to stream mode yet; a failure stops the
   room and is reported to LMS.
 - In stream mode the Sonos app shows the artist and title at the start of a
@@ -668,3 +675,8 @@ choose its remote-source scenario. Feed/container entries are browsed for playab
 episodes; candidates that produce no SlimProto start within five seconds are
 unloaded, up to five attempts. If none is playable the scenario reports SKIP.
 See [device verification](DEVICE-VERIFICATION.md#remote-source-selection-in-the-queue-device-suite).
+
+Room-level topology, ownership, SOAP and transport faults stop LMS once without
+STMn or playlist advancement. Source/decode/length faults can fail a track;
+a second consecutive fault within ten seconds stops the room. Continuous stream
+display titles and durations follow LMS track changes; renderer DIDL is unchanged.

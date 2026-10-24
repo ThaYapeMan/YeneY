@@ -99,7 +99,8 @@ class Speaker(BaseHTTPRequestHandler):
             return
         if action == 'GetZoneGroupState':
             topology = (ROOT / 'tests/fixtures/topology.xml').read_text()
-            if self.server.mode in ('control', 'lifecycle') and count >= 3:
+            if ((self.server.mode == 'control' and self.server.counts.get('Play',0) >= 2) or
+                    (self.server.mode == 'lifecycle' and count >= 3)):
                 topology = topology.replace('Coordinator="RINCON_00112233445501400"',
                                             'Coordinator="RINCON_66778899AABB01400"')
             values = '<ZoneGroupState>' + escape(topology) + '</ZoneGroupState>'
@@ -155,7 +156,7 @@ control = run('control', [str(ROOT / 'own-control-test')], golden)
 assert control.counts['GetPositionInfo'] == 3
 assert control.counts['GetVolume'] == 2
 assert control.counts['GetTransportInfo'] == 3
-assert control.counts['GetZoneGroupState'] == 3
+assert control.counts['GetZoneGroupState'] == 3 + sum(action in ('Play','Pause','Stop','SetAVTransportURI') for action,_ in control.requests)
 for action, body in control.requests:
     if action in golden: assert body == golden[action]
 print('PASS: all seven own AVTransport request bodies match fixed SOAP wire fixtures')

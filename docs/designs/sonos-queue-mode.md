@@ -1,9 +1,11 @@
 # LMS-driven Sonos queue relay
 
-The queue-mode base is a thin relay. LMS is the sole playback master. Stream
-mode remains the default and its transport, URLs and wire fixtures are unchanged.
-Explicit `YENEY_PLAYBACK_MODE=queue` selects source-aware playback for a standalone room: local files use the finite relay and remote/unknown sources use the existing continuous stream path.
-Grouped rooms use stream with `group-rate-undecided`; `auto` still uses stream.
+The queue-mode base is a thin relay. LMS is the sole playback master. Queue
+mode is the built-in default. Explicit `stream` preserves continuous transport,
+URLs and wire fixtures. Queue selects source-aware playback for a standalone room
+or the coordinator of a multi-speaker group: local files use the finite relay and remote/unknown sources use the existing continuous stream path.
+`auto` and invalid values still use stream with an effective-mode log. Existing
+queue overrides are redundant but harmless and are never removed by installation.
 There is no automatic fallback inside this queue release.
 
 The previous advanced implementation is preserved by immutable annotated
@@ -18,7 +20,8 @@ Classification runs on the room worker at each LMS `strm s`, before opening
 its audio connection. A read-only CLI snapshot supplies the track admitted by
 LMS. `remote:1`, a negative id, any URL outside `file://`, or missing/ambiguous
 metadata selects stream. Only an explicitly local file selects the relay.
-No selection, readiness or class boundary causes an LMS CLI mutation or HELO.
+Normal selection, readiness and class boundaries cause no LMS CLI mutation or HELO.
+A confirmed room refusal is the exception: one reason-checked LMS stop.
 
 | Play/source | Active path | Boundary behaviour |
 |---|---|---|
@@ -46,8 +49,9 @@ One serialized worker owns SOAP and an ordered list of immutable WAV assets,
 each identified by the core's monotonically allocated LMS stream occurrence.
 The only player states are **STOPPED**, **PLAYING**, **PAUSED**. Pending render
 records are data, not a separate player state. No playback epochs, generations,
-rearms, intent guessing or readiness continuation exist in the relay. The only
-CLI mutations report unambiguous speaker-originated stop/pause/resume. A fixed legacy route namespace keeps the existing WAV URL shape;
+rearms, intent guessing or readiness continuation exist in the relay. The
+CLI mutations report unambiguous speaker-originated stop/pause/resume or stop
+a room after a confirmed policy/transport fault. A fixed legacy route namespace keeps the existing WAV URL shape;
 it is not a playback generation and never causes a capability announcement.
 
 | Input/evidence | Renderer work | SlimProto result / next state |
@@ -61,14 +65,16 @@ it is not a playback generation and never causes a capability announcement.
 | LMS `strm p` / `strm u` | Pause / Play (resume only when paused) | Speaker-confirmed STMp/STMr, PAUSED/PLAYING |
 | Speaker STOPPED at the natural end of the final owned item | Feed confirmed final state to core | STMu once, STOPPED |
 | LMS seek (q+s with LMS source offset) | Same as a fresh play; no independent CLI/REL_TIME interpretation | New rendered stream, then confirmed STMs |
-| SOAP or asset failure | Log fault; Stop; remove exact owned items; restore crossfade | One renderer-rejection STMn, STOPPED; no stream fallback/retry loop |
+| Source/decode/length failure | Log fault; Stop/release | First consecutive fault: STMn; second within 10 s: one LMS stop, no playlist walk |
+| Room/topology/ownership/SOAP/transport fault | Log reason; Stop/release when still coordinator | One LMS stop, no STMn or automatic advancement |
+| New track while member of another group | No transport writes on either path | One logged LMS stop, STOPPED |
 | External stop/source change, outside the 3 s own-command window, before the final 2 s | Release exact owned items without Stop or URI switch | One raw-MAC LMS stop, STOPPED |
 | External pause/resume, outside the own-command window | Report confirmed state; suppress the resulting LMS echo | One LMS pause 1 / pause 0, PAUSED/PLAYING |
 | Service shutdown | Stop and release exact owned entries; restore crossfade | Process exits |
 
 These messages let LMS's StreamingController own song advancement: STMs reports
 TrackStarted, STMd reports decoder completion / NextIfMore, STMu reports output
-underrun/end, and STMn reports renderer acceptance failure. YeneY never responds
+underrun/end, and STMn reports a failed source. Room failures never use it. YeneY never responds
 to LMS's own starts by jumping the LMS playlist. Read-only status queries supply
 metadata; requests use the raw player MAC and replies are CLI-decoded once.
 
@@ -121,8 +127,8 @@ table: (2) a separate failure/release observer and stream sink selector for
 fallback; (3) a speaker-evidence observer with explicit own-command matching for
 app actions; (4) a mirror supplying append/remove plans for future items; (5) a
 room eligibility/group policy outside the relay. Per-source path selection is
-now implemented, but automatic recovery from failures and group/auto policy
-remain separate future work. None may fabricate an LMS start
+now implemented, but automatic recovery from failures and auto selection
+remain separate future work; coordinator playback is now enabled. None may fabricate an LMS start
 or mutate LMS in response to LMS's own command. Tests for a future component
 must retain the base relay acceptance and stream wire fixtures.
 
@@ -179,7 +185,7 @@ LMS q+s/new Play. GENA triggers immediate refresh. The stream display does
 not issue a second set of queue queries. Successful polls are silent; changes
 of state, current item and TransportStatus are logged. Only PLAYING confirms
 an audible item. A non-OK TransportStatus or STOPPED for more than three
-seconds after Play faults once, stops/releases owned entries and sends STMn.
+seconds after Play faults once, stops/releases owned entries and reports one LMS stop without STMn.
 Queue status includes `rendered_rate`; the owner suite verifies both high-rate
 families where the library contains suitable tracks.
 
@@ -269,3 +275,32 @@ No threads, queues, locks or owner log formats were added or changed.
 method/state extraction; it is a one-off comparison tool rather than freezing
 future features to these method bodies. The next app-action feature can extend
 the speaker detector and LMS command module while retaining the relay state table.
+
+## Coordinator and fault policy (24 October 2026)
+
+Group size never selects the per-track path: local file:// uses the relay;
+remote/continuous/unknown uses stream. Queue output is already 24-bit 44.1/48 kHz,
+so no group sample-rate rule is needed. At each new LMS start the worker reads
+live GetZoneGroupState; every queue write retains uuid/name/ip identity fencing
+and verifies that this room is still coordinator. Existing topology GENA and
+polling update mid-play role changes; no new periodic SOAP traffic is added.
+Adding/removing members while staying coordinator does not interrupt playback.
+A role/source change reuses the external-stop detector. A member must not write
+transport, including cleanup, since this can affect its new coordinator. Owned
+assets remain retained until safe release after the room becomes coordinator;
+no foreign source is stopped or switched. Both paths report one reason-checked
+raw-MAC LMS stop through queue_lms_commands.h/.cpp.
+
+Room faults are latched until a later new play checks topology. Source failures
+are distinguished from storage/worker, SOAP, ownership and transport failures.
+The host opts into core queueHostFailures so even a source receiving zero bytes
+is classified before any STMn; other hosts retain the old default. Two consecutive
+source failures within ten seconds stop the room after the second instead of
+walking an album. A completed, fully produced audible item clears that streak when its successor starts.
+
+For continuous streams only, existing STMs/STMt ticks schedule a read-only current-track
+metadata query on the bridge control loop (at most the existing one-second
+STAT cadence). This follows LMS processing its start notification without
+assuming that another CLI connection has already seen that state. Sanitised/formatted title and duration
+feed only the status display/log, not DIDL, HTTP or transport. The normal first
+Play metadata and its cached renderer title keep their existing wire behavior.

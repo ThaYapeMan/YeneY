@@ -14,6 +14,7 @@
 #include "speaker_uri.h"
 #include "stream_session.h"
 #include "stream_metrics.h"
+#include "stream_display.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -62,6 +63,12 @@ Status::Snapshot Status::poll() const
     s.title = transport.title; s.album = transport.album; s.artist = transport.artist;
     s.transportStatus = transport.status; s.transportState = transport.state;
     s.trackDuration = transport.duration;
+    auto &display = streamDisplay();
+    std::lock_guard<std::mutex> lock(display.mutex);
+    if (display.active) {
+        s.title = display.title; s.artist = display.artist; s.album = display.album;
+        s.trackDuration = display.duration;
+    }
     return s;
 }
 

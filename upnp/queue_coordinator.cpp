@@ -67,7 +67,7 @@ XmlNode didl(const SoapResult &result) {
 QueueCoordinator::QueueCoordinator(Speaker s, std::function<void(const std::string &)> logger, unsigned ms)
     : room(std::move(s)), log(std::move(logger)), timeout(ms) {
     if (bridge::selectPlaybackMode("queue", room, true).selected != bridge::PlaybackMode::Queue || !timeout)
-        throw std::invalid_argument("group-rate-undecided");
+        throw std::invalid_argument("queue-coordinator-unconfirmed");
 }
 void QueueCoordinator::discover() {
     if (!services.empty())
@@ -144,14 +144,19 @@ SoapResult QueueCoordinator::raw(const std::string &service, const std::string &
                                  " error=" + http.error);
     return result;
 }
-void QueueCoordinator::fence() {
+Speaker QueueCoordinator::currentRoom() {
     auto topology = raw("ZoneGroupTopology", "GetZoneGroupState", {});
     auto speakers = parseTopology(topology.response.value("ZoneGroupState"));
-    auto selected =
-        std::find_if(speakers.begin(), speakers.end(), [&](const auto &s) { return s.uuid == room.uuid; });
-    if (selected == speakers.end() || selected->name != room.name || selected->ip != room.ip ||
-        bridge::selectPlaybackMode("queue", *selected, true).selected != bridge::PlaybackMode::Queue)
-        throw std::runtime_error("group-rate-undecided");
+    auto selected = std::find_if(speakers.begin(), speakers.end(),
+                                 [&](const auto &s) { return s.uuid == room.uuid; });
+    if (selected == speakers.end() || selected->name != room.name || selected->ip != room.ip)
+        throw std::runtime_error("queue-coordinator-identity-changed");
+    return *selected;
+}
+void QueueCoordinator::fence() {
+    const auto selected = currentRoom();
+    if (selected.coordinator != room.name)
+        throw std::runtime_error("room-group-member coordinator=" + selected.coordinator);
 }
 SoapResult QueueCoordinator::transport(const std::string &action, const SoapArguments &args) {
     // Queries do not mutate; all queue/transport writes recheck the lease.
@@ -162,6 +167,8 @@ SoapResult QueueCoordinator::transport(const std::string &action, const SoapArgu
 SoapResult QueueCoordinator::releaseTransport(const std::string &action, const SoapArguments &args) {
     if (action != "RemoveTrackRangeFromQueue" && action != "SetCrossfadeMode" && action != "GetCrossfadeMode")
         throw std::logic_error("queue-invalid-release-action");
+    if (action.compare(0, 3, "Get"))
+        fence();
     return raw("AVTransport", action, args);
 }
 QueueSnapshot QueueCoordinator::browse() {

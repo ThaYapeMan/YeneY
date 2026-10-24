@@ -141,7 +141,9 @@ class Handler(BaseHTTPRequestHandler):
         s = self.server
         if action == 'GetZoneGroupState':
             other = ('<ZoneGroupMember UUID="RINCON_OTHER" ZoneName="Other" Location="http://127.0.0.1:'+str(s.server_port)+'/description.xml"/>') if s.grouped else ''
-            topology = ('<ZoneGroupState><ZoneGroups><ZoneGroup Coordinator="RINCON_TEST" ID="test">'
+            if s.grouped and int(s.grouped)>1:
+                other += '<ZoneGroupMember UUID="RINCON_SECOND" ZoneName="Second" Location="http://127.0.0.1:'+str(s.server_port)+'/description.xml"/>'
+            topology = ('<ZoneGroupState><ZoneGroups><ZoneGroup Coordinator="'+getattr(s,'coordinator_uuid','RINCON_TEST')+'" ID="test">'
                         '<ZoneGroupMember UUID="RINCON_TEST" ZoneName="Study" Location="http://127.0.0.1:'+str(s.server_port)+
                         '/description.xml"/>'+other+'</ZoneGroup></ZoneGroups></ZoneGroupState>')
             return {'ZoneGroupState': topology}, None

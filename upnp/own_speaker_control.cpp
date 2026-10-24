@@ -93,6 +93,7 @@ bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
     return true;
 }
 Speaker OwnSpeakerControl::speaker() const { return state.snapshot().room; }
+bool OwnSpeakerControl::refreshTopology() { return topology(speaker().ip, false); }
 TransportInfo OwnSpeakerControl::transportInfo() { return state.snapshot().transport; }
 uint8_t OwnSpeakerControl::displayVolume() { return state.snapshot().volume; }
 std::string OwnSpeakerControl::controllerUri() {
@@ -106,6 +107,15 @@ unsigned OwnSpeakerControl::actionTimeoutMs(const std::string& action) {
 }
 SoapResult OwnSpeakerControl::call(const std::string& action, const SoapArguments& args,
                                   const std::string& host, const std::string& service) {
+    // Never forward a member's transport write to the coordinator or pull it out.
+    if (service == "AVTransport" && action.compare(0, 3, "Get")) {
+        const bool known = topology(speaker().ip, false);
+        const auto roomNow = speaker();
+        if (!known || roomNow.coordinator != roomNow.name) {
+            SoapResult blocked;
+            return blocked;
+        }
+    }
     const std::string address = host.empty() ? targetFor(action, state.snapshot()) : host;
     const auto path = service == "ZoneGroupTopology" ? "/ZoneGroupTopology/Control" :
         service == "RenderingControl" ? "/MediaRenderer/RenderingControl/Control" : "/MediaRenderer/AVTransport/Control";

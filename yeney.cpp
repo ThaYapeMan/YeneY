@@ -16,6 +16,8 @@
 #include "upnp/own_speaker_control.h"
 #include "upnp/backend.h"
 #include "upnp/title_format.h"
+#include "stream_display.h"
+#include "queue_lms_commands.h"
 #include "upnp/list_rooms.h"
 #include <iostream>
 
@@ -351,12 +353,16 @@ private:
     std::thread worker;
 };
 
+static std::atomic_bool streamTrackChanged{false}, streamTopologyPending{false}, streamMemberBlocked{false};
+extern "C" void yeney_stream_new_track() { streamTopologyPending = true; }
+extern "C" void yeney_stream_track_changed() { streamTrackChanged = true; }
 struct TrackInfo {
     std::string id;
     std::string title;
     std::string artist;
     std::string album;
     std::string artworkUrl;
+    std::string duration;
     bool remote = false;
 };
 
@@ -380,7 +386,7 @@ static std::string lmsUrldecode(const std::string& s)
 
 // Query LMS CLI (port 9090) for current track metadata of player identified by mac.
 // Returns empty fields on any error so the caller can gracefully fall back.
-static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac)
+static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac, bool current = false)
 {
     TrackInfo info;
     if (server.empty()) return info;
@@ -418,7 +424,7 @@ static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac
 
     // Include artwork and remote/source fields; title and id are always returned
     std::string position = "-";
-    if (gQueueRoom && !gQueueRoom->queueActive() && gQueueRoom->streamMetadataIndex() >= 0)
+    if (!current && gQueueRoom && !gQueueRoom->queueActive() && gQueueRoom->streamMetadataIndex() >= 0)
         position = std::to_string(gQueueRoom->streamMetadataIndex());
     std::string query = std::string(macFmt) + " status " + position + " 1 tags:aAlKuj\n";
     send(fd, query.c_str(), query.size(), 0);
@@ -429,7 +435,7 @@ static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac
         response += ch;
     close(fd);
 
-    printf("LMS response: %s\n", response.c_str());
+    if (!current) printf("LMS response: %s\n", response.c_str());
 
     // Each space-separated token is URL-encoded "key:value"
     std::string playlistTimestamp, playlistIndex, time, duration, mode;
@@ -456,10 +462,11 @@ static TrackInfo fetchLmsTrackInfo(const std::string& server, const uint8_t* mac
         else if (key == "mode") mode = val;
     }
 
-    printf("LMS identity: id=%s playlist_timestamp=%s index=%s time=%s duration=%s mode=%s\n",
+    if (!current) printf("LMS identity: id=%s playlist_timestamp=%s index=%s time=%s duration=%s mode=%s\n",
         info.id.c_str(), playlistTimestamp.c_str(), playlistIndex.c_str(),
         time.c_str(), duration.c_str(), mode.c_str());
 
+    info.duration = duration;
     info.remote = bridge::remoteArtworkTrack(info.id, remote, sourceUrl);
     info.artworkUrl = bridge::lmsArtwork(host, info.id, artwork, info.remote);
 
@@ -543,6 +550,16 @@ std::string SqueezeBoxURL(unsigned stream_id)
 
 // Resolve unknown ownership once per observation; status polling has already
 // populated this cache in the usual event and periodic refresh paths.
+static bool stopLmsForMemberSource() {
+    const auto live = gPlayer->speaker();
+    if (live.coordinator == live.name) return false;
+    if (gQueueRoom) { gQueueRoom->refusePlayback(true); return true; }
+    char mac[18];
+    snprintf(mac,sizeof mac,"%02x:%02x:%02x:%02x:%02x:%02x",gMac[0],gMac[1],gMac[2],gMac[3],gMac[4],gMac[5]);
+    bridge::roomLmsCommand(gServer.substr(0,gServer.find(':')),mac,"stop","speaker-source-change",
+        [](const auto &line) { printf("yeney: queue %s\n",line.c_str()); });
+    return true;
+}
 static bool ObserveSpeakerOwnership()
 {
     auto info = gPlayer->transportInfo();
@@ -570,7 +587,7 @@ static bool ObserveSpeakerOwnership()
             lmsPaused.store(true);
         }
         end_squeezebox_response();
-        sendLmsCommand(gServer, gMac, "pause 1");
+        if (!stopLmsForMemberSource()) sendLmsCommand(gServer, gMac, "pause 1");
     }
     return ours && !speakerRelinquished.load();
 }
@@ -661,14 +678,44 @@ static bool alreadyPlayingCurrentStream(unsigned stream)
     return true;
 }
 
+static bool permitRoomPlayback(unsigned stream_id) {
+    auto own = std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer);
+    if (own && (!own->refreshTopology() || own->speaker().coordinator != own->speaker().name)) {
+        const auto live = own->speaker();
+        char mac[18];
+        snprintf(mac, sizeof mac, "%02x:%02x:%02x:%02x:%02x:%02x", gMac[0],gMac[1],gMac[2],gMac[3],gMac[4],gMac[5]);
+        const bool member = live.coordinator != live.name;
+        if (gQueueRoom) {
+            gQueueRoom->refusePlayback(member);
+            completedStream = stream_id;
+            return false;
+        }
+        if (member) printf("yeney: room is group member room=%s coordinator=%s; not playing\n",
+                           live.name.c_str(),live.coordinator.c_str());
+        bridge::roomLmsCommand(gServer.substr(0,gServer.find(':')),mac,"stop",member ? "group-member" : "room-fault",
+                              [](const auto &line) { printf("yeney: queue %s\n",line.c_str()); });
+        completedStream = stream_id;
+        return false; // The stop is final, not a failed start to retry.
+    }
+    return true;
+}
+static void displayLmsTrack(TrackInfo track) {
+    upnp::sanitizeXmlFields({{"title", &track.title}, {"artist", &track.artist}, {"album", &track.album}});
+    unsigned seconds = 0;
+    try { seconds = unsigned(std::stod(track.duration)); } catch (...) {}
+    char duration[32]; snprintf(duration,sizeof duration,"%u:%02u:%02u",seconds/3600,seconds/60%60,seconds%60);
+    bridge::displayStreamTrack(upnp::formatTitle(track.title,track.artist),track.artist,track.album,duration);
+}
 static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)
 {
     if (speakerRelinquished.load() || stream_id != streamId.load()) return false;
+    if (!permitRoomPlayback(stream_id)) return true;
     std::string streamURL = SqueezeBoxURL(stream_id);
     bool ok = false;
     if (!streamURL.empty()) {
         const auto res = gStreamServer->resource(SBSTREAMER_CNAME);
         TrackInfo track = fetchLmsTrackInfo(gServer, gMac);
+        displayLmsTrack(track);
         std::string title = track.title.empty() ? "Squeezebox" : track.title;
         std::string artUrl = track.artworkUrl.empty() && !track.remote
             ? gPlayer->controllerUri() + res.iconUri : track.artworkUrl;
@@ -693,7 +740,7 @@ static bool PlaySqueezeBoxLocked(unsigned stream_id, bool resetPosition)
 static void dispatchStreamStart()
 {
     std::unique_lock<std::mutex> transport(transportMutex, std::try_to_lock);
-    if (speakerRelinquished.load() || !transport.owns_lock()) return;
+    if (speakerRelinquished.load() || streamMemberBlocked.load() || !transport.owns_lock()) return;
     const unsigned current = streamId.load();
     if (!current || completedStream.load() == current) return;
     uint64_t revision;
@@ -772,6 +819,28 @@ void runBridgeLoop(bridge::Status& status)
 
     for (;;) {
         bridge::streamMetrics().tick();
+        if (streamTopologyPending.exchange(false) && !gQueueRoom) {
+            auto own = std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer);
+            const bool known = own && own->refreshTopology();
+            const auto live = gPlayer->speaker();
+            if (!known || live.coordinator != live.name) {
+                if (!streamMemberBlocked.exchange(true)) {
+                    char mac[18];
+                    snprintf(mac,sizeof mac,"%02x:%02x:%02x:%02x:%02x:%02x",gMac[0],gMac[1],gMac[2],gMac[3],gMac[4],gMac[5]);
+                    if (known) printf("yeney: room is group member room=%s coordinator=%s; not playing\n",live.name.c_str(),live.coordinator.c_str());
+                    bridge::roomLmsCommand(gServer.substr(0,gServer.find(':')),mac,"stop",known ? "group-member" : "room-fault",
+                        [](const auto &line) { printf("yeney: queue %s\n",line.c_str()); });
+                }
+            } else streamMemberBlocked = false;
+        }
+        if (streamTrackChanged.exchange(false) && (!gQueueRoom || !gQueueRoom->queueActive())) {
+            displayLmsTrack(fetchLmsTrackInfo(gServer, gMac, true));
+            gEvent = true;
+        }
+        if (gQueueRoom && gQueueRoom->queueActive()) {
+            auto &display = bridge::streamDisplay();
+            std::lock_guard<std::mutex> lock(display.mutex); display.active = false;
+        }
         if (!gQueueRoom || !gQueueRoom->queueActive()) {
             dispatchStreamStart();
             pollSonosPosition();

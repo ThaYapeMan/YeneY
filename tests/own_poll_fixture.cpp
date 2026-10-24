@@ -1,3 +1,4 @@
+static bool stopLmsForMemberSource() { return false; }
 #include "stream_room_stub.h"
 #include "room_status.h"
 #include "source_ownership.h"

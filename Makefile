@@ -68,6 +68,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/queue_device_cli_test.py
 	python3 tests/queue_protocol_setting_test.py
 	YENEY_ACCEPTANCE_BINARY=$(CURDIR)/yeney python3 tests/queue_binary_test.py
+	python3 tests/queue_group_test.py
 	python3 tests/length_binary_test.py
 	./queue-source-test
 	./room-status-test
@@ -419,3 +420,8 @@ yeney.o queue_room.o sonos-position.o core_sonos.o sonos-status.o sbencoder.o: r
 yeney.o upnp/own_speaker_control.o sbstreamer.o: debug_settings.h
 
 $(QUEUE_ROOM_OBJS): queue_room_internal.h queue_room.h core_queue_sink.h queue_path_sink.h queue_playlist.h queue_source.h queue_speaker_changes.h stream_metrics.h
+
+yeney.o sonos-status.o: stream_display.h
+yeney.o $(QUEUE_ROOM_OBJS): queue_lms_commands.h
+
+queue_room.o: third_party/yeney-core/core/player.h

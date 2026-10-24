@@ -183,7 +183,7 @@ class SOAP(Handler):
 
 class Backend:
     def __init__(self,model,sonos,root):
-        self.model=model;self.sonos=sonos;self.root=root;self.suite=None;self.calls=[];self.pid=100;self.grouped=False;self.running=True;self.signal=None;self.inject=None;self.environment='ORIGINAL=1'
+        self.model=model;self.sonos=sonos;self.root=root;self.suite=None;self.calls=[];self.pid=100;self.member=False;self.grouped=False;self.running=True;self.signal=None;self.inject=None;self.environment='ORIGINAL=1'
     def now(self):return self.model.clock
     def sleep(self,duration):
         self.model.clock+=duration
@@ -207,7 +207,7 @@ class Backend:
     def run(self,*args):
         self.calls.append(args)
         if args[0]=='systemd-escape':return 'yeney@Study.service'
-        if args[0].endswith('/yeney'):return 'Study\tPort\t127.0.0.1\tStudy\t'+('Study,Kitchen' if self.grouped else 'Study')
+        if args[0].endswith('/yeney'):return 'Study\tPort\t127.0.0.1\t'+('Other' if self.member else 'Study')+'\t'+('Study,Kitchen' if self.grouped else 'Study')
         if args[0]=='journalctl':return 'core: STMc\nroom Study journal only' if self.model.mode=='play' and self.model.urls and self.model.started_url==self.model.urls[self.model.index] and self.model.started_url not in self.model.unplayable else 'room Study journal only'
         assert args[0]=='systemctl',args
         if args[1]=='show' and 'StateDirectory' in args: return ''
@@ -312,7 +312,9 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.model.external_stops,1)
         self.assertEqual(next(r for r in self.suite.results if r['name']=='external-stop')['verdict'],'PASS')
         self.assertEqual(self.suite.results[0]['joins'],3)
-        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000','remote-source'])
+        group=next(r for r in self.suite.results if r['name']=='group-coordinator')
+        self.assertEqual(group['verdict'],'SKIP');self.assertIn('standalone',group['note'])
+        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000','group-coordinator','remote-source'])
         self.assertTrue(all(r['verdict']=='SKIP' and 'library has no eligible' in r['note'] for r in self.suite.results[4:6]))
         with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:
             names={n.split('/',1)[-1] for n in tar.getnames()}
@@ -436,12 +438,22 @@ class Tests(unittest.TestCase):
                 code,output=self.run_suite();self.assertEqual(code,1,output);self.restored()
                 self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root);self.backend.suite=self.suite
         print('PASS queue device suite: identity mismatch, fallback and RelTime regression fail without losing restoration')
+    def test_group_coordinator(self):
+        self.backend.grouped=True;self.sonos.grouped=True
+        code,output=self.run_suite();self.assertEqual(code,0,output);self.restored()
+        summary=(self.suite.work/'summary.md').read_text()
+        self.assertIn('group-coordinator',summary)
+        row=next(r for r in self.suite.results if r['name']=='group-coordinator')
+        self.assertEqual(row['verdict'],'PASS');self.assertGreaterEqual(row['joins'],3)
+        self.assertFalse(any(r[0] in ('AddMember','RemoveMember','BecomeCoordinatorOfStandaloneGroup','SetAVTransportURI') for r in self.sonos.requests))
+        print('PASS device group-coordinator: owner-formed group runs three joins with title/index checks; no grouping actions')
+
     def test_refusals(self):
-        self.backend.grouped=True
+        self.backend.member=True
         code,_=self.run_suite();self.assertEqual(code,1);self.assertFalse(any(c[0]=='systemctl' and c[1]=='restart' for c in self.backend.calls))
         self.assertEqual(self.model.urls,self.original[0])
         self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root);self.backend.suite=self.suite
-        self.backend.grouped=False;self.backend.running=False
+        self.backend.member=False;self.backend.running=False
         code,_=self.run_suite();self.assertEqual(code,1)
         self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root);self.backend.suite=self.suite
         self.backend.running=True
@@ -450,7 +462,7 @@ class Tests(unittest.TestCase):
         fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
         try:code,output=self.run_suite();self.assertEqual(code,1);self.assertIn('lock',output)
         finally:os.close(fd)
-        print('PASS queue device suite: grouped/inactive room and existing suite lock refuse before mutations')
+        print('PASS queue device suite: member/inactive room and existing suite lock refuse before mutations')
     def test_preexisting_dropin_and_backup_failure(self):
         directory=self.suite.unit_root/'yeney@Study.service.d';directory.mkdir(parents=True)
         existing=directory/'queue-suite.conf';existing.write_text('OWNER CONTENT\n')

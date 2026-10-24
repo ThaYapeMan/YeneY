@@ -17,6 +17,7 @@ public:
     void shutdown();
     yeney::Sink &sink();
     void command(const yeney::Command &);
+    void refusePlayback(bool member);
     bool queueActive() const;
     int streamMetadataIndex() const;
     bool remoteSource(uint64_t occurrence) const;

@@ -6,6 +6,7 @@
 #include "queue_playlist.h"
 #include "queue_protocol.h"
 #include "queue_room.h"
+#include "queue_lms_commands.h"
 #include "queue_route.h"
 #include "queue_source.h"
 #include "queue_speaker_changes.h"
@@ -28,6 +29,7 @@ void logQueue(const std::string &);
 unsigned pollSetting();
 } // namespace queue_room_detail
 using namespace queue_room_detail;
+struct TrackFault : std::runtime_error { using std::runtime_error::runtime_error; };
 struct QueueRoom::Impl {
     upnp::Speaker room;
     std::string host, mac, session;
@@ -69,6 +71,9 @@ struct QueueRoom::Impl {
     std::condition_variable changed;
     std::deque<std::pair<char, uint64_t>> commands;
     std::thread worker;
+    bool roomStopped = false;
+    std::deque<std::chrono::steady_clock::time_point> trackFaults;
+    void roomFault(const std::string &reason, bool member = false);
     bool closing = false, started = false, faulted = false, releasing = false;
     uint64_t firstStream = 1, current = 0;
     queue_audio::PlaylistSnapshot playlist;

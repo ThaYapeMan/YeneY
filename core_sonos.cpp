@@ -1,3 +1,5 @@
+extern "C" void yeney_stream_track_changed() __attribute__((weak));
+extern "C" void yeney_stream_new_track() __attribute__((weak));
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_sonos.h"
 #include "timing_probe_runtime.h"
@@ -218,8 +220,11 @@ void runCoreClient(const char* server, const uint8_t* mac, const char* name) {
         config.name = name;
         config.connectionReady = [&icon](const auto &host) { icon.connected(host); };
         std::copy(mac, mac + 6, config.mac.begin());
-        config.log = [](const std::string& line) { printf("core: %s\n", line.c_str()); };
-        config.observeCommand = [&](const yeney::Command& c) { sink.command(c); };
+        config.log = [](const std::string& line) { printf("core: %s\n", line.c_str()); if ((line.rfind("STMs ", 0) == 0 || line.rfind("STMt ", 0) == 0) && yeney_stream_track_changed) yeney_stream_track_changed(); };
+        config.observeCommand = [&](const yeney::Command& c) {
+            if (c.letter == 's' && yeney_stream_new_track) yeney_stream_new_track();
+            sink.command(c);
+        };
         config.startOnSubmit = true;
         yeney::Player player(config, sink);
         player.run(coreStop);
