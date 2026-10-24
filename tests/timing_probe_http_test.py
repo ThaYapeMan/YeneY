@@ -38,6 +38,9 @@ for setting,mode in [(None,'off'),('0','off'),('bad','off'),('', 'off'),('1','me
         if setting is not None: env['YENEY_TIMING_PROBE']=setting
         result=subprocess.run([str(ROOT/'timing-probe-http-test'),str(server.server_port),mode],env=env,capture_output=True,text=True,check=True,timeout=18)
         print(result.stdout,end='')
+        if mode=='member':
+            assert not any(server.count.get(action,0) for action in ('SetAVTransportURI','Play','Pause','Stop')),server.count
+            print('PASS timing member policy: no stream transport writes, no timing probes, position cache preserved')
         baseline=0 if mode=='paused' else 1
         extra=len(server.requests)-baseline
         if mode not in ('active','errors'): assert extra==0,(mode,server.count,result.stdout)

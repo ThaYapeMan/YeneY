@@ -18,7 +18,7 @@ int main(int argc, char **argv) {
     const bool initialKnown = control.positionInfo(initial);
     const std::string uri = "http://127.0.0.1:1450/yeney.flac?session=abcdef&stream=" +
                             std::string(mode == "mismatch" ? "8" : "7");
-    assert(control.playStream(uri, "Test"));
+    assert(control.playStream(uri, "Test") == (mode != "member"));
     if (mode == "foreign") {
         std::string uri;
         assert(control.currentUri(uri));
