@@ -3,7 +3,7 @@
 #include <cstdio>
 #include <stdexcept>
 namespace upnp {
-std::string queueDidl(const QueueMetadata &m, TitleFormat format) {
+std::string queueDidl(const QueueMetadata &m) {
     if (!m.rate || m.url.compare(0, 7, "http://") || m.session.empty() || m.size < 44 || m.bits != 24 ||
         m.channels != 2 || m.frames > (UINT32_MAX - 36ull) / 6 || m.size != 44 + 6 * m.frames)
         throw std::invalid_argument("invalid finite queue metadata");
@@ -19,7 +19,7 @@ std::string queueDidl(const QueueMetadata &m, TitleFormat format) {
            esc(m.session) +
            "\" parentID=\"0\" restricted=\"true\">"
            "<dc:title>" +
-           esc(formatTitle(m.title, m.artist, format)) +
+           esc(m.title) +
            "</dc:title>"
            "<dc:creator>" +
            esc(m.artist) + "</dc:creator><upnp:artist>" + esc(m.artist) +

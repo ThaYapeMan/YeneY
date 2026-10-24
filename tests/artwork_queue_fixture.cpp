@@ -17,5 +17,5 @@ int main() {
     metadata.artist = entry.artist;
     metadata.album = entry.album;
     metadata.artwork = entry.artwork("127.0.0.1");
-    std::cout << upnp::queueDidl(metadata, upnp::TitleFormat::ArtistTitle);
+    std::cout << upnp::queueDidl(metadata);
 }

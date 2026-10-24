@@ -67,13 +67,13 @@ class Client(socketserver.StreamRequestHandler):
             self.wfile.write((line+' '+self.server.record+'\n').encode())
             self.wfile.flush()
 
-def check(didl, record, artwork):
+def check(didl, record, artwork, queue=False):
     root = ET.fromstring(didl)
     item = next(iter(root))
     values = {n.tag.rsplit('}', 1)[-1]: n.text or '' for n in item}
     expected = dict(unquote(t).split(':', 1) for t in record.split())
     title = expected['title']
-    if expected.get('artist'): title = expected['artist']+' - '+title
+    if not queue and expected.get('artist'): title = expected['artist']+' - '+title
     assert values['title'] == title, values
     assert values.get('creator', '') == expected.get('artist', ''), values
     assert values.get('album', '') == expected.get('album', ''), values
@@ -91,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-artwork-') as directory:
                     '-o', str(fixture)], cwd=ROOT, check=True)
     for name, record, artwork in cases:
         didl = subprocess.check_output([str(fixture)], input=record+'\n', text=True)
-        check(didl, record, artwork)
+        check(didl, record, artwork, queue=True)
         print('PASS queue artwork: '+name, flush=True)
         with CLI(('127.0.0.1', 9090), Client) as cli:
             cli.record, cli.commands, cli.errors = record, [], []

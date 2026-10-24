@@ -290,7 +290,7 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | `YENEY_UPNP` | `yeney` or `own`; unsupported names warn and use YeneY | `yeney` |
 | `YENEY_STREAM_PACING` | `sonos`: follow the Sonos clock · `wall`: legacy host clock opt-out | `sonos` |
 | `YENEY_AUDIO` | `24/48`: 24-bit FLAC at the source's 44.1/48 kHz rate · `16/44`: legacy 16-bit/44.1 kHz | `24/48` |
-| `YENEY_TITLE_FORMAT` | `artist-title`: "artist - title" · `title`: title only | `artist-title` |
+| `YENEY_TITLE_FORMAT` | Stream path only: `artist-title`: "artist - title" · `title`: title only; queue items always use the plain title | `artist-title` |
 | `YENEY_STREAM_CONTENT` | `structured`, `plain` or `off`: the radio-text field for other controllers | `structured` |
 | `YENEY_PAUSE` | `stop`: the Sonos-safe pause · `pause`: plain UPnP Pause (fallback) | `stop` |
 | `YENEY_DEBUG` | Comma-separated `events`, `stream`, `legacy-poll`, `stopped-mediainfo`; diagnostics and polling experiments only | empty |
@@ -680,3 +680,9 @@ Room-level topology, ownership, SOAP and transport faults stop LMS once without
 STMn or playlist advancement. Source/decode/length faults can fail a track;
 a second consecutive fault within ten seconds stops the room. Continuous stream
 display titles and durations follow LMS track changes; renderer DIDL is unchanged.
+
+Queue items carry the plain sanitised LMS title, with artist and album in their
+own musicTrack fields. An empty title stays empty; no non-empty queue fallback
+is added. `YENEY_TITLE_FORMAT` applies only to the stream path, whose radio-type
+DIDL makes the Sonos app display the title alone. Its artist-title default,
+sent-title log and continuous-stream display formatting remain unchanged.

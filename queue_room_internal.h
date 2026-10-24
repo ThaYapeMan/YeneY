@@ -64,6 +64,7 @@ struct QueueRoom::Impl {
         std::shared_ptr<queue_audio::Item> item;
         std::string sourceUrl;
         uint64_t frames;
+        std::string title;
     };
     std::vector<Entry> items;
     std::map<uint64_t, bool> remote;

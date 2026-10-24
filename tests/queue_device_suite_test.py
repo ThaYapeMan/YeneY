@@ -173,7 +173,7 @@ class SOAP(Handler):
             if model.fault=='regression' and model.time>4:position=0
             uri=f'http://127.0.0.1/music/queue.wav?epoch={model.epoch}&item={t["id"]}' if model.owned else 'http://127.0.0.1/music/yeney.flac?session=fixture&stream=1'
             from xml.sax.saxutils import escape
-            title='Wrong' if model.fault=='identity' else t['artist']+' - '+t['title'] if model.title_format=='artist-title' and t.get('artist') else t['title']
+            title='Wrong' if model.fault=='identity' else t['artist']+' - '+t['title'] if model.title_format=='artist-title' and not t.get('url','').startswith('file://') and t.get('artist') else t['title']
             tags=dict(title=title,album=t['album']);tags.update(model.speaker_metadata.get(t['id'],{}))
             metadata='<DIDL-Lite xmlns:dc="urn:dc" xmlns:upnp="urn:upnp"><item><dc:title>'+escape(tags['title'])+'</dc:title><upnp:album>'+escape(tags['album'])+'</upnp:album></item></DIDL-Lite>'
             return dict(Track=str(model.index+1),TrackURI=uri,RelTime=f'{int(position)//3600:02}:{int(position)//60%60:02}:{int(position)%60:02}',TrackMetaData=metadata),None
@@ -294,7 +294,7 @@ class Tests(unittest.TestCase):
                     self.suite.begin('album');tracks=self.suite.selected['album'];self.suite.load(tracks)
                     self.assertTrue(self.suite.samples[-1]['identity'])
                     track=tracks[0]
-                    wrong=track['title'] if selected=='artist-title' else track['artist']+' - '+track['title']
+                    wrong=track['artist']+' - '+track['title']
                     self.model.speaker_metadata[track['id']]=dict(title=wrong)
                     self.assertFalse(self.suite.sample(tracks,preparing=True)['identity'])
                     self.model.speaker_metadata.clear()
@@ -302,7 +302,7 @@ class Tests(unittest.TestCase):
                 self.assertEqual(code,0,output);self.restored()
                 self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root)
                 self.backend.suite=self.suite
-        print('PASS device suite title format: room environment selects exactly title or artist-title; unset/invalid/empty use artist-title; wrong format rejected')
+        print('PASS device suite title format: queue identity stays plain for every room setting; prefixed queue title rejected; stream format retained')
 
     def test_full_sequence(self):
         code,output=self.run_suite();self.assertEqual(code,0,output)

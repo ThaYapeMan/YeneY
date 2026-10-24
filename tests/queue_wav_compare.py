@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from queue_binary_test import Binary
 
 def album(binary):
-    host=Binary(rates=(44100,)*4,seconds=8,binary=Path(binary).resolve())
+    host=Binary(rates=(44100,)*4,seconds=8,binary=Path(binary).resolve(),queue_title_prefix="")
     bodies=[]
     try:
         for index in range(4):

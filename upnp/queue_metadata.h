@@ -9,6 +9,7 @@ struct QueueMetadata {
     uint32_t rate = 0;
     unsigned bits = 24, channels = 2;
 };
-// Finite music metadata has no radio URI rewriting or streamContent changes.
-std::string queueDidl(const QueueMetadata &, TitleFormat = titleFormat());
+// Finite music metadata keeps the plain LMS title and separate artist/album.
+// No stream title formatting, radio URI rewriting or streamContent changes.
+std::string queueDidl(const QueueMetadata &);
 } // namespace upnp

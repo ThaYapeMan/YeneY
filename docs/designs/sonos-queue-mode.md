@@ -101,7 +101,7 @@ U+0016 album XML identified the next morning. It is not a production path.
 The finite item store, progressive exact-length/sealed WAV publication, HTTP
 Range/reconnect support, metadata DIDL, XML 1.0 sanitiser and shared artwork
 resolver are unchanged. Metadata repair is logged by field/count, once per
-sent item; the sanitised formatted title is sent consistently.
+sent item; the sanitised plain title is sent consistently.
 Sonos crossfade is off; LMS transitions are still rendered by the core. Queue
 crossfade and mixed-rate owner qualification are parked, not declared passed.
 
@@ -304,3 +304,19 @@ STAT cadence). This follows LMS processing its start notification without
 assuming that another CLI connection has already seen that state. Sanitised/formatted title and duration
 feed only the status display/log, not DIDL, HTTP or transport. The normal first
 Play metadata and its cached renderer title keep their existing wire behavior.
+
+## Queue and stream title policy
+
+Queue musicTrack `dc:title` is always the plain XML-1.0-sanitised LMS title.
+Artist, album and artwork retain their separate fields; prefixing the artist
+would duplicate what Sonos already displays. The queue path has no non-empty
+fallback: an empty title stays empty, as in its existing title-only behavior.
+The stream-only `Squeezebox` fallback is not borrowed for queue items.
+
+`YENEY_TITLE_FORMAT` applies only to the stream path: its radio-type DIDL shows
+only the title, so artist-title remains its default. Stream DIDL, sent-title
+logging and continuous-stream display formatting are unchanged. Accepted queue
+items log their title once; the current item's same sanitised title is published
+as `playback.title` and used in the queue status display. JSON/log quoting
+preserves valid XML whitespace and Unicode. All of this also works for direct
+binary runs, using the existing state-directory/environment/stdout mechanisms.

@@ -44,11 +44,11 @@ def record(values):
     return ' '.join(quote_from_bytes(key.encode()+b':'+value, safe='') for key, value in fields.items())
 
 
-def check(didl, expected):
+def check(didl, expected, queue=False):
     item = ET.fromstring(didl)[0]  # Expat rejects XML 1.0 forbidden characters.
     values = {n.tag.rsplit('}', 1)[-1]: n.text or '' for n in item}
     title, artist, album = expected
-    assert values['title'] == artist+' - '+title, values
+    assert values['title'] == (title if queue else artist+' - '+title), values
     assert values['creator'] == artist and values['album'] == album, values
 
 
@@ -84,7 +84,7 @@ def cli_paths():
         for name, raw, expected, changes in cases:
             wire = record(raw)
             didl = subprocess.check_output([str(fixture)], input=wire+'\n', text=True)
-            check(didl, expected)
+            check(didl, expected, queue=True)
             print('PASS queue XML metadata via LMS CLI decode: '+name, flush=True)
             with CLI(('127.0.0.1', 9090), Client) as cli:
                 cli.record, cli.commands = wire, []

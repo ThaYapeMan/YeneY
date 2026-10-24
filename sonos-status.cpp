@@ -63,9 +63,14 @@ Status::Snapshot Status::poll() const
     s.title = transport.title; s.album = transport.album; s.artist = transport.artist;
     s.transportStatus = transport.status; s.transportState = transport.state;
     s.trackDuration = transport.duration;
+    bool queueDisplay = false;
+    if (auto *mode = roomMode()) {
+        const auto value = mode->status();
+        if (value.active == "queue" && value.path == "relay") { s.title = value.title; queueDisplay = true; }
+    }
     auto &display = streamDisplay();
     std::lock_guard<std::mutex> lock(display.mutex);
-    if (display.active) {
+    if (display.active && !queueDisplay) {
         s.title = display.title; s.artist = display.artist; s.album = display.album;
         s.trackDuration = display.duration;
     }

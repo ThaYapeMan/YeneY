@@ -13,7 +13,7 @@ struct ModeStatus {
     uint64_t occurrence = 0;
     uint32_t renderedRate = 0;
     std::vector<std::string> ownedUris;
-    std::string currentUri, lastFault;
+    std::string currentUri, lastFault, title;
 };
 // Passive snapshot registry, never a mode controller. A single room worker
 // publishes queue observations and the complete diagnostic file synchronously.
@@ -30,12 +30,24 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         value = std::move(v);
     }
+    static std::string quote(const std::string &t) {
+        std::string out = "\"";
+        for (unsigned char c : t) {
+            if (c == '\n') out += "\\n";
+            else if (c == '\r') out += "\\r";
+            else if (c == '\t') out += "\\t";
+            else {
+                if (c == '"' || c == '\\') out += '\\';
+                out += c >= 32 ? char(c) : '?';
+            }
+        }
+        return out + '"';
+    }
     static std::string json(const ModeStatus &v) {
         auto q = [](const std::string &t) {
             std::string out = "\"";
             for (unsigned char c : t) {
-                if (c == '"' || c == '\\')
-                    out += '\\';
+                if (c == '"' || c == '\\') out += '\\';
                 out += c >= 32 ? char(c) : '?';
             }
             return out + '"';
@@ -54,7 +66,9 @@ public:
                     out << ',';
                 out << q(v.ownedUris[i]);
             }
-            out << "]}";
+            out << "]";
+            if (v.path == "relay") out << ",\"title\":" << quote(v.title);
+            out << '}';
         } else {
             // Preserve the stream diagnostic's established representation.
             out << ",\"occurrence\":0,\"epoch\":0,\"generation\":1,\"owned\":false,\"mirrored_ahead\":0,"

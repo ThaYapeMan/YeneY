@@ -211,12 +211,14 @@ void QueueRoom::Impl::append() {
                      " " + changes);
         owned.insert(metadata.url); // include an enqueue whose reply is lost
         const auto result = actions.add(metadata.url, upnp::queueDidl(metadata));
+        logQueue("item occurrence=" + std::to_string(record.source.occurrence) +
+                 " title=" + RoomStatus::quote(metadata.title));
         expected.push_back(metadata.url);
         const auto after = coordinator.browse();
         if (result.response.value("NumTracksAdded") != "1" || after.uris != expected ||
             after.update == before.update)
             throw std::runtime_error("queue-enqueue-unconfirmed");
-        items.push_back({record.source.occurrence, metadata.url, record.item, track.url, metadata.frames});
+        items.push_back({record.source.occurrence, metadata.url, record.item, track.url, metadata.frames, metadata.title});
         publish();
         if (!started) {
             actions.selectQueue(room.uuid);

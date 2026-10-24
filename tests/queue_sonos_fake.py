@@ -210,7 +210,7 @@ class Handler(BaseHTTPRequestHandler):
             fields = {n.tag.rsplit('}', 1)[-1]: n.text for n in item}
             resource = next(n for n in item if n.tag.rsplit('}', 1)[-1] == 'res')
             assert fields['class'] == 'object.item.audioItem.musicTrack'
-            assert fields['title'].startswith(getattr(s, 'expected_title_prefix', 'Artist <one> - Title & '))
+            assert fields['title'].startswith(getattr(s, 'expected_title_prefix', 'Title & '))
             assert fields['album'] in getattr(s, 'expected_albums', ['Album & fixture'])
             assert resource.text == uri and resource.attrib['protocolInfo'] == 'http-get:*:audio/wav:*'
             assert resource.attrib['bitsPerSample'] == '24' and resource.attrib['nrAudioChannels'] == '2'

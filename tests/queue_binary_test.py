@@ -145,7 +145,7 @@ class CLI(socketserver.ThreadingTCPServer):
                             current=owner.index if owner.index is not None else max(0,owner.model.playing-1)
                             entries=entries[current:current+1]
                         for at,i in entries:
-                            fields += [f'playlist index:{at}', f'id:{-100-i}' if owner.remote_sources else f'id:track {i}:encoded',f'title:Title & {i}',
+                            fields += [f'playlist index:{at}', f'id:{-100-i}' if owner.remote_sources else f'id:track {i}:encoded',f'title:{owner.titles[i]}',
                                        'duration:24','artist:Artist <one>',f'album:{owner.albums[i] if i<len(owner.albums) else "Album & fixture"}',f'url:http://fixture.invalid/{i}' if owner.remote_sources else f'url:file:///fixture/{i}']
                         reply=' '.join(quote(f,safe='') for f in fields)
                     else: reply=''
@@ -185,7 +185,8 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, titles=None, queue_title_prefix=None):
+        self.titles=titles or [f'Title & {i}' for i in range(len(rates))]
         self.remote_sources=remote_sources
         self.resume_restart=resume_restart
         self.resume_changed=resume_changed
@@ -196,6 +197,7 @@ class Binary:
         self.sonos=Coordinator(('127.0.0.1',1400),Device)
         self.sonos.grouped=grouped or member
         if member:self.sonos.coordinator_uuid="RINCON_OTHER"
+        if queue_title_prefix is not None:self.sonos.expected_title_prefix=queue_title_prefix
         self.sonos.consume_stream=consume_stream
         self.sonos.stopped_play=stopped_play
         self.sonos.fail_add=fail_add

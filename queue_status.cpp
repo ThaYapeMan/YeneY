@@ -15,6 +15,7 @@ void QueueRoom::Impl::publish() {
         v.ownedUris.push_back(item.uri);
         if (item.stream == current) {
             v.currentUri = item.uri;
+            v.title = item.title;
             v.renderedRate = item.item->descriptor().rate;
         }
     }
