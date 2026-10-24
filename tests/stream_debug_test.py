@@ -50,4 +50,5 @@ with tempfile.TemporaryDirectory(prefix='yeney-stream-debug-') as tmp:
             assert 'bytes=4 ' in periodic[0] and 'send_max_ms=2.000' in periodic[0],lines
             assert 'bytes=30 ' in periodic[-1],lines
             assert 'end=peer_FIN final' in lines[-1],lines
-        print(f'PASS: YENEY_DEBUG_STREAM={setting!r}: response cadence 1..30 then 40/50, interval wire bytes, send durations, final termination',flush=True)
+        label='YENEY_DEBUG=stream' if setting=='canonical' else f'YENEY_DEBUG_STREAM={setting!r}'
+        print(f'PASS: {label}: response cadence 1..30 then 40/50, interval wire bytes, send durations, final termination',flush=True)
