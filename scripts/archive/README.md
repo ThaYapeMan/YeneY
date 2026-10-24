@@ -14,3 +14,6 @@ not installed tools or active acceptance tests. Use the maintained
 Their dedicated tests are retained under `tests/archive/` but are not part of
 `make test`. Historical scripts retain their original behaviour; they are not
 permission to run device experiments from an agent session.
+
+Live legacy-setting startup checks formerly mixed into the migration test remain
+active in `tests/obsolete_player_test.py`; only migration coverage is archived.
