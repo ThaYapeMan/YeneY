@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_coordinator.h"
 #include "../playback_mode.h"
+#include "../transport_source.h"
 #include <algorithm>
 #include <ctime>
 #include <iomanip>
@@ -165,10 +166,14 @@ SoapResult QueueCoordinator::transport(const std::string &action, const SoapArgu
     return raw("AVTransport", action, args);
 }
 SoapResult QueueCoordinator::releaseTransport(const std::string &action, const SoapArguments &args) {
-    if (action != "RemoveTrackRangeFromQueue" && action != "SetCrossfadeMode" && action != "GetCrossfadeMode")
+    if (action != "Stop" && action != "RemoveTrackRangeFromQueue" && action != "SetCrossfadeMode" && action != "GetCrossfadeMode")
         throw std::logic_error("queue-invalid-release-action");
-    if (action.compare(0, 3, "Get"))
+    if (action.compare(0, 3, "Get")) {
         fence();
+        const auto uri = raw("AVTransport", "GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
+        if (uri != "x-rincon-queue:" + room.uuid + "#0")
+            throw std::runtime_error("crossfade restore skipped: transport owned by " + bridge::transportSourceClass(uri));
+    }
     return raw("AVTransport", action, args);
 }
 QueueSnapshot QueueCoordinator::browse() {

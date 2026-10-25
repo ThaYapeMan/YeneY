@@ -68,6 +68,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/queue_device_cli_test.py
 	python3 tests/queue_protocol_setting_test.py
 	YENEY_ACCEPTANCE_BINARY=$(CURDIR)/yeney python3 tests/queue_binary_test.py
+	python3 tests/queue_takeover_test.py
 	python3 tests/queue_group_test.py
 	python3 tests/queue_title_test.py
 	python3 tests/length_binary_test.py
@@ -334,7 +335,7 @@ playback-mode-test: tests/playback_mode_test.cpp playback_mode.h upnp/speaker_co
 test: playback-mode-test
 
 QUEUE_CONTROLLER_OBJS = upnp/queue_coordinator.o upnp/queue_actions.o upnp/queue_ownership.o upnp/queue_metadata.o
-upnp/queue_coordinator.o: upnp/queue_coordinator.cpp upnp/queue_coordinator.h playback_mode.h upnp/queue_actions.h upnp/queue_ownership.h upnp/http.h upnp/soap.h upnp/xml.h upnp/discovery.h
+upnp/queue_coordinator.o: upnp/queue_coordinator.cpp upnp/queue_coordinator.h playback_mode.h transport_source.h upnp/queue_actions.h upnp/queue_ownership.h upnp/http.h upnp/soap.h upnp/xml.h upnp/discovery.h
 upnp/queue_actions.o: upnp/queue_actions.cpp upnp/queue_actions.h upnp/soap.h upnp/xml.h
 upnp/queue_ownership.o: upnp/queue_ownership.cpp upnp/queue_ownership.h
 upnp/queue_metadata.o: upnp/queue_metadata.cpp upnp/queue_metadata.h upnp/soap.h upnp/title_format.h upnp/xml.h
@@ -420,7 +421,7 @@ yeney.o queue_room.o sonos-position.o core_sonos.o sonos-status.o sbencoder.o: r
 
 yeney.o upnp/own_speaker_control.o sbstreamer.o: debug_settings.h
 
-$(QUEUE_ROOM_OBJS): queue_room_internal.h queue_room.h core_queue_sink.h queue_path_sink.h queue_playlist.h queue_source.h queue_speaker_changes.h stream_metrics.h
+$(QUEUE_ROOM_OBJS): queue_room_internal.h queue_room.h core_queue_sink.h queue_path_sink.h queue_playlist.h queue_source.h queue_speaker_changes.h transport_source.h stream_metrics.h
 
 yeney.o sonos-status.o: stream_display.h
 yeney.o $(QUEUE_ROOM_OBJS): queue_lms_commands.h

@@ -139,6 +139,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def action(self, service, action, a):
         s = self.server
+        writes = {'SetAVTransportURI','AddURIToQueue','Play','Pause','Stop','Seek',
+                  'RemoveTrackRangeFromQueue','SetCrossfadeMode','SaveQueue','DestroyObject'}
+        if getattr(s, 'reject_writes', False) and action in writes: return {}, '712'
+        if action == 'SetCrossfadeMode' and a['CrossfadeMode'] == '1' and getattr(s, 'restore_fault', ''):
+            return {}, s.restore_fault
+        if action == 'Stop' and getattr(s, 'stop_fault', ''): return {}, s.stop_fault
         if action == 'GetZoneGroupState':
             other = ('<ZoneGroupMember UUID="RINCON_OTHER" ZoneName="Other" Location="http://127.0.0.1:'+str(s.server_port)+'/description.xml"/>') if s.grouped else ''
             if s.grouped and int(s.grouped)>1:

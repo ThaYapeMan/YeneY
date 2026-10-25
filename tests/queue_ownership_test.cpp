@@ -70,6 +70,36 @@ int main() {
     conflict.release();
     assert(crossfade && queue.uris == before);
     io.remove = normalRemove;
+    // Release commits local state before I/O, logs once, never retries after refusal.
+    for (const auto &error : {"HTTP=500", "timeout", "fault=712", "fault=701"}) {
+        queue.uris.clear();
+        bool failRestore = false;
+        unsigned logs = 0, writes = 0;
+        upnp::QueueOwnership *releasing = nullptr;
+        io.stop = [&] { assert(releasing && !releasing->active()); };
+        io.log = [&](const auto &) { ++logs; };
+        io.setCrossfade = [&](bool value) {
+            ++writes;
+            if (failRestore) {
+                assert(releasing && !releasing->active());
+                throw std::runtime_error(error);
+            }
+            crossfade = value;
+        };
+        upnp::QueueOwnership retry(io, "retry");
+        retry.acquire("Before YeneY retry");
+        releasing = &retry;
+        failRestore = true;
+        retry.release(true, {}, true);
+        assert(!retry.active() && logs == 1);
+        retry.release();
+        assert(logs == 1 && writes == 2);
+        failRestore = false;
+        retry.acquire("Before YeneY retry");
+        assert(retry.active());
+        retry.release(false);
+        assert(!retry.active() && writes == 3);
+    }
     std::cout << "PASS queue ownership: verified backup before mutation, five-prefix retention, foreign "
                  "entry preservation, crossfade restore, failed save leaves queue intact\n";
 }

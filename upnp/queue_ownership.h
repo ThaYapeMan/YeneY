@@ -21,12 +21,13 @@ struct QueueOwnershipIO {
     std::function<void(const std::string &)> deletePlaylist;
     std::function<bool()> crossfade;
     std::function<void(bool)> setCrossfade;
+    std::function<void()> stop;
     std::function<void(uint32_t, unsigned, unsigned)> remove;
     std::function<void(const std::string &)> log;
 };
 // The serialized room controller supplies coordinator-fenced I/O. Exceptions
-// stop the mutation plan; they must trigger its latched fallback, never retries
-// against an old ordinal snapshot.
+// stop acquisition. Release always clears local state and stops best-effort
+// cleanup at the first failure, without retries against an old ordinal snapshot.
 class QueueOwnership {
     QueueOwnershipIO io;
     std::string session;
@@ -36,7 +37,7 @@ class QueueOwnership {
 public:
     QueueOwnership(QueueOwnershipIO, std::string session);
     void acquire(const std::string &backupTitle);
-    void release();
+    void release(bool cleanup = true, std::function<bool(const std::string &)> cleanupOwns = {}, bool stop = false) noexcept;
     bool active() const { return held; }
 };
 } // namespace upnp

@@ -10,6 +10,7 @@
 #include "queue_route.h"
 #include "queue_source.h"
 #include "queue_speaker_changes.h"
+#include "transport_source.h"
 #include "stream_metrics.h"
 #include "stream_session.h"
 #include "upnp/queue_coordinator.h"
@@ -82,6 +83,7 @@ struct QueueRoom::Impl {
     std::string state = "STOPPED", fault, transportStatus;
     std::chrono::steady_clock::time_point playAt{};
     bool waitingForPlay = false;
+    std::string takeoverSource = "unknown";
     bool externalReleased = false, stopAcknowledged = false, sourceAway = false;
     std::atomic<int64_t> resumeEchoUntil{0};
     std::atomic_bool resumeFlush{false};
@@ -111,7 +113,7 @@ struct QueueRoom::Impl {
     void selectPath();
     void handoffComplete();
     void publish();
-    void release();
+    void release(bool stop = false);
     void command(char c, uint64_t next);
     void append();
     void observe();

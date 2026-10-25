@@ -27,6 +27,22 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
       queue(room.name, queue_audio::Config::environment(), 60), paths(queue, rawMac),
       route(room.name, session), coordinator(room, logQueue),
       actions([this](const auto &name, const auto &args) {
+          if (name == "Stop" && !sourceAway) {
+              const auto uri = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
+              if (uri != "x-rincon-queue:" + room.uuid + "#0") {
+                  sourceAway = true;
+                  takeoverSource = transportSourceClass(uri);
+              }
+          }
+          if (started) {
+              const auto source = speakerChanges->foreignTransport("x-rincon-queue:" + room.uuid + "#0");
+              if (!source.empty()) {
+                  sourceAway = true;
+                  takeoverSource = source;
+                  if (!releasing && name.compare(0, 3, "Get"))
+                      throw std::runtime_error("transport no longer ours");
+              }
+          }
           if (sourceAway && (name == "Stop" || name == "Play" || name == "Pause" || name == "Seek")) {
               logQueue(name + " skipped: confirmed transport source is not the room queue");
               upnp::SoapResult result;

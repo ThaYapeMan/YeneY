@@ -91,43 +91,37 @@ void QueueOwnership::acquire(const std::string &title) {
         io.remove(queue.update, 1, queue.uris.size());
     held = true;
 }
-void QueueOwnership::release() {
-    std::exception_ptr error;
-    if (held) {
-        try {
+void QueueOwnership::release(bool cleanup, std::function<bool(const std::string &)> cleanupOwns, bool stop) noexcept {
+    const bool removeOwned = held, restore = restoring, crossfade = savedCrossfade;
+    // Local ownership ends before any fallible speaker I/O, including partial acquisition.
+    held = restoring = savedCrossfade = false;
+    if (!cleanup) return;
+    try {
+        if (stop && io.stop) io.stop();
+        if (removeOwned) {
             auto queue = io.browse();
-            // Remove owned entries from the back, refreshing UpdateID and URI
-            // identity each time. Foreign inserts cannot shift a later removal.
             auto remaining = queue.uris.size();
+            const auto owned = [&](const auto &uri) { return cleanupOwns ? cleanupOwns(uri) : owns(uri); };
             for (;;) {
                 size_t last = queue.uris.size();
-                while (last && !owns(queue.uris[last - 1]))
-                    --last;
-                if (!last)
-                    break;
+                while (last && !owned(queue.uris[last - 1])) --last;
+                if (!last) break;
                 size_t first = last - 1;
-                while (first && owns(queue.uris[first - 1]))
-                    --first;
-                if (!remaining--)
-                    throw std::runtime_error("queue-release-did-not-converge");
+                while (first && owned(queue.uris[first - 1])) --first;
+                if (!remaining--) throw std::runtime_error("queue-release-did-not-converge");
                 io.remove(queue.update, first + 1, last - first);
                 queue = io.browse();
             }
-            held = false;
-        } catch (...) {
-            error = std::current_exception();
         }
+        if (restore) io.setCrossfade(crossfade);
+    } catch (const std::exception &e) {
+        // A refusal also terminates the cleanup plan: never try another write.
+        const std::string error = e.what();
+        const bool refusal = error.find("fault=7") != std::string::npos;
+        try { io.log(std::string("cleanup ") + (refusal ? "transport no longer ours: " : "failed: ") + error); }
+        catch (...) {}
+    } catch (...) {
+        try { io.log("cleanup failed: unknown error"); } catch (...) {}
     }
-    if (restoring) {
-        try {
-            io.setCrossfade(savedCrossfade);
-            restoring = false;
-        } catch (...) {
-            if (!error)
-                error = std::current_exception();
-        }
-    }
-    if (error)
-        std::rethrow_exception(error);
 }
 } // namespace upnp

@@ -2,6 +2,7 @@
 #include "queue_room_internal.h"
 namespace bridge {
 void QueueRoom::Impl::externalStop(const std::string &reason) {
+    if (externalReleased) return;
     expectedState = "STOPPED";
     resumeEchoUntil = 0;
     resumeFlush = false;
@@ -10,24 +11,19 @@ void QueueRoom::Impl::externalStop(const std::string &reason) {
     externalReleased = true;
     stopAcknowledged = false;
     firstStream = queue.latestOccurrence() + 1;
-    // No Stop/URI switch here: another service may already own transport.
-    try {
-        const auto live = coordinator.currentRoom();
-        if (live.coordinator == room.name) release();
-        else { roomStopped = true; started = waitingForPlay = false; current = 0; state = "STOPPED"; publish(); }
-    } catch (const std::exception &e) {
-        fault = "external-release: " + std::string(e.what());
-        started = waitingForPlay = false;
-        current = 0;
-        state = "STOPPED";
-        logQueue(fault);
-        publish();
+    sourceAway = sourceAway || reason == "speaker-source-change";
+    if (sourceAway) {
+        logQueue("external takeover: source=" + takeoverSource);
+        logQueue("crossfade restore skipped: transport owned by " + takeoverSource);
     }
+
+    release();
     speakerCommand("stop", reason);
 }
 void QueueRoom::Impl::observe() {
     const auto live = speaker->speaker();
     if (live.coordinator != room.name && (!stoppedPlay || started || state == "PLAYING" || state == "PAUSED") && !externalReleased) {
+        takeoverSource = "other-group member";
         externalStop("speaker-source-change");
         return;
     }
@@ -69,8 +65,10 @@ void QueueRoom::Impl::observe() {
                                     {"AVTransportURI", media.value("CurrentURI")}});
     const auto uri = p.value("TrackURI");
     const auto avUri = media.value("CurrentURI");
-    if (media.child("CurrentURI"))
+    if (media.child("CurrentURI")) {
         sourceAway = !avUri.empty() && avUri != "x-rincon-queue:" + room.uuid + "#0";
+        takeoverSource = transportSourceClass(avUri);
+    }
     if (!uri.empty() && std::none_of(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; }))
         sourceAway = true;
     {
@@ -82,12 +80,11 @@ void QueueRoom::Impl::observe() {
     const auto reportedStatus = info.value("CurrentTransportStatus");
     if (reportedStatus != transportStatus) {
         transportStatus = reportedStatus;
-        logQueue("TransportStatus=" + transportStatus + " uri=" + uri);
+        logQueue("TransportStatus=" + transportStatus + " uri=" + transportSourceLog(uri));
     }
     auto it = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; });
     if (sourceAway) {
-        if (now >= ownUntil)
-            externalStop("speaker-source-change");
+        externalStop("speaker-source-change");
         return; // Neither an error nor the echo guard authorises stopping a foreign source.
     }
     if (!reportedStatus.empty() && reportedStatus != "OK")

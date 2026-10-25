@@ -19,19 +19,18 @@ upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
             throw std::runtime_error("queue-crossfade-unconfirmed");
     };
     io.remove = [this](auto update, auto first, auto count) { actions.remove(update, first, count); };
+    io.stop = [this] { actions.stop(); };
     io.log = logQueue;
     return io;
 }
-void QueueRoom::Impl::release() {
-    releasing = true;
-    try {
-        ownership.release();
-    } catch (...) {
-        releasing = false;
-        throw;
-    }
-    releasing = false;
+void QueueRoom::Impl::release(bool stop) {
+    auto cleanupOwned = std::move(owned);
+    owned.clear();
     items.clear();
+    releasing = true;
+    ownership.release(!sourceAway,
+                      [cleanupOwned = std::move(cleanupOwned)](const auto &uri) { return cleanupOwned.count(uri) != 0; }, stop);
+    releasing = false;
     started = false;
     waitingForPlay = false;
     current = 0;
@@ -99,15 +98,16 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         selecting = selectionKnown = false;
         stoppedPlay = true;
         firstStream = next;
-        if (ownership.active() && !externalReleased)
-            actions.stop();
-        if (!roomStopped) release();
+        if (!roomStopped) release(ownership.active() && !externalReleased);
         faulted = false;
         fault.clear();
         playlist = {};
         publish();
-    } else if (c == 's' && externalReleased && stopAcknowledged) {
+    } else if (c == 's' && externalReleased) {
         externalReleased = false;
+        sourceAway = false;
+        faulted = false;
+        fault.clear();
         firstStream = next;
         playlist = {};
     } else if (c == 's' && state == "STOPPED" && (started || faulted)) {
@@ -241,10 +241,13 @@ void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
     selecting = selectionKnown = false;
     paths.cancelSelection();
     if (!member) {
-        try { if (!externalReleased) actions.stop(); }
-        catch (const std::exception &e) { logQueue(e.what()); }
-        try { release(); }
+        try { release(!externalReleased); }
         catch (const std::exception &e) { logQueue("release failed=" + std::string(e.what())); }
+    }
+    if (member) {
+        externalReleased = true;
+        sourceAway = true;
+        release();
     }
     // A member must never write to either its old queue or the new coordinator.
     expectedState = state = "STOPPED";
@@ -293,6 +296,10 @@ void QueueRoom::Impl::run() {
         } catch (const queue_audio::ItemCancelled &) {
             // Producer cancellation raced a snapshot; observe the next run.
         } catch (const std::exception &e) {
+            if (sourceAway && started && !externalReleased) {
+                externalStop("speaker-source-change");
+                continue;
+            }
             if (roomStopped) continue;
             fault = e.what();
             logQueue("relay fault=" + fault);
@@ -311,9 +318,7 @@ void QueueRoom::Impl::run() {
                 continue;
             }
             faulted = true;
-            try { if (!externalReleased) actions.stop(); }
-            catch (const std::exception &stop) { logQueue(stop.what()); }
-            try { release(); }
+            try { release(!externalReleased); }
             catch (const std::exception &cleanup) { logQueue(cleanup.what()); }
             queue.failQueueTrack();
             publish();
@@ -321,9 +326,7 @@ void QueueRoom::Impl::run() {
     }
     if (roomStopped) return;
     try {
-        if (ownership.active() && !externalReleased)
-            actions.stop();
-        release();
+        release(ownership.active() && !externalReleased);
     } catch (const std::exception &e) {
         logQueue("release failed=" + std::string(e.what()));
     }

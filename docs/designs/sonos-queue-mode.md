@@ -68,7 +68,8 @@ it is not a playback generation and never causes a capability announcement.
 | Source/decode/length failure | Log fault; Stop/release | First consecutive fault: STMn; second within 10 s: one LMS stop, no playlist walk |
 | Room/topology/ownership/SOAP/transport fault | Log reason; Stop/release when still coordinator | One LMS stop, no STMn or automatic advancement |
 | New track while member of another group | No transport writes on either path | One logged LMS stop, STOPPED |
-| External stop/source change, outside the 3 s own-command window, before the final 2 s | Release exact owned items without Stop or URI switch | One raw-MAC LMS stop, STOPPED |
+| External source change/group membership, even during the own-command window | Release local ownership without speaker writes | One raw-MAC LMS stop, STOPPED |
+| External stop on our queue, outside the 3 s own-command window, before the final 2 s | Release exact owned items and restore crossfade without Stop or URI switch | One raw-MAC LMS stop, STOPPED |
 | External pause/resume, outside the own-command window | Report confirmed state; suppress the resulting LMS echo | One LMS pause 1 / pause 0, PAUSED/PLAYING |
 | Service shutdown | Stop and release exact owned entries; restore crossfade | Process exits |
 
@@ -88,7 +89,7 @@ counts, FLAC seek origins, finite container decoding and speaker clocks remain.
 On first acquisition foreign Q:0 entries are saved in an identity-verified
 `Before YeneY <timestamp>` playlist, then removed with UpdateID fencing.
 An empty or exclusively owned queue needs no backup. CrossfadeMode is read,
-forced off and verified; release restores it. Removal refreshes Browse and
+forced off and verified; release restores it only while the transport remains ours. Removal refreshes Browse and
 removes only exact owned URIs from the back, preserving foreign insertions.
 Every append uses Browse-before/after fencing and requires NumTracksAdded=1.
 
@@ -286,8 +287,7 @@ and verifies that this room is still coordinator. Existing topology GENA and
 polling update mid-play role changes; no new periodic SOAP traffic is added.
 Adding/removing members while staying coordinator does not interrupt playback.
 A role/source change reuses the external-stop detector. A member must not write
-transport, including cleanup, since this can affect its new coordinator. Owned
-assets remain retained until safe release after the room becomes coordinator;
+transport, including cleanup, since this can affect its new coordinator. Local ownership, lease and owned-item bookkeeping are released immediately;
 no foreign source is stopped or switched. Both paths report one reason-checked
 raw-MAC LMS stop through queue_lms_commands.h/.cpp.
 
@@ -320,3 +320,18 @@ items log their title once; the current item's same sanitised title is published
 as `playback.title` and used in the queue status display. JSON/log quoting
 preserves valid XML whitespace and Unicode. All of this also works for direct
 binary runs, using the existing state-directory/environment/stdout mechanisms.
+
+### External takeover release
+
+The last controller wins; LMS takes over again only on a new play.
+A foreign AVTransportURI or group-member role releases local ownership immediately,
+without Stop, queue removal or crossfade restoration. The external-stop path sends
+one LMS stop and logs the source class with foreign identifiers redacted. It never
+retries or automatically takes the speaker back. A later strm s is a fresh admission,
+including the usual verified backup of a foreign queue.
+
+Release clears local ownership and owned-item bookkeeping before best-effort SOAP
+cleanup. A cleanup failure logs once and cannot retain the lease or fault the room.
+A 7xx transport refusal means transport is no longer ours and ends the cleanup plan.
+Crossfade restoration is skipped after takeover, including when the room joins
+another coordinator. These rules also apply when running without systemd.

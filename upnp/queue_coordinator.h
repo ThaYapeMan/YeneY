@@ -24,9 +24,7 @@ public:
     explicit QueueCoordinator(Speaker, std::function<void(const std::string &)> = {},
                               unsigned timeoutMs = 2000);
     SoapResult transport(const std::string &, const SoapArguments &);
-    // Cleanup stays on the originally verified device after a grouping change.
-    // Only exact owned removals and restoring crossfade may bypass the play
-    // lease.
+    // Cleanup requires both live coordinator identity and our queue transport.
     SoapResult releaseTransport(const std::string &, const SoapArguments &);
     // Fresh topology at each new play; transport writes also fence live identity.
     Speaker currentRoom();

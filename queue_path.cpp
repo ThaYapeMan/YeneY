@@ -146,9 +146,7 @@ void QueueRoom::Impl::selectPath() {
         if (!selectedNewPlay)
             handoffAt = std::chrono::steady_clock::now();
         if (paths.isRelay()) {
-            if (ownership.active())
-                actions.stop();
-            release();
+            release(ownership.active());
             queue.flush();
             queue.waitIdle();
         } else {

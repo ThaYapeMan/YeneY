@@ -84,6 +84,8 @@ class Device(Handler):
             threading.Thread(target=fetch,daemon=True).start()
             return {},None
         values,fault=super().action(service,action,args)
+        if action=='Browse' and service=='Queue' and getattr(self.server,'browse_hook',None):
+            hook=self.server.browse_hook;self.server.browse_hook=None;hook()
         if action=='GetMediaInfo' and getattr(self.server,'media_hook',None):
             hook=self.server.media_hook;self.server.media_hook=None;hook();time.sleep(.08)
         if action=="Play" and getattr(self.server,"stopped_play",False):self.server.transport_state="STOPPED"
@@ -185,7 +187,7 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, titles=None, queue_title_prefix=None):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, titles=None, queue_title_prefix=None, initial_foreign=None):
         self.titles=titles or [f'Title & {i}' for i in range(len(rates))]
         self.remote_sources=remote_sources
         self.resume_restart=resume_restart
@@ -195,6 +197,9 @@ class Binary:
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
         self.sonos=Coordinator(('127.0.0.1',1400),Device)
+        if initial_foreign:
+            self.sonos.uri=initial_foreign
+            self.sonos.items=[dict(uri=initial_foreign)]
         self.sonos.grouped=grouped or member
         if member:self.sonos.coordinator_uuid="RINCON_OTHER"
         if queue_title_prefix is not None:self.sonos.expected_title_prefix=queue_title_prefix
@@ -428,12 +433,12 @@ def external_actions():
                     time.sleep(.3)
                     h.lms.strm('p');time.sleep(.2);h.lms.strm('u')
                     assert len(h.sonos.actions('Pause'))==0 and len(h.sonos.actions('Play'))==1
-                h.until(lambda:h.commands.count('stop')==1 and not any('resource' in i for i in h.items()),4 if kind=='source-error-guard' else 3)
+                h.until(lambda:h.commands.count('stop')==1,4 if kind=='source-error-guard' else 3)
                 time.sleep(.7)
                 assert h.commands.count('stop')==1 and len(h.sonos.actions('Stop'))==stops,h.commands
                 status=json.loads((h.base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
                 assert status['state']=='STOPPED' and not status['owned'],status
-                if kind=='source-foreign-item':assert h.items()==[dict(uri='http://foreign.invalid/app.flac')] and h.sonos.transport_state=='PLAYING'
+                if kind=='source-foreign-item':assert h.items()[-1]==dict(uri='http://foreign.invalid/app.flac') and h.sonos.transport_state=='PLAYING'
                 elif kind.startswith('source'):assert h.sonos.uri=='http://new-service.invalid/music' and h.sonos.transport_state=='PLAYING'
             print('PASS speaker-originated '+kind+': one intended CLI action, raw MAC/decoded echo, release or pause/resume, no command loop')
         finally:h.close()
@@ -488,7 +493,7 @@ def source_change_with_lms_stop():
             h.sonos.uri='http://new-service.invalid/music'
             h.sonos.position.update(TrackURI='http://new-service.invalid/track')
             h.sonos.media_hook=lambda:h.lms.strm('q')
-        h.until(lambda:not h.items())
+        h.until(lambda:not json.loads((h.base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']['owned'])
         assert len(h.sonos.actions('Stop'))==stops and h.sonos.transport_state=='PLAYING'
         assert all(c.startswith('status ') for c in h.commands),h.commands
         print('PASS concurrent source change/LMS stop: in-flight source evidence fences transport, no CLI echo or foreign Stop')
@@ -500,11 +505,12 @@ def soap_fault():
         h.until(lambda:h.commands.count('stop')==1)
         time.sleep(.3)
         assert not h.packets('STMn') and not h.sonos.actions('Play')
-        assert not h.items() and h.sonos.crossfade
+        assert not h.items() and not h.sonos.crossfade
+        assert not h.sonos.actions('Stop')
         log=(h.base/'bridge.log').read_text()
         assert 'errorCode=' in log and 'request=' in log,log
         assert h.commands.count('stop')==1,h.commands
-        print('PASS relay SOAP fault: full diagnostic, Stop/release, LMS stop once, no STMn or playlist advance',flush=True)
+        print('PASS relay SOAP fault: full diagnostic, local release before queue selection, no foreign Stop/restore, LMS stop once, no STMn or playlist advance',flush=True)
     finally:h.close()
 
 if __name__=='__main__':
