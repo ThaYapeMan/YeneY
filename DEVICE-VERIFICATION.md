@@ -732,7 +732,7 @@ emitted when the feeder receives its first PCM batch, and match N to the
 speaker URI stream ID. Their existing five-second limit also starts there.
 Journal evidence uses the room unit, bridge PID and monotonic timestamps;
 the first decode after this play's `strm s` identifies the new occurrence
-independently of room status. Audible confirmation requires that same occurrence. No `strm s`
+independently of room status. Audible confirmation requires that same occurrence. For local items, no `strm s`
 within ten seconds fails as “LMS did not start”. Evidence failures name the
 missing state, identity or rendered rate. Local replays cover the 26 October
 96 kHz case (2 seconds LMS, 1 second YeneY), 192 kHz (5 seconds LMS,
@@ -799,8 +799,8 @@ legacy 44.1 kHz mode retain LMS/SoX conversion.
 Atom and playlist URLs. It browses favourite/podcast feed children for the first
 playable episode instead of placing a feed URL into the LMS playlist. The first
 playable candidate is selected from those menus. Once a candidate is loaded,
-it must produce a new `strm s` within ten seconds of Play, confirmed from the
-room journal. Absence fails with “LMS did not start”; it cannot silently skip a
+it must produce a new `strm s` within 15 seconds of Play, confirmed from the
+room journal. Absence fails with “LMS did not start the remote source”; it cannot silently skip a
 failed start. An empty menu still reports an explicit remote-source SKIP.
 Once LMS delivers first audio, the speaker-start and stream-path limits apply.
 Candidate choices are recorded in the manifest and command log.
@@ -886,3 +886,31 @@ Start at a safe physical volume, with ReplayGain disabled for audio comparison.
 
 The full-WAV automated baseline comparison proves audio byte identity in both
 modes. Physical volume/group acceptance remains an owner check.
+
+### Remote internet deadlines and timing diagnostics
+
+Remote favourites, podcast and radio menu queries use the named
+`remote-internet` CLI limit of 15 seconds. Queries during remote startup, from
+suite Play until the first observed audible sample, use the same limit. Other
+queries retain the named three-second `query` limit; mutations retain their
+existing 30-second deadline. Menu timeouts fail with the limit name; a successful
+empty menu remains SKIP. A selected remote item must emit `strm s` within
+15 seconds or fail with “LMS did not start the remote source”. Local starts
+retain their ten-second `strm s` deadline.
+
+Remote timing records `lms_play_to_strm_s`, `lms_strm_to_audio_s` and
+`yeney_startup_s`. First audio is the matching stream's FLAC journal line;
+15 seconds without it fails with “LMS did not deliver audio”. The unchanged
+YeneY remote limit is five seconds from first audio to observed speaker PLAYING
+with the matching stream URI and LMS source identity. This is the suite's
+observable audible proxy, not an acoustic measurement.
+
+When present, the room/PID-scoped `PlaySqueezeBox: title=...` journal marker
+splits that last share into `remote_audio_to_transport_s` and
+`remote_transport_to_audible_s`, also included in samples, joins, summary and
+verdict diagnostics. This marker immediately precedes `playStream`, which sends
+SetAVTransportURI then Play; it does not timestamp SOAP completion or distinguish
+those two calls. Missing evidence is reported as not observed. The stream feeder
+allocates its stream and logs first audio on its first PCM batch; transport is
+dispatched by the main loop without a PCM buffer threshold. Thus no separate
+threshold wait is inferred from these logs.

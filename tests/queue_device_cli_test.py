@@ -53,6 +53,32 @@ def fixture():
 
 
 class Tests(unittest.TestCase):
+    def test_remote_internet_deadlines(self):
+        with fixture() as f:
+            command=('podcasts','items','0','100','want_url:1')
+            server=Delayed(f.model,{command:6,('status','-','1','tags:utal'):4})
+            try:
+                client=m.CLI('127.0.0.1',lambda _:None,server.server_address[1])
+                started=time.monotonic();client.call(MAC,*command)
+                self.assertGreaterEqual(time.monotonic()-started,6)
+                client.remote_starting=True
+                client.call(MAC,'status','-','1','tags:utal')
+                client.remote_starting=False
+                server.delays[command]=16
+                started=time.monotonic()
+                with self.assertRaisesRegex(m.CLITimeout,'15 s .*remote-internet limit'):
+                    client.call(MAC,*command)
+                self.assertGreaterEqual(time.monotonic()-started,15)
+                self.assertLess(time.monotonic()-started,18)
+                with patch.object(m.socket,'create_connection',side_effect=TimeoutError):
+                    with self.assertRaisesRegex(m.CLITimeout,r'15 s \(remote-internet limit\)'):
+                        client.call(MAC,*command)
+                    with self.assertRaisesRegex(m.CLITimeout,r'3 s \(query limit\)'):
+                        client.call(MAC,'status','-','1','tags:utal')
+                self.assertFalse(client.fresh().remote_starting)
+            finally:server.close()
+        print('PASS remote internet CLI: podcast answer after 6 s and starting status after 4 s succeed; named 15 s remote and 3 s local limits; cleanup resets context')
+
     def test_remote_playlist_identity_uses_url(self):
         url='podcast://https://plus.bnr.nl/episode.mp3'
         old=dict(id='-95857229938624',url=url)

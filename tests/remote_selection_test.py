@@ -49,14 +49,18 @@ class Tests(unittest.TestCase):
         self.assertIn("parser.add_argument('--remote'",(ROOT/'scripts/yeney-queue-device-suite').read_text())
         print('PASS --remote: exact favourite name, feed URL and explicit episode URL honoured without choosing another favourite')
     def test_strm_deadline(self):
-        s=Suite.__new__(Suite);s.unit='yeney@Study.service';s.pid=42;s.backend=Clock();s.current=dict(name='remote-source')
+        s=Suite.__new__(Suite);s.unit='yeney@Study.service';s.pid=42;s.backend=Clock();s.current=dict(name='remote-source');s.cli=Menus({});s.cli.remote_starting=True
+        with self.assertRaisesRegex(M['SuiteError'],'LMS did not start the remote source: no strm s within 15 s'):
+            s.wait_strm(123,0)
+        self.assertEqual(s.backend.now(),15)
+        s.cli.remote_starting=False;s.backend=Clock()
         with self.assertRaisesRegex(M['SuiteError'],'LMS did not start: no strm s within 10 s'):
             s.wait_strm(123,0)
         self.assertEqual(s.backend.now(),10)
         self.assertTrue(all('--since' in c and '-u' in c and '_PID=42' in c for c in s.backend.calls))
         s.backend=Clock(json.dumps(dict(__MONOTONIC_TIMESTAMP=2000000,MESSAGE='core: queue command strm s')))
         self.assertEqual(s.wait_strm(123,0),2)
-        print('PASS startup journal: room/process scoped strm s timestamp; no strm s fails as LMS did not start after 10 s')
+        print('PASS startup journal: room/process scoped strm s timestamp; no strm s fails as LMS did not start after 15 s (local remains 10 s)')
     def scenario(self,fail_count,count=2):
         temp=tempfile.TemporaryDirectory(prefix='yeney-remote-selection-');self.addCleanup(temp.cleanup)
         s=Suite.__new__(Suite);s.work=Path(temp.name);s.backend=Clock();s.remote_note='favorites';s.results=[];s.actions=[]
@@ -66,7 +70,7 @@ class Tests(unittest.TestCase):
         def load(tracks,**kwargs):
             s.actions.append(('load',tracks[0]['url'],kwargs))
             if not tracks[0]['url'].startswith('file:') and int(tracks[0]['title'])<fail_count:
-                raise M['SuiteError']('LMS did not start: no strm s within 10 s')
+                raise M['SuiteError']('LMS did not start the remote source: no strm s within 15 s')
         def sample(*args):s.backend.sleep(1)
         s.begin=begin;s.load=load;s.sample=sample;s.log=lambda _:None
         s.mutate=lambda *args:s.actions.append(args);s.pending_mutation=s.mutate

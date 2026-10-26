@@ -407,6 +407,53 @@ class Tests(unittest.TestCase):
         finally:self.suite.cleanup()
         print('PASS remote first PCM: stream 1 FLAC evidence matches speaker stream=1 independently of queue occurrence 0')
 
+    def test_remote_field_timing_shares(self):
+        self.suite.setup();self.suite.begin('remote-source')
+        track=dict(id='',url='https://radio.invalid/live',title='Radio',artist='',album='',duration='120')
+        self.model.byid['-42']=dict(track,id='-42');self.model.library.append(self.model.byid['-42'])
+        original=self.suite.pending_mutation
+        evidence=self.suite.startup_evidence
+        self.model.audio_delay=4
+        def journal(since):
+            return evidence(since)+[(self.model.strm_at+5,"PlaySqueezeBox: title='Radio' art=''")]
+        def play(*args):
+            original(*args)
+            if args==('play',):
+                self.model.strm_at+=2.9
+                self.backend.sleep(9.4)
+        try:
+            with patch.object(self.suite,'pending_mutation',side_effect=play), patch.object(self.suite,'startup_evidence',side_effect=journal):
+                row=self.suite.load([track])
+            self.assertAlmostEqual(row['lms_play_to_strm_s'],2.9)
+            self.assertAlmostEqual(row['lms_strm_to_audio_s'],4)
+            self.assertAlmostEqual(row['yeney_startup_s'],2.5)
+            self.assertAlmostEqual(row['remote_audio_to_transport_s'],1)
+            self.assertAlmostEqual(row['remote_transport_to_audible_s'],1.5)
+            self.assertFalse(self.suite.cli.remote_starting)
+        finally:self.suite.cleanup()
+        print('PASS remote run 2 replay: strm=2.9 s, first audio=4 s after strm, audible=6.5 s after strm; YeneY=2.5 s (limit 5 s); transport shares=1/1.5 s')
+
+    def test_remote_delivery_and_yeney_deadlines(self):
+        self.suite.setup()
+        track=dict(id='',url='https://radio.invalid/live',title='Radio',artist='',album='',duration='120')
+        self.model.byid['-42']=dict(track,id='-42');self.model.library.append(self.model.byid['-42'])
+        original=self.suite.pending_mutation
+        try:
+            self.suite.begin('remote-source')
+            self.model.audio_delay=100
+            with self.assertRaisesRegex(m.SuiteError,'LMS did not deliver audio:.*within 15 s'):
+                self.suite.load([track])
+            self.suite.begin('remote-source')
+            self.model.audio_delay=0
+            def play(*args):
+                original(*args)
+                if args==('play',):self.backend.sleep(6)
+            with patch.object(self.suite,'pending_mutation',side_effect=play):
+                with self.assertRaisesRegex(m.SuiteError,'within 5 s after first audio'):
+                    self.suite.load([track])
+        finally:self.suite.cleanup()
+        print('PASS remote deadlines: no first audio fails after 15 s; YeneY 6 s still fails unchanged 5 s limit')
+
     def test_missing_first_audio(self):
         self.suite.setup();self.suite.begin('high-rate-48000')
         self.model.missing_audio=True;self.model.field_decimation=True
@@ -566,11 +613,18 @@ class Tests(unittest.TestCase):
         self.model.favourite_children['feed']=episodes
         self.model.unplayable.add(urls[0]);self.suite.remote_argument='Boekestijn & De Wijk | Plus'
         code,output=self.run_suite();self.assertEqual(code,1,output);self.restored()
-        self.assertIn('LMS did not start: no strm s within 10 s',output)
+        self.assertIn('LMS did not start the remote source: no strm s within 15 s',output)
         self.assertNotIn(urls[0],self.model.started_urls);self.assertNotIn(urls[1],self.model.started_urls)
         self.assertNotIn((MAC,'playlist','add',feed),self.model.calls)
         self.assertIn('remote-candidate',self.artifact('manifest.tsv'))
-        print('PASS device field RSS favourite: explicit feed browsed; no strm s fails clearly after 10 s without trying another episode; owner state restored')
+        print('PASS device field RSS favourite: explicit feed browsed; no strm s fails clearly after 15 s without trying another episode; owner state restored')
+
+    def test_remote_menu_timeout_is_failure(self):
+        self.suite.mac=MAC
+        with patch.object(self.suite.cli,'call',side_effect=m.CLITimeout('LMS CLI timeout after 15 s (remote-internet limit)')):
+            with self.assertRaisesRegex(m.CLITimeout,'remote-internet limit'):
+                self.suite.remote_choice()
+        print('PASS remote menu timeout propagates as failure; successful empty menus retain SKIP')
 
     def test_remote_podcast_menu(self):
         self.model.podcasts=[dict(id='episode',type='audio',url='podcast://https://podcast.invalid/episode.mp3',title='Podcast')]

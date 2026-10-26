@@ -104,12 +104,16 @@ class CLITimeout(SuiteError):
     pass
 
 
+REMOTE_CLI_LIMIT = 15
+
+
 class CLI:
     # One request per connection, even after success: delayed responses cannot
     # enter the next transaction. URLs retain LMS's existing percent escapes.
     def __init__(self, host, log, port=9090, query_timeout=3, mutation_timeout=30):
         self.host,self.log,self.port=host,log,port
         self.query_timeout,self.mutation_timeout=query_timeout,mutation_timeout
+        self.remote_starting=False
 
     def fresh(self):
         return CLI(self.host,self.log,self.port,self.query_timeout,self.mutation_timeout)
@@ -121,9 +125,12 @@ class CLI:
     def call(self,*args):
         args=list(map(str,args))
         query=args[-1]=='?' or args[0] in ('players','titles','syncgroups') or (len(args)>1 and args[1] in ('status','favorites','podcasts'))
-        timeout=self.query_timeout if query else self.mutation_timeout
+        remote_menu=len(args)>1 and args[1] in ("favorites","podcasts","radio","radios")
+        remote=remote_menu or (query and self.remote_starting)
+        timeout=REMOTE_CLI_LIMIT if remote else self.query_timeout if query else self.mutation_timeout
+        limit="remote-internet" if remote else "query" if query else "mutation"
         request=' '.join(quote(a,safe=':/%?,&=+' if urlsplit(a).scheme in ('file','http','https') else ':,?') for a in args)
-        self.log('CLI > '+request+' timeout_s='+str(timeout))
+        self.log('CLI > '+request+' timeout_s='+str(timeout)+' limit='+limit)
         started=time.monotonic();deadline=started+timeout
         try:
             with socket.create_connection((self.host,self.port),timeout=min(3,timeout)) as connection:
@@ -148,7 +155,7 @@ class CLI:
             return words
         except TimeoutError as error:
             self.log('CLI timeout; connection discarded: '+request)
-            raise CLITimeout('LMS CLI timeout after '+str(timeout)+' s: '+request) from error
+            raise CLITimeout('LMS CLI timeout after '+str(timeout)+' s ('+limit+' limit): '+request) from error
         except Exception as error:
             self.log('CLI failed; connection discarded: '+request+' '+str(error))
             raise SuiteError(str(error)) from error
@@ -444,6 +451,8 @@ class Suite(PACING['Suite']):
                 args=[self.mac,menu,'items','0','100','want_url:1']
                 if ident is not None:args.append('item_id:'+ident)
                 try:rows=records(self.cli.call(*args),'id')
+                except CLITimeout:
+                    raise
                 except (SuiteError,OSError) as error:
                     notes.append(menu+': '+str(error));continue
                 for row in rows:
@@ -474,15 +483,17 @@ class Suite(PACING['Suite']):
         return sorted(evidence)
 
     def wait_strm(self, since, commanded):
+        remote=getattr(self.cli,"remote_starting",False)
+        limit=15 if remote else 10
         while True:
             entries = self.startup_evidence(since)
             start = next((t for t,msg in entries if t >= commanded and
                           re.search(r'^core: (?:queue command strm s(?:\s|$)|STMc(?:\s|$))',msg)), None)
-            if start is not None and start <= commanded+10:
+            if start is not None and start <= commanded+limit:
                 return start
-            if self.backend.now() >= commanded+10:
-                self.problem('LMS did not start: no strm s within 10 s of suite play command')
-            self.backend.sleep(min(.1,commanded+10-self.backend.now()))
+            if self.backend.now() >= commanded+limit:
+                self.problem(('LMS did not start the remote source' if remote else 'LMS did not start')+': no strm s within '+str(limit)+' s of suite play command')
+            self.backend.sleep(min(.1,commanded+limit-self.backend.now()))
 
     def owned_item(self, row):
         p=row['playback'];uri=row['speaker']['uri']
@@ -504,7 +515,8 @@ class Suite(PACING['Suite']):
 
     def timing(self, row):
         keys=('lms_play_to_strm_s','lms_strm_to_audio_s','yeney_startup_s')
-        if all(key in row for key in keys):return {key:row[key] for key in keys}
+        if all(key in row for key in keys):
+            return {key:value for key,value in row.items() if key in keys or key.startswith('remote_')}
         context = getattr(self,'startup_context',None)
         if not context:
             return {}
@@ -535,6 +547,14 @@ class Suite(PACING['Suite']):
         values = dict(lms_play_to_strm_s=context['strm']-context['command'],
                       lms_strm_to_audio_s=None if audio is None else audio-context['strm'],
                       yeney_startup_s=context['confirmed']-audio if audio is not None and 'confirmed' in context else None)
+        if not context['local'] and audio is not None:
+            # PlaySqueezeBox is logged immediately before playStream, which calls
+            # SetAVTransportURI then Play. It is a dispatch marker, not SOAP completion.
+            dispatch = next((t for t,msg in self.startup_evidence(context['wall'])
+                             if audio <= t <= row['monotonic'] and msg.startswith('PlaySqueezeBox: title=')),None)
+            values.update(remote_audio_to_transport_s=None if dispatch is None else dispatch-audio,
+                          remote_transport_to_audible_s=None if dispatch is None or 'confirmed' not in context else context['confirmed']-dispatch,
+                          remote_transport_evidence='PlaySqueezeBox dispatch (SetAVTransportURI then Play)' if dispatch is not None else 'not observed')
         return values
 
     def diagnostic(self):
@@ -750,6 +770,7 @@ class Suite(PACING['Suite']):
         self.lms_ready(expected,'stop',queue=True,deadline=deadline)
         start = self.backend.now()
         play_wall = time.time()
+        self.cli.remote_starting=not tracks[0]['url'].startswith('file://')
         self.pending_mutation('play')
         strm = self.wait_strm(play_wall,start)
         self.startup_context = dict(command=start,wall=play_wall,strm=strm,local=tracks[0]['url'].startswith('file://'))
@@ -783,6 +804,7 @@ class Suite(PACING['Suite']):
                 self.problem('no '+missing(row)+' within '+str(startup_limit)+' s after first audio')
             if 'confirmed' in self.startup_context:
                 break
+        self.cli.remote_starting=False
         delay = self.startup_context['confirmed']-audio
         self.current.update(self.timing(row))
         self.current['startup'] = max(self.current['startup'],delay)
@@ -1005,17 +1027,17 @@ class Suite(PACING['Suite']):
                     signal.signal(s,signal.SIG_IGN)
                 self.cleanup()
             verdict = 'DEVICE SUITE FAILED: '+'; '.join(dict.fromkeys(self.errors)) if self.errors else 'DEVICE SUITE OK'
-            timing_report = '; '.join(r['name']+': '+', '.join(k+'='+str(r.get(k,'not observed')) for k in ('lms_play_to_strm_s','lms_strm_to_audio_s','yeney_startup_s')) for r in self.results)
+            timing_report = '; '.join(r['name']+': '+', '.join(k+'='+str(r.get(k,'not observed')) for k in ('lms_play_to_strm_s','lms_strm_to_audio_s','yeney_startup_s','remote_audio_to_transport_s','remote_transport_to_audible_s','remote_transport_evidence')) for r in self.results)
             verdict += ' | '+timing_report
             (self.work/'result.txt').write_text(verdict+'\n')
-            lines = ['# Queue device qualification','', '| Scenario | Verdict | Joins | YeneY startup max s | LMS play to strm s | LMS strm to audio s | Boundary mismatch max s | Fallbacks | Note |', '|---|---|---:|---:|---:|---:|---:|---|---|']
+            lines = ['# Queue device qualification','', '| Scenario | Verdict | Joins | YeneY startup max s | LMS play to strm s | LMS strm to audio s | Audio to transport s | Transport to audible s | Transport evidence | Boundary mismatch max s | Fallbacks | Note |', '|---|---|---:|---:|---:|---:|---:|---:|---|---:|---|---|']
             for name in ('album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000'):
                 if not any(r['name']==name for r in self.results):
                     self.results.append(dict(name=name,verdict='NOT RUN',joins=0,startup=None,mismatch=0,fallbacks=[],note='prior failure'))
             order={name:i for i,name in enumerate(('album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000'))}
             self.results.sort(key=lambda r:order.get(r['name'],len(order)))
             for r in self.results:
-                lines.append('| '+' | '.join(str(r.get(k,'not observed')).replace('|','/') for k in ('name','verdict','joins','startup','lms_play_to_strm_s','lms_strm_to_audio_s','mismatch','fallbacks','note'))+' |')
+                lines.append('| '+' | '.join(str(r.get(k,'not observed')).replace('|','/') for k in ('name','verdict','joins','startup','lms_play_to_strm_s','lms_strm_to_audio_s','remote_audio_to_transport_s','remote_transport_to_audible_s','remote_transport_evidence','mismatch','fallbacks','note'))+' |')
             lines += ['', *self.not_restored, '', self.backup_note, '', 'Release verified: '+str(self.release_verified), '', CHECKLIST, '', verdict]
             (self.work/'summary.md').write_text('\n'.join(lines)+'\n')
             (self.work/'listening-checklist.txt').write_text(CHECKLIST+'\n')
