@@ -272,6 +272,31 @@ class Tests(unittest.TestCase):
             self.model.speaker_metadata[track['id']]=dict(album=clean)
         return clean
 
+    def test_owned_join_window(self):
+        one='http://bridge/music/queue.wav?item=1'
+        two='http://bridge/music/queue.wav?item=2'
+        three='http://bridge/music/queue.wav?item=3'
+        row=dict(monotonic=0,speaker=dict(uri=two),playback=dict(owned=True,
+                 current_owned_item=one,owned_item_uris=[one,two,three]))
+        self.assertTrue(self.suite.owned_item(row))
+        row['monotonic']=1
+        self.assertTrue(self.suite.owned_item(row))
+        row['playback']['current_owned_item']=two
+        self.assertTrue(self.suite.owned_item(row))
+        row['playback']['current_owned_item']=one
+        row['monotonic']=10
+        self.assertTrue(self.suite.owned_item(row))
+        row['monotonic']=12.01
+        self.assertFalse(self.suite.owned_item(row))
+        row['playback']['current_owned_item']=two
+        self.assertFalse(self.suite.owned_item(row))
+        row['speaker']['uri']='http://foreign/music/queue.wav?item=2'
+        self.assertFalse(self.suite.owned_item(row))
+        row['speaker']['uri']=three
+        row['playback']['current_owned_item']=one
+        self.assertFalse(self.suite.owned_item(row))
+        print('PASS owned join window: 1 s lag passes; >2 s lag and late recovery fail; foreign URI and non-successor fail immediately')
+
     def test_study_startup_clock(self):
         self.suite.setup()
         self.suite.begin('high-rate-48000')

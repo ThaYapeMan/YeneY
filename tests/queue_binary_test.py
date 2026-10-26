@@ -85,6 +85,9 @@ class Device(Handler):
             threading.Thread(target=fetch,daemon=True).start()
             return {},None
         values,fault=super().action(service,action,args)
+        if action=='GetPositionInfo' and getattr(self.server,'position_hook',None):
+            values=dict(values)
+            hook=self.server.position_hook;self.server.position_hook=None;hook()
         if action=='Browse' and service=='Queue' and getattr(self.server,'browse_hook',None):
             hook=self.server.browse_hook;self.server.browse_hook=None;hook()
         if action=='GetMediaInfo' and getattr(self.server,'media_hook',None):

@@ -54,17 +54,22 @@ void QueueRoom::Impl::observe() {
     if (!event && now < nextPoll)
         return;
     nextPoll = now + std::chrono::milliseconds(now < fastUntil ? 100 : pollMs);
+    const auto positionStarted = std::chrono::steady_clock::now();
     const auto p = actions.position().response;
+    const auto position = speakerChanges->poll(positionStarted,
+        {{"CurrentTrack", p.value("Track")}, {"CurrentTrackURI", p.value("TrackURI")},
+         {"RelativeTimePosition", p.value("RelTime")}});
+    const auto transportStarted = std::chrono::steady_clock::now();
     const auto info = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}}).response;
+    const auto transportFields = speakerChanges->poll(transportStarted,
+        {{"TransportState", info.value("CurrentTransportState")},
+         {"TransportStatus", info.value("CurrentTransportStatus")}});
+    const auto mediaStarted = std::chrono::steady_clock::now();
     const auto media = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response;
-    speakerChanges->report("poll", {{"TransportState", info.value("CurrentTransportState")},
-                                    {"TransportStatus", info.value("CurrentTransportStatus")},
-                                    {"CurrentTrack", p.value("Track")},
-                                    {"CurrentTrackURI", p.value("TrackURI")},
-                                    {"NumberOfTracks", media.value("NrTracks")},
-                                    {"AVTransportURI", media.value("CurrentURI")}});
-    const auto uri = p.value("TrackURI");
-    const auto avUri = media.value("CurrentURI");
+    const auto mediaFields = speakerChanges->poll(mediaStarted,
+        {{"NumberOfTracks", media.value("NrTracks")}, {"AVTransportURI", media.value("CurrentURI")}});
+    const auto uri = position.at("CurrentTrackURI");
+    const auto avUri = mediaFields.at("AVTransportURI");
     if (media.child("CurrentURI")) {
         sourceAway = !avUri.empty() && avUri != "x-rincon-queue:" + room.uuid + "#0";
         takeoverSource = transportSourceClass(avUri);
@@ -76,8 +81,8 @@ void QueueRoom::Impl::observe() {
         if (!commands.empty())
             return; // SlimProto arrived while SOAP was in flight.
     }
-    const auto transport = info.value("CurrentTransportState");
-    const auto reportedStatus = info.value("CurrentTransportStatus");
+    const auto transport = transportFields.at("TransportState");
+    const auto reportedStatus = transportFields.at("TransportStatus");
     if (reportedStatus != transportStatus) {
         transportStatus = reportedStatus;
         logQueue("TransportStatus=" + transportStatus + " uri=" + transportSourceLog(uri));
@@ -107,12 +112,12 @@ void QueueRoom::Impl::observe() {
         }
     }
     unsigned ph = 0, pm = 0, ps = 0;
-    const bool positionValid = sscanf(p.value("RelTime").c_str(), "%u:%u:%u", &ph, &pm, &ps) == 3;
+    const bool positionValid = sscanf(position.at("RelativeTimePosition").c_str(), "%u:%u:%u", &ph, &pm, &ps) == 3;
     const uint64_t reportedElapsed = positionValid ? uint64_t(ph * 3600 + pm * 60 + ps) : 0;
     const auto endEvidence = it == previousItem ? std::max(lastElapsed, reportedElapsed) : lastElapsed;
     const bool nearEnd =
         finalItem && previousItem->frames <= (endEvidence + 2) * previousItem->item->descriptor().rate;
-    const auto source = media.value("CurrentURI");
+    const auto source = avUri;
     const bool sourceChanged = media.child("CurrentURI") && source != "x-rincon-queue:" + room.uuid + "#0" &&
                                (!source.empty() || !nearEnd);
     const bool missingItem = it == items.end();
@@ -143,7 +148,7 @@ void QueueRoom::Impl::observe() {
     if (waitingForPlay && transport == "STOPPED")
         return;
     unsigned h = 0, m = 0, s = 0;
-    if (sscanf(p.value("RelTime").c_str(), "%u:%u:%u", &h, &m, &s) != 3)
+    if (sscanf(position.at("RelativeTimePosition").c_str(), "%u:%u:%u", &h, &m, &s) != 3)
         return;
     const auto playback = transport == "PLAYING"           ? yeney::PlaybackState::Playing
                           : transport == "PAUSED_PLAYBACK" ? yeney::PlaybackState::Paused

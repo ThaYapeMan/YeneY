@@ -105,6 +105,29 @@ def gena_before_append():
         print('PASS GENA between poll and successor append: no AddURIToQueue or cleanup writes, external stop once, source class retained',flush=True)
     finally:h.close()
 
+def stale_join():
+    h=Binary(rates=(44100,44100),seconds=24)
+    try:
+        h.state(1,5);h.until(lambda:len(h.packets('STMs'))==1)
+        h.until(lambda:len(h.items())==2)
+        joined=[]
+        def join():
+            joined.append(time.monotonic())
+            h.state(2,0)
+        h.sonos.position_hook=join
+        h.until(lambda:bool(joined))
+        h.until(lambda:len(h.packets('STMs'))==2,timeout=.5)
+        assert time.monotonic()-joined[0]<=.5
+        h.until(lambda:status(h)['current_owned_item']==h.items()[1]['uri'])
+        time.sleep(1.2)
+        assert len(h.packets('STMs'))==2
+        text=(h.base/'bridge.log').read_text()
+        assert 'relay-change state=' in text,text
+        assert 'stale poll answer discarded after GENA seq=' in text,text
+        assert 'field=CurrentTrack old="2" new="1"' not in text,text
+        print('PASS Study join replay: GENA 1->2, stale poll 2->1 discarded, fresh poll item 2; one STMs for item 2 within one poll interval, no flip-flop',flush=True)
+    finally:h.close()
+
 def source_classes():
     for uri, source in (
         ('x-rincon-queue:FOREIGN#0','queue'),
@@ -131,4 +154,4 @@ def source_classes():
         finally:h.close()
 
 if __name__=='__main__':
-    replay(True);replay(False);cleanup();source_classes();gena_before_append()
+    stale_join();replay(True);replay(False);cleanup();source_classes();gena_before_append()

@@ -484,11 +484,23 @@ class Suite(PACING['Suite']):
                 self.problem('LMS did not start: no strm s within 10 s of suite play command')
             self.backend.sleep(min(.1,commanded+10-self.backend.now()))
 
-    @staticmethod
-    def owned_item(row):
+    def owned_item(self, row):
         p=row['playback'];uri=row['speaker']['uri']
-        return (p.get('owned') and '/music/queue.wav?' in uri and
-                uri==p.get('current_owned_item') and uri in p.get('owned_item_uris',[]))
+        owned=p.get('owned_item_uris',[])
+        if not (p.get('owned') and '/music/queue.wav?' in uri and uri in owned):
+            return False
+        current=p.get('current_owned_item')
+        # Retain the start until catch-up, including the first matching sample.
+        pending=getattr(self,'owned_join',None)
+        now=row['monotonic']
+        if uri==current:
+            self.owned_join=None
+            return not pending or pending[0]!=uri or now-pending[1]<=2
+        if current not in owned or owned.index(current)+1>=len(owned) or owned[owned.index(current)+1]!=uri:
+            return False
+        if pending is None or pending[0]!=uri:
+            self.owned_join=(uri,now)
+        return now-self.owned_join[1]<=2
 
     def timing(self, row):
         keys=('lms_play_to_strm_s','lms_strm_to_audio_s','yeney_startup_s')
