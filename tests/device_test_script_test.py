@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import shlex
 from urllib.parse import quote
 
@@ -166,7 +167,7 @@ observe 'S2: error dialog?'
         assert 'S1 | PASS |' in result.stdout and 'S5 | PASS |' in result.stdout
         assert ('S2 | FAIL | CurrentTransportStatus=ERROR_NO_PLAYABLE_CONTENT' in result.stdout) == fail
         if fail:
-            Path('/tmp/sonos-auto-summary.txt').write_text(result.stdout)
+            (Path(tempfile.gettempdir()) / 'sonos-auto-summary.txt').write_text(result.stdout)
             print(result.stdout, end='')
     print('PASS: device-test AUTO summary exit 0 only when every scenario passes; recovery retains failure')
 

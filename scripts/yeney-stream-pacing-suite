@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import runpy
 import signal
+import shutil
 import socket
 import subprocess
 import tarfile
@@ -88,14 +89,14 @@ class Backend:
 class Suite:
     def __init__(self, room, server, hours=2, *, backend=None, cli=None,
                  unit_root=Path('/etc/systemd/system'), state_root=None, state_base=Path('/var/lib'),
-                 output=Path('/tmp'), executable='/opt/yeney/yeney'):
+                 output=Path(os.environ.get('YENEY_TEST_CACHE',str(Path.home()/'.cache/yeney-test')))/'pacing', executable='/opt/yeney/yeney'):
         self.room, self.server, self.hours = room, server, hours
         self.unit_root, self.state_root, self.output = Path(unit_root), Path(state_root) if state_root is not None else STATE['LEGACY_ROOT'], Path(output)
         self.state_base = Path(state_base)
         self.legacy_state_root = self.state_root
         self.executable = executable
         self.output.mkdir(parents=True, exist_ok=True)
-        self.work = Path(tempfile.mkdtemp(prefix='yeney-stream-pacing-', dir=self.output))
+        self.work = Path(tempfile.mkdtemp(prefix='yeney-stream-pacing-', dir=(os.environ.get('TMPDIR') or '/var/tmp')))
         self.logfile = (self.work/'commands.log').open('w')
         self.backend = backend or Backend(self.log)
         self.cli = cli or CLI(server, self.log)
@@ -324,6 +325,13 @@ class Suite:
 
     def execute(self):
         try:
+            return self._execute()
+        finally:
+            if not self.logfile.closed:self.logfile.close()
+            shutil.rmtree(self.work)
+
+    def _execute(self):
+        try:
             self.setup(); self.measure()
         except (Exception, KeyboardInterrupt) as error:
             self.errors.append(str(error) or 'interrupted')
@@ -345,6 +353,9 @@ class Suite:
             with tarfile.open(temporary,'w:gz') as tar:
                 tar.add(self.work,arcname='yeney-stream-pacing')
             os.replace(temporary,archive)
+            dated=self.output/('yeney-stream-pacing-'+str(time.time_ns())+'.tar.gz')
+            shutil.copyfile(archive,dated)
+            for old in sorted((p for p in self.output.glob('yeney-stream-pacing-*.tar.gz') if p != archive),key=lambda p:p.stat().st_mtime,reverse=True)[5:]:old.unlink()
         except Exception as error:
             self.errors.append('archive write failed: '+str(error))
             verdict = 'PACING FAILED: '+'; '.join(dict.fromkeys(self.errors))
@@ -378,7 +389,7 @@ def main():
     signal.signal(signal.SIGINT,interrupted)
     signal.signal(signal.SIGTERM,interrupted)
     # One transaction per room. Lock files are never deleted while in use.
-    lock = suite.output/('yeney-stream-pacing-'+args.room.encode().hex()+'.lock')
+    lock = Path('/var/tmp')/('yeney-stream-pacing-'+args.room.encode().hex()+'.lock')
     try:
         fd = os.open(lock,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW,0o600)
         held = os.fdopen(fd,'w')

@@ -14,5 +14,5 @@ if __name__ == '__main__':
     output, dryrun, bonus, *args = sys.argv[1:]
     if args[args.index('--server')+1] != '127.0.0.1':
         raise RuntimeError('tests must use localhost')
-    raise SystemExit(suite.main(args, root=Path(output), dryrun=dryrun,
+    raise SystemExit(suite.main(args, root=Path(output), lock_root=Path(output), dryrun=dryrun,
                                ready_timeout=4, finish_timeout=5, timeout_bonus=float(bonus)))

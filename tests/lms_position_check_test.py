@@ -1,3 +1,6 @@
+import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Deterministic CLI sampling without a live LMS or wall-clock sleeps."""
 import importlib.machinery
@@ -114,7 +117,7 @@ for kind in ('cold','warm'):
     assert 'overall segments=2' in report and report.count('ppm=') == 3
     assert 'backwards_count=0' in report
     assert 'stream_start_mono_s=' in report
-    (Path('/tmp')/f'field-{kind}-checker.txt').write_text(report)
+    (Path(tempfile.gettempdir())/f'field-{kind}-checker.txt').write_text(report)
     print(f'PASS: {kind} capture: two track fits, stream-based lock={tool.lock_time(samples,journal):.3f} s')
 
 assert len(tool.segments([(1,10),(2,11),(3,12)], ['a','a','b'])) == 2
@@ -167,7 +170,7 @@ for kind in ('cold', 'warm'):
         assert report.count('startup_anomaly_count=1')==1
         assert 'decreases=5 duration_s=4.250 size_ms=750.061' in report
     assert 'audible_gap_s=unknown' in report
-    (Path('/tmp')/f'oct11-{kind}-checker.txt').write_text(report)
+    (Path(tempfile.gettempdir())/f'oct11-{kind}-checker.txt').write_text(report)
     print(f'PASS: October 11 {kind}: per-track statistics, grouped startup decreases and explicit track-change gap')
 
 for kind in ('cold', 'warm'):

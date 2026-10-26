@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import os
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 ROOT = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='sonos-own-display-') as directory:
     executable = Path(directory) / 'test'

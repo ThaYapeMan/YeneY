@@ -8,6 +8,7 @@ from pathlib import Path
 import struct
 import subprocess
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import time
 import json
 

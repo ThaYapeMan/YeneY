@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="sonos-audio-mode-") as tmp:

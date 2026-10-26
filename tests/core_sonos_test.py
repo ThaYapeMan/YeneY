@@ -2,6 +2,8 @@
 from pathlib import Path
 import subprocess
 import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 root = Path(__file__).resolve().parents[1]
 source = r'''
 #include "core_sonos.h"

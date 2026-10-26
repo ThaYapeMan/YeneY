@@ -14,6 +14,7 @@ import socketserver
 import subprocess
 import sys
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import threading
 import time
 import unittest

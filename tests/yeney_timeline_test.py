@@ -4,6 +4,8 @@ Only steady-clock reads in temporary copies are replaced; repository code is unt
 from pathlib import Path
 import subprocess
 import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / 'yeney.cpp').read_text()
 def function(signature):

@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import os
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 
 ROOT = Path(__file__).resolve().parents[1]
 source = (ROOT / "yeney.cpp").read_text()

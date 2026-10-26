@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "timing_probe_runtime.h"
 #include "position_state.h"
@@ -30,7 +31,7 @@ static void replay(bool prior) {
     assert(recorded.locked && rtts.size()>100);
     zero=recorded.timeAt(0);
     double start=prior ? 1110750.554 : 1110013.688;
-    char directory[]="/tmp/yeney-oct11-XXXXXX";assert(mkdtemp(directory));
+    std::string directory = testTempRoot()+"/yeney-oct11-XXXXXX";assert(mkdtemp(directory.data()));
     DriftState state;state.speaker("oct11",directory);
     if(prior) assert(state.save({8.350,6.928,time(nullptr)}));
     now=start; Diagnostics literalRuntime(clockNow);

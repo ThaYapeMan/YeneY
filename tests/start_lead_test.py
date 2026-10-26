@@ -6,6 +6,7 @@ namespace = {'__file__': str(ROOT/'tests/player_engine_test.py')}
 exec((ROOT/'tests/player_engine_test.py').read_text().split('\nwith tempfile.TemporaryDirectory')[0], namespace)
 Run, HTTP = namespace['Run'], namespace['HTTP']
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import time
 import random
 

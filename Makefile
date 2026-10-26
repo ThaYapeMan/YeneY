@@ -1,3 +1,8 @@
+# Test installations persist on disk; each test invocation owns a cleaned workspace.
+export YENEY_TEST_CACHE ?= $(HOME)/.cache/yeney-test
+export TMPDIR ?= /var/tmp
+export LAMPASTREAM_CHECKOUT ?= $(abspath ../LampaStream)
+
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
@@ -26,7 +31,10 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 clean:
 	rm -f lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
-.PHONY: test install
+.PHONY: test test-run install
+test:
+	python3 scripts/run-tests.py $(MAKE) test-run
+
 install: yeney yeney-queue-dryrun
 	install -d -m 0755 /var/lib/yeney
 	install -m 0755 yeney-queue-dryrun /usr/local/bin/yeney-queue-dryrun
@@ -42,19 +50,19 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 	g++ -g -O2 -Wall -I. -DSBENCODER_TEST -o $@ tests/encoder_test.cpp tests/audio_pack_fixture.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC -lcrypto -lpthread
 
 # Preserve the legacy wire fixtures explicitly; settings tests also exercise the unset default.
-test: export YENEY_DEBUG =
-test: export YENEY_LMS_ICON =
-test: export YENEY_STREAM_PACING = wall
-test: export YENEY_PLAYBACK_MODE = stream
-test: export YENEY_START_LEAD_MS = 0
-test: export YENEY_TIMING_PROBE = 0
-test: export YENEY_TIMING_RAW = 0
-test: export YENEY_TIMING_PRIOR = 1
-test: export YENEY_TIMING_PUBLISH = 0
-test: export YENEY_TIMING_LOCKED_EVERY_S = 5
-test: export YENEY_AUDIBLE_OFFSET_MS = 0
-test: export YENEY_TIMING_STALE_S = 60
-test: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+test-run: export YENEY_DEBUG =
+test-run: export YENEY_LMS_ICON =
+test-run: export YENEY_STREAM_PACING = wall
+test-run: export YENEY_PLAYBACK_MODE = stream
+test-run: export YENEY_START_LEAD_MS = 0
+test-run: export YENEY_TIMING_PROBE = 0
+test-run: export YENEY_TIMING_RAW = 0
+test-run: export YENEY_TIMING_PRIOR = 1
+test-run: export YENEY_TIMING_PUBLISH = 0
+test-run: export YENEY_TIMING_LOCKED_EVERY_S = 5
+test-run: export YENEY_AUDIBLE_OFFSET_MS = 0
+test-run: export YENEY_TIMING_STALE_S = 60
+test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	./stream-metrics-lifetime-test
 	./stream-metrics-lifetime-test worker
 	YENEY_STREAM_PACING=sonos YENEY_START_LEAD_MS=1000 ./stream-pacing-encoder-test
@@ -125,6 +133,8 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/installer_state_test.py
 	python3 tests/debug_settings_test.py
 	python3 tests/script_references_test.py
+	python3 tests/consumer_policy_test.py
+	python3 tests/test_run_storage.py
 	python3 tests/installer_test.py
 	python3 tests/upnp_mock_test.py
 	python3 tests/own_display_test.py
@@ -152,7 +162,7 @@ test: timing-probe-field-test timing-probe-settings-test timing-probe-test timin
 	python3 tests/queue_suite_test.py
 	$(MAKE) -C third_party/yeney-core decimator-fixture
 	python3 tests/real_lms_test.py
-	python3 third_party/yeney-core/tests/decimator_quality.py --sox "$${YENEY_REAL_LMS_HOME:-/tmp/yeney-real-lms-9.1.1}/Bin/x86_64-linux/sox"
+	python3 third_party/yeney-core/tests/decimator_quality.py --sox "$${YENEY_REAL_LMS_HOME:-$${YENEY_TEST_CACHE}/real-lms-9.1.1}/Bin/x86_64-linux/sox"
 	$(MAKE) -C third_party/yeney-core test
 
 sbstreamer.o sbencoder.o: sbencoder.h
@@ -254,11 +264,11 @@ core_sonos.o sonos-position.o sbstreamer.o upnp/own_speaker_control.o upnp/http.
 
 timing-contract-test: tests/timing_contract_test.cpp timing_probe_runtime.h timing_probe.h timing_brackets.h timing_channel.h timing_settings.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
-test: timing-contract-test
+test-run: timing-contract-test
 
 timing-tap-test: tests/timing_tap_test.cpp timing_tap.h timing_probe_runtime.h timing_brackets.h timing_channel.h timing_settings.h core_shm.o $(CORE_LIB)
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -Ithird_party/yeney-core -pthread -o $@ $< core_shm.o $(CORE_LIB) -lFLAC
-test: timing-tap-test
+test-run: timing-tap-test
 
 core_shm.o: third_party/yeney-core/sinks/shm_v1/sink.cpp third_party/yeney-core/core/sink.h third_party/yeney-core/sinks/shm_v1/sink.h third_party/yeney-core/sinks/shm_v1/layout.h
 	g++ -std=c++17 -O2 -Wall -Wextra -Ithird_party/yeney-core -c -o $@ $<
@@ -267,26 +277,26 @@ timing-probe-settings-test timing-probe-resets-test timing-probe-http-test strea
 
 lms-position-test: tests/lms_position_test.cpp position_state.h timing_probe_runtime.h timing_settings.h timing_brackets.h timing_channel.h timing_probe.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
-test: lms-position-test
+test-run: lms-position-test
 sonos-position.o position-test: position_state.h
 
 core_sonos.o sonos-position.o sbstreamer.o upnp/own_speaker_control.o timing-contract-test lms-position-test: timing_drift_state.h
 
 cold-position-test: tests/cold_position_test.cpp timing_brackets.h timing_probe.h timing_drift_state.h timing_probe_runtime.h timing_settings.h timing_channel.h position_state.h
 	g++ -std=c++17 -g -O2 -Wall -I. -o $@ $<
-test: cold-position-test
+test-run: cold-position-test
 
 field-cold-test: tests/field_cold_test.cpp timing_probe_runtime.h timing_probe.h timing_brackets.h timing_settings.h position_state.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
-test: field-cold-test
+test-run: field-cold-test
 
 oct11-acquisition-test: tests/oct11_acquisition_test.cpp timing_probe_runtime.h timing_probe.h timing_brackets.h timing_drift_state.h timing_settings.h timing_channel.h position_state.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
-test: oct11-acquisition-test
+test-run: oct11-acquisition-test
 
 oct12-boundary-test: tests/oct12_boundary_test.cpp core_sonos.cpp core_sonos.h position_state.h timing_probe_runtime.h core_shm.o $(CORE_LIB)
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -Ithird_party/yeney-core -pthread -o $@ tests/oct12_boundary_test.cpp core_sonos.cpp core_shm.o $(CORE_LIB) -lFLAC
-test: oct12-boundary-test
+test-run: oct12-boundary-test
 
 # Independent phase 1 library; no playback registration or transport changes.
 queue_route.o queue_item_store.o wav_writer.o: %.o: %.cpp queue_item_store.h wav_writer.h pcm_pack.h
@@ -296,13 +306,13 @@ libqueueitems.a: queue_item_store.o wav_writer.o queue_route.o
 	ar rcs $@ $^
 queue-item-store-test: tests/queue_item_store_test.cpp libqueueitems.a pcm_pack.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $< libqueueitems.a -lFLAC -pthread
-test: queue-item-store-test
+test-run: queue-item-store-test
 
 core_queue_sink.o: core_queue_sink.cpp core_queue_sink.h queue_item_store.h third_party/yeney-core/core/sink.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
 core-queue-sink-test: tests/core_queue_sink_test.cpp core_queue_sink.o libqueueitems.a
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread
-test: core-queue-sink-test
+test-run: core-queue-sink-test
 
 yeney-queue-dryrun: queue_dryrun.cpp core_queue_sink.o libqueueitems.a $(CORE_LIB)
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread
@@ -312,27 +322,27 @@ yeney-queue-dryrun: queue_lms_cli.h queue_flac_metadata.h
 
 yeney-queue-dryrun: queue_lms_cli.h
 
-test: yeney-queue-dryrun
+test-run: yeney-queue-dryrun
 
 queue-route-test: tests/queue_route_test.cpp libqueueitems.a upnp/http_server.o upnp/gena.o upnp/xml.o upnp/discovery.o upnp/http.o
-	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $^ -lFLAC -pthread
-test: queue-route-test
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread
+test-run: queue-route-test
 
 queue-metadata-test: tests/queue_metadata_test.cpp upnp/queue_metadata.cpp upnp/xml.cpp upnp/queue_metadata.h upnp/soap.h upnp/title_format.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^)
-test: queue-metadata-test
+test-run: queue-metadata-test
 
 queue-actions-test: tests/queue_actions_test.cpp upnp/queue_actions.cpp upnp/queue_actions.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^)
-test: queue-actions-test
+test-run: queue-actions-test
 
 queue-ownership-test: tests/queue_ownership_test.cpp upnp/queue_ownership.cpp upnp/queue_ownership.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp,$^)
-test: queue-ownership-test
+test-run: queue-ownership-test
 
 playback-mode-test: tests/playback_mode_test.cpp playback_mode.h upnp/speaker_control.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $<
-test: playback-mode-test
+test-run: playback-mode-test
 
 QUEUE_CONTROLLER_OBJS = upnp/queue_coordinator.o upnp/queue_actions.o upnp/queue_ownership.o upnp/queue_metadata.o
 upnp/queue_coordinator.o: upnp/queue_coordinator.cpp upnp/queue_coordinator.h playback_mode.h transport_source.h upnp/queue_actions.h upnp/queue_ownership.h upnp/http.h upnp/soap.h upnp/xml.h upnp/discovery.h
@@ -351,31 +361,31 @@ QUEUE_TEST_UPNP = upnp/http_server.o upnp/gena.o upnp/xml.o upnp/http.o upnp/soa
 
 queue-position-test: tests/queue_position_test.cpp position_state.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
-test: queue-position-test
+test-run: queue-position-test
 
 upnp/encoded_buffer.o upnp/http_server.o sbstreamer.o sonos-status.o yeney.o: stream_metrics.h
 
 stream-metrics-test: tests/stream_metrics_test.cpp stream_metrics.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
-test: stream-metrics-test
+test-run: stream-metrics-test
 
 sbencoder.o sbstreamer.o yeney.o sonos-position.o upnp/own_speaker_control.o core_sonos.o: stream_pacing.h
 
 stream-pacing-test: tests/stream_pacing_test.cpp stream_pacing.h timing_probe_runtime.h upnp/encoded_buffer.cpp stream_metrics.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $< upnp/encoded_buffer.cpp
-test: stream-pacing-test
+test-run: stream-pacing-test
 
 encoded-backpressure-test: tests/encoded_backpressure_test.cpp upnp/encoded_buffer.cpp upnp/encoded_buffer.h stream_metrics.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ tests/encoded_backpressure_test.cpp upnp/encoded_buffer.cpp
-test: encoded-backpressure-test
+test-run: encoded-backpressure-test
 
 stream-pacing-encoder-test: tests/stream_pacing_encoder_test.cpp sbencoder.cpp sbencoder.h stream_pacing.h stream_metrics.h upnp/encoded_buffer.cpp
 	g++ -std=c++17 -O2 -Wall -Wextra -DSBENCODER_TEST -I. -pthread -o $@ tests/stream_pacing_encoder_test.cpp sbencoder.cpp upnp/encoded_buffer.cpp -lFLAC++ -lFLAC
-test: stream-pacing-encoder-test
+test-run: stream-pacing-encoder-test
 
 stream-metrics-lifetime-test: tests/stream_metrics_lifetime_test.cpp stream_metrics.h
 	g++ -std=c++17 -g -O1 -Wall -Wextra -fsanitize=address -fno-omit-frame-pointer -I. -pthread -o $@ $<
-test: stream-metrics-lifetime-test
+test-run: stream-metrics-lifetime-test
 
 $(QUEUE_ROOM_OBJS): %.o: %.cpp queue_room_internal.h queue_room.h room_status.h queue_playlist.h queue_lms_cli.h upnp/queue_actions.h core_queue_sink.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
@@ -394,15 +404,15 @@ queue_room.o: queue_protocol.h
 
 xml-sanitize-test: tests/xml_sanitize_test.cpp upnp/xml.cpp upnp/xml.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ tests/xml_sanitize_test.cpp upnp/xml.cpp
-test: xml-sanitize-test
+test-run: xml-sanitize-test
 
 room-status-test: tests/room_status_test.cpp room_status.h
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
-test: room-status-test
+test-run: room-status-test
 
 queue-source-test: tests/queue_source_test.cpp queue_source.h lms_artwork.h
 	$(CXX) -std=c++17 -Wall -Wextra -I. -o $@ tests/queue_source_test.cpp
-test: queue-source-test
+test-run: queue-source-test
 
 queue_room.o: queue_path_sink.h queue_source.h core_sonos.h
 
@@ -414,7 +424,7 @@ lms-icon-test: tests/lms_icon_fixture.cpp lms_icon.h queue_lms_cli.h
 lms-icon-connection-test: tests/lms_icon_connection.cpp $(CORE_LIB)
 	g++ -std=c++17 -O2 -Wall -Wextra -Ithird_party/yeney-core -pthread -o $@ $< $(CORE_LIB) -lFLAC
 
-test: lms-icon-test lms-icon-connection-test
+test-run: lms-icon-test lms-icon-connection-test
 
 # Both playback paths and timing persistence share the room state policy.
 yeney.o queue_room.o sonos-position.o core_sonos.o sonos-status.o sbencoder.o: room_state_directory.h stream_metrics.h timing_probe_runtime.h timing_drift_state.h
@@ -427,3 +437,6 @@ yeney.o sonos-status.o: stream_display.h
 yeney.o $(QUEUE_ROOM_OBJS): queue_lms_commands.h
 
 queue_room.o: third_party/yeney-core/core/player.h
+
+# Disk scratch policy is shared by these native fixtures.
+queue-route-test core-queue-sink-test queue-item-store-test cold-position-test field-cold-test oct11-acquisition-test oct12-boundary-test encoded-backpressure-test stream-metrics-test upnp-test: tests/test_temp.h

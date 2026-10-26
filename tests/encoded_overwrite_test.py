@@ -3,6 +3,8 @@
 from pathlib import Path
 import subprocess
 import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 
 with tempfile.TemporaryDirectory(prefix='sonos-backpressure-') as directory:
     source, exe = Path(directory, 'test.cpp'), Path(directory, 'test')

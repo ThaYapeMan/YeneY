@@ -489,17 +489,17 @@ scenarios. Otherwise it exits nonzero and prints **SUITE FAILED:** with scenario
 reasons. Unknown CLI identity cannot pass. These are protocol/queue checks;
 acoustic gaplessness and Sonos controls still require their later device phases.
 
-The output is `/tmp/yeney-queue-suite-latest.tar.gz`, plus a timestamped copy.
+The output is `${YENEY_TEST_CACHE:-~/.cache/yeney-test}/queue/yeney-queue-suite-latest.tar.gz`, plus the last five timestamped copies.
 The archive contains each scenario's matched `.md`, `.tsv`, `.log` and console
 output, `manifest.tsv` with track ids/titles/albums/durations, every CLI request
 and response with timings in `suite.log`, and one results table in `summary.md`.
 Failures and interruptions also produce an archive; missing child artifacts are
-reported explicitly. Original PID-stamped dry-run files remain in `/tmp`.
+reported explicitly. Dry-run reports are retained under the cache's `dryrun` directory (last five runs); per-run item storage is removed.
 
 From the Proxmox host, retrieve the single archive:
 
 ```bash
-pct pull 113 /tmp/yeney-queue-suite-latest.tar.gz /tmp/yeney-queue-suite-latest.tar.gz
+pct pull 113 /root/.cache/yeney-test/queue/yeney-queue-suite-latest.tar.gz ./yeney-queue-suite-latest.tar.gz
 ```
 
 ### Manual fallback
@@ -612,15 +612,15 @@ reported as deferred until isolation is restored. Cleanup is protected from a
 second interrupt.
 
 The terminal ends with exactly `PACING OK` or `PACING FAILED: <reasons>`. The same
-verdict is in `result.txt` inside `/tmp/yeney-stream-pacing-latest.tar.gz`, together
+verdict is in `result.txt` inside `${YENEY_TEST_CACHE:-~/.cache/yeney-test}/pacing/yeney-stream-pacing-latest.tar.gz`, together
 with ten-second JSONL/CSV samples, original playback state, room journal and
-command transcript. The working evidence directory is retained in `/tmp`.
+command transcript. The working evidence directory is removed after packaging; the last five dated archives remain in the cache.
 The supported duration is greater than zero and at most 168 hours.
 
 On the **Proxmox host**, retrieve the archive with this single command:
 
 ```sh
-pct pull 113 /tmp/yeney-stream-pacing-latest.tar.gz /tmp/yeney-stream-pacing-latest.tar.gz
+pct pull 113 /root/.cache/yeney-test/pacing/yeney-stream-pacing-latest.tar.gz ./yeney-stream-pacing-latest.tar.gz
 ```
 
 Agents test this runner only with mocked service/CLI operations and loopback
@@ -667,20 +667,41 @@ Install on the deployment host using the owner workflow:
 git pull && git submodule update --init --recursive && make && sudo make install
 ```
 
-To survive SSH disconnects, run the installed suite as a transient service:
+The installer creates `/etc/yeney/device-suite.conf` once and preserves it on
+later installs. Edit it before running the suite. Its format is plain `key=value`
+(no shell expansion or quoting); blank lines and `#` comment lines are ignored:
+
+```ini
+room=Study
+server=192.168.178.23
+album=2802
+volume=10
+# remote=Favourite name or playable episode URL
+```
+
+The supported keys are `room`, `server`, `album`, `remote`, and `volume`.
+Use `--config /path/to/device-suite.conf` for another file. Command-line options
+override individual file values. A configured album must exist and contain at
+least four eligible tracks; a missing or ineligible album fails before playback
+changes. The suite never replaces that choice with another album.
+
+Exact foreground commands for the owner's rooms (the same file supplies album
+2802, volume 10 and the server):
 
 ```sh
-sudo systemd-run --unit=yeney-queue-device-suite --collect /usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23
+sudo /usr/local/bin/yeney-queue-device-suite --config /etc/yeney/device-suite.conf --room Study
+sudo /usr/local/bin/yeney-queue-device-suite --config /etc/yeney/device-suite.conf --room 'Sonos Port'
+```
+
+To survive SSH disconnects, run one room at a time as a transient service:
+
+```sh
+sudo systemd-run --unit=yeney-queue-device-suite --collect /usr/local/bin/yeney-queue-device-suite --config /etc/yeney/device-suite.conf --room Study
 sudo journalctl -fu yeney-queue-device-suite
+sudo systemd-run --unit=yeney-queue-device-suite --collect /usr/local/bin/yeney-queue-device-suite --config /etc/yeney/device-suite.conf --room 'Sonos Port'
 ```
 
-Select an LMS album ID or exact name and a temporary volume if desired:
-
-```sh
-sudo /usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23 --album 'Album name' --volume 10
-```
-
-The default is the first eligible local lossless album with at least four
+Without an album in the file or on the command line, selection uses the first eligible local lossless album with at least four
 tracks of 60 seconds or longer, and Sonos room volume 10 (range 0–100). LMS software volume is untouched. It plays until
 three joins, checks audible Sonos/LMS identity with at most two seconds of
 boundary mismatch, pauses ten seconds from LMS, resumes, then stops and plays
@@ -694,7 +715,22 @@ require PLAYING without a TransportStatus fault and confirm the room status
 are recorded in summary.md and manifest.tsv. Run this qualification with the
 normal modern `YENEY_AUDIO=24/48` setting; legacy mode caps output at 44.1 kHz.
 The playlist is staged while stopped with `cmd:add`; one explicit LMS play
-starts the clock. Each start must reach PLAYING on an owned item within five seconds.
+begins the LMS diagnostic clock. Room- and process-scoped journal evidence of
+`strm s` starts the YeneY clock. The first observed speaker PLAYING an owned item
+with matching LMS identity must arrive within five seconds of `strm s` (three
+seconds for high-rate tracks). LMS readiness polling no longer consumes this
+budget. The high-rate rendered-rate evidence must arrive within the same three
+seconds; there is no second rate allowance.
+
+Each startup records `lms_play_to_strm_s`, `lms_strm_to_audio_s` and
+`yeney_startup_s` in samples, joins, summary.md and the result line. The first two
+are diagnostics: suite Play to `strm s`, then `strm s` to the occurrence's first
+decode/decimation evidence. Missing first-audio evidence is recorded as unknown,
+not invented. No `strm s` within ten seconds fails explicitly as “LMS did not
+start”. Evidence failures name the missing state, identity or rendered rate.
+The 25 October Study regression is replayed locally with two seconds from suite
+Play to `strm s`, two seconds to first audio and PLAYING at 2.5 seconds after
+`strm s`; four seconds of YeneY startup still fails.
 Expected metadata follows YeneY's XML sanitisation and room title format.
 
 The **remote-source** scenario selects a playable entry from LMS favourites or
@@ -709,6 +745,8 @@ Local tracks still use finite WAV items. Class changes in a mixed playlist wait
 for the current path to finish and log their measured handoff gap. No new owner
 command or deployment step is needed.
 
+Suite locks live in the shared `/var/tmp` namespace, independently of archive
+and scratch directories; lock files remain in place to avoid inode races.
 The suite refuses member/inactive rooms and competing suite locks. It accepts an owner-formed group only when the selected room is its coordinator. It saves
 playlist identities/order, mode/index/time, repeat/shuffle/transition settings,
 volume and the room environment. It verifies a Before YeneY backup only when
@@ -742,7 +780,7 @@ deadlines. Slow loads wait for verified readiness before scenario measurements.
 Playlist restoration uses stable local IDs or exact remote URLs, retries failed
 items once on fresh connections and continues with the remaining preferences.
 
-High-rate queue scenarios require PLAYING within 3 seconds of LMS play and
+High-rate queue scenarios require PLAYING within 3 seconds of LMS `strm s` and
 report the measured startup. Modern queue rooms receive native hi-res files
 and yeney-core converts within the rate family (88.2/176.4 → 44.1 kHz;
 96/192 → 48 kHz), preserving exact WAV lengths. Ordinary stream rooms and
@@ -752,13 +790,13 @@ legacy 44.1 kHz mode retain LMS/SoX conversion.
 
 `/usr/local/bin/yeney-queue-device-suite` skips menu containers and RSS/XML/OPML,
 Atom and playlist URLs. It browses favourite/podcast feed children for the first
-playable episode instead of placing a feed URL into the LMS playlist. Up to five
-audio candidates are tried. Each must produce a new `strm s` within five seconds
-of Play, confirmed from the room journal's existing STMc/queue-command messages;
-otherwise it is stopped/unloaded and the next candidate is tried. No playable
-candidate produces a clear remote-source SKIP, not a playback failure. Once LMS
-starts a candidate, the existing speaker-start and stream-path checks still apply.
-Candidate choices and rejection reasons are recorded in the manifest and command log.
+playable episode instead of placing a feed URL into the LMS playlist. The first
+playable candidate is selected from those menus. Once a candidate is loaded,
+it must produce a new `strm s` within ten seconds of Play, confirmed from the
+room journal. Absence fails with “LMS did not start”; it cannot silently skip a
+failed start. An empty menu still reports an explicit remote-source SKIP.
+Once LMS starts, the speaker-start and stream-path limits apply from `strm s`.
+Candidate choices are recorded in the manifest and command log.
 
 Use `--remote 'Favourite name'`, `--remote 'https://…/episode.mp3'`, or a
 `podcast://` episode URL to select the remote item explicitly. An explicit feed
@@ -776,3 +814,38 @@ Standalone rooms report SKIP with a clear note. The suite never creates,
 changes or dissolves a Sonos group. Gaining/losing members while remaining
 coordinator must not interrupt playback; joining another coordinator uses the
 existing external-source stop path. Playback through a member is not supported.
+
+## Local automated test storage and consumer coverage
+
+Persistent test installations use `$YENEY_TEST_CACHE`, default
+`~/.cache/yeney-test`. The private LMS 9.1.1 distribution and its Perl dependencies
+are reused there; keep protocol LMS installations under this cache too. Per-run
+workspaces, generated audio and WAV comparisons use `$TMPDIR`, falling back to
+`/var/tmp`. For WSL, set both to disk-backed paths before testing:
+
+```sh
+export YENEY_TEST_CACHE="$HOME/.cache/yeney-test"
+export TMPDIR="$HOME/.cache/tmp"
+mkdir -p "$YENEY_TEST_CACHE" "$TMPDIR"
+make test
+```
+
+`make test` owns and removes its workspace on success, failure and interruption,
+including files left by a failing child. Transcripts and small diagnostic evidence
+are retained under `$YENEY_TEST_CACHE/runs`, with only the last five runs kept;
+generated WAV/PCM data is removed. Standalone real-LMS checks also clean their
+workspace and retain bounded logs if setup fails. The owner-only core diagnostic
+also removes disk scratch after setup failure or interruption and retains five
+archives under the cache's `core-device` directory, including its WAV/packet
+captures. Its offline tests mock all device operations. Old installations already in
+WSL `/tmp` are not deleted automatically.
+
+The owner device suite retains its deployment archive contract:
+`/tmp/yeney-queue-device-suite-latest.tar.gz`, plus the last five timestamped
+archives. It removes its working directory after packaging.
+
+`make test` defaults `LAMPASTREAM_CHECKOUT` to the sibling `../LampaStream`
+checkout and respects a caller's explicit value. Missing checkout or failed
+`lampastream.pcm_source` import fails the cross-repository consumer check. Only
+an explicit `LAMPASTREAM_CONSUMER=off` opts out; its final test report announces
+`CROSS-REPO CONSUMER NOT RUN (LAMPASTREAM_CONSUMER=off)`.

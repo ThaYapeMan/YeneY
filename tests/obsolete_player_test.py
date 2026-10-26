@@ -2,6 +2,7 @@ from pathlib import Path
 import os
 import subprocess
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 root=Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix='yeney-obsolete-player-') as tmp:
     source=Path(tmp)/'test.cpp'; exe=Path(tmp)/'test'

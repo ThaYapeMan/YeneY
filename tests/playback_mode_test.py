@@ -8,6 +8,7 @@ import socket
 import subprocess
 import threading
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 from xml.sax.saxutils import escape
 
 ROOT = Path(__file__).resolve().parents[1]

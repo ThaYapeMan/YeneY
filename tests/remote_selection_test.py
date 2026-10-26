@@ -1,8 +1,11 @@
 """Remote menu selection/retry tests: in-memory LMS replies and clocks only."""
 import io
+import json
 from pathlib import Path
 import runpy
 import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
 M=runpy.run_path(str(ROOT/'scripts/yeney-queue-device-suite'))
@@ -46,12 +49,14 @@ class Tests(unittest.TestCase):
         self.assertIn("parser.add_argument('--remote'",(ROOT/'scripts/yeney-queue-device-suite').read_text())
         print('PASS --remote: exact favourite name, feed URL and explicit episode URL honoured without choosing another favourite')
     def test_strm_deadline(self):
-        s=Suite.__new__(Suite);s.unit='yeney@Study.service';s.backend=Clock()
-        with self.assertRaises(M['RemoteNotStarted']):s.remote_strm(123,5)
-        self.assertEqual(s.backend.now(),5)
-        self.assertTrue(all('--since' in c and '--until' in c and '-u' in c for c in s.backend.calls))
-        s.backend=Clock('core: STMc\n');s.remote_strm(123,5);self.assertEqual(s.backend.now(),0)
-        print('PASS remote start deadline: room-scoped journal requires new strm-s acknowledgement within five seconds')
+        s=Suite.__new__(Suite);s.unit='yeney@Study.service';s.pid=42;s.backend=Clock();s.current=dict(name='remote-source')
+        with self.assertRaisesRegex(M['SuiteError'],'LMS did not start: no strm s within 10 s'):
+            s.wait_strm(123,0)
+        self.assertEqual(s.backend.now(),10)
+        self.assertTrue(all('--since' in c and '-u' in c and '_PID=42' in c for c in s.backend.calls))
+        s.backend=Clock(json.dumps(dict(__MONOTONIC_TIMESTAMP=2000000,MESSAGE='core: queue command strm s')))
+        self.assertEqual(s.wait_strm(123,0),2)
+        print('PASS startup journal: room/process scoped strm s timestamp; no strm s fails as LMS did not start after 10 s')
     def scenario(self,fail_count,count=2):
         temp=tempfile.TemporaryDirectory(prefix='yeney-remote-selection-');self.addCleanup(temp.cleanup)
         s=Suite.__new__(Suite);s.work=Path(temp.name);s.backend=Clock();s.remote_note='favorites';s.results=[];s.actions=[]
@@ -61,24 +66,21 @@ class Tests(unittest.TestCase):
         def load(tracks,**kwargs):
             s.actions.append(('load',tracks[0]['url'],kwargs))
             if not tracks[0]['url'].startswith('file:') and int(tracks[0]['title'])<fail_count:
-                raise M['RemoteNotStarted']('LMS sent no strm s within 5 s')
+                raise M['SuiteError']('LMS did not start: no strm s within 10 s')
         def sample(*args):s.backend.sleep(1)
         s.begin=begin;s.load=load;s.sample=sample;s.log=lambda _:None
         s.mutate=lambda *args:s.actions.append(args);s.pending_mutation=s.mutate
         return s
-    def test_unplayable_replaced(self):
-        s=self.scenario(1);s.remote_scenario()
-        self.assertEqual([r['name'] for r in s.results],['remote-source','local-after-remote'])
-        self.assertEqual(s.results[0]['verdict'],'PASS');self.assertEqual(len([a for a in s.actions if a[0]=='load']),3)
-        self.assertIn(('stop',),s.actions);self.assertIn(('playlist','clear'),s.actions)
-        self.assertIn('remote-candidate',(s.work/'manifest.tsv').read_text())
-        print('PASS remote retry: no-strm candidate unloaded, next candidate succeeds, local relay resumes')
-    def test_none_playable_skips_at_five(self):
-        s=self.scenario(10,10);s.remote_scenario()
-        self.assertEqual(len([a for a in s.actions if a[0]=='load']),5)
-        self.assertEqual(s.results[0]['verdict'],'SKIP');self.assertEqual(len(s.results),1)
-        self.assertIn('no playable remote candidate',s.results[0]['note'])
+    def test_unplayable_fails(self):
+        s=self.scenario(1)
+        with self.assertRaisesRegex(M['SuiteError'],'LMS did not start'):s.remote_scenario()
+        self.assertEqual(len([a for a in s.actions if a[0]=='load']),1)
+        print('PASS no-strm remote start is a failure; no retry can hide it')
+    def test_empty_menu_skips(self):
+        s=self.scenario(0,0);s.remote_scenario()
+        self.assertEqual(s.results[0]['verdict'],'SKIP')
+        self.assertFalse(s.actions)
         s=selector({('favorites',None):[dict(id='feed',type='audio',url='https://a.invalid/feed.rss')]})
         self.assertIsNone(s.remote_choice()[0]);self.assertFalse(s.remote_pool)
-        print('PASS remote skip: at most five unsuccessful candidates; empty/feed-only menu reports SKIP rather than FAIL')
+        print('PASS empty/feed-only menu explicitly reports SKIP before loading anything')
 if __name__=='__main__':unittest.main(verbosity=2)

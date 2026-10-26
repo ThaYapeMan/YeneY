@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "timing_probe_runtime.h"
 #include "position_state.h"
@@ -103,7 +104,7 @@ static void positionBound(const std::vector<Read>& input, bool prior) {
     printf("PASS: field pre-lock prior=%d samples=%u interval_error_max_ms=%.3f; high-frequency 20 s drift <1.5 ppm\n",prior,count,worst*1000);
 }
 static void priorSetting() {
-    char directory[]="/tmp/yeney-cold-switch-XXXXXX"; assert(mkdtemp(directory));
+    std::string directory = testTempRoot()+"/yeney-cold-switch-XXXXXX"; assert(mkdtemp(directory.data()));
     DriftState state; state.speaker("RINCON_switch",directory);
     DriftState::Value value{10.850,1,time(nullptr)},loaded; assert(state.save(value));
     Diagnostics d(fakeClock);d.speaker("RINCON_switch",directory);

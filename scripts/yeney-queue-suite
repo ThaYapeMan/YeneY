@@ -211,13 +211,14 @@ def assess(path, scenario, joins):
 
 
 class Suite:
-    def __init__(self, args, dryrun=DRYRUN, root=Path('/tmp'), ready_timeout=30,
+    def __init__(self, args, dryrun=DRYRUN, root=Path(os.environ.get('YENEY_TEST_CACHE',str(Path.home()/'.cache/yeney-test')))/'queue', ready_timeout=30,
                  timeout_bonus=120, finish_timeout=20):
         self.args, self.dryrun, self.root = args, str(dryrun), Path(root)
         self.ready_timeout, self.timeout_bonus, self.finish_timeout = ready_timeout, timeout_bonus, finish_timeout
         self.started = time.monotonic()
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%d-%H%M%S')
-        self.work = Path(tempfile.mkdtemp(prefix=f'yeney-queue-suite-{stamp}-', dir=self.root))
+        self.root.mkdir(parents=True,exist_ok=True)
+        self.work = Path(tempfile.mkdtemp(prefix=f'yeney-queue-suite-{stamp}-', dir=(os.environ.get('TMPDIR') or '/var/tmp')))
         self.stream = (self.work/'suite.log').open('w', buffering=1)
         self.cli = CLI(args.server, self.log)
         self.results, self.saved = {}, {}
@@ -438,10 +439,21 @@ class Suite:
             temporary = Path(staged.name)
             with archive.open('rb') as source:
                 shutil.copyfileobj(source, staged)
-        os.replace(temporary, latest)
+        try:
+            os.replace(temporary, latest)
+        finally:
+            temporary.unlink(missing_ok=True)
+        for old in sorted((p for p in self.root.glob('yeney-queue-suite-*.tar.gz') if p != latest),key=lambda p:p.stat().st_mtime,reverse=True)[5:]:old.unlink()
         print('Archive: '+str(latest), flush=True)
 
     def run(self):
+        try:
+            return self._run()
+        finally:
+            if not self.stream.closed:self.stream.close()
+            shutil.rmtree(self.work)
+
+    def _run(self):
         try:
             chosen = select(self.cli, self.args.only, self.args.joins,
                             {'alac': self.args.alac_album, 'flac': self.args.flac_album})
@@ -489,9 +501,11 @@ def arguments(argv=None):
     return args
 
 
-def main(argv=None, *, dryrun=DRYRUN, root=Path('/tmp'), **timings):
+def main(argv=None, *, dryrun=DRYRUN, root=Path(os.environ.get('YENEY_TEST_CACHE',str(Path.home()/'.cache/yeney-test')))/'queue', lock_root=Path('/var/tmp'), **timings):
     args = arguments(argv)
-    lock = os.open(Path(root)/'yeney-queue-suite.lock', os.O_RDWR|os.O_CREAT|os.O_CLOEXEC|os.O_NOFOLLOW, 0o600)
+    Path(root).mkdir(parents=True,exist_ok=True)
+    Path(lock_root).mkdir(parents=True,exist_ok=True)
+    lock = os.open(Path(lock_root)/'yeney-queue-suite.lock', os.O_RDWR|os.O_CREAT|os.O_CLOEXEC|os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX|fcntl.LOCK_NB)
     except BlockingIOError:

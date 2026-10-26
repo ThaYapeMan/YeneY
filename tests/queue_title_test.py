@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 from queue_binary_test import Binary
 from queue_sonos_fake import Coordinator, Handler
 
@@ -86,6 +87,6 @@ if __name__=='__main__':
             old='&lt;dc:title&gt;Michael Bublé - When I Fall In Love &amp;amp; &amp;lt;live&amp;gt;&lt;/dc:title&gt;'.encode()
             new='&lt;dc:title&gt;When I Fall In Love &amp;amp; &amp;lt;live&amp;gt;&lt;/dc:title&gt;'.encode()
             assert before.count(old)==1 and before.replace(old,new,1)==after
-            (Path('/tmp')/'yeney-title-before-add-uri.xml').write_bytes(before)
+            (Path(tempfile.gettempdir())/'yeney-title-before-add-uri.xml').write_bytes(before)
             print('PASS queue SOAP baseline '+args.baseline+': only dc:title removes '+repr('Michael Bublé - ')+' ('+str(len(before)-len(after))+' UTF-8 bytes); every other request-body byte identical',flush=True)
     if not args.wire_only:integration()

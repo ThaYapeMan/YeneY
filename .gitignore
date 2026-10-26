@@ -94,3 +94,5 @@ field-cold-test
 /lms-icon-connection-test
 
 !scripts/archive/*.sh
+
+/.test-cache/

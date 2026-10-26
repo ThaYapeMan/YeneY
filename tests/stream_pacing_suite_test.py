@@ -10,6 +10,8 @@ import signal
 import socket
 import tarfile
 import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import threading
 import unittest
 from unittest.mock import patch
@@ -161,7 +163,7 @@ class SuiteTests(unittest.TestCase):
         self.assertIn('install -m 0755 scripts/yeney-stream-pacing-suite '+path,(ROOT/'Makefile').read_text())
         docs=(ROOT/'DEVICE-VERIFICATION.md').read_text()
         self.assertIn(path+' --room Study --server 192.168.178.23 --hours 2',docs)
-        self.assertIn('pct pull 113 /tmp/yeney-stream-pacing-latest.tar.gz /tmp/yeney-stream-pacing-latest.tar.gz',docs)
+        self.assertIn('pct pull 113 /root/.cache/yeney-test/pacing/yeney-stream-pacing-latest.tar.gz ./yeney-stream-pacing-latest.tar.gz',docs)
         self.suite.logfile.close()
 
     def test_existing_override_preserved(self):

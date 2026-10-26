@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_route.h"
 #include "upnp/http_server.h"
@@ -9,8 +10,8 @@
 #include <unistd.h>
 using namespace queue_audio;
 int main() {
-    char temp[] = "/tmp/yeney-route-XXXXXX";
-    assert(mkdtemp(temp));
+    std::string temp = testTempRoot()+"/yeney-route-XXXXXX";
+    assert(mkdtemp(temp.data()));
     {
         Config config;
         config.root = temp;

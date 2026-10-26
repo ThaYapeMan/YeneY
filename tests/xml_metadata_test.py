@@ -7,6 +7,7 @@ from pathlib import Path
 import socketserver
 import subprocess
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import threading
 from urllib.parse import quote_from_bytes
 import xml.etree.ElementTree as ET

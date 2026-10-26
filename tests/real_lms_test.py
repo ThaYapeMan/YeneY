@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import threading
 import time
 from urllib.parse import quote, unquote
@@ -30,7 +31,9 @@ from decoders_test import alac_parts, mp4
 from length_test import alac as length_alac
 from hires_audio import pcm as hires_pcm, wave as hires_wave, alac as hires_alac, raw24
 import numpy as np
-HOME=Path(os.environ.get('YENEY_REAL_LMS_HOME','/tmp/yeney-real-lms-9.1.1'))
+CACHE=Path(os.environ.get('YENEY_TEST_CACHE',Path.home()/'.cache/yeney-test')).expanduser()
+CACHE.mkdir(parents=True,exist_ok=True)
+LMS_HOME=Path(os.environ.get('YENEY_REAL_LMS_HOME',CACHE/'real-lms-9.1.1'))
 OWNER_CLI=[]
 URL='https://downloads.lms-community.org/LyrionMusicServer_v9.1.1/lyrionmusicserver-9.1.1.tgz'
 
@@ -154,9 +157,11 @@ def stop(proc):
         os.killpg(proc.pid,signal.SIGKILL);proc.wait()
 
 def install():
-    if (HOME/'slimserver.pl').is_file():return
-    HOME.mkdir(parents=True,exist_ok=True)
-    archive=HOME/'distribution.tgz'
+    if (LMS_HOME/'slimserver.pl').is_file():
+        print('REAL LMS cache reused: '+str(LMS_HOME),flush=True)
+        return
+    LMS_HOME.mkdir(parents=True,exist_ok=True)
+    archive=LMS_HOME/'distribution.tgz'
     with urlopen(URL,timeout=60) as source,archive.open('wb') as out:
         while chunk:=source.read(1024*1024):out.write(chunk)
     with tarfile.open(archive) as tar:
@@ -164,10 +169,10 @@ def install():
         for member in tar.getmembers():
             if not member.name.startswith(prefix):continue
             member.name=member.name[len(prefix):]
-            if member.name:tar.extract(member,HOME,filter='data')
+            if member.name:tar.extract(member,LMS_HOME,filter='data')
 
 def perl_environment(base):
-    prefix=Path(os.environ.get('YENEY_REAL_LMS_PERL5','/tmp/yeney-real-lms-perl5'))
+    prefix=Path(os.environ.get('YENEY_REAL_LMS_PERL5',CACHE/'real-lms-perl5'))
     env=dict(os.environ,PERL5LIB=str(prefix/'lib/perl5')+':'+os.environ.get('PERL5LIB',''),PERL_MM_USE_DEFAULT='1')
     probe=['perl','-MIO::Socket::SSL','-MNet::SSLeay','-e','print "Perl SSL $IO::Socket::SSL::VERSION / $Net::SSLeay::VERSION\\n"']
     if subprocess.run(probe,env=env,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode:
@@ -189,7 +194,8 @@ def perl_environment(base):
     print('REAL LMS private dependency: '+result.stdout.strip(),flush=True)
     return env
 
-base=Path(tempfile.mkdtemp(prefix='yeney-real-lms-acceptance-'))
+from test_storage import workspace
+base=workspace('real-lms')
 print('REAL LMS transcript directory: '+str(base),flush=True)
 install()
 perl_env=perl_environment(base)
@@ -205,7 +211,7 @@ for i,rate in ((4,44100),(5,48000)):
     (base/f'library/{i}.m4a').write_bytes(mp4(cookie,[packets[0]]*count,count*4096))
 for rate in (88200,96000):
     path=base/f'hires-{rate}.wav';path.write_bytes(wav(rate,24,noise=True))
-    subprocess.run([str(HOME/'Bin/x86_64-linux/sox'),str(path),'-b','24',str(base/f'library/hires-{rate}.flac')],check=True)
+    subprocess.run([str(LMS_HOME/'Bin/x86_64-linux/sox'),str(path),'-b','24',str(base/f'library/hires-{rate}.flac')],check=True)
 unknown=bytearray((base/'library/hires-96000.flac').read_bytes())
 unknown[21]&=0xf0;unknown[22:26]=bytes(4)
 (base/'library/unknown-96000.flac').write_bytes(unknown)
@@ -247,7 +253,7 @@ lms=bridge=tap=sonos=remote=proxy=None
 extra_remotes=[]
 lms_log=(base/'lms.log').open('w');bridge_log=(base/'bridge.log').open('w')
 try:
-    command=['perl',str(HOME/'slimserver.pl'),'--prefsdir',str(base/'prefs'),'--cachedir',str(base/'cache'),
+    command=['perl',str(LMS_HOME/'slimserver.pl'),'--prefsdir',str(base/'prefs'),'--cachedir',str(base/'cache'),
              '--logdir',str(base/'log'),'--httpport','9000','--httpaddr','127.0.0.1','--cliport','19090',
              '--cliaddr','127.0.0.1','--playeraddr','127.0.0.1','--streamaddr','127.0.0.1',
              '--advertiseaddr','127.0.0.1','--nosetup','--norestart']

@@ -15,6 +15,7 @@ import struct
 import sys
 import tarfile
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import subprocess
 import random
 import threading
@@ -49,7 +50,7 @@ class Model:
         self.volume='37'
         self.prefs=dict(transitionType='4',transitionDuration='7',transitionSmart='1')
         self.play_prior_modes=[]
-        self.calls=[];self.clock=100.;self.queue=False;self.epoch=0;self.owned=False;self.fault=None;self.backend=None
+        self.audio_delay=0;self.strm_at=100.;self.calls=[];self.clock=100.;self.queue=False;self.epoch=0;self.owned=False;self.fault=None;self.backend=None
         self.slim=LMS()
         self.peer=socket.create_connection(self.slim.listener.getsockname())
         self.peer.sendall(b'HELO'+struct.pack('!I',36)+bytes(36));self.slim.accept()
@@ -122,7 +123,7 @@ class Model:
                 self.play_prior_modes.append(self.mode)
                 if self.urls and self.urls[self.index] not in self.unplayable:
                     if self.mode!='pause':
-                        self.slim.strm('s');self.started_url=self.urls[self.index];self.started_urls.append(self.started_url)
+                        self.strm_at=self.clock;self.slim.strm('s');self.started_url=self.urls[self.index];self.started_urls.append(self.started_url)
                     self.slim.strm('u')
             else:self.slim.strm('q')
             self.mode=cmd[0]
@@ -200,15 +201,28 @@ class Backend:
     def snapshot(self):
         if self.model.owned:
             self.sonos.items=[dict(uri='http://127.0.0.1/music/queue.wav?session=fixture')]
-        p=dict(state='PLAYING' if self.model.mode=='play' else 'PAUSED' if self.model.mode=='pause' else 'STOPPED',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='local-source' if self.model.owned else 'remote-source',path='relay' if self.model.owned else 'stream',occurrence=self.model.index+1,epoch=self.model.epoch,
+        p=dict(state='PLAYING' if self.model.mode=='play' else 'PAUSED' if self.model.mode=='pause' else 'STOPPED',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='local-source' if self.model.owned else 'remote-source',path='relay' if self.model.owned else 'stream',occurrence=self.model.index+1+getattr(self.model,'occurrence_base',0),epoch=self.model.epoch,
                rendered_rate=(44100 if not self.model.urls or int(self.model.track().get('samplerate','44100'))%44100==0 else 48000),owned=self.model.owned,mirrored_ahead=3,last_fallback='soap-error' if self.model.fault=='fallback' else '',handoff_gap_ms=-1,latched=False)
+        uri=f'http://127.0.0.1/music/queue.wav?epoch={self.model.epoch}&item={self.model.track()["id"]}' if self.model.owned and self.model.urls else ''
+        p.update(current_owned_item=uri,owned_item_uris=[uri] if uri else [])
         path=self.root/('stream-pacing-'+b'Study'.hex()+'.json')
         path.write_text(json.dumps(dict(pid=self.pid,monotonic_ms=self.now()*1000,playback=p)))
     def run(self,*args):
         self.calls.append(args)
         if args[0]=='systemd-escape':return 'yeney@Study.service'
         if args[0].endswith('/yeney'):return 'Study\tPort\t127.0.0.1\t'+('Other' if self.member else 'Study')+'\t'+('Study,Kitchen' if self.grouped else 'Study')
-        if args[0]=='journalctl':return 'core: STMc\nroom Study journal only' if self.model.mode=='play' and self.model.urls and self.model.started_url==self.model.urls[self.model.index] and self.model.started_url not in self.model.unplayable else 'room Study journal only'
+        if args[0]=='journalctl':
+            if self.model.mode=='play' and self.model.urls and self.model.started_url==self.model.urls[self.model.index] and self.model.started_url not in self.model.unplayable:
+                occurrence=self.model.index+1+getattr(self.model,'occurrence_base',0)
+                audio=('core: queue FLAC occurrence='+str(occurrence)+' decimation source=96000 target=48000'
+                       if getattr(self.model,'field_decimation',False) else 'core: queue decode occurrence='+str(occurrence)+' first audio')
+                entries=[dict(__MONOTONIC_TIMESTAMP=int(self.model.strm_at*1e6),MESSAGE='core: queue command strm s'),
+                         dict(__MONOTONIC_TIMESTAMP=int((self.model.strm_at+self.model.audio_delay)*1e6),MESSAGE=audio)]
+                if getattr(self.model,'field_decimation',False):
+                    entries.append(dict(__MONOTONIC_TIMESTAMP=int((self.model.strm_at+.1)*1e6),
+                        MESSAGE='core: queue FLAC occurrence=7 decimation source=96000 target=48000'))
+                return '\n'.join(json.dumps(e) for e in entries)
+            return ''
         assert args[0]=='systemctl',args
         if args[1]=='show' and 'StateDirectory' in args: return ''
         if args[1]=='show':return str(self.pid) if 'MainPID' in args else self.environment+(' YENEY_PLAYBACK_MODE=queue' if self.suite.dropin and self.suite.dropin.exists() else '')
@@ -233,7 +247,7 @@ class Tests(unittest.TestCase):
         self.model=Model();self.sonos=Coordinator(('127.0.0.1',1400),SOAP);self.sonos.model=self.model
         self.cli=CLI(self.model);self.backend=Backend(self.model,self.sonos,self.root);self.model.backend=self.backend
         self.original=copy.deepcopy((self.model.urls,self.model.index,self.model.time,self.model.mode,self.model.repeat,self.model.shuffle,self.model.prefs))
-        self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root)
+        self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root)
         self.backend.suite=self.suite
     def tearDown(self):
         self.suite.logfile.close();self.cli.close();self.sonos.close();self.model.close();self.tmp.cleanup()
@@ -241,6 +255,9 @@ class Tests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()) as output,contextlib.nullcontext():
             code=self.suite.execute()
         return code,output.getvalue()
+    def artifact(self,name):
+        with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:
+            return tar.extractfile('yeney-queue-device-suite/'+name).read().decode()
     def restored(self):
         self.assertEqual((self.model.urls,self.model.index,self.model.time,self.model.mode,self.model.repeat,self.model.shuffle,self.model.prefs),self.original)
         self.assertFalse(self.suite.dropin.exists());self.assertTrue(self.sonos.crossfade)
@@ -254,6 +271,79 @@ class Tests(unittest.TestCase):
             track['album']='\x16'+clean
             self.model.speaker_metadata[track['id']]=dict(album=clean)
         return clean
+
+    def test_study_startup_clock(self):
+        self.suite.setup()
+        self.suite.begin('high-rate-48000')
+        tracks=self.suite.selected['album']
+        for track in tracks:
+            track['samplerate']='96000'
+            self.model.byid[track['id']]['samplerate']='96000'
+        self.model.audio_delay=2
+        self.model.field_decimation=True;self.model.occurrence_base=7
+        original=self.suite.pending_mutation
+        def play(*args):
+            original(*args)
+            if args==('play',):
+                self.model.strm_at += 2
+                self.backend.sleep(4.5)  # command -> strm 2 s; strm -> observed PLAYING 2.5 s
+        with patch.object(self.suite,'pending_mutation',side_effect=play):
+            row=self.suite.load(tracks,startup_limit=3)
+        self.assertAlmostEqual(self.suite.current['startup'],2.5)
+        self.assertAlmostEqual(row['lms_play_to_strm_s'],2)
+        self.assertAlmostEqual(row['lms_strm_to_audio_s'],2)
+        self.assertEqual(row['playback']['occurrence'],8)
+        self.assertIn('lms_strm_to_audio_s',json.loads((self.suite.work/'joins.jsonl').read_text().splitlines()[-1]))
+        self.suite.cleanup()
+        print('PASS Study startup replay: LMS play to strm s=2.0 s; strm s to first audio=2.0 s; YeneY startup=2.5 s (limit 3 s)')
+
+    def test_yeney_four_seconds_still_fails(self):
+        self.suite.setup();self.suite.begin('high-rate-48000')
+        for track in self.suite.selected['album']:
+            self.model.byid[track['id']]['samplerate']='96000'
+        original=self.suite.pending_mutation
+        def play(*args):
+            original(*args)
+            if args==('play',): self.backend.sleep(4)
+        try:
+            with patch.object(self.suite,'pending_mutation',side_effect=play):
+                with self.assertRaisesRegex(m.SuiteError,'no timely speaker PLAYING.*within 3 s after strm s'):
+                    self.suite.load(self.suite.selected['album'],startup_limit=3)
+        finally:self.suite.cleanup()
+        print('PASS slow YeneY replay: startup=4.0 s after strm s still fails the unchanged 3 s limit')
+
+    def test_missing_rendered_rate_is_named(self):
+        self.suite.setup();self.suite.begin('high-rate-48000')
+        try:
+            with self.assertRaisesRegex(m.SuiteError,'no rendered_rate 48000 within 3 s after strm s'):
+                self.suite.load(self.suite.selected['album'],startup_limit=3)
+        finally:self.suite.cleanup()
+        print('PASS startup deadline names missing rendered_rate 48000; no second rate budget')
+
+    def test_configuration_parser(self):
+        path=self.root/'suite.conf'
+        path.write_text('# Example\nroom=Study\nserver=localhost\nalbum=2802\nvolume=10\nremote=Radio Name\n')
+        self.assertEqual(m.read_config(path)['album'],'2802')
+        path.write_text('unknown=ignored\n')
+        with self.assertRaisesRegex(ValueError,'expected room'):m.read_config(path)
+
+    def test_configuration_cli_precedence_and_missing_album(self):
+        path=self.root/'suite.conf'
+        path.write_text('room=Study\nserver=localhost\nalbum=2802\nvolume=10\nremote=Configured radio\n')
+        with patch.object(sys,'argv',['suite','--config',str(path),'--room','Sonos Port','--volume','12']), patch.object(m,'Suite') as factory:
+            factory.return_value.execute.return_value=0
+            self.assertEqual(m.main(),0)
+            factory.assert_called_once_with('Sonos Port','localhost',album='2802',volume=12,remote='Configured radio')
+        self.suite.album_choice='2802'
+        code,output=self.run_suite()
+        self.assertEqual(code,1)
+        self.assertIn("configured album '2802' is missing or ineligible",output)
+        self.assertFalse(self.suite.playback)
+        path.write_text('# Empty defaults\n')
+        with patch.object(sys,'argv',['suite','--config',str(path),'--room','Study','--server','localhost']), patch.object(m,'Suite') as factory:
+            m.main()
+            factory.assert_called_once_with('Study','localhost',album=None,volume=10,remote=None)
+        print('PASS suite configuration: file, CLI and defaults precedence; missing album fails without fallback')
 
     def test_field_sanitized_album_identity(self):
         clean=self.field_album()
@@ -300,7 +390,7 @@ class Tests(unittest.TestCase):
                     self.model.speaker_metadata.clear()
                 with patch.object(self.suite,'measure',side_effect=replay):code,output=self.run_suite()
                 self.assertEqual(code,0,output);self.restored()
-                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root)
+                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root)
                 self.backend.suite=self.suite
         print('PASS device suite title format: queue identity stays plain for every room setting; prefixed queue title rejected; stream format retained')
 
@@ -322,8 +412,8 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(list(self.root.glob('yeney-queue-device-suite-20*.tar.gz'))),1)
         self.assertTrue({'p','u','q'}<=set(self.model.slim_commands))
         self.assertEqual(len(self.sonos.actions('SaveQueue')),1)
-        self.assertIn('Before YeneY backup verified: SQ:',(self.suite.work/'summary.md').read_text())
-        self.assertIn('Q:0 before takeover: entries=1 owned=0 foreign=1',(self.suite.work/'commands.log').read_text())
+        self.assertIn('Before YeneY backup verified: SQ:',self.artifact('summary.md'))
+        self.assertIn('Q:0 before takeover: entries=1 owned=0 foreign=1',self.artifact('commands.log'))
         print('PASS queue device backup: foreign entries require an identity/content-verified saved queue')
         print('PASS device external-stop: direct SOAP Stop, LMS stopped within 3 s, owned items released')
         print('PASS relay startup measurement: playlist staged stopped with cmd:add; each timed Play starts a new run, resume follows pause')
@@ -341,10 +431,10 @@ class Tests(unittest.TestCase):
         self.assertEqual(rows['local-after-remote']['verdict'],'PASS')
         remote=[r for r in self.suite.samples if r['scenario']=='remote-source']
         self.assertTrue(remote and all(r['playback']['path']=='stream' for r in remote))
-        self.assertIn('remote-source',(self.suite.work/'manifest.tsv').read_text())
+        self.assertIn('remote-source',self.artifact('manifest.tsv'))
         print('PASS device remote-source: favourite streams within 5 s, local album returns to relay, manifest and owner state restored')
 
-    def test_remote_feed_retry_transaction(self):
+    def test_remote_feed_no_start_fails(self):
         feed='https://plus.bnr.invalid/show.rss?t=fixture'
         urls=['https://audio.invalid/bad.mp3','https://audio.invalid/episode.mp3']
         episodes=[]
@@ -355,15 +445,12 @@ class Tests(unittest.TestCase):
         self.model.favourites=[dict(id='feed',type='audio',url=feed,name='Boekestijn & De Wijk | Plus')]
         self.model.favourite_children['feed']=episodes
         self.model.unplayable.add(urls[0]);self.suite.remote_argument='Boekestijn & De Wijk | Plus'
-        code,output=self.run_suite();self.assertEqual(code,0,output);self.restored()
-        rows={r['name']:r for r in self.suite.results}
-        self.assertEqual(rows['remote-source']['verdict'],'PASS')
-        self.assertEqual(rows['local-after-remote']['verdict'],'PASS')
-        self.assertNotIn(urls[0],self.model.started_urls);self.assertIn(urls[1],self.model.started_urls)
+        code,output=self.run_suite();self.assertEqual(code,1,output);self.restored()
+        self.assertIn('LMS did not start: no strm s within 10 s',output)
+        self.assertNotIn(urls[0],self.model.started_urls);self.assertNotIn(urls[1],self.model.started_urls)
         self.assertNotIn((MAC,'playlist','add',feed),self.model.calls)
-        self.assertIn('remote candidate rejected:',(self.suite.work/'commands.log').read_text())
-        self.assertIn('remote-candidate',(self.suite.work/'manifest.tsv').read_text())
-        print('PASS device field RSS favourite: explicit feed browsed through fake LMS CLI, no-strm episode unloaded after 5 s, next audio episode streams, local relay and owner state restored')
+        self.assertIn('remote-candidate',self.artifact('manifest.tsv'))
+        print('PASS device field RSS favourite: explicit feed browsed; no strm s fails clearly after 10 s without trying another episode; owner state restored')
 
     def test_remote_podcast_menu(self):
         self.model.podcasts=[dict(id='episode',type='audio',url='podcast://https://podcast.invalid/episode.mp3',title='Podcast')]
@@ -400,12 +487,12 @@ class Tests(unittest.TestCase):
                 self.restored()
                 self.assertFalse(self.sonos.actions('SaveQueue'))
                 self.assertEqual(self.suite.results[0]['joins'],3)
-                self.assertIn('backup not needed: '+note,(self.suite.work/'summary.md').read_text())
-                backup=json.loads((self.suite.work/'backup.json').read_text())
+                self.assertIn('backup not needed: '+note,self.artifact('summary.md'))
+                backup=json.loads(self.artifact('backup.json'))
                 self.assertFalse(backup['needed'])
-                self.assertIn(f'Q:0 before takeover: entries={len(entries)} owned={len(entries)} foreign=0',(self.suite.work/'commands.log').read_text())
+                self.assertIn(f'Q:0 before takeover: entries={len(entries)} owned={len(entries)} foreign=0',self.artifact('commands.log'))
                 print('PASS queue device backup: '+note+' skips SaveQueue and completes all scenarios')
-                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root)
+                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root)
                 self.backend.suite=self.suite
 
     def test_named_soap_http_fault(self):
@@ -413,7 +500,7 @@ class Tests(unittest.TestCase):
         code,output=self.run_suite();self.assertEqual(code,1,output)
         expected='SOAP AVTransport SaveQueue failed: HTTP 500 UPnPError 800 fixture rejection'
         self.assertIn(expected,output)
-        log=(self.suite.work/'commands.log').read_text()
+        log=self.artifact('commands.log')
         request=log.index('SOAP AVTransport SaveQueue request ')
         outcome=log.index(expected)
         self.assertLess(request,outcome)
@@ -428,7 +515,7 @@ class Tests(unittest.TestCase):
                 else:self.backend.inject=event
                 code,output=self.run_suite();self.assertEqual(code,1,output);self.restored()
                 # New transaction workspace/flags, same untouched saved room state.
-                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root)
+                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root)
                 self.backend.suite=self.suite
         print('PASS queue device suite: Ctrl-C, SIGHUP, SIGTERM and errors restore only the selected room')
     def test_failures(self):
@@ -436,12 +523,12 @@ class Tests(unittest.TestCase):
             with self.subTest(fault=fault):
                 self.model.fault=fault
                 code,output=self.run_suite();self.assertEqual(code,1,output);self.restored()
-                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root);self.backend.suite=self.suite
+                self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root);self.backend.suite=self.suite
         print('PASS queue device suite: identity mismatch, fallback and RelTime regression fail without losing restoration')
     def test_group_coordinator(self):
         self.backend.grouped=True;self.sonos.grouped=True
         code,output=self.run_suite();self.assertEqual(code,0,output);self.restored()
-        summary=(self.suite.work/'summary.md').read_text()
+        summary=self.artifact('summary.md')
         self.assertIn('group-coordinator',summary)
         row=next(r for r in self.suite.results if r['name']=='group-coordinator')
         self.assertEqual(row['verdict'],'PASS');self.assertGreaterEqual(row['joins'],3)
@@ -452,10 +539,10 @@ class Tests(unittest.TestCase):
         self.backend.member=True
         code,_=self.run_suite();self.assertEqual(code,1);self.assertFalse(any(c[0]=='systemctl' and c[1]=='restart' for c in self.backend.calls))
         self.assertEqual(self.model.urls,self.original[0])
-        self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root);self.backend.suite=self.suite
+        self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root);self.backend.suite=self.suite
         self.backend.member=False;self.backend.running=False
         code,_=self.run_suite();self.assertEqual(code,1)
-        self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root);self.backend.suite=self.suite
+        self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root);self.backend.suite=self.suite
         self.backend.running=True
         fd=os.open(self.root/('yeney-stream-pacing-'+b'Study'.hex()+'.lock'),os.O_CREAT|os.O_RDWR,0o600)
         import fcntl
@@ -469,7 +556,7 @@ class Tests(unittest.TestCase):
         code,output=self.run_suite();self.assertEqual(code,1,output)
         self.assertEqual(existing.read_text(),'OWNER CONTENT\n')
         self.assertFalse(any(c[0]=='systemctl' and c[1]=='restart' for c in self.backend.calls))
-        self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root);self.backend.suite=self.suite
+        self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root);self.backend.suite=self.suite
         self.sonos.hide_save=True
         code,output=self.run_suite();self.assertEqual(code,1,output)
         self.assertIn('backup identity unverified',output)

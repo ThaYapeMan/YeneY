@@ -11,6 +11,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import threading
 import time
 from urllib.parse import quote, urlsplit

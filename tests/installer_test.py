@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import unittest
 from unittest.mock import patch
 
@@ -93,6 +94,16 @@ class InstallerTests(unittest.TestCase):
         runner = runner or Commands()
         installer.install(ROOT, self.config_dir, self.unit_dir, args, runner, self.out, self.err, lms_check=mock_lms)
         return runner
+
+    def test_suite_configuration_installed_once(self):
+        self.config.write_text('LMS_SERVER=host\nroom.Study=yes\n')
+        runner=Commands(rooms='Study\n')
+        self.run_install(runner)
+        suite=self.config_dir/'device-suite.conf'
+        self.assertIn('album=2802',suite.read_text())
+        suite.write_text('room=Sonos Port\nalbum=123\nvolume=7\n')
+        self.run_install(runner)
+        self.assertEqual(suite.read_text(),'room=Sonos Port\nalbum=123\nvolume=7\n')
 
     def test_exact_core_override_removed_reload_restart_and_idempotent(self):
         self.config.write_text('# keep\nLMS_SERVER=host\nroom.Study=yes\n')
@@ -581,7 +592,7 @@ class InstallerTests(unittest.TestCase):
                 if process.poll() is None: process.kill(); process.wait()
                 os.close(master)
             text = transcript.decode().replace('\r\n', '\n')
-            Path('/tmp/sonos-plan-' + case + '.txt').write_text(text)
+            (Path(tempfile.gettempdir())/('sonos-plan-'+case+'.txt')).write_text(text)
             self.assertIn(installer.LMS_COMMENT + 'LMS_SERVER=lms.example', text)
             self.assertIn('room.Sonos Port=yes', text)
             if case == 'first':
@@ -624,7 +635,7 @@ def dry_run_report():
                   'Existing rooms file: Study, Sonos Port\n\n'
                   'Config produced:\n' + (config_dir / 'config').read_text()
                   + '\nInstaller summary (temporary test path shown literally):\n' + out.getvalue())
-        Path('/tmp/sonos-installer-dry-run.txt').write_text(report)
+        (Path(tempfile.gettempdir()) / 'sonos-installer-dry-run.txt').write_text(report)
         print(report, end='')
         assert not errors.getvalue(), errors.getvalue()
 
@@ -638,6 +649,7 @@ if __name__ == '__main__':
             config_dir.mkdir(parents=True)
             (config_dir / 'config').write_text(installer.LMS_COMMENT + 'LMS_SERVER=lms.example\n' + installer.ROOM_HEADER +
                                              'room.Kitchen=no\nroom.Sonos Port=yes\nroom.Study=yes\n')
+            (config_dir / 'device-suite.conf').write_text((ROOT/'scripts/device-suite.conf.example').read_text())
             (config_dir / 'installed-build').write_text(installer.build_identity(ROOT, runner)[1])
             unit_dir.mkdir(parents=True)
             (unit_dir / 'yeney@.service').write_text((ROOT / 'packaging/yeney@.service').read_text())

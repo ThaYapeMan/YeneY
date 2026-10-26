@@ -575,8 +575,10 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         if template_changed: print('Service template: install/update', file=output)
         if migrate: print('Migration: rooms → rooms.migrated', file=output)
         if build_changed: print('Build record: update installed-build', file=output)
+        example_missing = not (config_dir/'device-suite.conf').exists()
+        if example_missing:print('Device suite configuration: install example', file=output)
         actions = any(plan[kind] for kind in ('Start', 'Restart', 'Stop', 'Enable'))
-        work = merged != original or actions or template_changed or migrate or build_changed or bool(overrides) or bool(state_changes) or bool(moves) or bool(workarounds) or units_changed
+        work = example_missing or merged != original or actions or template_changed or migrate or build_changed or bool(overrides) or bool(state_changes) or bool(moves) or bool(workarounds) or units_changed
         if not work:
             print('Nothing to do.', file=output)
         elif interactive and not keep and not ask_yes('Apply? [Y/n] ', True, input_stream, output):
@@ -587,6 +589,11 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
         return
     if work:
         config_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with (config_dir/'device-suite.conf').open('x') as example:
+                example.write((repo/'scripts/device-suite.conf.example').read_text())
+        except FileExistsError:
+            pass
         if units_changed: atomic_write(pending, 'Managed unit update pending service actions.\n')
         if merged != original: atomic_write(config, merged)
         if migrate: os.replace(legacy, migrated)

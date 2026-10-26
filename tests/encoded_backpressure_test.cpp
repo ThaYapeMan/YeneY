@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "upnp/encoded_buffer.h"
 #include "stream_metrics.h"
@@ -46,8 +47,8 @@ int main() {
     p=stalled.read(); assert(*p->data=='b'); stalled.freePacket(p);
     p=stalled.read(); assert(*p->data=='c'); stalled.freePacket(p);
     assert(bridge::streamMetrics().dropped==1 && !bridge::streamMetrics().overwrites);
-    bridge::streamMetrics().configure("stall-fixture","/tmp");
+    bridge::streamMetrics().configure("stall-fixture",testTempRoot());
     assert(bridge::streamMetrics().tick(60000));
-    unlink(("/tmp/stream-pacing-"+bridge::StreamMetrics::hex("stall-fixture")+".json").c_str());
+    unlink((testTempRoot()+"/stream-pacing-"+bridge::StreamMetrics::hex("stall-fixture")+".json").c_str());
     std::cout<<"PASS encoded stalled reader: bounded oldest-only drop counted and logged reason=reader-stalled\n";
 }

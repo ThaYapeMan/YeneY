@@ -1,3 +1,6 @@
+import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Real bridge plus strict loopback Sonos/LMS: bounded source count mismatches."""
 import http.client,math,os,struct,time,unittest
@@ -41,7 +44,7 @@ class Lengths(unittest.TestCase):
                     finally:
                         try:h.close()
                         finally:
-                            Path(f'/tmp/yeney-length-alac-{rate}-{short}.log').write_text((h.base/'bridge.log').read_text())
+                            (Path(tempfile.gettempdir()) / f'yeney-length-alac-{rate}-{short}.log').write_text((h.base/'bridge.log').read_text())
                             h.tmp.cleanup()
     def test_flac_eof(self):
         original=fixture.HTTP
@@ -66,6 +69,6 @@ class Lengths(unittest.TestCase):
                 finally:
                     try:h.close()
                     finally:
-                        Path(f'/tmp/yeney-length-flac-{delta}.log').write_text((h.base/'bridge.log').read_text())
+                        (Path(tempfile.gettempdir()) / f'yeney-length-flac-{delta}.log').write_text((h.base/'bridge.log').read_text())
                         h.tmp.cleanup()
 if __name__=='__main__':unittest.main(verbosity=2)

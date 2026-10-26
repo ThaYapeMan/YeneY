@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "stream_metrics.h"
 #include <cassert>
@@ -5,13 +6,13 @@
 #include <iostream>
 int main() {
     bridge::StreamMetrics m;
-    m.configure("fixture", "/tmp");
+    m.configure("fixture", testTempRoot());
     m.encoder([] { return bridge::StreamMeasurement{2000, 1000, true}; });
     m.overwrites += 3;
     m.socketWait(10); m.socketWait(2000);
     assert(m.socketBlockedCalls == 1 && m.socketBlockedUs == 2000);
     assert(m.tick(60000)); assert(!m.tick(61000)); assert(!m.tick(119999)); assert(m.tick(120000));
-    std::string path = "/tmp/stream-pacing-" + bridge::StreamMetrics::hex("fixture") + ".json";
+    std::string path = testTempRoot()+"/stream-pacing-" + bridge::StreamMetrics::hex("fixture") + ".json";
     std::ifstream f(path); std::string line; std::getline(f,line);
     assert(line.find(bridge::streamPacingSonos() ? "\"mode\":\"sonos\"" : "\"mode\":\"wall\"") != std::string::npos);
     assert(line.find("\"overwrites\":3") != std::string::npos);

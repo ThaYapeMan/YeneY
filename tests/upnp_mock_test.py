@@ -6,6 +6,7 @@ import http.client
 from urllib.parse import urlsplit
 import subprocess
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import threading
 import time
 import xml.etree.ElementTree as ET

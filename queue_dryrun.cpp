@@ -9,6 +9,8 @@
 #include <cmath>
 #include <csignal>
 #include <ctime>
+#include <cstdlib>
+#include <filesystem>
 #include <fcntl.h>
 #include <fstream>
 #include <iomanip>
@@ -23,6 +25,9 @@ extern "C" void measureSignal(int) { resetMeasurement = true; }
 extern "C" void stopSignal(int) { stopped = true; }
 } // namespace
 int main(int argc, char **argv) {
+    std::signal(SIGINT, stopSignal);
+    std::signal(SIGTERM, stopSignal);
+    std::signal(SIGHUP, stopSignal);
     std::string server;
     unsigned seconds = 900;
     double speed = 1;
@@ -78,7 +83,15 @@ int main(int argc, char **argv) {
                      "append :9000\n";
         return 2;
     }
-    int lock = open("/tmp/yeney-queue-dryrun.lock", O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    const auto env = [](const char *key, const std::string &fallback) {
+        const char *value = std::getenv(key);
+        return value && *value ? std::string(value) : fallback;
+    };
+    const std::string tempRoot = env("TMPDIR", "/var/tmp");
+    const std::string cache = env("YENEY_TEST_CACHE", env("HOME", ".") + "/.cache/yeney-test");
+    const std::filesystem::path reports = std::filesystem::path(cache) / "dryrun";
+    std::filesystem::create_directories(reports);
+    int lock = open("/var/tmp/yeney-queue-dryrun.lock", O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (lock < 0 || flock(lock, LOCK_EX | LOCK_NB)) {
         std::cerr << "Another dry-run owns the fixed test player\n";
         return 1;
@@ -88,14 +101,23 @@ int main(int argc, char **argv) {
     localtime_r(&time, &local);
     char stamp[32];
     std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", &local);
-    const std::string base = std::string("/tmp/yeney-queue-dryrun-") + stamp + "-" + std::to_string(getpid());
+    const std::string runName = std::string("yeney-queue-dryrun-") + stamp + "-" + std::to_string(getpid());
+    const auto reportDir = reports / runName;
+    std::filesystem::create_directory(reportDir);
+    std::vector<std::filesystem::path> oldReports;
+    for (const auto &entry : std::filesystem::directory_iterator(reports))
+        if (entry.is_directory()) oldReports.push_back(entry.path());
+    std::sort(oldReports.begin(), oldReports.end(), [](const auto &a, const auto &b) {
+        return std::filesystem::last_write_time(a) > std::filesystem::last_write_time(b);
+    });
+    for (size_t i = 5; i < oldReports.size(); ++i) std::filesystem::remove_all(oldReports[i]);
+    const std::string base = (reportDir / "report").string();
+    const std::string storeRoot = keep ? (reportDir / "items").string() : tempRoot + "/" + runName + "-store";
     std::ofstream log(base + ".log");
-    bool storeOpened = false;
     try {
         queue_audio::Config storage;
-        storage.root = "/tmp/yeney-queue-dryrun";
+        storage.root = storeRoot;
         queue_audio::CoreQueueSink sink("QueueTest", storage, 30, speed);
-        storeOpened = true;
         yeney::Config cfg;
         cfg.server = server;
         cfg.sourceIsTranscoded = [transcoded](uint64_t) { return transcoded; };
@@ -125,8 +147,6 @@ int main(int argc, char **argv) {
             return info;
         };
         yeney::Player player(cfg, sink);
-        std::signal(SIGINT, stopSignal);
-        std::signal(SIGTERM, stopSignal);
         if (controlled)
             std::signal(SIGUSR1, measureSignal);
         std::exception_ptr playerError;
@@ -358,15 +378,15 @@ int main(int argc, char **argv) {
             std::rethrow_exception(playerError);
     } catch (const std::exception &e) {
         std::cerr << e.what() << '\n';
-        if (!keep && storeOpened) {
+        if (!keep) {
             std::error_code ignored;
-            std::filesystem::remove_all("/tmp/yeney-queue-dryrun/QueueTest", ignored);
+            std::filesystem::remove_all(storeRoot, ignored);
         }
         close(lock);
         return 1;
     }
     if (!keep)
-        std::filesystem::remove_all("/tmp/yeney-queue-dryrun/QueueTest");
+        std::filesystem::remove_all(storeRoot);
     close(lock);
     return 0;
 }

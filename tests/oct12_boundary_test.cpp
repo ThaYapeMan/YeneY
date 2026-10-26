@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // Replay captured SOAP/STAT times through the production sink and position state.
 #include "core_sonos.h"
@@ -107,8 +108,8 @@ static void replay(const char *kind) {
     sink.trackBoundary(0, {48000, 24, 2, false}, false);
     submit(sink, end);
     assert(stream == 1);
-    char directory[] = "/tmp/yeney-boundary-XXXXXX";
-    assert(mkdtemp(directory));
+    std::string directory = testTempRoot()+"/yeney-boundary-XXXXXX";
+    assert(mkdtemp(directory.data()));
     timing_probe::DriftState saved;
     saved.speaker("boundary", directory);
     assert(saved.save({(1 / scale - 1) * 1e6, 7, ::time(nullptr)}));
@@ -120,7 +121,7 @@ static void replay(const char *kind) {
     unsigned reportTrack = 1;
     uint64_t epoch = 0;
     timing_probe::Context context;
-    std::ofstream result(std::string("/tmp/oct12-") + kind + "-replay.txt");
+    std::ofstream result(std::string(testTempRoot()+"/oct12-") + kind + "-replay.txt");
     size_t cursor = 1;
     double firstStart = 0;
     // Preserve field response order and times; query reporting at 250 ms.

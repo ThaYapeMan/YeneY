@@ -10,6 +10,7 @@ import socketserver
 import subprocess
 import sys
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import threading
 from urllib.parse import quote, unquote
 import xml.etree.ElementTree as ET
@@ -168,5 +169,5 @@ finally:
     try:
         queue.close()
     finally:
-        (Path('/tmp')/'yeney-source-artwork-queue-bridge.log').write_text((queue.base/'bridge.log').read_text())
+        (Path(tempfile.gettempdir())/'yeney-source-artwork-queue-bridge.log').write_text((queue.base/'bridge.log').read_text())
 print('PASS queue-configured remote artwork (real yeney/CLI/SOAP): podcast streams immediately with proxy URL, no finite enqueue or queue backup', flush=True)

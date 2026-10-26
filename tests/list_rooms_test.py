@@ -1,3 +1,6 @@
+import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 """Exercise the actual CLI with each discovery backend against a loopback speaker."""
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -99,7 +102,7 @@ try:
                                 env=dict(os.environ, YENEY_UPNP=backend), capture_output=True, text=True, timeout=30)
         assert result.returncode == 0 and result.stdout == expected, result
         print(f'PASS: --list-rooms --details backend={backend}: model fallback, unknown model, groups, room device and satellites')
-    Path('/tmp/sonos-room-details.txt').write_text(result.stdout)
+    (Path(tempfile.gettempdir()) / 'sonos-room-details.txt').write_text(result.stdout)
 
 finally:
     server.shutdown()

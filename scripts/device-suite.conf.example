@@ -1,0 +1,7 @@
+# Owner device qualification settings. CLI options override these values.
+# Uncomment room and server before running the suite.
+# room=Study
+# server=192.168.178.23
+album=2802
+volume=10
+# remote=Favourite name or playable episode URL

@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "timing_probe_runtime.h"
 #include "timing_drift_state.h"
@@ -76,8 +77,8 @@ static void replay(bool prior, bool timestamp = true) {
     printf("PASS: Study cold prior=%d timestamp=%d lock_s=%.0f phase_ready_s=%.0f count_40_ready_s=%.0f largest_250ms_step_ms=%.3f no_backwards\n", prior, timestamp, lock, phaseReady, countReady, maxStep * 1000);
 }
 static void persistence() {
-    char directory[] = "/tmp/yeney-drift-test-XXXXXX";
-    assert(mkdtemp(directory));
+    std::string directory = testTempRoot()+"/yeney-drift-test-XXXXXX";
+    assert(mkdtemp(directory.data()));
     DriftState state; state.speaker("uuid:RINCON/example", directory);
     DriftState::Value v{10.15, 1, 1000000}, loaded;
     assert(state.save(v) && state.load(loaded, 1000001));
@@ -86,10 +87,10 @@ static void persistence() {
     assert(!DriftState::valid({600,1,1000000},1000001));
     DriftState missing; missing.speaker("missing", std::string(directory) + "/absent");
     assert(!missing.load(loaded) && !missing.save(v));
-    assert(chmod(directory, 0555) == 0);
+    assert(chmod(directory.c_str(), 0555) == 0);
     DriftState readonly; readonly.speaker("readonly", directory);
     assert(!readonly.load(loaded) && !readonly.save(v));
-    assert(chmod(directory,0755) == 0);
+    assert(chmod(directory.c_str(),0755) == 0);
     printf("PASS: atomic UDN persistence, expiry/plausibility, missing and read-only directory\n");
 }
 static void contradiction() {
@@ -106,8 +107,8 @@ static void contradiction() {
 static double simulatedNow = 100;
 static double simulatedClock() { return simulatedNow; }
 static void runtimePersistence() {
-    char directory[] = "/tmp/yeney-runtime-drift-XXXXXX";
-    assert(mkdtemp(directory));
+    std::string directory = testTempRoot()+"/yeney-runtime-drift-XXXXXX";
+    assert(mkdtemp(directory.data()));
     setenv("YENEY_TIMING_PROBE", "1", 1);
     const std::string udn = "RINCON_runtime-test";
     Diagnostics d(simulatedClock);
@@ -165,8 +166,8 @@ static void reconnectFallback() {
     puts("PASS: reconnect holds the existing fallback until a fresh positive RelTime observation");
 }
 static void carriedPersistence() {
-    char directory[] = "/tmp/yeney-carried-save-XXXXXX";
-    assert(mkdtemp(directory));
+    std::string directory = testTempRoot()+"/yeney-carried-save-XXXXXX";
+    assert(mkdtemp(directory.data()));
     simulatedNow = 100;
     Diagnostics d(simulatedClock);d.speaker("carried-save", directory);
     d.anchor(1,0);d.handed(1,0,48000);

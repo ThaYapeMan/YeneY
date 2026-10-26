@@ -1,3 +1,4 @@
+#include "test_temp.h"
 #include "upnp/xml.h"
 #include "upnp/stream_server.h"
 #include "upnp/soap.h"
@@ -70,7 +71,7 @@ int main() {
     std::cout << "PASS: golden artist/album DIDL escapes XML, preserves apostrophes and Unicode, omits empty fields; empty metadata matches the wire fixture\n";
     const auto body = soapBody("AVTransport", "SetAVTransportURI", {{"InstanceID", "0"}, {"CurrentURI", url}, {"CurrentURIMetaData", didl}});
     assert(body == file("tests/fixtures/radio-set-uri.xml"));
-    std::ofstream("/tmp/sonos-own-set-uri.xml") << body;
+    std::ofstream(testTempRoot()+"/sonos-own-set-uri.xml") << body;
     assert(streamDidl(url, "", "").find("albumArtURI") == std::string::npos);
     assert(streamDidl("http://bridge/track.mp3", "", "").find("x-rincon-mp3radio://bridge/track.mp3") != std::string::npos);
     const auto fault = parseSoap("<s:Envelope><s:Body><s:Fault><detail><UPnPError><errorCode>701</errorCode><errorDescription>Transition &amp; unavailable</errorDescription></UPnPError></detail></s:Fault></s:Body></s:Envelope>", "Play");

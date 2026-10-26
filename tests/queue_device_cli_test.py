@@ -5,6 +5,8 @@ import io
 import json
 import socketserver
 import tempfile
+import os
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import threading
 import time
 import unittest
@@ -142,7 +144,7 @@ class Tests(unittest.TestCase):
                     code=f.suite.execute()
                 self.assertEqual(code,1,output.getvalue())
                 self.assertIn('NOT RESTORED: transitionType (expected 4, got 0)',output.getvalue())
-                self.assertIn('NOT RESTORED: transitionType (expected 4, got 0)',(f.suite.work/'summary.md').read_text())
+                self.assertIn('NOT RESTORED: transitionType (expected 4, got 0)',f.artifact('summary.md'))
                 self.assertTrue(any('NOT RESTORED: transitionType (expected 4, got 0)'==v for v in f.suite.not_restored))
                 self.assertEqual(f.model.prefs['transitionSmart'],'1')
                 self.assertEqual(f.model.prefs['transitionDuration'],'7')

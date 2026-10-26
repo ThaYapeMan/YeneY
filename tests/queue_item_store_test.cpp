@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "pcm_pack.h"
 #include "queue_item_store.h"
@@ -19,8 +20,8 @@ namespace {
 struct Temp {
     std::filesystem::path root;
     Temp() {
-        char pattern[] = "/tmp/yeney-item-test-XXXXXX";
-        auto p = mkdtemp(pattern);
+        std::string pattern = testTempRoot()+"/yeney-item-test-XXXXXX";
+        auto p = mkdtemp(pattern.data());
         assert(p);
         root = p;
     }

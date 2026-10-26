@@ -68,8 +68,13 @@ CLI_PORT=${CLI_PORT:-9090}
 SCALE=${SCALE:-1}   # internal: multiplies every wait (used for dry runs)
 
 STAMP=$(date +%Y%m%d-%H%M%S)
-OUT=${OUT:-/tmp/sonos-test-$STAMP}
+KEEP_OUT=${OUT:+1}
+TEST_CACHE=${YENEY_TEST_CACHE:-$HOME/.cache/yeney-test}
+OUT=${OUT:-${TMPDIR:-/var/tmp}/sonos-test-$STAMP-$$}
 mkdir -p "$OUT"
+early_cleanup() { if [[ -z $KEEP_OUT ]]; then rm -rf -- "$OUT"; fi; }
+trap early_cleanup EXIT
+trap 'exit 130' INT TERM HUP
 START_TIME=$(date '+%Y-%m-%d %H:%M:%S')
 START_EPOCH=$(date +%s)
 JOURNAL_SINCE="@$START_EPOCH"
@@ -448,11 +453,20 @@ finish() {
       [[ -d /opt/yeney/.git ]] && echo "bridge=$(git -C /opt/yeney rev-parse --short HEAD)"
     } > "$OUT/run-info.txt"
     auto_summary > "$OUT/auto-summary.txt"
-    tar -czf "$OUT.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
+    mkdir -p "$TEST_CACHE/device"
+    local archive="$TEST_CACHE/device/sonos-test-$STAMP-$$.tar.gz"
+    if [[ -n $KEEP_OUT ]]; then archive="$OUT.tar.gz"; fi
+    tar -czf "$archive" -C "$(dirname "$OUT")" "$(basename "$OUT")"
     say ""
     say "Done. Send this file:"
-    say "  $OUT.tar.gz"
+    say "  $archive"
     if [[ $AUTO == 1 || -n $RG_REPORT || -n $REQUIRE_PLAYER ]]; then auto_summary; fi
+    if [[ -z $KEEP_OUT ]]; then rm -rf -- "$OUT"; fi
+    python3 - "$TEST_CACHE/device" <<'PYKEEP'
+from pathlib import Path
+import sys
+for old in sorted(Path(sys.argv[1]).glob('sonos-test-*.tar.gz'),key=lambda p:p.stat().st_mtime,reverse=True)[5:]:old.unlink()
+PYKEEP
     exit "$result"
 }
 
@@ -1043,7 +1057,7 @@ fi
 [[ $IDLE_SECS =~ ^[0-9]+$ ]] || fail "IDLE_SECS must be nonnegative seconds"
 
 trap finish EXIT
-trap 'exit 130' INT TERM
+trap 'exit 130' INT TERM HUP
 if [[ -n $REQUIRE_PLAYER && $AUTO_FAILED != 0 ]]; then exit 1; fi
 start_capture
 mark "RUN START room=$ROOM player=$PLAYER track_a=$TRACK_A_ID track_b=$TRACK_B_ID"

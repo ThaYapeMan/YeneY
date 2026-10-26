@@ -7,6 +7,7 @@ import runpy
 import socket
 import subprocess
 import tempfile
+tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 import time
 import unittest
 from unittest.mock import Mock

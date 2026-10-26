@@ -452,7 +452,7 @@ directories, leaving other files alone.
 
 The owner-tool audit also covers `yeney-lms-position-check` (journal and LMS CLI),
 `yeney-timing-read` (the unchanged `/dev/shm` timing/audio objects), and
-`yeney-queue-suite` (its isolated `/tmp` workspace). Those tools do not read the
+`yeney-queue-suite` (its isolated `$TMPDIR`, or `/var/tmp`, workspace). Those tools do not read the
 room's persistent status/state files, so their data sources remain unchanged.
 
 On install, existing state from escaped or raw room-name directories is moved
@@ -557,6 +557,12 @@ make test
 ```
 
 `make test` runs the bridge fixtures and bundled core suite without a physical speaker.
+Persistent test installations use `$YENEY_TEST_CACHE` (default `~/.cache/yeney-test`);
+per-run scratch uses `$TMPDIR` (default `/var/tmp`) and is removed on exit.
+Only the last five transcript runs are retained in the cache. The cross-repository
+SHM consumer requires the sibling `../LampaStream` checkout or an explicit
+`LAMPASTREAM_CHECKOUT`; only `LAMPASTREAM_CONSUMER=off` opts out with a loud
+NOT RUN summary. See [test storage](DEVICE-VERIFICATION.md#local-automated-test-storage-and-consumer-coverage).
 Test tools also require `flac`, `ffmpeg`, and `clang-format` (set `CLANG_FORMAT`
 to its executable path when needed). Physical
 tests on real Sonos speakers use `scripts/device-test.sh`; see

@@ -1,3 +1,4 @@
+#include "test_temp.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_queue_sink.h"
 #include "queue_report.h"
@@ -10,8 +11,8 @@
 #include <unistd.h>
 using namespace queue_audio;
 int main() {
-    char pattern[] = "/tmp/yeney-queue-sink-XXXXXX";
-    auto root = mkdtemp(pattern);
+    std::string pattern = testTempRoot()+"/yeney-queue-sink-XXXXXX";
+    auto root = mkdtemp(pattern.data());
     assert(root);
     Config c;
     c.root = root;
