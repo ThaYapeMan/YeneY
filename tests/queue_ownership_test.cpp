@@ -71,13 +71,17 @@ int main() {
     assert(crossfade && queue.uris == before);
     io.remove = normalRemove;
     // Release commits local state before I/O, logs once, never retries after refusal.
-    for (const auto &error : {"HTTP=500", "timeout", "fault=712", "fault=701"}) {
+    for (const auto &error : {"HTTP=500", "timeout", "fault=712", "fault=701", "crossfade restore skipped: transport owned by spotify-connect"}) {
         queue.uris.clear();
         bool failRestore = false;
         unsigned logs = 0, writes = 0;
         upnp::QueueOwnership *releasing = nullptr;
         io.stop = [&] { assert(releasing && !releasing->active()); };
-        io.log = [&](const auto &) { ++logs; };
+        io.log = [&](const std::string &line) {
+            ++logs;
+            if (std::string(error).rfind("crossfade restore skipped:", 0) == 0)
+                assert(line == error && line.find("failed") == std::string::npos);
+        };
         io.setCrossfade = [&](bool value) {
             ++writes;
             if (failRestore) {
@@ -99,6 +103,48 @@ int main() {
         assert(retry.active());
         retry.release(false);
         assert(!retry.active() && writes == 3);
+    }
+    // A failed switch retains the verified backup, but never a queue lease.
+    {
+        upnp::QueueSnapshot foreign{1, {"spotify-item"}};
+        std::vector<upnp::SavedQueue> backups;
+        unsigned saves = 0, attempts = 0;
+        std::string transport = "x-sonos-vli:spotify-session";
+        upnp::QueueOwnershipIO retryIO;
+        retryIO.browse = [&] { return foreign; };
+        retryIO.transport = [&] { return transport; };
+        retryIO.queueTransport = "x-rincon-queue:room#0";
+        retryIO.playlists = [&] { return backups; };
+        retryIO.save = [&](const auto &title) {
+            ++saves; backups.push_back({"SQ:1", title, 1}); return std::string("SQ:1");
+        };
+        retryIO.log = [](const auto &) {};
+        retryIO.prepareTransport = [&] {
+            if (++attempts < 3) throw std::runtime_error("switch refused");
+            transport = "x-rincon-queue:room#0";
+        };
+        retryIO.crossfade = [&] { assert(attempts >= 3); return true; };
+        retryIO.setCrossfade = [&](bool) { assert(attempts >= 3); };
+        retryIO.remove = [&](auto, auto, auto) { foreign.uris.clear(); };
+        upnp::QueueOwnership retry(retryIO, "retry-backup");
+        for (unsigned i = 0; i < 3; ++i) {
+            try { retry.acquire("Before YeneY retry"); }
+            catch (const std::runtime_error &) { assert(i < 2 && !retry.active()); }
+        }
+        assert(saves == 1 && retry.active());
+        retry.release(false);
+        // The switch succeeded but foreign entries can remain after a later
+        // admission failure. Do not back up that unchanged queue a second time.
+        foreign.uris = {"spotify-item"};
+        retry.acquire("Before YeneY later minute");
+        assert(saves == 1 && retry.active());
+        retry.release(false);
+        foreign.uris = {"spotify-item"};
+        transport = "x-sonos-vli:spotify-session";
+        retry.acquire("Before YeneY resumed foreign session");
+        assert(saves == 1 && retry.active());
+        retry.release(false);
+        std::cout << "PASS repeated foreign admission: three attempts, one verified backup, settings only after confirmed switch\n";
     }
     std::cout << "PASS queue ownership: verified backup before mutation, five-prefix retention, foreign "
                  "entry preservation, crossfade restore, failed save leaves queue intact\n";

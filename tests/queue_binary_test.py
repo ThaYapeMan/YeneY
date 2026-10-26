@@ -191,7 +191,7 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, titles=None, queue_title_prefix=None, initial_foreign=None):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False):
         self.titles=titles or [f'Title & {i}' for i in range(len(rates))]
         self.remote_sources=remote_sources
         self.resume_restart=resume_restart
@@ -204,6 +204,8 @@ class Binary:
         if initial_foreign:
             self.sonos.uri=initial_foreign
             self.sonos.items=[dict(uri=initial_foreign)]
+        self.sonos.crossfade_race=crossfade_race
+        self.sonos.crossfade_fault=crossfade_fault
         self.sonos.grouped=grouped or member
         if member:self.sonos.coordinator_uuid="RINCON_OTHER"
         if queue_title_prefix is not None:self.sonos.expected_title_prefix=queue_title_prefix
@@ -509,12 +511,12 @@ def soap_fault():
         h.until(lambda:h.commands.count('stop')==1)
         time.sleep(.3)
         assert not h.packets('STMn') and not h.sonos.actions('Play')
-        assert not h.items() and not h.sonos.crossfade
-        assert not h.sonos.actions('Stop')
+        assert not h.items() and h.sonos.crossfade
+        assert len(h.sonos.actions('Stop'))==1
         log=(h.base/'bridge.log').read_text()
         assert 'errorCode=' in log and 'request=' in log,log
         assert h.commands.count('stop')==1,h.commands
-        print('PASS relay SOAP fault: full diagnostic, local release before queue selection, no foreign Stop/restore, LMS stop once, no STMn or playlist advance',flush=True)
+        print('PASS relay SOAP fault: full diagnostic, local release after confirmed queue selection, owned Stop/restore, LMS stop once, no STMn or playlist advance',flush=True)
     finally:h.close()
 
 if __name__=='__main__':

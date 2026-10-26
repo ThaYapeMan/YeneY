@@ -83,6 +83,7 @@ struct QueueRoom::Impl {
     std::string state = "STOPPED", fault, transportStatus;
     std::chrono::steady_clock::time_point playAt{};
     bool waitingForPlay = false;
+    bool queueSelectedForAdmission = false;
     std::string takeoverSource = "unknown";
     bool externalReleased = false, stopAcknowledged = false, sourceAway = false;
     std::atomic<int64_t> resumeEchoUntil{0};

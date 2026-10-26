@@ -7,14 +7,42 @@ void QueueRoom::Impl::fastPoll() {
 }
 upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
     upnp::QueueOwnershipIO io;
+    io.queueTransport = "x-rincon-queue:" + room.uuid + "#0";
     io.browse = [this] { return coordinator.browse(); };
     io.owned = [this](const auto &uri) { return owned.count(uri) != 0; };
     io.playlists = [this] { return coordinator.playlists(); };
     io.save = [this](const auto &title) { return actions.save(title).response.value("AssignedObjectID"); };
     io.deletePlaylist = [this](const auto &id) { coordinator.destroyPlaylist(id); };
+    io.transport = [this] {
+        return coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
+    };
+    io.prepareTransport = [this] {
+        const auto ownQueue = "x-rincon-queue:" + room.uuid + "#0";
+        const auto uri = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
+        if (uri == ownQueue) return;
+        actions.selectQueue(room.uuid);
+        if (coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI") != ownQueue)
+            throw std::runtime_error("queue-transport-switch-unconfirmed");
+        queueSelectedForAdmission = true;
+        logQueue("admission transport switched and confirmed before transport settings");
+    };
     io.crossfade = [this] { return actions.crossfade().response.value("CrossfadeMode") == "1"; };
     io.setCrossfade = [this](bool value) {
-        actions.crossfade(value);
+        try {
+            actions.crossfade(value);
+        } catch (const std::exception &e) {
+            const std::string error = e.what();
+            if (releasing || queueSelectedForAdmission || error.find("fault=7") == std::string::npos)
+                throw;
+            // A setting was refused before our first switch, possibly after a source race.
+            actions.selectQueue(room.uuid);
+            if (coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI") !=
+                "x-rincon-queue:" + room.uuid + "#0")
+                throw std::runtime_error("queue-transport-switch-unconfirmed");
+            queueSelectedForAdmission = true;
+            logQueue("admission retry after confirmed queue switch: " + error);
+            actions.crossfade(value); // Exactly one retry; a post-switch failure faults the room.
+        }
         if (actions.crossfade().response.value("CrossfadeMode") != (value ? "1" : "0"))
             throw std::runtime_error("queue-crossfade-unconfirmed");
     };
@@ -176,6 +204,7 @@ void QueueRoom::Impl::append() {
             localtime_r(&now, &tm);
             char title[64];
             std::strftime(title, sizeof title, "Before YeneY %Y-%m-%d %H:%M", &tm);
+            queueSelectedForAdmission = false;
             ownership.acquire(title);
             logQueue("ownership acquired");
             publish();
@@ -221,7 +250,7 @@ void QueueRoom::Impl::append() {
         items.push_back({record.source.occurrence, metadata.url, record.item, track.url, metadata.frames, metadata.title});
         publish();
         if (!started) {
-            actions.selectQueue(room.uuid);
+            if (!queueSelectedForAdmission) actions.selectQueue(room.uuid);
             actions.seekTrack(1);
             expectedState = "PLAYING";
 

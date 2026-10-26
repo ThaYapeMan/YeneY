@@ -14,11 +14,14 @@ struct SavedQueue {
     uint64_t created = 0;
 };
 struct QueueOwnershipIO {
+    std::string queueTransport;
     std::function<QueueSnapshot()> browse;
     std::function<bool(const std::string &)> owned; // optional exact room-controller identity
     std::function<std::vector<SavedQueue>()> playlists;
     std::function<std::string(const std::string &)> save;
     std::function<void(const std::string &)> deletePlaylist;
+    std::function<std::string()> transport;
+    std::function<void()> prepareTransport;
     std::function<bool()> crossfade;
     std::function<void(bool)> setCrossfade;
     std::function<void()> stop;
@@ -30,7 +33,8 @@ struct QueueOwnershipIO {
 // cleanup at the first failure, without retries against an old ordinal snapshot.
 class QueueOwnership {
     QueueOwnershipIO io;
-    std::string session;
+    std::string session, backupTransport, backupId, backupTitle;
+    std::vector<std::string> backupUris;
     bool held = false, restoring = false, savedCrossfade = false;
     bool owns(const std::string &) const;
 

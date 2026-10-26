@@ -189,6 +189,13 @@ class Handler(BaseHTTPRequestHandler):
         if action == 'GetTransportInfo': return {'CurrentTransportState': s.transport_state}, None
         if action == 'GetCrossfadeMode': return {'CrossfadeMode': int(s.crossfade)}, None
         if action == 'SetCrossfadeMode':
+            if getattr(s, 'crossfade_race', False):
+                race=s.crossfade_race
+                s.crossfade_race=False
+                if race != 'own': s.uri='x-sonos-vli:spotify-raced-admission'
+                return {}, '712'
+            if s.uri.startswith('x-sonos-vli:'): return {}, '712'
+            if getattr(s, 'crossfade_fault', None): return {}, s.crossfade_fault
             assert s.verified_save
             if not s.ignore_crossfade: s.crossfade = a['CrossfadeMode'] == '1'
             return {}, None
@@ -226,7 +233,7 @@ class Handler(BaseHTTPRequestHandler):
         if action == 'SetAVTransportURI':
             if a.get('CurrentURIMetaData'):
                 ET.fromstring(a['CurrentURIMetaData']) # strict XML 1.0, including nested DIDL
-            assert a['CurrentURI'] == 'x-rincon-queue:RINCON_TEST#0' and s.items
+            assert a['CurrentURI'] == 'x-rincon-queue:RINCON_TEST#0'
             s.uri = a['CurrentURI']; return {}, None
         if action == 'Seek':
             if a['Unit'] == 'TRACK_NR':

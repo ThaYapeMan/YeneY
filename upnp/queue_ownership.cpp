@@ -37,13 +37,28 @@ void QueueOwnership::acquire(const std::string &title) {
     if (foreign) {
         if (title.compare(0, 13, "Before YeneY ") != 0)
             throw std::invalid_argument("invalid queue backup prefix");
-        auto id = io.save(title);
+        const auto transport = io.transport ? io.transport() : std::string();
+        // A partial admission may already have switched transport while the
+        // backed-up queue is still intact. That is the same admission series.
+        const bool sameTransport = !transport.empty() &&
+            (transport == backupTransport || (!backupId.empty() && transport == io.queueTransport));
+        auto existing = sameTransport && queue.uris == backupUris
+                            ? io.playlists() : std::vector<SavedQueue>{};
+        const bool reuse = sameTransport && queue.uris == backupUris &&
+            std::any_of(existing.begin(), existing.end(), [&](const auto &p) {
+                return p.id == backupId && p.title == backupTitle;
+            });
+        auto id = reuse ? backupId : io.save(title);
         auto saved = io.playlists();
         auto verified = std::find_if(saved.begin(), saved.end(),
-                                     [&](const auto &p) { return p.id == id && p.title == title; });
+                                     [&](const auto &p) { return p.id == id && p.title == (reuse ? backupTitle : title); });
         if (id.empty() || verified == saved.end())
             throw std::runtime_error("queue-backup-unverified");
-        io.log("queue backup id=" + id + " title=" + title);
+        io.log("queue backup " + std::string(reuse ? "reused " : "") + "id=" + id + " title=" + (reuse ? backupTitle : title));
+        if (!reuse) backupTransport = transport;
+        backupId = id;
+        backupTitle = reuse ? backupTitle : title;
+        backupUris = queue.uris;
         // Verify identity, not just same-minute title. Sort ties by ID to make
         // retention deterministic without deleting the newly verified backup.
         saved.erase(
@@ -82,6 +97,7 @@ void QueueOwnership::acquire(const std::string &title) {
         if (fresh.update != queue.update || fresh.uris != queue.uris)
             throw std::runtime_error("queue-changed-during-backup");
     }
+    if (io.prepareTransport) io.prepareTransport();
     savedCrossfade = io.crossfade();
     restoring = true;
     io.setCrossfade(false);
@@ -118,7 +134,7 @@ void QueueOwnership::release(bool cleanup, std::function<bool(const std::string 
         // A refusal also terminates the cleanup plan: never try another write.
         const std::string error = e.what();
         const bool refusal = error.find("fault=7") != std::string::npos;
-        try { io.log(std::string("cleanup ") + (refusal ? "transport no longer ours: " : "failed: ") + error); }
+        try { io.log(error.rfind("crossfade restore skipped: ", 0) == 0 ? error : std::string("cleanup ") + (refusal ? "transport no longer ours: " : "failed: ") + error); }
         catch (...) {}
     } catch (...) {
         try { io.log("cleanup failed: unknown error"); } catch (...) {}

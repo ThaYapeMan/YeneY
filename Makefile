@@ -443,3 +443,6 @@ queue_room.o: third_party/yeney-core/core/player.h
 
 # Disk scratch policy is shared by these native fixtures.
 queue-route-test core-queue-sink-test queue-item-store-test cold-position-test field-cold-test oct11-acquisition-test oct12-boundary-test encoded-backpressure-test stream-metrics-test upnp-test: tests/test_temp.h
+
+# QueueOwnership is stored by value in the room implementation.
+$(QUEUE_ROOM_OBJS): upnp/queue_ownership.h

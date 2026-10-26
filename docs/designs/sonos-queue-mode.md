@@ -88,7 +88,17 @@ counts, FLAC seek origins, finite container decoding and speaker clocks remain.
 
 On first acquisition foreign Q:0 entries are saved in an identity-verified
 `Before YeneY <timestamp>` playlist, then removed with UpdateID fencing.
-An empty or exclusively owned queue needs no backup. CrossfadeMode is read,
+An empty or exclusively owned queue needs no backup. Repeated admissions reuse a
+verified backup only for the same foreign transport and identical queue contents;
+a missing or changed saved-queue identity requires a new backup. An unchanged
+queue left after a successful switch and later admission failure also reuses
+that backup. For a foreign
+transport, admission switches to this room's own queue and confirms CurrentURI
+before reading or changing transport settings. A 7xx setting refusal before
+the first switch retries once after a confirmed switch; a post-switch refusal
+remains a room fault. This also takes a coordinator's
+whole group away from a live Spotify Connect session. An already selected own
+queue retains its existing settings/enqueue/select/seek/play order. CrossfadeMode is read,
 forced off and verified; release restores it only while the transport remains ours. Removal refreshes Browse and
 removes only exact owned URIs from the back, preserving foreign insertions.
 Every append uses Browse-before/after fencing and requires NumTracksAdded=1.
