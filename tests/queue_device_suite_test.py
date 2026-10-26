@@ -212,15 +212,19 @@ class Backend:
         if args[0]=='systemd-escape':return 'yeney@Study.service'
         if args[0].endswith('/yeney'):return 'Study\tPort\t127.0.0.1\t'+('Other' if self.member else 'Study')+'\t'+('Study,Kitchen' if self.grouped else 'Study')
         if args[0]=='journalctl':
+            if 'json' in args:assert '_PID='+str(self.pid) in args
             if self.model.mode=='play' and self.model.urls and self.model.started_url==self.model.urls[self.model.index] and self.model.started_url not in self.model.unplayable:
                 occurrence=self.model.index+1+getattr(self.model,'occurrence_base',0)
-                audio=('core: queue FLAC occurrence='+str(occurrence)+' decimation source=96000 target=48000'
-                       if getattr(self.model,'field_decimation',False) else 'core: queue decode occurrence='+str(occurrence)+' first audio')
-                entries=[dict(__MONOTONIC_TIMESTAMP=int(self.model.strm_at*1e6),MESSAGE='core: queue command strm s'),
-                         dict(__MONOTONIC_TIMESTAMP=int((self.model.strm_at+self.model.audio_delay)*1e6),MESSAGE=audio)]
+                audio=('core: queue decode occurrence='+str(occurrence)+' first audio'
+                       if self.model.owned else 'stream 1: FLAC 24-bit 44100 Hz')
+                entries=[dict(__MONOTONIC_TIMESTAMP=int(self.model.strm_at*1e6),MESSAGE='core: queue command strm s')]
+                if not getattr(self.model,'missing_audio',False):
+                    entries.append(dict(__MONOTONIC_TIMESTAMP=int((self.model.strm_at+self.model.audio_delay)*1e6),MESSAGE=audio))
                 if getattr(self.model,'field_decimation',False):
                     entries.append(dict(__MONOTONIC_TIMESTAMP=int((self.model.strm_at+.1)*1e6),
                         MESSAGE='core: queue FLAC occurrence=7 decimation source=96000 target=48000'))
+                    entries.append(dict(__MONOTONIC_TIMESTAMP=int((self.model.strm_at+self.model.audio_delay-.01)*1e6),
+                        MESSAGE='core: queue FLAC occurrence='+str(occurrence)+' decimation source=96000 target=48000'))
                 return '\n'.join(json.dumps(e) for e in entries)
             return ''
         assert args[0]=='systemctl',args
@@ -311,7 +315,7 @@ class Tests(unittest.TestCase):
             original(*args)
             if args==('play',):
                 self.model.strm_at += 2
-                self.backend.sleep(4.5)  # command -> strm 2 s; strm -> observed PLAYING 2.5 s
+                self.backend.sleep(6.5)  # command -> strm 2 s; audio 2 s later; YeneY 2.5 s
         with patch.object(self.suite,'pending_mutation',side_effect=play):
             row=self.suite.load(tracks,startup_limit=3)
         self.assertAlmostEqual(self.suite.current['startup'],2.5)
@@ -322,25 +326,116 @@ class Tests(unittest.TestCase):
         self.suite.cleanup()
         print('PASS Study startup replay: LMS play to strm s=2.0 s; strm s to first audio=2.0 s; YeneY startup=2.5 s (limit 3 s)')
 
-    def test_yeney_four_seconds_still_fails(self):
+    def test_field_and_192khz_audio_clock(self):
+        self.suite.setup()
+        try:
+            for rate,lms_delay in ((96000,2),(192000,5)):
+                self.suite.begin('high-rate-48000')
+                tracks=self.suite.selected['album']
+                for track in tracks:
+                    self.model.byid[track['id']]['samplerate']=str(rate)
+                self.model.audio_delay=lms_delay
+                self.model.field_decimation=True;self.model.occurrence_base=7
+                original=self.suite.pending_mutation
+                def play(*args):
+                    original(*args)
+                    if args==('play',):
+                        self.model.strm_at+=.0997
+                        self.backend.sleep(.0997+lms_delay+1)
+                with patch.object(self.suite,'pending_mutation',side_effect=play):
+                    row=self.suite.load(tracks,startup_limit=3)
+                self.assertAlmostEqual(row['lms_play_to_strm_s'],.0997,places=5)
+                self.assertAlmostEqual(row['lms_strm_to_audio_s'],lms_delay,places=5)
+                self.assertAlmostEqual(row['yeney_startup_s'],1,places=5)
+                fresh={k:v for k,v in row.items()
+                       if k not in ('lms_play_to_strm_s','lms_strm_to_audio_s','yeney_startup_s')}
+                with patch.object(self.suite,'startup_evidence',return_value=[]):
+                    self.assertEqual(self.suite.timing(fresh)['lms_strm_to_audio_s'],row['lms_strm_to_audio_s'])
+                print('PASS decimated '+str(rate)+' Hz replay: LMS play to strm=0.0997 s; LMS audio='+str(lms_delay)+' s; YeneY=1 s; all three shares reported')
+        finally:self.suite.cleanup()
+
+    def test_occurrence_catches_up_after_decimation(self):
         self.suite.setup();self.suite.begin('high-rate-48000')
-        for track in self.suite.selected['album']:
-            self.model.byid[track['id']]['samplerate']='96000'
+        tracks=self.suite.selected['album']
+        for track in tracks:self.model.byid[track['id']]['samplerate']='96000'
+        self.model.audio_delay=2;self.model.field_decimation=True;self.model.occurrence_base=7
+        original=self.suite.diagnostic
+        start=self.backend.now()
+        def diagnostic():
+            row=original()
+            if self.backend.now()<start+3:
+                row=dict(row,occurrence=0,owned=False)
+            return row
+        try:
+            with patch.object(self.suite,'diagnostic',side_effect=diagnostic):
+                row=self.suite.load(tracks,startup_limit=3)
+            self.assertEqual(row['playback']['occurrence'],8)
+            self.assertEqual(row['lms_strm_to_audio_s'],2)
+            self.assertEqual(row['yeney_startup_s'],1)
+        finally:self.suite.cleanup()
+        print('PASS first audio occurrence catch-up: status 0 -> 8; decimation ordering and wrong occurrence ignored; scoped PID retained')
+
+    def test_unpublished_item_uses_audio_deadline(self):
+        self.suite.setup();self.suite.begin('high-rate-48000')
+        self.model.audio_delay=2;self.model.field_decimation=True;self.model.occurrence_base=7
+        original=self.suite.diagnostic
+        def diagnostic():return dict(original(),occurrence=0,owned=False)
+        try:
+            with patch.object(self.suite,'diagnostic',side_effect=diagnostic):
+                with self.assertRaisesRegex(m.SuiteError,'no occurrence 8, owned queue item.*within 3 s after first audio'):
+                    self.suite.load(self.suite.selected['album'],startup_limit=3)
+            self.assertEqual(self.suite.current['lms_strm_to_audio_s'],2)
+        finally:self.suite.cleanup()
+        print('PASS unpublished occurrence: explicit first audio is found before status catches up; YeneY deadline fails, not LMS delivery')
+
+    def test_remote_first_pcm_evidence(self):
+        track=dict(id='-42',url='http://radio.invalid/live',title='Radio fixture',artist='',album='',duration='120')
+        self.model.byid['-42']=track;self.model.library.append(track)
+        self.model.favourites=[dict(id='0',type='audio',url=track['url'],name=track['title'])]
+        self.suite.setup();self.suite.begin('remote-source')
+        self.model.occurrence_base=-1
         original=self.suite.pending_mutation
         def play(*args):
             original(*args)
-            if args==('play',): self.backend.sleep(4)
+            if args==('play',):self.backend.sleep(1)
         try:
             with patch.object(self.suite,'pending_mutation',side_effect=play):
-                with self.assertRaisesRegex(m.SuiteError,'no timely speaker PLAYING.*within 3 s after strm s'):
+                row=self.suite.load([self.suite.remote_pool[0]])
+            self.assertEqual(row['playback']['occurrence'],0)
+            self.assertEqual(row['lms_strm_to_audio_s'],0)
+            self.assertEqual(row['yeney_startup_s'],1)
+        finally:self.suite.cleanup()
+        print('PASS remote first PCM: stream 1 FLAC evidence matches speaker stream=1 independently of queue occurrence 0')
+
+    def test_missing_first_audio(self):
+        self.suite.setup();self.suite.begin('high-rate-48000')
+        self.model.missing_audio=True;self.model.field_decimation=True
+        try:
+            with self.assertRaisesRegex(m.SuiteError,'LMS did not deliver audio: missing core: queue decode occurrence=1 first audio within 15 s'):
+                self.suite.load(self.suite.selected['album'],startup_limit=3)
+        finally:self.suite.cleanup()
+        print('PASS missing first audio: LMS did not deliver audio within 15 s; decimation is not audio evidence')
+
+    def test_yeney_four_seconds_still_fails(self):
+        self.suite.setup();self.suite.begin('high-rate-48000')
+        for track in self.suite.selected['album']:
+            self.model.byid[track['id']]['samplerate']='192000'
+        self.model.audio_delay=5
+        original=self.suite.pending_mutation
+        def play(*args):
+            original(*args)
+            if args==('play',): self.backend.sleep(9)
+        try:
+            with patch.object(self.suite,'pending_mutation',side_effect=play):
+                with self.assertRaisesRegex(m.SuiteError,'no timely speaker PLAYING.*within 3 s after first audio'):
                     self.suite.load(self.suite.selected['album'],startup_limit=3)
         finally:self.suite.cleanup()
-        print('PASS slow YeneY replay: startup=4.0 s after strm s still fails the unchanged 3 s limit')
+        print('PASS slow YeneY replay: startup=4.0 s after first audio still fails the unchanged 3 s limit')
 
     def test_missing_rendered_rate_is_named(self):
         self.suite.setup();self.suite.begin('high-rate-48000')
         try:
-            with self.assertRaisesRegex(m.SuiteError,'no rendered_rate 48000 within 3 s after strm s'):
+            with self.assertRaisesRegex(m.SuiteError,'no rendered_rate 48000 within 3 s after first audio'):
                 self.suite.load(self.suite.selected['album'],startup_limit=3)
         finally:self.suite.cleanup()
         print('PASS startup deadline names missing rendered_rate 48000; no second rate budget')

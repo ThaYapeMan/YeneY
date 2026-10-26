@@ -716,21 +716,28 @@ are recorded in summary.md and manifest.tsv. Run this qualification with the
 normal modern `YENEY_AUDIO=24/48` setting; legacy mode caps output at 44.1 kHz.
 The playlist is staged while stopped with `cmd:add`; one explicit LMS play
 begins the LMS diagnostic clock. Room- and process-scoped journal evidence of
-`strm s` starts the YeneY clock. The first observed speaker PLAYING an owned item
-with matching LMS identity must arrive within five seconds of `strm s` (three
-seconds for high-rate tracks). LMS readiness polling no longer consumes this
-budget. The high-rate rendered-rate evidence must arrive within the same three
-seconds; there is no second rate allowance.
+`strm s` starts LMS's audio delivery window. The occurrence's explicit
+`core: queue decode occurrence=N first audio` line starts YeneY's clock.
+The first observed speaker PLAYING an owned item with matching LMS identity
+must arrive within five seconds of first audio (three seconds for high-rate
+tracks). The expected rendered rate must match in that same sample.
 
 Each startup records `lms_play_to_strm_s`, `lms_strm_to_audio_s` and
-`yeney_startup_s` in samples, joins, summary.md and the result line. The first two
-are diagnostics: suite Play to `strm s`, then `strm s` to the occurrence's first
-decode/decimation evidence. Missing first-audio evidence is recorded as unknown,
-not invented. No `strm s` within ten seconds fails explicitly as “LMS did not
-start”. Evidence failures name the missing state, identity or rendered rate.
-The 25 October Study regression is replayed locally with two seconds from suite
-Play to `strm s`, two seconds to first audio and PLAYING at 2.5 seconds after
-`strm s`; four seconds of YeneY startup still fails.
+`yeney_startup_s` in samples, joins, summary.md and the result line. The LMS
+shares remain diagnostics, except that no first audio within 15 seconds of
+`strm s` fails as “LMS did not deliver audio”, naming the missing occurrence's
+first-audio line. Decimation setup is not evidence that audio was delivered.
+Remote streams use the existing `stream N: FLAC <bits>-bit <rate> Hz` line,
+emitted when the feeder receives its first PCM batch, and match N to the
+speaker URI stream ID. Their existing five-second limit also starts there.
+Journal evidence uses the room unit, bridge PID and monotonic timestamps;
+the first decode after this play's `strm s` identifies the new occurrence
+independently of room status. Audible confirmation requires that same occurrence. No `strm s`
+within ten seconds fails as “LMS did not start”. Evidence failures name the
+missing state, identity or rendered rate. Local replays cover the 26 October
+96 kHz case (2 seconds LMS, 1 second YeneY), 192 kHz (5 seconds LMS,
+1 second YeneY), the earlier 2.5 second YeneY startup, and a rejected
+4 second YeneY startup, all with unchanged limits.
 Expected metadata follows YeneY's XML sanitisation and room title format.
 
 The **remote-source** scenario selects a playable entry from LMS favourites or
@@ -780,7 +787,7 @@ deadlines. Slow loads wait for verified readiness before scenario measurements.
 Playlist restoration uses stable local IDs or exact remote URLs, retries failed
 items once on fresh connections and continues with the remaining preferences.
 
-High-rate queue scenarios require PLAYING within 3 seconds of LMS `strm s` and
+High-rate queue scenarios require PLAYING within 3 seconds of first audio from LMS and
 report the measured startup. Modern queue rooms receive native hi-res files
 and yeney-core converts within the rate family (88.2/176.4 → 44.1 kHz;
 96/192 → 48 kHz), preserving exact WAV lengths. Ordinary stream rooms and
@@ -795,7 +802,7 @@ playable candidate is selected from those menus. Once a candidate is loaded,
 it must produce a new `strm s` within ten seconds of Play, confirmed from the
 room journal. Absence fails with “LMS did not start”; it cannot silently skip a
 failed start. An empty menu still reports an explicit remote-source SKIP.
-Once LMS starts, the speaker-start and stream-path limits apply from `strm s`.
+Once LMS delivers first audio, the speaker-start and stream-path limits apply.
 Candidate choices are recorded in the manifest and command log.
 
 Use `--remote 'Favourite name'`, `--remote 'https://…/episode.mp3'`, or a

@@ -509,18 +509,32 @@ class Suite(PACING['Suite']):
         if not context:
             return {}
         playing = row['speaker']['state']=='PLAYING' and row['identity'] and (
-            self.owned_item(row) or
+            self.owned_item(row) if context.get('local',True) else
             row['playback'].get('path')=='stream' and '/music/yeney.flac?' in row['speaker']['uri'])
-        if playing and 'confirmed' not in context:
+        # Status can retain occurrence 0 (or the previous item) until queue
+        # publication. The first decode after this play's strm s identifies the
+        # new occurrence independently, including decimated FLAC.
+        audio = context.get('audio')
+        occurrence = context.get('audio_occurrence')
+        pattern = (r'^core: queue decode occurrence=(\d+) first audio\b' if context['local'] else
+                   r'^stream (\d+): FLAC \d+-bit \d+ Hz\b')
+        if audio is None:
+            for timestamp,message in self.startup_evidence(context['wall']):
+                match = re.search(pattern,message)
+                if context['strm'] <= timestamp <= row['monotonic'] and match:
+                    audio,occurrence = timestamp,int(match.group(1))
+                    break
+        context['audio'] = audio
+        context['audio_occurrence'] = occurrence
+        rate_matches = context.get('target') is None or row['playback'].get('rendered_rate')==context['target']
+        same_item = (row['playback'].get('occurrence')==occurrence if context['local'] else
+                     bool(re.search(r'[?&]stream='+str(occurrence)+r'(?:&|$)',row['speaker']['uri'])))
+        if (audio is not None and playing and rate_matches and same_item and
+                'confirmed' not in context):
             context['confirmed']=row['monotonic']
-            context['occurrence']=row['playback'].get('occurrence')
-        occurrence = context.get('occurrence',row['playback'].get('occurrence'))
-        audio = next((t for t,msg in self.startup_evidence(context['wall'])
-                      if t >= context['strm'] and re.search(
-                          r'^core: queue (?:FLAC occurrence='+str(occurrence)+r' decimation\b|decode occurrence='+str(occurrence)+r' first audio\b)',msg)),None)
         values = dict(lms_play_to_strm_s=context['strm']-context['command'],
                       lms_strm_to_audio_s=None if audio is None else audio-context['strm'],
-                      yeney_startup_s=context['confirmed']-context['strm'] if 'confirmed' in context else None)
+                      yeney_startup_s=context['confirmed']-audio if audio is not None and 'confirmed' in context else None)
         return values
 
     def diagnostic(self):
@@ -738,13 +752,17 @@ class Suite(PACING['Suite']):
         play_wall = time.time()
         self.pending_mutation('play')
         strm = self.wait_strm(play_wall,start)
-        self.startup_context = dict(command=start,wall=play_wall,strm=strm)
+        self.startup_context = dict(command=start,wall=play_wall,strm=strm,local=tracks[0]['url'].startswith('file://'))
         self.due=self.backend.now()
         target = {'high-rate-44100':44100,'high-rate-48000':48000}.get(self.current['name'])
+        self.startup_context['target'] = target
         def missing(row):
             absent=[]
             if row['speaker']['state']!='PLAYING':absent.append('speaker PLAYING')
             if not row['identity']:absent.append('matching LMS identity')
+            occurrence=self.startup_context.get('audio_occurrence')
+            if self.startup_context['local'] and occurrence is not None and row['playback'].get('occurrence')!=occurrence:
+                absent.append('occurrence '+str(occurrence))
             if tracks[0]['url'].startswith('file://'):
                 if not self.owned_item(row):
                     absent.append('owned queue item')
@@ -752,13 +770,20 @@ class Suite(PACING['Suite']):
                 absent.append('remote stream path')
             if target and row['playback'].get('rendered_rate')!=target:absent.append('rendered_rate '+str(target))
             return ', '.join(absent) or 'timely speaker PLAYING with matching LMS identity'
-        row,_ = self.wait(tracks,lambda r:r['speaker']['state']=='PLAYING' and r['identity'] and
-                          (target is None or r['playback'].get('rendered_rate')==target) and
-                          ((r['playback'].get('path')=='stream' and '/music/yeney.flac?' in r['speaker']['uri'])
-                           if not tracks[0]['url'].startswith('file://') else
-                           self.owned_item(r)),
-                          startup_limit,preparing=True,origin=strm,missing=missing)
-        delay = self.startup_context['confirmed']-strm
+        while True:
+            row = self.sample(tracks,preparing=True)
+            audio = self.startup_context.get('audio')
+            if audio is None or audio > strm+15:
+                if row['monotonic'] >= strm+15:
+                    evidence = ('core: queue decode occurrence='+str(row['playback'].get('occurrence'))+' first audio'
+                                if self.startup_context['local'] else 'stream N: FLAC <bits>-bit <rate> Hz')
+                    self.problem('LMS did not deliver audio: missing '+evidence+' within 15 s after strm s')
+                continue
+            if row['monotonic']-audio > startup_limit:
+                self.problem('no '+missing(row)+' within '+str(startup_limit)+' s after first audio')
+            if 'confirmed' in self.startup_context:
+                break
+        delay = self.startup_context['confirmed']-audio
         self.current.update(self.timing(row))
         self.current['startup'] = max(self.current['startup'],delay)
         self.last_sample = row
