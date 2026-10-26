@@ -4,7 +4,11 @@ namespace bridge {
 void roomLmsCommand(const std::string &host, const std::string &mac,
                            const std::string &command, const std::string &reason,
                            const std::function<void(const std::string &)> &log) {
+    const auto volume = command.rfind("mixer volume ", 0) == 0 ? command.substr(13) : std::string{};
+    const bool validVolume = !volume.empty() && volume.size() <= 3 &&
+        volume.find_first_not_of("0123456789") == std::string::npos && std::stoi(volume) <= 100;
     const bool allowed =
+        (reason == "speaker-volume" && (validVolume || command == "mixer muting 0" || command == "mixer muting 1")) ||
         (command == "stop" && (reason == "speaker-stop" || reason == "speaker-source-change" ||
                                reason == "room-fault" || reason == "group-member" || reason == "track-fault-limit")) ||
         (command == "pause 1" && reason == "speaker-pause") ||

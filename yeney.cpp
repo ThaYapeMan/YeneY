@@ -1,3 +1,4 @@
+#include "volume_worker.h"
 // yeney.cpp -- bridges a Sonos zone player into an LMS session
 //
 // Copyright (c) 2026 Jaap van Vliet
@@ -1035,6 +1036,8 @@ int main(int argc, char** argv)
     if (!gPlayer->discover(room, ip ? ip : "")) return EXIT_FAILURE;
     const auto selectedSpeaker = gPlayer->speaker();
     bridge::streamMetrics().configure(selectedSpeaker.name);
+    bridge::roomVolumeSettings() = bridge::volumeSettings(selectedSpeaker.name, findOption(argc, argv, "--lms-volume"),
+        std::getenv("YENEY_CONFIG") ? std::getenv("YENEY_CONFIG") : "/etc/yeney/config");
     const auto playback = bridge::selectPlaybackMode(std::getenv("YENEY_PLAYBACK_MODE"), selectedSpeaker);
     if (playback.selected == bridge::PlaybackMode::Stream)
         printf("yeney: stream pacing room=%s selected=%s\n", upnp::logValue(selectedSpeaker.name).c_str(),
@@ -1083,6 +1086,11 @@ int main(int argc, char** argv)
         mode->publish(initial);
         bridge::setRoomStatus(mode);
     }
+    static std::unique_ptr<bridge::VolumeWorker> volume;
+    char volumeMac[18];
+    snprintf(volumeMac, sizeof volumeMac, "%02x:%02x:%02x:%02x:%02x:%02x", gMac[0], gMac[1], gMac[2], gMac[3], gMac[4], gMac[5]);
+    volume.reset(new bridge::VolumeWorker(std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer),
+        gServer.substr(0, gServer.find(':')), volumeMac, bridge::roomVolumeSettings()));
     static StopTimer stopTimer;
     std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(), std::string(room) + " (Sonos)");
 

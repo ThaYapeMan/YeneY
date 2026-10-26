@@ -276,6 +276,43 @@ Environment=YENEY_TITLE_FORMAT=title
 sudo systemctl restart 'yeney@Study'
 ```
 
+Volume control also works when starting the binary directly:
+
+```sh
+YENEY_VOLUME_MAX=70 ./yeney --room=Study --server=192.0.2.23 --lms-volume=speaker
+```
+
+Volume mode precedence is `--lms-volume=off|speaker`, then the room process's
+`YENEY_LMS_VOLUME`, then `room.Study.lms_volume=off|speaker` in
+`/etc/yeney/config`, then `off`. The cap uses `YENEY_VOLUME_MAX`, then
+`room.Study.volume_max=70` in that same config, then 100. `YENEY_CONFIG` can
+select another volume configuration file. Invalid mode values warn once and
+select off; invalid caps warn once and select 100. Effective mode, source and
+cap appear in the startup log and room status (`lms_volume`,
+`lms_volume_source`, `volume_max` inside `playback`). Restart after changing
+settings. Config keys are suitable for a future per-player LMS plugin.
+
+LMS 9.1.1 does **not** offer its native fixed/adjustable volume preference for
+YeneY's player model: **Settings > Player > select the YeneY room > Audio** has
+no Volume control selector. The server's `digitalVolumeControl` preference
+exists internally, but YeneY does not advertise `HasDigitalOut`; LMS hides the
+selector and enforces adjustable internally. YeneY never changes that preference.
+The YeneY setting therefore controls this feature.
+
+In speaker mode LMS's exact integer mixer volume (not its nonlinear SlimProto
+gain) sets the room's own Sonos volume. A coordinator with members snapshots the group
+volume ratios before using group volume, and uses group mute; a standalone room or member uses its own volume/mute.
+App-side changes reach LMS through its CLI with echo suppression. Changes settle
+for 200 ms, and SOAP writes are spaced at least 200 ms apart across volume and
+mute; unchanged values are skipped. Own changes await confirmation for up to
+two seconds, suppressing intermediate group feedback. A separate bounded worker queries LMS and
+confirms speaker state; RenderingControl and GroupRenderingControl events wake
+it immediately, with a 100 ms polling fallback. A capped LMS value does not
+rewrite the LMS slider. The cap limits YeneY's writes; the Sonos app can still
+set its own volume above it. Both modes preserve audio samples without PCM
+volume scaling. Off mode starts no volume worker and sends no mixer commands
+or volume/mute writes.
+
 Settings are read once; timing RAW/STALE are inspected only when the probe is enabled. An invalid value logs a warning
 and uses the default, except for an invalid queue disk quota, which fails queue configuration.
 
@@ -285,6 +322,8 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |
 | `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |
 | `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; invalid/overflowing values fail queue configuration | `256` |
+| `YENEY_LMS_VOLUME` | `off`: ignore LMS volume · `speaker`: map LMS volume/mute to Sonos and mirror app changes to LMS; PCM remains unchanged | `off` |
+| `YENEY_VOLUME_MAX` | Maximum speaker volume YeneY writes, integer 0–100; applies in speaker mode | `100` |
 | `YENEY_LMS_ICON` | Material icon name; explicitly empty disables preference handling | `sonos` |
 | `YENEY_START_LEAD_MS` | Startup reserve, 0–10000 milliseconds | `1000` |
 | `YENEY_UPNP` | `yeney` or `own`; unsupported names warn and use YeneY | `yeney` |
@@ -479,6 +518,7 @@ yeney --room="Living Room" [--ip=<sonos-ip>] [--server=<lms-host>]
 | `--list-rooms --details` | Sorted tab-separated name, model, IP, coordinator and comma-separated members (coordinator first); `-` means unknown. Uses the room’s primary device for bonded speakers. |
 | `--find-server` | Discover LMS; print only its host/IP and exit 0, or print nothing and exit non-zero. |
 | `--list-rooms` | Print sorted, unique room names, including group members, then exit. Uses `YENEY_UPNP` and honours `--ip`. |
+| `--lms-volume=off\|speaker` | Override the room's volume mode; takes precedence over its environment and saved config. |
 | `--room=<name>` | Required except with `--list-rooms` or `--find-server`. The Sonos room/zone to take over. |
 | `--ip=<address>` | Skip Sonos auto-discovery and talk to this player directly (any player in the household will do -- they share topology). Needed if discovery can't reach the Sonos network. |
 | `--server=<host>` | LMS hostname or IP **only**, not a web-UI port. Precedence: explicit `--server` > `LMS_SERVER=` in `/etc/yeney/config` > automatic UDP broadcast discovery on port 3483 (same subnet only; does not cross routers). |

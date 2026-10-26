@@ -66,11 +66,15 @@ def setting(line):
     return key, value
 
 
+def room_enable_key(key):
+    return key.startswith('room.') and not key.endswith(('.lms_volume', '.volume_max'))
+
+
 def parse_rooms(text, warn):
     rooms = {}
     for line in text.splitlines():
         entry = setting(line)
-        if not entry or not entry[0].startswith('room.'):
+        if not entry or not room_enable_key(entry[0]):
             continue
         name, value = entry[0][5:], entry[1].strip().lower()
         if not valid_room(name):
@@ -88,7 +92,7 @@ def merge_config(text, discovered, enabled, server=None, answers=None):
     """Preserve all unmodified bytes, including comments, CRLF and unknown values."""
     lines = text.splitlines(keepends=True)
     existing = {entry[0][5:] for line in lines if (entry := setting(line))
-                and entry[0].startswith('room.')}
+                and room_enable_key(entry[0])}
     new = sorted(set(discovered) - existing)
     answers = answers or {}
     updates = {'room.' + name: 'yes' for name in enabled}

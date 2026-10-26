@@ -45,3 +45,23 @@ The program line-buffers stdout, including under systemd. Use `journalctl` for t
 
 - Runtime state, settings and logging must also work when the binary runs directly,
   without systemd, for a future LMS plugin. No systemd-only runtime dependencies.
+
+## Per-room volume
+
+`YENEY_LMS_VOLUME=off|speaker` defaults to off. `--lms-volume` overrides the
+process environment, which overrides `room.<name>.lms_volume` in the global
+config. `YENEY_VOLUME_MAX` / `room.<name>.volume_max` caps writes (default 100).
+`volume_control.h/.cpp` owns settings and debounce/echo state;
+`volume_worker.h` performs bounded reads and speaker writes outside the audio
+and relay workers. All LMS mutations still pass `roomLmsCommand`.
+Read exact LMS mixer percentages; never infer them from audg or scale PCM.
+Coordinators use GroupRenderingControl; standalone/member rooms use their own
+RenderingControl. Off mode preserves existing network behavior. The private
+LMS 9.1.1 rendered Audio settings test proves native digitalVolumeControl is
+not exposed for Model=yeney (HasDigitalOut defaults to 0). Never set that pref.
+Status and global configuration work without systemd.
+
+LMS's mixer volume command implicitly unmutes; mute/unmute also complete a
+server-side fade. Reverse control preserves the app's mute state and waits
+400 ms for a mute transition before setting its new level, so a late fade
+callback cannot undo that level. The real LMS volume test exercises this.

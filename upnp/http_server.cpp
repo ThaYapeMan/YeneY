@@ -239,7 +239,7 @@ struct HttpServer::Impl {
             const auto reply = response(error ? error : wire.compare(0, 7, "NOTIFY ") == 0 ? 412 : 400) + "\r\n"; client->send(reply.data(),reply.size()); return;
         }
         auto& parsed = static_cast<Request&>(*request);
-        if (request->path() == "/avt" || request->path() == "/rc" || request->path() == "/zgt") {
+        if (request->path() == "/avt" || request->path() == "/rc" || request->path() == "/zgt" || request->path() == "/grc") {
             if (parsed.verb != "NOTIFY") { request->reply(405); return; }
             size_t length = 0; GenaEvent event;
             if (!parseGenaHeaders(parsed.target, parsed.version, request->headers(), length, event)) {

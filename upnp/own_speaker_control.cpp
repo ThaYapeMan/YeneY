@@ -40,7 +40,10 @@ void OwnSpeakerControl::startEvents() {
         subscriptions.reset(new Subscriptions(speakerPort, *eventServer, [this] {
             const auto s = state.snapshot();
             return std::array<std::string, 3>{{s.group.ip, s.room.ip, s.room.ip}};
-        }, [this](const GenaEvent& event) { return receiveEvent(event); }));
+        }, [this](const GenaEvent& event) { return receiveEvent(event); }, routeAddress, [this] {
+            const auto s = speaker();
+            return groupVolume && s.coordinator == s.name && s.members.size() > 1 ? s.ip : "";
+        }));
     } catch (const std::exception& error) {
         printf("yeney: subscription result=unavailable reason=%s\n", logValue(error.what()).c_str());
     }
@@ -71,6 +74,7 @@ void OwnSpeakerControl::queueEvents(GenaHandler handler) {
     queueObserver = std::move(handler);
 }
 bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
+    if (event.service == Service::RenderingControl || event.service == Service::GroupRenderingControl) ++volumeEvents;
     auto update = event.update;
     update.source = Source::Event;
     if (event.service == Service::ZoneGroupTopology) {
@@ -118,6 +122,7 @@ SoapResult OwnSpeakerControl::call(const std::string& action, const SoapArgument
     }
     const std::string address = host.empty() ? targetFor(action, state.snapshot()) : host;
     const auto path = service == "ZoneGroupTopology" ? "/ZoneGroupTopology/Control" :
+        service == "GroupRenderingControl" ? "/MediaRenderer/GroupRenderingControl/Control" :
         service == "RenderingControl" ? "/MediaRenderer/RenderingControl/Control" : "/MediaRenderer/AVTransport/Control";
     const auto activityBefore = action == "GetPositionInfo" && streamActivity ? streamActivity() : StreamActivity{};
     auto http = httpPost({address, path, speakerPort}, {

@@ -250,13 +250,14 @@ for rate in (44100,88200,96000):
 # Seed CLI preferences so first-start plugin migration cannot replace the port.
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
 lms=bridge=tap=sonos=remote=proxy=None
+volume_only=os.environ.get('YENEY_REAL_LMS_VOLUME_ONLY')=='1'
 extra_remotes=[]
 lms_log=(base/'lms.log').open('w');bridge_log=(base/'bridge.log').open('w')
 try:
     command=['perl',str(LMS_HOME/'slimserver.pl'),'--prefsdir',str(base/'prefs'),'--cachedir',str(base/'cache'),
              '--logdir',str(base/'log'),'--httpport','9000','--httpaddr','127.0.0.1','--cliport','19090',
              '--cliaddr','127.0.0.1','--playeraddr','127.0.0.1','--streamaddr','127.0.0.1',
-             '--advertiseaddr','127.0.0.1','--nosetup','--norestart']
+             '--advertiseaddr','127.0.0.1','--norestart']
     lms=subprocess.Popen(command,stdout=lms_log,stderr=subprocess.STDOUT,start_new_session=True,env=perl_env)
     def available():
         if lms.poll() is not None:raise AssertionError('real LMS exited: '+(base/'lms.log').read_text())
@@ -278,9 +279,11 @@ try:
     alac_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('4.m4a','5.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
     sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True;sonos.consume_stream=True
+    sonos.volume=20;sonos.muted=0
     sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None]+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
     tap=Tap()
-    env=dict(os.environ,YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(base))
+    env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(base))
+    if volume_only:env['YENEY_LMS_VOLUME']='speaker'
     bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
                             stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
     wait(lambda:any(r['op']=='HELO' for r in tap.records),10,'HELO')
@@ -289,6 +292,32 @@ try:
     print('PASS queue HELO MaxSampleRate=192000; ordinary stream remains 48000',flush=True)
     mac=':'.join(f'{v:02x}' for v in bytes.fromhex(hello['body'])[2:8])
     wait(lambda:cli('connected ?',mac)[-1]=='1',10,'player connected')
+    assert b'Model=yeney,' in bytes.fromhex(hello['body']) and b'HasDigitalOut=' not in bytes.fromhex(hello['body'])
+    audio_page=urlopen('http://127.0.0.1:9000/settings/player/audio.html?player='+mac,timeout=10).read().decode()
+    (base/'player-audio-settings.txt').write_text(audio_page)
+    assert 'pref_digitalVolumeControl' not in audio_page, 'native volume preference unexpectedly offered'
+    assert 'pref_transitionType' in audio_page, 'player audio settings did not render'
+    print('PASS real LMS 9.1.1 native volume preference: Model=yeney; Settings > Player > Audio rendered; pref_digitalVolumeControl absent (HasDigitalOut defaults to 0); YeneY setting is sole source',flush=True)
+    if volume_only:
+        from volume_test import notify
+        from types import SimpleNamespace
+        wait(lambda:getattr(sonos,'volume',None)==int(float(cli('mixer volume ?',mac)[-1])),10,'initial volume')
+        for value in (0,25,50,100):
+            cli('mixer volume '+str(value),mac)
+            wait(lambda:getattr(sonos,'volume',None)==value,5,'exact speaker volume '+str(value))
+            assert int(float(cli('mixer volume ?',mac)[-1]))==value
+        cli('mixer muting 1',mac)
+        wait(lambda:getattr(sonos,'muted',0)==1,5,'speaker mute')
+        n=len(sonos.volume_writes)
+        sonos.volume=42;sonos.muted=0
+        notify(SimpleNamespace(sonos=sonos,until=lambda f:wait(f,5,'volume subscription')))
+        wait(lambda:int(float(cli('mixer volume ?',mac)[-1]))==42 and cli('mixer muting ?',mac)[-1]=='0',5,'app volume/mute in real LMS')
+        time.sleep(.5)
+        assert len(sonos.volume_writes)==n,'speaker echo'
+        mutations=[r['request'] for r in proxy.records if ' mixer ' in r['request'] and not r['request'].endswith(' ?')]
+        assert mutations==[mac+' mixer muting 0',mac+' mixer volume 42'],mutations
+        print('PASS real LMS 9.1.1 exact mixer source: 0/25/50/100 and mute -> exact speaker values; app volume 42/mute 0 -> LMS once, raw MAC, no echo; audg gains never used',flush=True)
+        raise SystemExit(0)
     def packets(event):return [r for r in tap.records if r.get('event')==event]
     def items():
         with sonos.lock:return [i for i in sonos.items if 'resource' in i]
@@ -535,10 +564,12 @@ finally:
             owned={entry[1]['EnqueuedURI'] for entry in sonos.actions('AddURIToQueue')}
             assert not any(i['uri'] in owned for i in sonos.items) and sonos.crossfade,'owned cleanup/crossfade'
             assert sonos.verified_save and sonos.snapshots[sonos.last_save]==sonos.original,'verified Before YeneY backup'
-        cleanup(ownership_restored)
+        if not volume_only:cleanup(ownership_restored)
         cleanup(sonos.close)
     if remote:cleanup(remote.close)
     for source in extra_remotes:cleanup(source.close)
     cleanup(lambda:stop(lms));bridge_log.close();lms_log.close()
     (base/'owner-cli.json').write_text(json.dumps(OWNER_CLI,indent=2))
-    if failures:raise failures[0]
+    active_error=sys.exc_info()[1]
+    if failures and (active_error is None or isinstance(active_error,SystemExit) and active_error.code in (None,0)):
+        raise failures[0]

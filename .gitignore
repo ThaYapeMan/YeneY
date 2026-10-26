@@ -96,3 +96,5 @@ field-cold-test
 !scripts/archive/*.sh
 
 /.test-cache/
+
+/volume-test

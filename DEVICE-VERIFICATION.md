@@ -856,3 +856,33 @@ checkout and respects a caller's explicit value. Missing checkout or failed
 `lampastream.pcm_source` import fails the cross-repository consumer check. Only
 an explicit `LAMPASTREAM_CONSUMER=off` opts out; its final test report announces
 `CROSS-REPO CONSUMER NOT RUN (LAMPASTREAM_CONSUMER=off)`.
+
+## Optional LMS volume control
+
+Owner-only checks; automated tests use loopback fakes and a private LMS.
+Start at a safe physical volume, with ReplayGain disabled for audio comparison.
+
+1. Set `YENEY_LMS_VOLUME=off` (the default) and restart the room. Verify the log
+   reports `LMS volume=off` and its source, and the room status's `playback`
+   object reports `lms_volume`, `lms_volume_source` and `volume_max`. Move LMS
+   volume and mute: Sonos volume/mute must stay unchanged. Move Sonos volume:
+   LMS must stay unchanged. Playback must continue normally.
+2. Set `YENEY_LMS_VOLUME=speaker` and `YENEY_VOLUME_MAX=50`, restart, and verify
+   the log/status. Try LMS volume 0, 25, 50 and 100. Sonos must show 0, 25, 50
+   and 50. The first capped request logs once. Restore a comfortable volume.
+   LMS mute/unmute must change Sonos mute without changing the audio samples.
+3. Drag the LMS slider quickly. Only the settled value should remain; unchanged
+   values must produce no additional writes. Move volume/mute in the Sonos app:
+   LMS must follow once, without jumps or repeated changes in either app.
+4. Repeat on a group coordinator. The whole group's slider/mute must change
+   together. On a member, changes affect that room's own volume, without an
+   individual write to every member or changing the coordinator's transport.
+5. In LMS 9.1.1 open Settings > Player > select the YeneY room > Audio.
+   There is no native Volume control selector for Model=yeney. Use YeneY's
+   setting; never alter the server's internal digitalVolumeControl preference.
+6. Repeat a direct binary start with `--lms-volume=off` while the environment
+   says speaker, then with `--lms-volume=speaker` while it says off. The option
+   must win. Restore the desired persistent room setting afterward.
+
+The full-WAV automated baseline comparison proves audio byte identity in both
+modes. Physical volume/group acceptance remains an owner check.

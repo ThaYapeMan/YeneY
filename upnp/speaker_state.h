@@ -7,15 +7,18 @@
 namespace upnp {
 using StateClock = std::chrono::steady_clock;
 enum class Source { Event, Poll };
-enum class Service { AVTransport, RenderingControl, ZoneGroupTopology };
+enum class Service { AVTransport, RenderingControl, ZoneGroupTopology, GroupRenderingControl };
 constexpr size_t serviceIndex(Service service) { return static_cast<size_t>(service); }
 inline const char* serviceName(Service s) {
+    if (s == Service::GroupRenderingControl) return "GroupRenderingControl";
     return s == Service::AVTransport ? "AVTransport" : s == Service::RenderingControl ? "RenderingControl" : "ZoneGroupTopology";
 }
 inline const char* eventPath(Service s) {
+    if (s == Service::GroupRenderingControl) return "/grc";
     return s == Service::AVTransport ? "/avt" : s == Service::RenderingControl ? "/rc" : "/zgt";
 }
 inline const char* subscriptionPath(Service s) {
+    if (s == Service::GroupRenderingControl) return "/MediaRenderer/GroupRenderingControl/Event";
     return s == Service::AVTransport ? "/MediaRenderer/AVTransport/Event" :
         s == Service::RenderingControl ? "/MediaRenderer/RenderingControl/Event" : "/ZoneGroupTopology/Event";
 }

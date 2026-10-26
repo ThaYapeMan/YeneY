@@ -49,8 +49,8 @@ public:
     using Targets = std::function<std::array<std::string, 3>()>;
     using Address = std::function<std::string(const std::string&, unsigned)>;
     Subscriptions(unsigned speakerPort, HttpServer& server, Targets targets, GenaHandler handler,
-                  Address address = routeAddress)
-        : port(speakerPort), server(server), targets(std::move(targets)), handler(std::move(handler)), address(std::move(address)) {
+                  Address address = routeAddress, std::function<std::string()> groupTarget = {})
+        : port(speakerPort), server(server), targets(std::move(targets)), handler(std::move(handler)), address(std::move(address)), groupTarget(std::move(groupTarget)) {
         server.setNotifyHandler([this](const GenaEvent& event) { return receive(event); });
         try { worker = std::thread([this] { run(); }); }
         catch (...) { server.setNotifyHandler({}); throw; }
@@ -62,10 +62,10 @@ public:
         server.setNotifyHandler({});
     }
     SubscriptionHealth health() const {
-        const auto desired = targets();
+        const auto desired = desiredTargets();
         std::lock_guard<std::mutex> lock(mutex);
         SubscriptionHealth result;
-        for (size_t i = 0; i < slots.size(); ++i) {
+        for (size_t i = 0; i < result.active.size(); ++i) {
             result.active[i] = !slots[i].sid.empty() && slots[i].host == desired[i] && StateClock::now() < slots[i].schedule.expires;
             result.reason[i] = result.active[i] ? "" : slots[i].reason.empty() ? "expired-or-moved" : slots[i].reason;
         }
@@ -82,9 +82,14 @@ private:
     Targets targets;
     GenaHandler handler;
     Address address;
+    std::function<std::string()> groupTarget;
+    std::array<std::string, 4> desiredTargets() const {
+        const auto t = targets();
+        return {{t[0], t[1], t[2], groupTarget ? groupTarget() : ""}};
+    }
     mutable std::mutex mutex;
     std::condition_variable wake;
-    std::array<Slot, 3> slots;
+    std::array<Slot, 4> slots;
     bool stopping = false;
     std::thread worker;
     void unsubscribe(const Slot& slot, Service service) {
@@ -92,7 +97,7 @@ private:
                                           {{"SID", slot.sid}}, "", timing::unsubscribeMs);
     }
     bool receive(const GenaEvent& event) {
-        const auto desired = targets();
+        const auto desired = desiredTargets();
         {
             std::unique_lock<std::mutex> lock(mutex);
             auto& slot = slots[serviceIndex(event.service)];
@@ -108,7 +113,7 @@ private:
     }
     void run() {
         for (;;) {
-            const auto desired = targets();
+            const auto desired = desiredTargets();
             for (size_t i = 0; i < slots.size(); ++i) {
                 const auto service = static_cast<Service>(i);
                 Slot before;
@@ -116,6 +121,11 @@ private:
                     std::lock_guard<std::mutex> lock(mutex);
                     if (stopping) break;
                     before = slots[i];
+                }
+                if (i == 3 && desired[i].empty()) {
+                    unsubscribe(before, service);
+                    std::lock_guard<std::mutex> lock(mutex); slots[i] = {};
+                    continue;
                 }
                 const bool moved = before.host != desired[i];
                 if (!moved && StateClock::now() < before.schedule.due) continue;

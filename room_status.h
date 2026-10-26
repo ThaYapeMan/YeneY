@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include <atomic>
+#include "volume_control.h"
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -55,6 +56,9 @@ public:
         std::ostringstream out;
         out << "{\"requested\":" << q(v.requested) << ",\"active\":" << q(v.active)
             << ",\"state\":" << q(v.state) << ",\"reason\":" << q(v.reason);
+        const auto &volume = roomVolumeSettings();
+        out << ",\"lms_volume\":" << q(volume.speaker ? "speaker" : "off")
+            << ",\"lms_volume_source\":" << q(volume.source) << ",\"volume_max\":" << volume.maximum;
         if (!v.path.empty())
             out << ",\"path\":" << q(v.path);
         if (v.active == "queue") {

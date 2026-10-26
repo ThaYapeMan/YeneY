@@ -10,7 +10,7 @@ UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
 QUEUE_ROOM_OBJS = queue_room.o queue_relay.o queue_path.o queue_speaker.o queue_lms_commands.o queue_status.o
 
-OBJS = $(QUEUE_ROOM_OBJS) core_queue_sink.o core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
+OBJS = volume_control.o $(QUEUE_ROOM_OBJS) core_queue_sink.o core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
 all: yeney libqueueitems.a yeney-queue-dryrun
 
@@ -31,7 +31,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f volume-test lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test test-run install
 test:
@@ -53,6 +53,8 @@ encoder-test: tests/audio_pack_fixture.cpp upnp/encoded_buffer.cpp upnp/encoded_
 
 # Preserve the legacy wire fixtures explicitly; settings tests also exercise the unset default.
 test-run: export YENEY_DEBUG =
+test-run: export YENEY_LMS_VOLUME = off
+test-run: export YENEY_VOLUME_MAX = 100
 test-run: export YENEY_LMS_ICON =
 test-run: export YENEY_STREAM_PACING = wall
 test-run: export YENEY_PLAYBACK_MODE = stream
@@ -65,6 +67,8 @@ test-run: export YENEY_TIMING_LOCKED_EVERY_S = 5
 test-run: export YENEY_AUDIBLE_OFFSET_MS = 0
 test-run: export YENEY_TIMING_STALE_S = 60
 test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	./volume-test
+	python3 tests/volume_test.py
 	./stream-metrics-lifetime-test
 	./stream-metrics-lifetime-test worker
 	YENEY_STREAM_PACING=sonos YENEY_START_LEAD_MS=1000 ./stream-pacing-encoder-test
@@ -165,6 +169,7 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	python3 tests/queue_suite_test.py
 	$(MAKE) -C third_party/yeney-core decimator-fixture
 	python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_VOLUME_ONLY=1 python3 tests/real_lms_test.py
 	python3 third_party/yeney-core/tests/decimator_quality.py --sox "$${YENEY_REAL_LMS_HOME:-$${YENEY_TEST_CACHE}/real-lms-9.1.1}/Bin/x86_64-linux/sox"
 	$(MAKE) -C third_party/yeney-core test
 
@@ -446,3 +451,12 @@ queue-route-test core-queue-sink-test queue-item-store-test cold-position-test f
 
 # QueueOwnership is stored by value in the room implementation.
 $(QUEUE_ROOM_OBJS): upnp/queue_ownership.h
+
+yeney.o: volume_worker.h volume_control.h
+volume_control.o: volume_control.h
+
+volume-test: tests/volume_test.cpp volume_control.cpp volume_control.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ tests/volume_test.cpp volume_control.cpp
+test-run: volume-test
+
+upnp/own_speaker_control.o: upnp/own_speaker_control.h upnp/subscriptions.h upnp/speaker_state.h

@@ -101,6 +101,9 @@ class Device(Handler):
     def do_SUBSCRIBE(self):
         if 'ZoneGroupTopology' in self.path:
             self.server.topology_callback = self.headers.get('CALLBACK', '').strip('<>') or getattr(self.server, 'topology_callback', '')
+        if 'RenderingControl' in self.path:
+            key='group_volume_callback' if 'GroupRenderingControl' in self.path else 'volume_callback'
+            setattr(self.server,key,self.headers.get('CALLBACK','').strip('<>') or getattr(self.server,key,''))
         if 'AVTransport' in self.path:
             self.server.callback = self.headers.get('CALLBACK', '').strip('<>') or getattr(self.server, 'callback', '')
         self.send_response(200); self.send_header('SID','uuid:binary'); self.send_header('TIMEOUT','Second-1800')
@@ -109,11 +112,38 @@ class Device(Handler):
     def do_POST(self):
         action = self.headers['SOAPAction'].strip('"').split('#')[1]
         service = next((name for name in SERVICES if name in self.path), 'AVTransport')
-        if action == 'GetVolume':
-            self.rfile.read(int(self.headers['Content-Length']))
+        if action in ('GetVolume','GetMute','SetVolume','SetMute','GetGroupVolume','GetGroupMute','SetGroupVolume','SetGroupMute','SnapshotGroupVolume'):
+            group='Group' in action
+            service='GroupRenderingControl' if group else 'RenderingControl'
+            assert self.path=='/MediaRenderer/'+service+'/Control'
+            assert self.headers['SOAPAction'].strip('"')=='urn:schemas-upnp-org:service:'+service+':1#'+action
+            root=ET.fromstring(self.rfile.read(int(self.headers['Content-Length'])))
+            args={n.tag.rsplit('}',1)[-1]:n.text for n in list(list(root)[0])[0]}
+            assert args['InstanceID']=='0'
+            assert group or args['Channel']=='Master'
+            mute='Mute' in action
+            field=('group_' if group else '')+('muted' if mute else 'volume')
+            if action=='SnapshotGroupVolume':
+                self.server.group_snapshot=True
+                if not hasattr(self.server,'volume_writes'): self.server.volume_writes=[]
+                self.server.volume_writes.append((time.monotonic(),action,None))
+                values=''
+            elif action.startswith('Set'):
+                if action=='SetGroupVolume':
+                    assert getattr(self.server,'group_snapshot',False),'group snapshot required'
+                    self.server.group_snapshot=False
+                value=int(args['DesiredMute' if mute else 'DesiredVolume'])
+                assert 0<=value<=(1 if mute else 100)
+                setattr(self.server,field,value)
+                if not hasattr(self.server,'volume_writes'): self.server.volume_writes=[]
+                self.server.volume_writes.append((time.monotonic(),action,value))
+                values=''
+            else:
+                tag='CurrentMute' if mute else 'CurrentVolume'
+                values=f'<{tag}>{getattr(self.server,field,0 if mute else 20)}</{tag}>'
             self.send('<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/"><s:Body>'
-                      '<u:GetVolumeResponse xmlns:u="urn:schemas-upnp-org:service:RenderingControl:1">'
-                      '<CurrentVolume>20</CurrentVolume></u:GetVolumeResponse></s:Body></s:Envelope>'); return
+                      f'<u:{action}Response xmlns:u="urn:schemas-upnp-org:service:{service}:1">'
+                      +values+f'</u:{action}Response></s:Body></s:Envelope>');return
         self.path=PATHS[service]
         super().do_POST()
 
@@ -129,8 +159,18 @@ class CLI(socketserver.ThreadingTCPServer):
                     if line=='listen 1':
                         self.wfile.write(b'listen 1\n');self.wfile.flush();continue
                     mac,cmd=line.split(' ',1)
+                    deadline=time.monotonic()+2
+                    while not hasattr(owner,'mac') and time.monotonic()<deadline:time.sleep(.01)
                     assert mac==owner.mac and '%' not in mac, line
                     owner.commands.append(cmd)
+                    if cmd.startswith('mixer '):
+                        field='lms_mute' if cmd.startswith('mixer muting ') else 'lms_volume'
+                        if cmd.endswith('?'):
+                            answer=cmd[:-1].rstrip() if field=='lms_mute' and not hasattr(owner,field) else cmd[:-1]+str(getattr(owner,field,50))
+                        else:
+                            setattr(owner,field,int(cmd.split()[-1]));answer=cmd
+                            if field=='lms_volume' and getattr(owner,'lms_mute',0):owner.lms_mute=0
+                        self.wfile.write((mac+' '+answer+'\n').encode());self.wfile.flush();continue
                     if not cmd.startswith('status ') and not cmd.endswith('?'):
                         reasons={'stop':('speaker-stop','speaker-source-change','room-fault','group-member','track-fault-limit'),'pause 1':('speaker-pause',),'pause 0':('speaker-resume',)}
                         assert cmd in reasons,('unapproved LMS mutation',cmd)

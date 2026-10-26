@@ -345,3 +345,26 @@ cleanup. A cleanup failure logs once and cannot retain the lease or fault the ro
 A 7xx transport refusal means transport is no longer ours and ends the cleanup plan.
 Crossfade restoration is skipped after takeover, including when the room joins
 another coordinator. These rules also apply when running without systemd.
+
+## Per-player volume choice
+
+A future LMS plugin exposes `room.<name>.lms_volume=off|speaker` and
+`room.<name>.volume_max=0..100` in the existing global configuration as
+per-player settings. Runtime CLI/environment overrides, status and stdout logs
+also support direct starts without systemd. Default off retains the original
+traffic and bit-perfect PCM. Speaker mode reads exact LMS mixer volume/mute,
+uses RenderingControl locally or GroupRenderingControl for a coordinator with
+members, debounces writes and mirrors observed app changes through the sole
+reason-checked LMS mutation choke point. No audio gain is applied.
+
+The private real LMS 9.1.1 test renders Settings > Player > Audio for the actual
+Model=yeney HELO. Native digitalVolumeControl is absent because HasDigitalOut
+is not advertised (SqueezePlay default 0); the server's audio settings only
+expose that preference for digital-output players. Thus YeneY configuration is
+the sole mode source for the current model. Do not set the internal preference
+or change HELO merely to expose it: that would change default wire behavior.
+
+Group volume uses SnapshotGroupVolume before each settled SetGroupVolume to
+preserve relative member levels, following [Sonos volume guidance](https://docs.sonos.com/docs/volume).
+Snapshot and level/mute writes share the 200 ms rate limit. A snapshot never
+counts as confirmation of a volume change.

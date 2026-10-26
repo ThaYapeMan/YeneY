@@ -23,6 +23,14 @@ public:
     ~OwnSpeakerControl() override;
     void shutdownEvents();
     void queueEvents(GenaHandler);
+    void enableGroupVolume() { groupVolume = true; }
+    uint64_t volumeRevision() const { return volumeEvents.load(); }
+    SoapResult volumeAction(const std::string& action, const SoapArguments& args, bool group) {
+        const auto current = speaker();
+        const bool currentGroup = current.coordinator == current.name && current.members.size() > 1;
+        if (group != currentGroup) return {};
+        return call(action, args, current.ip, group ? "GroupRenderingControl" : "RenderingControl");
+    }
     bool discover(const std::string&, const std::string& = {}) override;
     std::vector<std::string> discoverRooms(const std::string& = {}) override;
     std::vector<Speaker> discoverRoomDetails(const std::string& = {}) override;
@@ -55,6 +63,8 @@ private:
     MonitorPolicy monitor;
     std::string monitorLog;
     std::function<void()> eventCallback;
+    std::atomic<bool> groupVolume{false};
+    std::atomic<uint64_t> volumeEvents{0};
     GenaHandler queueObserver;
     std::mutex queueObserverMutex;
     std::shared_ptr<HttpServer> eventServer;
