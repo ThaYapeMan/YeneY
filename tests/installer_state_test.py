@@ -106,7 +106,7 @@ class StateTests(unittest.TestCase):
             runner.build = 'binary-changed'; runner.calls.clear()
             text = apply()
             self.assertEqual({a[-1] for a in runner.actions() if a[1]=='restart'}, runner.active)
-            self.assertNotIn(['systemctl','daemon-reload'], runner.calls)
+            self.assertEqual(runner.calls.count(['systemctl','daemon-reload']), 1)
             for room in NAMES:
                 self.assertRegex(text, __import__('re').escape(room)+r' +restarted +LMS player')
             for change in ('template', 'dropin', 'pending'):
@@ -120,6 +120,52 @@ class StateTests(unittest.TestCase):
                 self.assertFalse((config/'unit-update-pending').exists())
                 runner.calls.clear(); apply(); self.assertFalse(runner.actions())
         print('PASS installer changed binary/template/drop-in restarts every running room; reload before restart; unchanged install keeps rooms')
+
+    def test_reload_failure_and_loaded_settings(self):
+        with tempfile.TemporaryDirectory(prefix='yeney-state-') as tmp:
+            base = Path(tmp); config = base/'config'; units = base/'units'
+            config.mkdir(); (config/'config').write_text('LMS_SERVER=host\nroom.Study=yes\n')
+            runner = Commands('Study\n')
+            unit = 'yeney@Study.service'
+            runner.active = {unit}; runner.enabled = {unit}
+            def apply(run):
+                installer.install(ROOT, config, units, [], run, io.StringIO(), io.StringIO(),
+                                  lms_check=mock_lms, state_root=base/'state')
+            def fail_reload(args, **kwargs):
+                if args == ['systemctl', 'daemon-reload']:
+                    self.assertEqual((units/'yeney@.service').read_text(), (ROOT/'packaging/yeney@.service').read_text())
+                    path, text = installer.state_dropins(units, {'Study': (unit, True, True)})['Study']
+                    self.assertEqual(path.read_text(), text)
+                    raise subprocess.CalledProcessError(1, args)
+                return runner(args, **kwargs)
+            with self.assertRaisesRegex(ValueError, 'daemon-reload failed; no rooms restarted'):
+                apply(fail_reload)
+            self.assertFalse(runner.actions())
+            self.assertFalse((config/'installed-build').exists())
+            self.assertTrue((config/'unit-update-pending').exists())
+            runner.calls.clear(); apply(runner)
+            reload = runner.calls.index(['systemctl', 'daemon-reload'])
+            restart = runner.calls.index(['systemctl', 'restart', unit])
+            self.assertLess(reload, restart)
+            self.assertEqual(runner.calls.count(['systemctl', 'daemon-reload']), 1)
+            for prop in ('StateDirectory', 'Environment'):
+                self.assertGreater(runner.calls.index(['systemctl', 'show', '--property', prop, '--value', unit]), restart)
+            def stale(args, **kwargs):
+                result = runner(args, **kwargs)
+                if args[:4] == ['systemctl', 'show', '--property', 'StateDirectory']:
+                    result.stdout = 'yeney/stale'
+                return result
+            runner.build = 'stale-settings-build'
+            with self.assertRaisesRegex(ValueError, 'loaded StateDirectory'):
+                apply(stale)
+            def inactive(args, **kwargs):
+                result = runner(args, **kwargs)
+                if args[:2] == ['systemctl', 'is-active']:
+                    result.returncode = 3
+                return result
+            with self.assertRaisesRegex(ValueError, 'not active'):
+                apply(inactive)
+        print('PASS installer writes all units before one reload before restart; failed reload prevents restart; active and loaded StateDirectory/Environment verified')
 
     def test_binary_bytes_and_failed_unit_restart_are_retried(self):
         with tempfile.TemporaryDirectory(prefix='yeney-state-') as tmp:

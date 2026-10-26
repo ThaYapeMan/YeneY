@@ -620,8 +620,11 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
                 path.unlink()
             else:
                 print(f'Note: leaving changed override {path}.', file=output)
-        if units_changed:
-            run(['systemctl', 'daemon-reload'], check=True)
+        if units_changed or plan['Start'] or plan['Restart']:
+            try:
+                run(['systemctl', 'daemon-reload'], check=True)
+            except subprocess.CalledProcessError as error:
+                raise ValueError('systemctl daemon-reload failed; no rooms restarted; retry installation.') from error
         for kind in ('Stop', 'Enable', 'Start', 'Restart'):
             for room in plan[kind]:
                 unit = states[room][0]
@@ -634,7 +637,23 @@ def install(repo, config_dir, unit_dir, args, run=subprocess.run, output=sys.std
                     run(['systemctl', 'enable', '--now', unit], check=True)
                 else:
                     run(['systemctl', 'restart', unit], check=True)
-        # A failed service action must never bless this build as installed.
+    for room, wanted in rooms.items():
+        if not wanted:
+            continue
+        unit = states[room][0]
+        if run(['systemctl', 'is-active', '--quiet', unit]).returncode:
+            raise ValueError(f'{unit} is not active after installation.')
+        loaded = {}
+        for property_name in ('StateDirectory', 'Environment'):
+            loaded[property_name] = run(['systemctl', 'show', '--property', property_name,
+                                         '--value', unit], check=True, capture_output=True,
+                                        text=True).stdout.strip()
+        expected = 'yeney/' + state_name(room)
+        if loaded['StateDirectory'] != expected:
+            raise ValueError(f'{unit}: loaded StateDirectory {loaded["StateDirectory"]!r}, expected {expected!r}.')
+        print(f'{unit}: active StateDirectory={loaded["StateDirectory"]} Environment={loaded["Environment"]}', file=output)
+    if work:
+        # Failed service actions or verification must never bless the installed build.
         if build_changed: atomic_write(stamp, identity)
         if units_changed: pending.unlink()
     clean_legacy_status(state_root, rooms, run, output)

@@ -52,6 +52,7 @@ class Commands:
         if action == 'is-active': code = 0 if unit in self.active else 3
         elif action == 'is-enabled': code = 0 if unit in self.enabled else 1
         elif action == 'show' and 'StateDirectory' in args: output = self.state_dirs.get(unit, '')
+        elif action == 'show' and 'Environment' in args: output = ''
         elif action == 'show': output = 'not-found\n' if unit in self.missing else 'loaded\n'
         elif action == 'enable':
             self.enabled.add(unit)

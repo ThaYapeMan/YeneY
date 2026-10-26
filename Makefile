@@ -1,6 +1,8 @@
 # Test installations persist on disk; each test invocation owns a cleaned workspace.
 export YENEY_TEST_CACHE ?= $(HOME)/.cache/yeney-test
 export TMPDIR ?= /var/tmp
+# An explicitly empty caller value disables private-media checks.
+export YENEY_LENGTH_FIXTURE_DIR ?= $(shell for directory in "$(HOME)/src/private-fixtures" "$(HOME)/private-fixtures" /mnt/c/HueSyncLXC/private-fixtures; do if test -d "$$directory"; then printf "%s" "$$directory"; break; fi; done)
 export LAMPASTREAM_CHECKOUT ?= $(abspath ../LampaStream)
 
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
@@ -79,6 +81,7 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	python3 tests/queue_takeover_test.py
 	python3 tests/queue_group_test.py
 	python3 tests/queue_title_test.py
+	python3 tests/length_fixture_policy_test.py
 	python3 tests/length_binary_test.py
 	./queue-source-test
 	./room-status-test
