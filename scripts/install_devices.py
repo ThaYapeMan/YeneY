@@ -393,14 +393,14 @@ def connected_players(reply):
     for token in reply.split():
         key, sep, value = unquote(token).partition(':')
         if key == 'playerindex':
-            if record.get('connected') == '1' and 'name' in record: connected.add(record['name'])
+            if record.get('connected') == '1' and 'playerid' in record: connected.add(record['playerid'].lower())
             record = {}
         if sep: record[key] = value
-    if record.get('connected') == '1' and 'name' in record: connected.add(record['name'])
+    if record.get('connected') == '1' and 'playerid' in record: connected.add(record['playerid'].lower())
     return connected
 
 
-def check_lms(host, rooms, timeout=15, connect=socket.create_connection):
+def check_lms(host, rooms, timeout=15, connect=socket.create_connection, identity=None):
     """One shared deadline, including DNS/connect/read, regardless of room count.
 
     Network work is in a daemon so even a stalled OS resolver cannot hold up install.
@@ -410,10 +410,21 @@ def check_lms(host, rooms, timeout=15, connect=socket.create_connection):
     if not host: return {}, 'no LMS host known'
     events, stop = queue.Queue(), threading.Event()
     deadline = time.monotonic() + timeout
-    wanted = {room + ' (Sonos)' for room in rooms}
+    if identity is None:
+        def identity(room):
+            _, directory = ROOM_STATE['room_state'](room)
+            return ROOM_STATE['player_identity'](room, directory)
+    identities = {}
+    wanted = set(rooms)
     def poll():
         try:
             while not stop.is_set() and time.monotonic() < deadline:
+                current = {}
+                for room in rooms:
+                    try: current[room] = identity(room)
+                    except (OSError, ValueError, KeyError, subprocess.SubprocessError): pass
+                events.put(('identities', current))
+                if stop.is_set() or time.monotonic() >= deadline: return
                 remaining = max(0.001, deadline - time.monotonic())
                 with connect((host, 9090), timeout=min(2, remaining)) as sock:
                     sock.settimeout(min(2, remaining))
@@ -427,8 +438,9 @@ def check_lms(host, rooms, timeout=15, connect=socket.create_connection):
                         if len(data) > 1024 * 1024: raise OSError('CLI reply too large')
                         if stop.is_set() or time.monotonic() >= deadline: return
                     seen = connected_players(data.split(b'\n', 1)[0].decode('utf-8', errors='replace'))
-                    events.put(('seen', seen))
-                    if wanted <= seen: return
+                    connected = {room for room, value in current.items() if value[0] in seen}
+                    events.put(('seen', connected))
+                    if wanted <= connected: return
                 stop.wait(min(0.5, max(0, deadline - time.monotonic())))
         except OSError as error:
             events.put(('skip', f'port 9090 unreachable: {error}'))
@@ -443,11 +455,12 @@ def check_lms(host, rooms, timeout=15, connect=socket.create_connection):
             if kind == 'skip':
                 skipped = value
                 break
-            seen.update(value)
+            if kind == 'identities': identities.update(value)
+            else: seen.update(value)
     finally:
         stop.set()
-    return {room: f'LMS player "{room} (Sonos)" ' +
-            ('connected' if room + ' (Sonos)' in seen else f'not seen after {timeout:g} s')
+    return {room: f'LMS player "{identities[room][1]}" ' +
+            ('connected' if room in seen else f'not seen after {timeout:g} s') if room in identities else 'LMS player identity unavailable'
             for room in rooms}, skipped
 
 

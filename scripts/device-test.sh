@@ -21,7 +21,7 @@
 # Settings (environment):
 #   ROOM        Sonos room / systemd instance            (default: Study)
 #   LMS         LMS host             (default: config, recent journal, unit --server, full journal)
-#   PLAYER      LMS player id (MAC)  (default: looked up as "<ROOM> (Sonos)")
+#   PLAYER      LMS player id (MAC)  (default: MAC from room status)
 #   TRACK_A     search text, or id:<n> for track A       (default: Just A Little Bit More)
 #   TRACK_B     search text, or id:<n> for track B       (default: False Need)
 #   SCENARIOS   which scenarios to run                   (default: 1 2 3 4 5 6 7)
@@ -159,16 +159,19 @@ resolve_track() {
 }
 
 resolve_player() {
-    local r tok id='' want="$ROOM (Sonos)"
-    r=$(cli_raw "players 0 100") || return 1
-    for tok in $r; do
-        tok=$(urldec "$tok")
-        case $tok in
-            playerid:*) id=${tok#playerid:} ;;
-            name:*) [[ ${tok#name:} == "$want" ]] && { printf '%s' "$id"; return 0; } ;;
-        esac
-    done
-    return 1
+    python3 - "$ROOM" "${YENEY_STATE_DIRECTORY:-}" <<'PYIDENTITY'
+import json, os, pathlib, re, subprocess, sys
+room, directory = sys.argv[1:]
+if not directory:
+    unit = subprocess.check_output(['systemd-escape','--template=yeney@.service','--',room],text=True).strip()
+    value = subprocess.check_output(['systemctl','show',unit,'-p','StateDirectory','--value'],text=True).strip()
+    directory = str(pathlib.Path('/var/lib')/value) if value else '/var/lib/yeney'
+state = json.loads((pathlib.Path(directory)/('stream-pacing-'+room.encode().hex()+'.json')).read_text())
+mac = state['mac']
+assert re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}',mac)
+assert state['true_name'] == room+' (Sonos)'
+print(mac.lower())
+PYIDENTITY
 }
 
 # --------------------------------------------------------------- markers ---
@@ -1007,7 +1010,7 @@ if have systemctl && ! systemctl is-active --quiet "$UNIT"; then
 fi
 
 PLAYER=${PLAYER:-$(resolve_player)} || true
-[[ -n ${PLAYER:-} ]] || fail "no LMS player named '$ROOM (Sonos)'; set PLAYER=<mac>"
+[[ -n ${PLAYER:-} ]] || fail "no room identity available; set PLAYER=<mac>"
 
 say "Room $ROOM ($UNIT), LMS $LMS, player $PLAYER"
 HAS_S9=0

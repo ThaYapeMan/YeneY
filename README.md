@@ -220,7 +220,7 @@ there is no Apply prompt. Declining Apply or pressing Ctrl-C at a prompt changes
 no files or services.
 
 Afterward, enabled rooms (including kept rooms) share an LMS CLI check on port
-9090, waiting at most 15 seconds for `<room> (Sonos)` with `connected:1`.
+9090, waiting at most 15 seconds for the MAC from the room status with `connected:1`.
 A missing host or unreachable CLI skips the check without failing installation;
 a running service alone does not prove it reached LMS.
 
@@ -276,6 +276,24 @@ Environment=YENEY_TITLE_FORMAT=title
 sudo systemctl restart 'yeney@Study'
 ```
 
+The true player name is always `<room> (Sonos)`, alongside the unchanged room
+name and MAC. Only the display name sent to LMS changes. Precedence is
+`--show-sonos-suffix=yes|no`, then the per-room process environment
+`YENEY_SHOW_SONOS_SUFFIX`, then the global `YENEY_SHOW_SONOS_SUFFIX=yes|no`
+key in `/etc/yeney/config` (`YENEY_CONFIG` selects another file), then `yes`.
+An invalid selected value warns once and uses `yes`. This also works directly:
+
+```sh
+./yeney --room=Study --server=192.0.2.23 --show-sonos-suffix=no
+```
+
+LMS has one player-name field, so every LMS interface shows the display name.
+The MAC-bound player and its preferences/playlist remain the same. A rename in
+LMS lasts until the next YeneY restart, when the configured display name returns
+through SlimProto SETD. Startup logs show both names and the setting source;
+the room status publishes `true_name`, `display_name` and `mac`. Tools select by
+MAC and use the true name for reporting, independently of the LMS display name.
+
 Volume control also works when starting the binary directly:
 
 ```sh
@@ -322,6 +340,7 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |
 | `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |
 | `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; invalid/overflowing values fail queue configuration | `256` |
+| `YENEY_SHOW_SONOS_SUFFIX` | `yes`: LMS displays `<room> (Sonos)` · `no`: LMS displays `<room>`; identity stays unchanged | `yes` |
 | `YENEY_LMS_VOLUME` | `off`: ignore LMS volume · `speaker`: map LMS volume/mute to Sonos and mirror app changes to LMS; PCM remains unchanged | `off` |
 | `YENEY_VOLUME_MAX` | Maximum speaker volume YeneY writes, integer 0–100; applies in speaker mode | `100` |
 | `YENEY_LMS_ICON` | Material icon name; explicitly empty disables preference handling | `sonos` |
@@ -519,6 +538,7 @@ yeney --room="Living Room" [--ip=<sonos-ip>] [--server=<lms-host>]
 | `--find-server` | Discover LMS; print only its host/IP and exit 0, or print nothing and exit non-zero. |
 | `--list-rooms` | Print sorted, unique room names, including group members, then exit. Uses `YENEY_UPNP` and honours `--ip`. |
 | `--lms-volume=off\|speaker` | Override the room's volume mode; takes precedence over its environment and saved config. |
+| `--show-sonos-suffix=yes\|no` | Override the LMS display suffix; true name and MAC remain unchanged. |
 | `--room=<name>` | Required except with `--list-rooms` or `--find-server`. The Sonos room/zone to take over. |
 | `--ip=<address>` | Skip Sonos auto-discovery and talk to this player directly (any player in the household will do -- they share topology). Needed if discovery can't reach the Sonos network. |
 | `--server=<host>` | LMS hostname or IP **only**, not a web-UI port. Precedence: explicit `--server` > `LMS_SERVER=` in `/etc/yeney/config` > automatic UDP broadcast discovery on port 3483 (same subnet only; does not cross routers). |

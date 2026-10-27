@@ -29,6 +29,7 @@
 #include "sbstreamer.h"
 #include "sonos-position.h"
 #include "sonos-status.h"
+#include "player_name.h"
 #include "stream_metrics.h"
 #include "stream_pacing.h"
 #include "stop_debounce.h"
@@ -1035,6 +1036,8 @@ int main(int argc, char** argv)
     }
     if (!gPlayer->discover(room, ip ? ip : "")) return EXIT_FAILURE;
     const auto selectedSpeaker = gPlayer->speaker();
+    bridge::playerName() = bridge::playerNames(selectedSpeaker.name, findOption(argc, argv, "--show-sonos-suffix"),
+        std::getenv("YENEY_CONFIG") ? std::getenv("YENEY_CONFIG") : "/etc/yeney/config");
     bridge::streamMetrics().configure(selectedSpeaker.name);
     bridge::roomVolumeSettings() = bridge::volumeSettings(selectedSpeaker.name, findOption(argc, argv, "--lms-volume"),
         std::getenv("YENEY_CONFIG") ? std::getenv("YENEY_CONFIG") : "/etc/yeney/config");
@@ -1052,6 +1055,9 @@ int main(int argc, char** argv)
 
     bridge::Status status(gPlayer);
     status.get_mac(gMac);
+    char identityMac[18];
+    snprintf(identityMac, sizeof identityMac, "%02x:%02x:%02x:%02x:%02x:%02x", gMac[0],gMac[1],gMac[2],gMac[3],gMac[4],gMac[5]);
+    bridge::playerName().mac = identityMac;
     printf(" (MAC = %02X:%02X:%02X:%02X:%02X:%02X)\n\n", gMac[0], gMac[1], gMac[2], gMac[3], gMac[4], gMac[5]);
     if (server) {
         gServer = server;
@@ -1092,7 +1098,7 @@ int main(int argc, char** argv)
     volume.reset(new bridge::VolumeWorker(std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer),
         gServer.substr(0, gServer.find(':')), volumeMac, bridge::roomVolumeSettings()));
     static StopTimer stopTimer;
-    std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(), std::string(room) + " (Sonos)");
+    std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(), bridge::playerName().displayName);
 
     runBridgeLoop(status);
 

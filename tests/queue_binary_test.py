@@ -231,7 +231,7 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False, player_options=()):
         self.titles=titles or [f'Title & {i}' for i in range(len(rates))]
         self.remote_sources=remote_sources
         self.resume_restart=resume_restart
@@ -257,7 +257,7 @@ class Binary:
         self.cli=CLI(self);self.lms=LMS();self.log=open(self.base/'bridge.log','w')
         env=dict(os.environ,YENEY_PLAYBACK_MODE=mode,YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(self.base))
         self.proc=subprocess.Popen([str(binary or ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',
-                                   '--server=127.0.0.1:'+str(self.lms.listener.getsockname()[1])],stdout=self.log,stderr=self.log,env=env)
+                                   '--server=127.0.0.1:'+str(self.lms.listener.getsockname()[1])]+list(player_options),stdout=self.log,stderr=self.log,env=env)
         try:
             hello=self.lms.accept()
             self.mac=':'.join(f'{v:02x}' for v in hello['body'][2:8])

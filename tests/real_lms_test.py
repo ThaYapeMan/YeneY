@@ -250,6 +250,7 @@ for rate in (44100,88200,96000):
 # Seed CLI preferences so first-start plugin migration cannot replace the port.
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
 lms=bridge=tap=sonos=remote=proxy=None
+name_only=os.environ.get('YENEY_REAL_LMS_NAME_ONLY')=='1'
 volume_only=os.environ.get('YENEY_REAL_LMS_VOLUME_ONLY')=='1'
 extra_remotes=[]
 lms_log=(base/'lms.log').open('w');bridge_log=(base/'bridge.log').open('w')
@@ -298,6 +299,54 @@ try:
     assert 'pref_digitalVolumeControl' not in audio_page, 'native volume preference unexpectedly offered'
     assert 'pref_transitionType' in audio_page, 'player audio settings did not render'
     print('PASS real LMS 9.1.1 native volume preference: Model=yeney; Settings > Player > Audio rendered; pref_digitalVolumeControl absent (HasDigitalOut defaults to 0); YeneY setting is sole source',flush=True)
+    if name_only:
+        wait(lambda:cli('name ?',mac)[-1]=='Study (Sonos)',10,'initial true name')
+        cli('playlist clear',mac)
+        cli('playlistcontrol cmd:add track_id:'+','.join(ids),mac)
+        wait(lambda:cli('playlist tracks ?',mac)[-1]=='4',10,'four stopped playlist tracks')
+        assert cli('mode ?',mac)[-1]=='stop', 'name regression must retain stopped state'
+        cli('mixer volume 37',mac)
+        prefs={'plugin.material-skin:icon':'{"icon":"owner-name-test"}', 'syncVolume':'0', 'syncPower':'0', 'transitionType':'0'}
+        for key,value in prefs.items():cli('playerpref '+key+' '+quote(value,safe=''),mac)
+        cli('playlist repeat 2',mac);cli('playlist shuffle 0',mac)
+        def saved():
+            return {key:cli('playerpref '+key+' ?',mac)[-1] for key in prefs} | {
+                'volume':cli('mixer volume ?',mac)[-1], 'repeat':cli('playlist repeat ?',mac)[-1],
+                'shuffle':cli('playlist shuffle ?',mac)[-1], 'playlist':cli('status - 100 tags:u',mac)[3:],
+                'syncgroups':cli('syncgroups ?')}
+        # Select only stable playlist fields; connection/name/timestamps are expected to change.
+        def stable():
+            value=saved();value['playlist']=[v for v in value['playlist'] if v.startswith(('playlist index:','id:','url:','playlist_tracks:','playlist_cur_index:','mode:'))]
+            return value
+        before=stable()
+        for suffix,display in [('no','Study'),('yes','Study (Sonos)')]:
+            stop(bridge);bridge=None
+            wait(lambda:cli('connected ?',mac)[-1]=='0',10,'disconnect')
+            mark=len(tap.records)
+            env['YENEY_SHOW_SONOS_SUFFIX']=suffix
+            bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
+            wait(lambda:cli('connected ?',mac)[-1]=='1' and cli('name ?',mac)[-1]==display,15,'configured display '+display)
+            wait(lambda:any(r['op']=='SETD' for r in tap.records[mark:]),10,'SETD display exchange')
+            names=[bytes.fromhex(r['body'])[1:].rstrip(b'\0').decode() for r in tap.records[mark:] if r['op']=='SETD' and bytes.fromhex(r['body'])[:1]==b'\0']
+            assert display in names,names
+            assert stable()==before,(stable(),before)
+            state=base/('stream-pacing-'+b'Study'.hex()+'.json')
+            wait(lambda:state.exists() and json.loads(state.read_text()).get('display_name')==display,5,'identity snapshot')
+            status=json.loads(state.read_text())
+            assert status['true_name']=='Study (Sonos)' and status['mac']==mac,status
+            print('PASS real LMS 9.1.1 suffix='+suffix+' name='+display+' MAC='+mac+' SETD verified; Material icon, sync preferences/groups, volume and four-track stopped playlist state unchanged',flush=True)
+            # Let registration's name/pref echoes finish before simulating an
+            # administrator rename; an in-flight startup echo can overwrite it.
+            wait(lambda:time.monotonic()-max(r['when'] for r in tap.records[mark:] if r['op']=='SETD')>.3,5,'name registration settled')
+            cli('name Web%20rename',mac)
+            wait(lambda:cli('name ?',mac)[-1]=='Web rename',5,'web rename equivalent name command')
+            assert json.loads(state.read_text())['true_name']=='Study (Sonos)'
+        stop(bridge);bridge=None
+        env['YENEY_SHOW_SONOS_SUFFIX']='yes'
+        bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
+        wait(lambda:cli('name ?',mac)[-1]=='Study (Sonos)',15,'restart overrides web rename')
+        print('PASS LMS name mutation lasts until next YeneY restart; configured display reapplied through SETD, without CLI rename for toggle',flush=True)
+        raise SystemExit(0)
     if volume_only:
         from volume_test import notify
         from types import SimpleNamespace
@@ -564,7 +613,7 @@ finally:
             owned={entry[1]['EnqueuedURI'] for entry in sonos.actions('AddURIToQueue')}
             assert not any(i['uri'] in owned for i in sonos.items) and sonos.crossfade,'owned cleanup/crossfade'
             assert sonos.verified_save and sonos.snapshots[sonos.last_save]==sonos.original,'verified Before YeneY backup'
-        if not volume_only:cleanup(ownership_restored)
+        if not volume_only and not name_only:cleanup(ownership_restored)
         cleanup(sonos.close)
     if remote:cleanup(remote.close)
     for source in extra_remotes:cleanup(source.close)

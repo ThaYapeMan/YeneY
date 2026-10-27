@@ -29,3 +29,14 @@ def room_state(room, run=command, *, state_base=STATE_BASE, legacy_root=LEGACY_R
         raise ValueError('invalid escaped room unit')
     value = run('systemctl', 'show', unit, '-p', 'StateDirectory', '--value')
     return unit, state_directory(value, state_base=state_base, legacy_root=legacy_root)
+
+
+def player_identity(room, directory):
+    """Read immutable bridge identity; LMS display names are never identifiers."""
+    import json
+    import re
+    state = json.loads((Path(directory)/('stream-pacing-'+room.encode().hex()+'.json')).read_text())
+    mac, true_name = state['mac'], state['true_name']
+    if not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', mac) or true_name != room+' (Sonos)':
+        raise ValueError('invalid room identity')
+    return mac.lower(), true_name

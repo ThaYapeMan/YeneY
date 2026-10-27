@@ -68,6 +68,10 @@ class Commands:
                 and args[1] in ('enable', 'restart', 'stop', 'disable')]
 
 
+def identity(room):
+    return {"Sonos Port":"00:11:22:33:44:55", "Study":"00:11:22:33:44:66"}.get(room,"00:11:22:33:44:77"), room+" (Sonos)"
+
+
 def mock_lms(host, rooms):
     # Exercise the real parser/polling code with an in-memory CLI socket.
     class Socket:
@@ -77,8 +81,8 @@ def mock_lms(host, rooms):
         def sendall(self, value): assert value == b'players 0 999\n'
         def recv(self, size):
             from urllib.parse import quote
-            return ('players 0 999 ' + ' '.join(f'playerindex%3A{i} name%3A{quote(room + " (Sonos)")} connected%3A1' for i, room in enumerate(rooms)) + '\n').encode()
-    return installer.check_lms(host, rooms, connect=lambda *a, **k: Socket())
+            return ('players 0 999 ' + ' '.join(f'playerindex%3A{i} playerid%3A{identity(room)[0]} name%3A{quote(room + " (Sonos)")} connected%3A1' for i, room in enumerate(rooms)) + '\n').encode()
+    return installer.check_lms(host, rooms, connect=lambda *a, **k: Socket(), identity=identity)
 
 
 class InstallerTests(unittest.TestCase):
@@ -524,9 +528,9 @@ class InstallerTests(unittest.TestCase):
         self.assertIn('LMS server: - (none)', self.out.getvalue())
 
     def test_lms_cli_encoding_timeout_unreachable_and_shared_deadline(self):
-        response = 'players 0 999 count%3A2 playerindex%3A0 name%3ASonos%20Port%20%28Sonos%29 connected%3A1 playerindex%3A1 name%3AStudy%20%28Sonos%29 connected%3A0'
-        self.assertEqual(installer.connected_players(response), {'Sonos Port (Sonos)'})
-        self.assertEqual(installer.connected_players('players 0 999 playerindex:0 name:A%2BB%3A%20C connected:1'), {'A+B: C'})
+        response = 'players 0 999 count%3A2 playerindex%3A0 playerid%3A00:11:22:33:44:55 name%3ASonos%20Port%20%28Sonos%29 connected%3A1 playerindex%3A1 name%3AStudy%20%28Sonos%29 connected%3A0'
+        self.assertEqual(installer.connected_players(response), {'00:11:22:33:44:55'})
+        self.assertEqual(installer.connected_players('players 0 999 playerindex:0 playerid:00:11:22:33:44:55 name:A%2BB%3A%20C connected:1'), {'00:11:22:33:44:55'})
         class Socket:
             def __enter__(self): return self
             def __exit__(self, *args): pass
@@ -535,21 +539,21 @@ class InstallerTests(unittest.TestCase):
             def recv(self, size): return (response + '\n').encode()
         start = time.monotonic()
         checks, skipped = installer.check_lms('host', ['Sonos Port', 'Study', 'Other'], timeout=0.03,
-                                             connect=lambda *a, **k: Socket())
+                                             connect=lambda *a, **k: Socket(), identity=identity)
         self.assertLess(time.monotonic() - start, 0.3)
         self.assertFalse(skipped)
         self.assertIn('connected', checks['Sonos Port'])
         self.assertIn('not seen after 0.03 s', checks['Study'])
         self.assertIn('not seen after 0.03 s', checks['Other'])
         def unreachable(*args, **kwargs): raise OSError('connection refused')
-        self.assertIn('port 9090 unreachable', installer.check_lms('host', ['Study'], connect=unreachable)[1])
+        self.assertIn('port 9090 unreachable', installer.check_lms('host', ['Study'], connect=unreachable, identity=identity)[1])
         self.assertEqual(installer.check_lms('', ['Study'])[1], 'no LMS host known')
         # Even a resolver ignoring socket timeout cannot hold the caller up.
         def stalled(*args, **kwargs):
             time.sleep(0.1)
             raise OSError('resolver stalled')
         start = time.monotonic()
-        installer.check_lms('host', ['Study'], timeout=0.02, connect=stalled)
+        installer.check_lms('host', ['Study'], timeout=0.02, connect=stalled, identity=identity)
         self.assertLess(time.monotonic() - start, 0.08)
 
     def test_real_tty_session_and_yes(self):

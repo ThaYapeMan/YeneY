@@ -84,7 +84,7 @@ class FakeBackend:
         if self.midgroup and self.time>=30: self.grouped=True
         if self.interrupt and self.time>=30:
             self.interrupt=False; raise KeyboardInterrupt()
-        s=dict(pid=self.pid,monotonic_ms=int(self.time*1000),mode='sonos',start_lead_ms=1000,
+        s=dict(mac=MAC,true_name="Study (Sonos)",display_name="Study",pid=self.pid,monotonic_ms=int(self.time*1000),mode='sonos',start_lead_ms=1000,
                overwrites=0,dropped=0,socket_backpressure_ms=self.time,socket_backpressure_calls=1,
                encoded_ms=self.time*1000+1500,audible_ms=self.time*1000,lead_ms=1500,
                valid=True,connection_id=1,locked=True)
@@ -93,9 +93,11 @@ class FakeBackend:
         if self.fault=='pid': s['pid']=999
         if self.fault=='wall': s['mode']='wall'
         if self.fault=='unlock' and self.time>=130: s['locked']=False
-        if self.fault!='missing':
+        if self.fault!='missing' or self.time<=1:
             path=self.suite.state_root/('stream-pacing-'+self.suite.room.encode().hex()+'.json')
             path.write_text(json.dumps(s))
+        else:
+            (self.suite.state_root/('stream-pacing-'+self.suite.room.encode().hex()+'.json')).unlink(missing_ok=True)
 
 
 class SuiteTests(unittest.TestCase):
@@ -106,6 +108,7 @@ class SuiteTests(unittest.TestCase):
         self.suite=module.Suite('Study','127.0.0.1',.04,backend=self.backend,cli=self.cli,
                                unit_root=self.root/'units',state_root=self.root/'state',output=self.root/'out')
         self.backend.suite=self.suite
+        self.backend.sleep(0)
         self.handlers={s:signal.getsignal(s) for s in (signal.SIGINT,signal.SIGTERM)}
 
     def tearDown(self):
@@ -198,6 +201,7 @@ class SuiteTests(unittest.TestCase):
                                   unit_root=self.root/'units',state_root=self.root/'state',output=self.root/'out')
                 backend.suite=suite
                 for p in (self.root/'state').glob('*.json'): p.unlink()
+                backend.sleep(0)
                 with contextlib.redirect_stdout(io.StringIO()): self.assertEqual(suite.execute(),1)
                 self.assertFalse(suite.dropin.exists());self.assertEqual(backend.restarts,2)
                 self.assertEqual(cli.state['mode'],'pause')
@@ -213,6 +217,7 @@ class SuiteTests(unittest.TestCase):
                                    unit_root=self.root/'units',state_root=self.root/'state',output=self.root/'out')
             self.backend.suite=self.suite
             for p in (self.root/'state').glob('*.json'):p.unlink()
+            self.backend.sleep(0)
         self.suite.logfile.close()
 
     def test_loopback_cli_raw_mac(self):

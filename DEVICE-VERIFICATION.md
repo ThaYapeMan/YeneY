@@ -914,3 +914,26 @@ those two calls. Missing evidence is reported as not observed. The stream feeder
 allocates its stream and logs first audio on its first PCM batch; transport is
 dispatched by the main loop without a PCM buffer threshold. Thus no separate
 threshold wait is inferred from these logs.
+
+## LMS display suffix
+
+`YENEY_SHOW_SONOS_SUFFIX=yes|no` defaults to yes. The command-line option
+`--show-sonos-suffix=yes|no` overrides the room environment, then the global
+config key, then the default. Direct binary starts use the same settings.
+True name `<room> (Sonos)`, room name and MAC never change. The diagnostic JSON
+has top-level `true_name`, `display_name` and `mac`; device tools use that MAC.
+`scripts/device-test.sh` also accepts `YENEY_STATE_DIRECTORY` for direct starts.
+
+Private LMS 9.1.1 automation (`YENEY_REAL_LMS_NAME_ONLY=1 python3
+tests/real_lms_test.py`, included in `make test`) checks yes → no → yes with
+loopback Sonos, captures SETD and verifies the same MAC's Material icon, sync
+preferences/groups, volume and stopped playlist state. It also checks an LMS
+name mutation persists until restart, when the configured display name returns.
+No owner endpoint is used. Fixtures exercise all active tools with either display
+name and a same-name impostor; archived scripts remain unchanged.
+
+For owner verification, restart once with each value and check every LMS
+interface shows the configured display name for the same player. Change its
+name in LMS and restart: the configured name must return. The startup line
+always records the true name and selected source. No additional device transport
+or audio behavior is introduced by this setting.

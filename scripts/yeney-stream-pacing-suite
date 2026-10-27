@@ -127,7 +127,14 @@ class Suite:
 
     def player(self):
         players = records(self.cli.call('players','0','999'), 'playerindex')
-        matches = [p for p in players if p.get('name') == self.room+' (Sonos)' and p.get('connected') == '1']
+        try:
+            if self.mac and hasattr(self, 'true_name'):
+                expected = self.mac.lower()
+            else:
+                expected, self.true_name = STATE['player_identity'](self.room, self.state_root)
+        except (OSError, ValueError, KeyError) as error:
+            raise SuiteError('room identity unavailable: '+str(error)) from error
+        matches = [p for p in players if p.get('playerid','').lower() == expected and p.get('connected') == '1']
         if len(matches) != 1 or not re.fullmatch(r'(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}', matches[0].get('playerid','')):
             raise SuiteError('exact connected LMS room player missing or ambiguous')
         mac = matches[0]['playerid']

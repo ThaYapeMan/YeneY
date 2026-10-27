@@ -49,7 +49,13 @@ class CLI(socketserver.ThreadingTCPServer):
     daemon_threads = True
 
     def handle_error(self, request, client_address):
-        self.errors.append(sys.exc_info()[1])
+        error = sys.exc_info()[1]
+        # The real bridge closes its CLI listener during process shutdown.
+        # A reset at that boundary is normal; protocol/assertion errors and
+        # connection failures during the scenario must still fail the test.
+        if getattr(self, 'tearing_down', False) and isinstance(error, (ConnectionResetError, BrokenPipeError)):
+            return
+        self.errors.append(error)
 
 class Client(socketserver.StreamRequestHandler):
     def handle(self):
@@ -110,6 +116,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-artwork-') as directory:
                 check(didl, record, artwork)
                 assert cli.commands, cli.commands
             finally:
+                cli.tearing_down = True
                 if run: run.close()
                 cli.shutdown()
                 worker.join()

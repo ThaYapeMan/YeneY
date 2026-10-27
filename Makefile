@@ -69,6 +69,8 @@ test-run: export YENEY_TIMING_STALE_S = 60
 test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	./volume-test
 	python3 tests/volume_test.py
+	python3 tests/player_name_test.py
+	YENEY_REAL_LMS_NAME_ONLY=1 python3 tests/real_lms_test.py
 	./stream-metrics-lifetime-test
 	./stream-metrics-lifetime-test worker
 	YENEY_STREAM_PACING=sonos YENEY_START_LEAD_MS=1000 ./stream-pacing-encoder-test
@@ -460,3 +462,5 @@ volume-test: tests/volume_test.cpp volume_control.cpp volume_control.h
 test-run: volume-test
 
 upnp/own_speaker_control.o: upnp/own_speaker_control.h upnp/subscriptions.h upnp/speaker_state.h
+
+$(OBJS) stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test: player_name.h

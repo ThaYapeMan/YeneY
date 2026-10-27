@@ -206,7 +206,7 @@ class Backend:
         uri=f'http://127.0.0.1/music/queue.wav?epoch={self.model.epoch}&item={self.model.track()["id"]}' if self.model.owned and self.model.urls else ''
         p.update(current_owned_item=uri,owned_item_uris=[uri] if uri else [])
         path=self.root/('stream-pacing-'+b'Study'.hex()+'.json')
-        path.write_text(json.dumps(dict(pid=self.pid,monotonic_ms=self.now()*1000,playback=p)))
+        path.write_text(json.dumps(dict(mac=MAC,true_name="Study (Sonos)",display_name="Study",pid=self.pid,monotonic_ms=self.now()*1000,playback=p)))
     def run(self,*args):
         self.calls.append(args)
         if args[0]=='systemd-escape':return 'yeney@Study.service'
@@ -253,6 +253,7 @@ class Tests(unittest.TestCase):
         self.original=copy.deepcopy((self.model.urls,self.model.index,self.model.time,self.model.mode,self.model.repeat,self.model.shuffle,self.model.prefs))
         self.suite=m.Suite('Study','127.0.0.1',backend=self.backend,unit_root=self.root/'units',state_root=self.root,output=self.root,lock_root=self.root)
         self.backend.suite=self.suite
+        self.backend.snapshot()
     def tearDown(self):
         self.suite.logfile.close();self.cli.close();self.sonos.close();self.model.close();self.tmp.cleanup()
     def run_suite(self):
