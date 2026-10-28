@@ -937,3 +937,17 @@ interface shows the configured display name for the same player. Change its
 name in LMS and restart: the configured name must return. The startup line
 always records the true name and selected source. No additional device transport
 or audio behavior is introduced by this setting.
+
+## Finite remote podcast acceptance
+
+Configure `podcast=<episode URL or podcast menu name>` in
+`/etc/yeney/device-suite.conf`, or pass `--podcast`. Without it the suite searches
+LMS podcasts. The owner-only `remote-finite` scenario must show relay with reason
+`remote-finite`, a TrackDuration matching WAV/Content-Length, unchanged remote
+startup limits, a stable 120 s app pause and resume at that position, and an
+app-equivalent `Seek(REL_TIME)` to the middle. The summary records LMS time after
+that seek. It then observes the remaining episode, including continuation items,
+until a clean stop; listen for the final words and uninterrupted continuation.
+Check Next and Previous as with local relay items and confirm LMS remains on one
+episode across its continuation entries. Run only on the owner's chosen room;
+agents use loopback fakes and a private LMS instance, never the owner's devices.

@@ -98,3 +98,5 @@ field-cold-test
 /.test-cache/
 
 /volume-test
+
+/podcast-sink-test

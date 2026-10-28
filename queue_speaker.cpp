@@ -115,8 +115,11 @@ void QueueRoom::Impl::observe() {
     const bool positionValid = sscanf(position.at("RelativeTimePosition").c_str(), "%u:%u:%u", &ph, &pm, &ps) == 3;
     const uint64_t reportedElapsed = positionValid ? uint64_t(ph * 3600 + pm * 60 + ps) : 0;
     const auto endEvidence = it == previousItem ? std::max(lastElapsed, reportedElapsed) : lastElapsed;
+    uint64_t realEnd = finalItem ? previousItem->frames : 0;
+    if (finalItem && !cancelledCurrent && previousItem->item->descriptor().kind == queue_audio::PromiseKind::UpperBound &&
+        previousItem->item->finished()) realEnd = previousItem->item->producedFrames();
     const bool nearEnd =
-        finalItem && previousItem->frames <= (endEvidence + 2) * previousItem->item->descriptor().rate;
+        finalItem && realEnd <= (endEvidence + 2) * previousItem->item->descriptor().rate;
     const auto source = avUri;
     const bool sourceChanged = media.child("CurrentURI") && source != "x-rincon-queue:" + room.uuid + "#0" &&
                                (!source.empty() || !nearEnd);

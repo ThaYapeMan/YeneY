@@ -213,7 +213,9 @@ class Handler(BaseHTTPRequestHandler):
             if s.race_add:
                 s.race_add = False; s.add_foreign()
             assert not s.crossfade and a['InstanceID'] == '0'
-            assert a['DesiredFirstTrackNumberEnqueued'] == '0' and a['EnqueueAsNext'] == '0'
+            assert a['EnqueueAsNext'] == '0'
+            before=int(a['DesiredFirstTrackNumberEnqueued'])
+            assert 0 <= before <= len(s.items)+1
             uri = a['EnqueuedURI']; u = urlsplit(uri)
             assert u.hostname == '127.0.0.1' and u.path == '/music/queue.wav'
             metadata = ET.fromstring(a['EnqueuedURIMetaData'])
@@ -228,8 +230,9 @@ class Handler(BaseHTTPRequestHandler):
             assert fields['album'] in getattr(s, 'expected_albums', ['Album & fixture'])
             assert resource.text == uri and resource.attrib['protocolInfo'] == 'http-get:*:audio/wav:*'
             assert resource.attrib['bitsPerSample'] == '24' and resource.attrib['nrAudioChannels'] == '2'
-            s.items.append(dict(uri=uri, metadata=fields, resource=resource.attrib)); s.update += 1
-            return dict(NumTracksAdded=1, FirstTrackNumberEnqueued=len(s.items), NewQueueLength=len(s.items), NewUpdateID=s.update), None
+            insertion=before-1 if before else len(s.items)
+            s.items.insert(insertion,dict(uri=uri, metadata=fields, resource=resource.attrib)); s.update += 1
+            return dict(NumTracksAdded=1, FirstTrackNumberEnqueued=insertion+1, NewQueueLength=len(s.items), NewUpdateID=s.update), None
         if action == 'SetAVTransportURI':
             if a.get('CurrentURIMetaData'):
                 ET.fromstring(a['CurrentURIMetaData']) # strict XML 1.0, including nested DIDL

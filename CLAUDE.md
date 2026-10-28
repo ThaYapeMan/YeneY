@@ -65,3 +65,30 @@ LMS's mixer volume command implicitly unmutes; mute/unmute also complete a
 server-side fade. Reverse control preserves the app's mute state and waits
 400 ms for a mute transition before setting its new level, so a late fade
 callback cannot undo that level. The real LMS volume test exercises this.
+
+## Finite remote queue items
+
+Read-only LMS `status` requests include duration (`d`) and live edge (`V`).
+Local files retain their exact promises. A remote item with a finite positive
+LMS duration and no live marker (`live_edge` absent or negative) selects relay
+with `reason=remote-finite`; live/unknown-duration sources retain stream.
+Remaining duration excludes LMS's resume offset. `remoteMarginSeconds` is 5;
+header, Content-Length and DIDL derive from the same declared frame count.
+
+`PromiseKind::UpperBound` is distinct from exact local publication: short EOF
+finishes normally without padding or LengthFault. Range at/beyond a short EOF
+still announces the declared 206 range and closes with no body. Overflow is
+spooled into ordered continuations with the same metadata, inserted after their
+parent segments before the following LMS item. Insert immediately; warn when
+less than ten seconds remain before their boundary. Ordinary continuation transitions never produce
+another LMS start and use parent-relative positions. Estimated episode segments
+are retained together; default quota becomes 8 GiB, explicit quotas take priority.
+No runtime feature depends on systemd.
+
+A newly created continuation uses the exact remaining frame count when the
+producer has already resolved its end. Existing published promises stay immutable;
+continuations created while the end is unknown keep the five-second upper bound.
+
+Cached resume from a continuation matches the parent LMS producer, retains the
+same queue assets, and reanchors the existing cached-start handshake to that
+parent. It does not turn the continuation into another LMS track.

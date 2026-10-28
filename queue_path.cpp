@@ -92,7 +92,11 @@ void QueueRoom::Impl::beginSelection(uint64_t request) {
     selectedCommand = requestedCommand;
     selecting = true;
     selectionKnown = false;
-    selectedNewPlay = stoppedPlay || state == "STOPPED";
+    // A handoff temporarily releases transport before its new renderer is
+    // confirmed. A fast source may already deliver its successor then; that
+    // remains a track boundary, rather than a fresh play of the current index.
+    selectedNewPlay = stoppedPlay ||
+        (state == "STOPPED" && (handoffAt == std::chrono::steady_clock::time_point{} || externalReleased || faulted));
 }
 void QueueRoom::Impl::selectPath() {
     if (!selecting || selectedRequest != selectionRequest)
@@ -127,7 +131,8 @@ void QueueRoom::Impl::selectPath() {
             selecting = false;
             return;
         }
-        selectedLocal = !remotePlaybackSource(track.id, track.remote, track.url);
+        selectedLocal = !remotePlaybackSource(track.id, track.remote, track.url) || track.finiteRemote();
+        if (selectedNewPlay) track.startOffsetMs = playlist.timeMs;
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
             selectedTrack = track;
@@ -158,11 +163,12 @@ void QueueRoom::Impl::selectPath() {
     bool continues = false;
     if (selectedIndex >= 0 && size_t(selectedIndex + 1) < playlist.entries.size()) {
         const auto &next = playlist.entries[size_t(selectedIndex + 1)];
-        continues = (!remotePlaybackSource(next.id, next.remote, next.url)) == selectedLocal;
+        continues = (!remotePlaybackSource(next.id, next.remote, next.url) || next.finiteRemote()) == selectedLocal;
     }
     paths.mayContinue(continues);
     metadataIndex = !selectedLocal && !selectedNewPlay ? selectedIndex : -1;
-    pathReason = selectedLocal ? "local-source" : "remote-source";
+    pathReason = selectedLocal ? (remotePlaybackSource(selectedTrack.id, selectedTrack.remote, selectedTrack.url)
+                                     ? "remote-finite" : "local-source") : "remote-source";
     logQueue("path=" + std::string(selectedLocal ? "relay" : "stream") + " reason=" + pathReason +
              " boundary=" + (selectedNewPlay ? "new-play" : "track-end"));
     if (selectedLocal)

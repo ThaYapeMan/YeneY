@@ -15,10 +15,13 @@ struct QueueRecord {
     yeney::TrackDescriptor source;
     std::chrono::steady_clock::time_point strmAt{};
     uint64_t expectedIndex = 0;
+    uint64_t parent = 0, segmentOffset = 0;
+    bool estimated = false, productionComplete = false;
+    double duration = 0;
     uint32_t sourceOriginMs = 0;
     double strm = -1, decoded = -1, stmd = -1, audible = -1, stms = -1, end = -1;
     uint64_t first = 0, actual = 0, overlap = 0, prefixFrames = 0;
-    std::optional<uint64_t> promised;
+    std::optional<uint64_t> promised, finalFrame;
     std::string publication = "pending", transition, fault, incomplete;
     bool storageFault = false;
     struct LmsSample {
@@ -54,8 +57,9 @@ class CoreQueueSink : public yeney::Sink {
     std::optional<yeney::PlaybackState> speakerState;
     std::optional<uint32_t> speakerElapsed;
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
+    uint64_t continuationSerial = UINT64_MAX / 2, producingSegment = 0;
     uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
-    bool prefixPending = false, freshRender = false;
+    bool prefixPending = false, freshRender = false, cachedReanchor = false;
     std::atomic_bool refetchRequested{false}, startRequested{false}, cachedStartRequested{false};
     std::atomic<uint64_t> latestProducer{0};
     uint32_t rate = 48000;
@@ -65,6 +69,7 @@ class CoreQueueSink : public yeney::Sink {
     void enqueue(std::function<void()>, double seconds = 0);
     void work();
     void append(const std::vector<yeney::Frame> &, bool);
+    void appendEstimated(const std::vector<yeney::Frame> &, bool);
     void protectItems();
     void commit(uint64_t previous, const yeney::TrackDescriptor &next);
     void finish(const yeney::ItemBoundary &);
@@ -75,6 +80,7 @@ public:
     bool decodeAhead() const override { return true; }
     uint32_t maxSampleRate() const override { return audioMode() == AudioMode::Legacy ? 44100 : 48000; }
     bool paced() const override { return false; }
+    void estimate(uint64_t occurrence, double duration, unsigned originMs);
     void trackDescriptor(const yeney::TrackDescriptor &) override;
     void coreEvent(const std::string &, uint64_t, uint64_t) override;
     void resolvedItemBoundary(const yeney::ItemBoundary &) override;

@@ -4,6 +4,7 @@
 #include "upnp/stream_server.h"
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 #include <limits>
 #include <stdexcept>
 namespace queue_audio {
@@ -116,7 +117,10 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &item,
             left -= n;
             deadline = std::chrono::steady_clock::now() + wait;
         }
-    } catch (...) {
+    } catch (const std::exception &e) {
+        std::printf("yeney: queue HTTP read closed item=%s offset=%llu reason=%s\n",
+                    item->descriptor().occurrence.c_str(),
+                    static_cast<unsigned long long>(reader.position()), e.what());
         request.disconnect();
     }
     return true;

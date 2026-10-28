@@ -264,13 +264,14 @@ class Speaker:
 
 
 class Suite(PACING['Suite']):
-    def __init__(self, room, server, *, speaker=None, album=None, volume=10, remote=None, lock_root=Path('/var/tmp'), **kwargs):
+    def __init__(self, room, server, *, speaker=None, album=None, volume=10, remote=None, podcast=None, lock_root=Path('/var/tmp'), **kwargs):
         kwargs.setdefault('output',Path('/tmp'))  # Owner archive contract on deployment host.
         super().__init__(room, server, **kwargs)
         # Parent constructor creates only an archive workspace, never a service.
         self.cli = kwargs.get('cli') or CLI(server, self.log)
         self.album_choice, self.test_volume = album, volume
         self.remote_argument, self.remote_pool = remote, []
+        self.podcast_argument = podcast
         if not 0 <= volume <= 100: raise SuiteError("volume must be 0–100")
         self.speaker = speaker
         self.results, self.selected = [], {}
@@ -431,7 +432,7 @@ class Suite(PACING['Suite']):
                 ('playlist','link','outline','opml','feed','rss') or
                 path.endswith(('.rss','.xml','.opml','.atom','.m3u','.m3u8','.pls','.asx')))
 
-    def remote_choice(self):
+    def remote_choice(self, menus=('favorites','podcasts')):
         # Read-only menu traversal. A favourite can be a feed despite type=audio.
         notes=[]; pool=[]; requested=self.remote_argument
         direct=bool(requested and ('://' in requested or urlsplit(requested).scheme in ('http','https','podcast','mms','rtsp')))
@@ -441,7 +442,7 @@ class Suite(PACING['Suite']):
         if direct and not self.remote_container(dict(url=requested)) and not requested.startswith('file:'):
             self.remote_pool=[track(dict(url=requested,title=requested),'explicit --remote')]
             return self.remote_pool[0],'explicit --remote'
-        for menu in ('favorites','podcasts'):
+        for menu in menus:
             pending=[(None,not requested)];seen=set()
             while pending and len(seen)<20 and len(pool)<5:
                 ident,selected=pending.pop(0)
@@ -460,6 +461,11 @@ class Suite(PACING['Suite']):
                     match=bool(requested and (url==requested or requested in (row.get('title'),row.get('name'))))
                     eligible=selected or match
                     container=self.remote_container(row)
+                    if eligible and menu=='podcasts' and row.get('isaudio')=='1' and not url:
+                        candidate=track(dict(row,url='podcast-menu:'+row['id']),menu)
+                        candidate['menu_id']=row['id']
+                        pool.append(candidate)
+                        continue
                     if eligible and url and not url.startswith('file:') and not container:
                         if all(t['url']!=url for t in pool):pool.append(track(row,menu))
                         if len(pool)==5:break
@@ -520,6 +526,7 @@ class Suite(PACING['Suite']):
         context = getattr(self,'startup_context',None)
         if not context:
             return {}
+        if row['playback'].get('reason')=='remote-finite':context['local']=True
         playing = row['speaker']['state']=='PLAYING' and row['identity'] and (
             self.owned_item(row) if context.get('local',True) else
             row['playback'].get('path')=='stream' and '/music/yeney.flac?' in row['speaker']['uri'])
@@ -676,7 +683,8 @@ class Suite(PACING['Suite']):
         expected = tracks[index]
         is_remote=not expected.get('url','').startswith('file://')
         meta = s['metadata']
-        title, album = expected_metadata(entry if is_remote else expected,self.title_format if is_remote else "title")
+        finite = p.get('reason')=='remote-finite'
+        title, album = expected_metadata(entry if is_remote else expected,self.title_format if is_remote and not finite else "title")
         metadata_matches=meta.get('title')==title and (not album or meta.get('album')==album)
         # Radio text can change while the existing stream path retains startup
         # DIDL. Qualify its source/path and record text; local identity is strict.
@@ -702,12 +710,12 @@ class Suite(PACING['Suite']):
             self.current['fallbacks'].append(p.get('last_fallback') or p.get('reason'))
             self.problem('fallback '+str(self.current['fallbacks']))
         if s['state']=='PLAYING' and not preparing:
-            if is_remote:
+            if is_remote and not finite:
                 if p.get('path')!='stream' or p.get('reason')!='remote-source' or p.get('owned') or '/music/yeney.flac?' not in s['uri']:
                     self.problem('remote source is not playing on the stream path')
             elif not self.owned_item(row) or p.get('path','relay')!='relay':
                 self.problem('speaker is not playing an owned queue item')
-            if not is_remote and self.speaker.crossfade() != '0':
+            if (not is_remote or finite) and self.speaker.crossfade() != '0':
                 self.problem('Sonos CrossfadeMode not disabled')
             if not identity:
                 if self.mismatch_since is None:
@@ -766,14 +774,21 @@ class Suite(PACING['Suite']):
         if all(t['id'] for t in tracks):
             self.pending_mutation('playlistcontrol','cmd:add','track_id:'+','.join(t['id'] for t in tracks))
         else:
-            for track in tracks:self.pending_mutation('playlist','add',track['url'])
+            for track in tracks:
+                if track.get('menu_id'):
+                    self.pending_mutation('podcasts','playlist','add','item_id:'+track['menu_id'])
+                    entries=self.playlist_entries()
+                    if len(entries)!=len(tracks):self.problem('podcast menu did not stage an episode')
+                    track['url']=entries[-1]['url']
+                else:self.pending_mutation('playlist','add',track['url'])
+        expected=[dict(id=t['id'],url=t['url']) for t in tracks]
         self.lms_ready(expected,'stop',queue=True,deadline=deadline)
         start = self.backend.now()
         play_wall = time.time()
         self.cli.remote_starting=not tracks[0]['url'].startswith('file://')
         self.pending_mutation('play')
         strm = self.wait_strm(play_wall,start)
-        self.startup_context = dict(command=start,wall=play_wall,strm=strm,local=tracks[0]['url'].startswith('file://'))
+        self.startup_context = dict(command=start,wall=play_wall,strm=strm,local=tracks[0]['url'].startswith('file://') or self.current['name']=='remote-finite')
         self.due=self.backend.now()
         target = {'high-rate-44100':44100,'high-rate-48000':48000}.get(self.current['name'])
         self.startup_context['target'] = target
@@ -784,7 +799,7 @@ class Suite(PACING['Suite']):
             occurrence=self.startup_context.get('audio_occurrence')
             if self.startup_context['local'] and occurrence is not None and row['playback'].get('occurrence')!=occurrence:
                 absent.append('occurrence '+str(occurrence))
-            if tracks[0]['url'].startswith('file://'):
+            if self.startup_context['local'] or row['playback'].get('reason')=='remote-finite':
                 if not self.owned_item(row):
                     absent.append('owned queue item')
             elif row['playback'].get('path')!='stream' or '/music/yeney.flac?' not in row['speaker']['uri']:
@@ -878,6 +893,7 @@ class Suite(PACING['Suite']):
             until=self.backend.now()+3
             while self.backend.now()<until:self.sample(selected)
         self.remote_scenario()
+        self.finite_scenario()
 
     def remote_scenario(self):
         candidates=(self.remote_pool or self.selected['remote-source'])[:5]
@@ -895,10 +911,54 @@ class Suite(PACING['Suite']):
         selected=[track]
         until=self.backend.now()+5
         while self.backend.now()<until:self.sample(selected)
-        self.current['note']='remote from '+selected[0].get('remote_menu',self.remote_note)+' started on stream path within 5 s'
+        self.current['note']='remote from '+selected[0].get('remote_menu',self.remote_note)+' started on '+self.samples[-1]['playback'].get('path','unknown')+' path within 5 s'
         self.begin('local-after-remote')
         self.load(self.selected['album'])
         self.current['note']='local album returned to relay path'
+
+    def finite_scenario(self):
+        self.begin('remote-finite')
+        saved_argument,saved_pool=self.remote_argument,self.remote_pool
+        try:
+            self.remote_argument=self.podcast_argument
+            track,note=self.remote_choice(menus=('podcasts',))
+        finally:
+            self.remote_argument,self.remote_pool=saved_argument,saved_pool
+        if not track:
+            self.current.update(verdict='SKIP',note='no podcast episode: '+note)
+            print('SKIP remote-finite: '+self.current['note'],flush=True)
+            return
+        row=self.load([track])
+        if row['playback'].get('reason')!='remote-finite':self.problem('podcast did not select remote-finite relay')
+        # Header, DIDL and speaker must announce the same constant-bitrate entity.
+        uri=row['speaker']['uri']
+        from urllib.request import Request,urlopen
+        with urlopen(Request(uri,headers={'Range':'bytes=0-43'}),timeout=30) as response:
+            header=response.read()
+            total=int(response.headers['Content-Range'].split('/')[-1])
+        rate=int.from_bytes(header[24:28],'little');frames=int.from_bytes(header[40:44],'little')//6
+        if total!=44+frames*6 or abs(row['speaker']['duration']-frames/rate)>1:self.problem('declared duration/header/Content-Length disagree')
+        self.speaker.call('AVTransport','Pause',InstanceID=0)
+        row,_=self.wait([track],lambda r:r['speaker']['state']=='PAUSED_PLAYBACK',5,missing='podcast paused')
+        paused=row['speaker']['rel'];until=self.backend.now()+120
+        while self.backend.now()<until:
+            row=self.sample([track])
+            if row['speaker']['state']!='PAUSED_PLAYBACK' or row['speaker']['rel']!=paused:self.problem('120 s pause position changed')
+        self.speaker.call('AVTransport','Play',InstanceID=0,Speed=1)
+        row,_=self.wait([track],lambda r:r['speaker']['state']=='PLAYING',5,missing='podcast resumed')
+        if abs(row['speaker']['rel']-paused)>2:self.problem('resume lost paused position')
+        middle=int(frames/rate/2)
+        target=f'{middle//3600:02}:{middle//60%60:02}:{middle%60:02}'
+        self.speaker.call('AVTransport','Seek',InstanceID=0,Unit='REL_TIME',Target=target)
+        self.wait([track],lambda r:abs(r['speaker']['rel']-middle)<=2,10,discontinuity=True,missing='podcast app seek')
+        self.current['note']='120 s pause/resume and app REL_TIME seek passed; LMS time='+self.query('time')
+        # Observe the real end, including every continuation, without seeking over the tail.
+        deadline=self.backend.now()+max(300,frames/rate-middle+300)
+        while self.backend.now()<deadline:
+            row=self.sample([track])
+            if row['speaker']['state']=='STOPPED' and self.query('mode')=='stop':break
+        else:self.problem('podcast did not reach a clean real end')
+        self.current['note']+='; clean end observed; owner must confirm the audible tail'
 
     def restore_item(self,label,expected,setter,getter,compare=None):
         compare=compare or (lambda a,b:a==b)
@@ -1085,8 +1145,8 @@ def read_config(path):
         if not line or line.startswith('#'): continue
         key,separator,value=line.partition('=')
         key=key.strip();value=value.strip()
-        if not separator or key not in ('room','server','album','remote','volume') or not value:
-            raise ValueError(str(path)+':'+str(number)+': expected room/server/album/remote/volume=value')
+        if not separator or key not in ('room','server','album','remote','podcast','volume') or not value:
+            raise ValueError(str(path)+':'+str(number)+': expected room/server/album/remote/podcast/volume=value')
         if key in values: raise ValueError('duplicate configuration key: '+key)
         values[key]=value
     return values
@@ -1097,6 +1157,7 @@ def main():
     parser.add_argument('--config',default='/etc/yeney/device-suite.conf')
     parser.add_argument('--room')
     parser.add_argument('--server')
+    parser.add_argument('--podcast',help='Finite podcast episode URL or podcast menu name for the remote-finite scenario')
     parser.add_argument('--remote',help='LMS favourite name, playable remote URL, or podcast episode URL')
     parser.add_argument('--album',help='LMS album ID or exact name; first eligible album by default')
     parser.add_argument('--volume',type=int,choices=range(101),metavar='0–100')
@@ -1110,7 +1171,7 @@ def main():
         if not 0 <= args.volume <= 100: parser.error('volume must be 0–100')
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    suite=Suite(args.room,args.server,album=args.album,volume=args.volume,remote=args.remote)
+    suite=Suite(args.room,args.server,album=args.album,volume=args.volume,remote=args.remote,podcast=args.podcast)
     if os.geteuid()!=0:
         suite.setup=lambda:(_ for _ in ()).throw(SuiteError('run as root'))
     return suite.execute()

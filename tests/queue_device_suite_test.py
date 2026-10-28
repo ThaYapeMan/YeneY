@@ -490,8 +490,9 @@ class Tests(unittest.TestCase):
 
     def test_configuration_parser(self):
         path=self.root/'suite.conf'
-        path.write_text('# Example\nroom=Study\nserver=localhost\nalbum=2802\nvolume=10\nremote=Radio Name\n')
+        path.write_text('# Example\nroom=Study\nserver=localhost\nalbum=2802\nvolume=10\nremote=Radio Name\npodcast=podcast://https://fixture.invalid/episode.mp3\n')
         self.assertEqual(m.read_config(path)['album'],'2802')
+        self.assertEqual(m.read_config(path)['podcast'],'podcast://https://fixture.invalid/episode.mp3')
         path.write_text('unknown=ignored\n')
         with self.assertRaisesRegex(ValueError,'expected room'):m.read_config(path)
 
@@ -501,7 +502,7 @@ class Tests(unittest.TestCase):
         with patch.object(sys,'argv',['suite','--config',str(path),'--room','Sonos Port','--volume','12']), patch.object(m,'Suite') as factory:
             factory.return_value.execute.return_value=0
             self.assertEqual(m.main(),0)
-            factory.assert_called_once_with('Sonos Port','localhost',album='2802',volume=12,remote='Configured radio')
+            factory.assert_called_once_with('Sonos Port','localhost',album='2802',volume=12,remote='Configured radio',podcast=None)
         self.suite.album_choice='2802'
         code,output=self.run_suite()
         self.assertEqual(code,1)
@@ -510,7 +511,7 @@ class Tests(unittest.TestCase):
         path.write_text('# Empty defaults\n')
         with patch.object(sys,'argv',['suite','--config',str(path),'--room','Study','--server','localhost']), patch.object(m,'Suite') as factory:
             m.main()
-            factory.assert_called_once_with('Study','localhost',album=None,volume=10,remote=None)
+            factory.assert_called_once_with('Study','localhost',album=None,volume=10,remote=None,podcast=None)
         print('PASS suite configuration: file, CLI and defaults precedence; missing album fails without fallback')
 
     def test_field_sanitized_album_identity(self):
@@ -572,7 +573,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(self.suite.results[0]['joins'],3)
         group=next(r for r in self.suite.results if r['name']=='group-coordinator')
         self.assertEqual(group['verdict'],'SKIP');self.assertIn('standalone',group['note'])
-        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000','group-coordinator','remote-source'])
+        self.assertEqual([r['name'] for r in self.suite.results],['album','pause-resume','stop-new-play','external-stop','high-rate-44100','high-rate-48000','group-coordinator','remote-source','remote-finite'])
         self.assertTrue(all(r['verdict']=='SKIP' and 'library has no eligible' in r['note'] for r in self.suite.results[4:6]))
         with tarfile.open(self.root/'yeney-queue-device-suite-latest.tar.gz') as tar:
             names={n.split('/',1)[-1] for n in tar.getnames()}

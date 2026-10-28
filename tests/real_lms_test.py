@@ -108,14 +108,14 @@ class CLIProxy(socketserver.ThreadingTCPServer):
     def close(self):self.closing=True;self.shutdown();self.server_close();self.worker.join()
 
 class Remote:
-    def __init__(self,body,kind="flac",endless=False):
+    def __init__(self,body,kind="flac",endless=False,unknown_length=False):
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_HEAD(self):self.respond(False)
             def do_GET(self):self.respond(True)
             def respond(self,content):
                 self.send_response(200);self.send_header('Content-Type','audio/mpeg' if kind=='mp3' else 'audio/flac')
-                if not endless:self.send_header('Content-Length',str(len(body)))
+                if not endless and not unknown_length:self.send_header('Content-Length',str(len(body)))
                 else:self.send_header('icy-name','Loopback endless radio')
                 self.end_headers()
                 if content:
@@ -249,6 +249,8 @@ for rate in (44100,88200,96000):
 (base/'prefs/server.prefs').write_text('---\naudiodir: '+str(base/'library')+'\nplaylistdir: '+str(base/'playlists')+'\ncheckVersion: 0\nlanguage: EN\n')
 # Seed CLI preferences so first-start plugin migration cannot replace the port.
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
+if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':
+    (base/'prefs/plugin/state.prefs').write_text('---\nPodcast: enabled\n_version: 1\n')
 lms=bridge=tap=sonos=remote=proxy=None
 name_only=os.environ.get('YENEY_REAL_LMS_NAME_ONLY')=='1'
 volume_only=os.environ.get('YENEY_REAL_LMS_VOLUME_ONLY')=='1'
@@ -259,6 +261,7 @@ try:
              '--logdir',str(base/'log'),'--httpport','9000','--httpaddr','127.0.0.1','--cliport','19090',
              '--cliaddr','127.0.0.1','--playeraddr','127.0.0.1','--streamaddr','127.0.0.1',
              '--advertiseaddr','127.0.0.1','--norestart']
+    if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':command += ['--debug=formats.xml=DEBUG','--debug=plugin.podcast=DEBUG']
     lms=subprocess.Popen(command,stdout=lms_log,stderr=subprocess.STDOUT,start_new_session=True,env=perl_env)
     def available():
         if lms.poll() is not None:raise AssertionError('real LMS exited: '+(base/'lms.log').read_text())
@@ -382,6 +385,10 @@ try:
         text=(base/'bridge.log').read_text()
         assert 'rearm-loop room=' not in text and 'state=drain' not in text,text[-8000:]
         assert all('reason=speaker-' in line for line in text.splitlines() if 'queue LMS mutation ' in line),text[-8000:]
+    if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':
+        from podcast_real_lms import run
+        run(globals())
+        raise SystemExit(0)
     hires_only=os.environ.get('YENEY_REAL_LMS_HIRES_ONLY')=='1'
     if not hires_only:
         cli('playlistcontrol cmd:load track_id:'+','.join(ids),mac)
@@ -538,7 +545,10 @@ try:
     mp3=Remote((ROOT/'third_party/yeney-core/tests/fixtures/gapless-0.mp3').read_bytes(),kind='mp3')
     endless=Remote((ROOT/'third_party/yeney-core/tests/fixtures/gapless-0.mp3').read_bytes(),kind='mp3',endless=True)
     remote96=Remote((base/'library/hires-96000.flac').read_bytes())
-    extra_remotes.extend([mp3,endless,remote96])
+    # A 92 ms source deliberately queues its successor before transport
+    # confirmation, exercising the pending-handoff versus idle distinction.
+    unknown=Remote((ROOT/'third_party/yeney-core/tests/fixtures/gapless-0.mp3').read_bytes(),kind='mp3',unknown_length=True)
+    extra_remotes.extend([mp3,endless,remote96,unknown])
     def stage(urls):
         cli('stop',mac);cli('playlist clear',mac)
         for url in urls:cli('playlist add '+url,mac)
@@ -549,27 +559,35 @@ try:
         additions=len(sonos.actions('AddURIToQueue'));before=len(packets('STMs'))
         sonos.stream_audio=b''
         started=time.monotonic();cli('play',mac)
-        wait(lambda:playback().get('path')=='stream' and sonos.transport_state=='PLAYING'
-             and len(getattr(sonos,'stream_audio',b''))>128,3,label+' immediate continuous audio')
+        wait(lambda:sonos.transport_state=='PLAYING' and
+             ((playback().get('reason')=='remote-finite' and len(sonos.actions('AddURIToQueue'))>additions) or
+              (playback().get('path')=='stream' and len(getattr(sonos,'stream_audio',b''))>128)),3,label+' immediate remote audio')
         delay=time.monotonic()-started
         fields=cli('status 0 1 tags:u',mac)
         assert 'remote:1' in fields,fields
         wait(lambda:len(packets('STMs'))>before,3,label+' STMs')
         identity(0)
-        assert len(sonos.actions('AddURIToQueue'))==additions,'remote touched Sonos queue'
-        assert playback()['reason']=='remote-source' and not playback()['owned'],playback()
-        print(f'PASS real LMS remote {label}: remote:1, stream path, audio start {delay:.3f} s (<3 s), title/artwork path, no queue mutation',flush=True)
+        if playback()['reason']=='remote-finite':
+            assert playback()['path']=='relay' and playback()['owned'],playback()
+            print(f'PASS real LMS remote {label}: positive duration, remote-finite relay, start {delay:.3f} s (<3 s)',flush=True)
+        else:
+            assert len(sonos.actions('AddURIToQueue'))==additions,'unknown/live source touched queue'
+            assert playback()['reason']=='remote-source' and not playback()['owned'],playback()
+            print(f'PASS real LMS remote {label}: no finite duration, stream path, audio start {delay:.3f} s (<3 s), no queue mutation',flush=True)
     remote_start(remote,'HTTP FLAC')
     remote_start(remote96,'HTTP 96000 Hz FLAC')
-    header=getattr(sonos,'stream_audio',b'')
-    assert header[:4]==b'fLaC' and int.from_bytes(header[18:26],'big')>>44==48000,header[:40]
-    print('PASS real LMS remote native 96000 -> stream 48000 Hz FLAC, 24-bit, progressive start unchanged',flush=True)
+    if playback()['path']=='relay':
+        assert items()[0]['resource']['sampleFrequency']=='48000' and items()[0]['resource']['bitsPerSample']=='24'
+    else:
+        header=getattr(sonos,'stream_audio',b'')
+        assert header[:4]==b'fLaC' and int.from_bytes(header[18:26],'big')>>44==48000,header[:40]
+    print('PASS real LMS remote native 96000 -> 48000 Hz, 24-bit, progressive path selection',flush=True)
     remote_start(mp3,'HTTP MP3')
     remote_start(endless,'endless HTTP MP3')
     time.sleep(4)
     assert sonos.transport_state=='PLAYING' and playback()['path']=='stream'
     cli('stop',mac)
-    stage([next(t['url'] for t in tracks if t['id']==ids[0]),remote.url,
+    stage([next(t['url'] for t in tracks if t['id']==ids[0]),unknown.url,
            next(t['url'] for t in tracks if t['id']==ids[1])])
     mixed_log_start=len((base/'bridge.log').read_text())
     before=len(packets('STMs'));cli('play',mac)
@@ -584,7 +602,7 @@ try:
         sonos.position['RelTime']='00:00:24';sonos.transport_state='STOPPED'
     wait(lambda:playback()['path']=='stream' and sonos.uri.startswith('http://'),5,'local -> remote boundary')
     identity(1)
-    assert sonos.stream_metadata['title']==remote.url,sonos.stream_metadata
+    assert sonos.stream_metadata['title']=='Loopback endless radio',sonos.stream_metadata
     wait(lambda:playback()['path']=='relay' and len(items())>=1 and sonos.transport_state=='PLAYING',35,'remote -> local drained boundary')
     identity(2)
     wait(lambda:(base/'bridge.log').read_text()[mixed_log_start:].count('path-handoff path=')>=2,3,'both measured handoff gaps')

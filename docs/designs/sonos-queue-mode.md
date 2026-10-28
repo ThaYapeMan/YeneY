@@ -3,7 +3,7 @@
 The queue-mode base is a thin relay. LMS is the sole playback master. Queue
 mode is the built-in default. Explicit `stream` preserves continuous transport,
 URLs and wire fixtures. Queue selects source-aware playback for a standalone room
-or the coordinator of a multi-speaker group: local files use the finite relay and remote/unknown sources use the existing continuous stream path.
+or the coordinator of a multi-speaker group: local files and finite non-live remote items use the relay; live and unknown-duration sources use the existing continuous stream path.
 `auto` and invalid values still use stream with an effective-mode log. Existing
 queue overrides are redundant but harmless and are never removed by installation.
 There is no automatic fallback inside this queue release.
@@ -18,18 +18,20 @@ all earlier claims of advanced controller/device qualification.
 
 Classification runs on the room worker at each LMS `strm s`, before opening
 its audio connection. A read-only CLI snapshot supplies the track admitted by
-LMS. `remote:1`, a negative id, any URL outside `file://`, or missing/ambiguous
-metadata selects stream. Only an explicitly local file selects the relay.
+LMS. Explicit local files select relay. Remote items (remote flag, negative id
+or non-file URL) also select relay when LMS supplies a positive finite duration
+and no nonnegative live edge. Live or unknown-duration metadata selects stream.
 Normal selection, readiness and class boundaries cause no LMS CLI mutation or HELO.
 A confirmed room refusal is the exception: one reason-checked LMS stop.
 
 | Play/source | Active path | Boundary behaviour |
 |---|---|---|
 | New local file after q/idle | relay / local-source | Existing finite WAV takeover and startup |
-| New remote or unknown source | stream / remote-source | Existing stream metadata, artwork, PCM feeder, HTTP and pacing; no queue acquisition |
+| New finite non-live remote | relay / remote-finite | Progressive upper-bound WAV; overflow continuations preserve audio |
+| New live or unknown-duration source | stream / remote-source | Existing stream metadata, artwork, PCM feeder, HTTP and pacing; no queue acquisition |
 | Next track has the same class | Current path | Existing append/continuous behaviour |
-| Local → remote | Keep relay until confirmed final-item end | Stop/release owned entries and restore crossfade; fresh continuous start |
-| Remote → local | Keep stream until submitted audio is audibly drained | Close the continuous session and Stop; fresh relay takeover/start |
+| Relay → live/unknown | Keep relay until confirmed final-item end | Stop/release owned entries and restore crossfade; fresh continuous start |
+| Stream → local/finite remote | Keep stream until submitted audio is audibly drained | Close the continuous session and Stop; fresh relay takeover/start |
 | Endless remote | stream / remote-source | Starts progressively; no finite length or end is required |
 
 A deferred class-changing start retains the original SlimProto request without
@@ -103,8 +105,9 @@ forced off and verified; release restores it only while the transport remains ou
 removes only exact owned URIs from the back, preserving foreign insertions.
 Every append uses Browse-before/after fencing and requires NumTracksAdded=1.
 
-Production uses only **AddURIToQueue** with InstanceID=0,
-DesiredFirstTrackNumberEnqueued=0 and EnqueueAsNext=0. The retained unit-tested
+Production uses only **AddURIToQueue** with InstanceID=0 and EnqueueAsNext=0.
+Normal appends use DesiredFirstTrackNumberEnqueued=0; a continuation inserted
+before a queued successor supplies its verified 1-based insertion position. The retained unit-tested
 The removed AddMultipleURIsToQueue helper was **not device-verified**: Study returned 402 on
 20 October 2026. Its rejection is unexplained and may have been the invalid
 U+0016 album XML identified the next morning. It is not a production path.
@@ -118,14 +121,14 @@ crossfade and mixed-rate owner qualification are parked, not declared passed.
 
 `YENEY_QUEUE_NEXT_DELAY_S` defaults to 20 (valid 1–120). The core retains
 its finite-remote successor gate for other queue hosts; production remote
-sources now use the continuous path instead. `YENEY_QUEUE_DISK_MIB` remains a
-per-room disk quota (default 256). Unknown exact length waits for sealing; the
-relay never guesses a WAV length from LMS duration or an HTTP Range offset.
+sources with a positive non-live duration now use upper-bound queue promises. `YENEY_QUEUE_DISK_MIB` remains a
+per-room disk quota (default 256). Unknown local exact length waits for sealing. Estimated remote declarations use
+the explicit upper-bound kind below; HTTP Range offsets never determine length.
 
 ## Status and extension points
 
 The suite reads the existing per-room `stream-pacing-<room-hex>.json` file's
-`playback` object. Queue fields: requested/active=`queue`, path=`relay`/`stream`, reason=`local-source`/`remote-source`,
+`playback` object. Queue fields: requested/active=`queue`, path=`relay`/`stream`, reason=`local-source`/`remote-finite`/`remote-source`,
 state, occurrence, owned, owned_item_uris, current_owned_item, last_fault.
 Each observed state/ownership/item change publishes an atomic complete file on
 the same worker call, without waiting for the periodic stream metrics tick.
@@ -180,7 +183,7 @@ The original YeneY implementation and tests retain their existing license.
 Modern queue-configured rooms advertise 192 kHz. Native local FLAC/ALAC
 is converted in yeney-core before ReplayGain, volume and crossfade: 88.2/176.4
 to 44.1 kHz; 96/192 to 48 kHz. Exact ceil frame counts permit publication
-before DSCO. Unknown source counts retain sealed publication. Remote sources
+before DSCO. Unknown source counts retain sealed publication. Live/unknown-duration remote sources
 stay on the stream path, with the same converter for high-rate input.
 Rates ≤48 kHz pass through. Unsupported higher families fail with STMn.
 Ordinary stream rooms retain their existing 48 kHz HELO and LMS/SoX conversion;
@@ -290,7 +293,7 @@ the speaker detector and LMS command module while retaining the relay state tabl
 ## Coordinator and fault policy (24 October 2026)
 
 Group size never selects the per-track path: local file:// uses the relay;
-remote/continuous/unknown uses stream. Queue output is already 24-bit 44.1/48 kHz,
+finite non-live remote items also use relay; live/unknown-duration sources use stream. Queue output is already 24-bit 44.1/48 kHz,
 so no group sample-rate rule is needed. At each new LMS start the worker reads
 live GetZoneGroupState; every queue write retains uuid/name/ip identity fencing
 and verifies that this room is still coordinator. Existing topology GENA and
@@ -368,3 +371,76 @@ Group volume uses SnapshotGroupVolume before each settled SetGroupVolume to
 preserve relative member levels, following [Sonos volume guidance](https://docs.sonos.com/docs/volume).
 Snapshot and level/mute writes share the 200 ms rate limit. A snapshot never
 counts as confirmation of a volume change.
+
+## Finite remote queue evidence and implementation (27 October 2026)
+
+Owner-run probes, S2 firmware 86.10-81100:
+
+| Probe | Observed behavior | Implementation consequence |
+|---|---|---|
+| DIDL duration contradicts media header | DIDL duration ignored; WAV data size / FLAC total_samples wins | Derive WAV, HTTP length and DIDL from one frame count |
+| Direct transport versus queue item | Duration/progress appears in the app only for queue items | Finite remote sources use Q:0 |
+| Header three seconds shorter/longer | Short declaration truncates audio; long declaration advances at real EOF | Upper-bound promise plus continuations |
+| 40 s tone, first item declares 30 s | Second item plays remaining 10 s seamlessly; embedded second header ignored | Immutable headers; overflow gets another queue item |
+| Far seek and 120 s pause | Chunked fails; constant bitrate with Content-Length and standard 206 works | Progressive PCM WAV and persistent compressed spool |
+| 33 s declaration, 30 s body | Empty 206 at real EOF advances immediately without error | Short EOF and at-end Range close without padding |
+| Fetch pattern | GET probe (~32 KiB), HEAD, GET; next fetch 6–7 s before declared end | Insert continuations immediately; warn if under 10 s lead |
+| Publisher / scanner duration | Feed whole seconds may change after scanning; inserted adverts may add minutes | LMS duration is an estimate, never an exact truncation point |
+
+Source classification uses LMS duration and `live_edge` (tag V): positive finite
+duration with absent/negative live edge selects `remote-finite`; nonnegative live
+edge or unknown duration preserves the existing continuous path. Group size is
+irrelevant. The first promise is `ceil(max(0,duration-startOffset)*rate)+5*rate`.
+Local exact promises and their WAV bytes are unchanged. Each overflow segment
+promises another 5 s while production is incomplete. Segments carry the parent's
+metadata, are inserted in parent/segment order, and report one continuous LMS
+track clock without an extra STMs. The relay logs insertion lead relative to the
+10 s prefetch deadline, including negative margins for late production.
+
+Estimated items permit short production without cancellation or LengthFault.
+The declared header and Content-Length remain immutable. A Range inside the
+announced entity but at/beyond actual EOF responds 206 with the requested offset,
+declared last byte and declared total, announces the remaining declared length,
+sends no body and closes. Future ranges wait on the existing bounded reader;
+timeout closes and logs without fake bytes. Every segment remains spooled.
+
+Quota decision: estimated playback raises the default room budget from 256 MiB
+to 8 GiB, leaving explicit quota settings authoritative. The three-hour 44.1 kHz
+incompressible 24-bit stereo measurement produced 476,280,000 frames,
+2,857,680,000 PCM bytes and 2,868,842,882 compressed disk bytes in 27.6753 s.
+Both the first and last frame remained readable. Current episode segments are
+protected as one group. Old unprotected items can be evicted by the existing
+policy; a reader of evicted history fails and closes. An undersized explicit
+quota faults playback rather than producing fake audio. No systemd requirement.
+
+The owner must run the new `remote-finite` device scenario to qualify real
+speaker startup, 120 s pause/resume, midpoint REL_TIME seek and the audible tail.
+Loopback tests cannot establish physical audibility.
+
+### Native LMS fixture behavior
+
+The generated feed advertises 60 s, 64 s, 30 s and a 60 s episode resumed from
+20 s. Native FLAC scanning replaces publisher durations with its exact 60 s
+count. The regression therefore also serves generated MP3 with a late bitrate
+change: LMS estimates total duration from Content-Length and the initial
+bitrate, retaining an overestimate near 64 s and an underestimate near 31 s for
+about 60 s of actual decoded audio. This exercises real continuation production
+through the private LMS, not only a replay peer. The native podcast `{from=20}`
+resume marker is verified with an MP3 source, where LMS sends the remaining
+approximately 40 s. Queue position after an app-equivalent seek to 30 s appears
+in LMS as approximately 30 s through the existing STAT clock; no CLI seek is
+added. Estimated DIDL retains fractional seconds derived from declared frames;
+local DIDL retains its existing whole-second wire format.
+
+A newly created continuation uses the exact remaining frame count when the
+producer has already resolved its end. Existing published promises stay immutable;
+continuations created while the end is unknown keep the five-second upper bound.
+
+A source successor arriving while a class handoff awaits renderer confirmation
+is still a track boundary. The temporary STOPPED state is not idle: selection
+uses the next LMS index. A short unknown-duration radio EOF regression exercises
+this race without changing the stream wire path.
+
+Cached resume from a continuation matches the parent LMS producer, retains the
+same queue assets, and reanchors the existing cached-start handshake to that
+parent. It does not turn the continuation into another LMS track.

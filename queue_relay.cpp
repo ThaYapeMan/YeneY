@@ -165,7 +165,8 @@ void QueueRoom::Impl::append() {
     if (!paths.isRelay() || faulted || externalReleased || (started && sourceAway))
         return;
     for (const auto &record : queue.snapshot()) {
-        if (record.source.occurrence < firstStream || record.source.occurrence > UINT64_MAX / 2)
+        const auto owner = record.parent ? record.parent : record.source.occurrence;
+        if (owner < firstStream || (record.source.occurrence > UINT64_MAX / 2 && !record.parent))
             continue;
         if (record.item && !record.incomplete.empty())
             continue; // LMS cancelled this render, not a speaker rejection.
@@ -192,7 +193,7 @@ void QueueRoom::Impl::append() {
         queue_audio::PlaylistEntry track;
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
-            auto found = sourceTracks.find(record.source.occurrence);
+            auto found = sourceTracks.find(record.parent ? record.parent : record.source.occurrence);
             if (found == sourceTracks.end())
                 throw std::runtime_error("queue-stream-metadata-missing");
             track = found->second;
@@ -231,6 +232,7 @@ void QueueRoom::Impl::append() {
         metadata.size = *length;
         metadata.frames = (*length - 44) / 6;
         metadata.rate = record.source.rate;
+        metadata.preciseDuration = record.estimated;
         const auto changes = upnp::sanitizeXmlFields({{"title", &metadata.title},
                                                       {"artist", &metadata.artist},
                                                       {"album", &metadata.album},
@@ -239,15 +241,34 @@ void QueueRoom::Impl::append() {
             logQueue("metadata sanitized mode=queue occurrence=" + std::to_string(record.source.occurrence) +
                      " " + changes);
         owned.insert(metadata.url); // include an enqueue whose reply is lost
-        const auto result = actions.add(metadata.url, upnp::queueDidl(metadata));
+        size_t insertion = items.size();
+        if (record.parent) {
+            auto previous = std::find_if(items.rbegin(), items.rend(), [&](const auto &i) {
+                return i.stream == record.parent || i.owner == record.parent;
+            });
+            if (previous == items.rend()) throw std::runtime_error("continuation predecessor missing");
+            insertion = size_t(std::distance(items.begin(), previous.base()));
+        }
+        const auto result = actions.add(metadata.url, upnp::queueDidl(metadata),
+                                        insertion == items.size() ? 0 : unsigned(insertion + 1));
+        if (record.parent) {
+            double remaining = double(record.segmentOffset) / metadata.rate;
+            const auto playing = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
+            if (playing != items.end() && (playing->stream == record.parent || playing->owner == record.parent))
+                remaining -= double(playing->segmentOffset) / metadata.rate + lastElapsed;
+            const auto margin = remaining - 10;
+            logQueue(std::string(margin < 0 ? "WARNING " : "") + "continuation inserted parent=" +
+                     std::to_string(record.parent) + " prefetch_margin_s=" + std::to_string(margin));
+        }
         logQueue("item occurrence=" + std::to_string(record.source.occurrence) +
                  " title=" + RoomStatus::quote(metadata.title));
-        expected.push_back(metadata.url);
+        expected.insert(expected.begin() + insertion, metadata.url);
         const auto after = coordinator.browse();
         if (result.response.value("NumTracksAdded") != "1" || after.uris != expected ||
             after.update == before.update)
             throw std::runtime_error("queue-enqueue-unconfirmed");
-        items.push_back({record.source.occurrence, metadata.url, record.item, track.url, metadata.frames, metadata.title});
+        items.insert(items.begin() + insertion, {record.source.occurrence, metadata.url, record.item, track.url,
+                                                metadata.frames, metadata.title, record.parent, record.segmentOffset});
         publish();
         if (!started) {
             if (!queueSelectedForAdmission) actions.selectQueue(room.uuid);

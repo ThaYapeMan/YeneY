@@ -11,6 +11,13 @@ std::string queueDidl(const QueueMetadata &m) {
     char duration[64];
     snprintf(duration, sizeof(duration), "%llu:%02llu:%02llu", (unsigned long long)(seconds / 3600),
              (unsigned long long)(seconds / 60 % 60), (unsigned long long)(seconds % 60));
+    std::string declaredDuration(duration);
+    if (m.preciseDuration && m.frames % m.rate) {
+        char fraction[32];
+        snprintf(fraction, sizeof fraction, ".%09llu",
+                 (unsigned long long)((m.frames % m.rate) * 1000000000ull / m.rate));
+        declaredDuration += fraction;
+    }
     const auto esc = [](const std::string &s) { return xmlEscape(s); };
     return "<DIDL-Lite xmlns=\"urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/\" "
            "xmlns:dc=\"http://purl.org/dc/elements/1.1/\" "
@@ -30,7 +37,7 @@ std::string queueDidl(const QueueMetadata &m) {
                               : "<upnp:albumArtURI>" + esc(m.artwork) + "</upnp:albumArtURI>") +
            "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
            "<res protocolInfo=\"http-get:*:audio/wav:*\" duration=\"" +
-           duration + "\" size=\"" + std::to_string(m.size) + "\" sampleFrequency=\"" +
+           declaredDuration + "\" size=\"" + std::to_string(m.size) + "\" sampleFrequency=\"" +
            std::to_string(m.rate) + "\" bitsPerSample=\"24\" nrAudioChannels=\"2\">" + esc(m.url) +
            "</res></item></DIDL-Lite>";
 }

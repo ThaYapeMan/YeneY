@@ -3,12 +3,16 @@
 #include "lms_artwork.h"
 #include "queue_lms_cli.h"
 #include <map>
+#include <cmath>
 #include <sstream>
 #include <stdexcept>
 namespace queue_audio {
 struct PlaylistEntry {
     std::string id, title, artist, album, url;
     std::string artworkUrl, remote;
+    double duration = 0, liveEdge = -1;
+    unsigned startOffsetMs = 0;
+    bool finiteRemote() const { return std::isfinite(duration) && duration > 0 && liveEdge < 0; }
     std::string artwork(const std::string &host) const {
         return bridge::lmsArtwork(host, id, artworkUrl, bridge::remoteArtworkTrack(id, remote, url));
     }
@@ -59,6 +63,10 @@ public:
                     entry->url = value;
                 else if (key == "artwork_url")
                     entry->artworkUrl = value;
+                else if (key == "duration")
+                    entry->duration = std::stod(value);
+                else if (key == "live_edge")
+                    entry->liveEdge = std::stod(value);
                 else if (key == "remote")
                     entry->remote = value;
             }
@@ -70,7 +78,7 @@ public:
     }
     PlaylistSnapshot read(const std::string &host, const std::string &mac, unsigned port = 9090) {
         std::string reply;
-        if (!controlLms(host, mac, "status 0 60000 tags:alKu", port, &reply))
+        if (!controlLms(host, mac, "status 0 60000 tags:alKudV", port, &reply))
             throw std::runtime_error("playlist-cli-unavailable");
         return parse(reply);
     }

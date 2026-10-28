@@ -37,7 +37,7 @@ on your own network, on any small Linux machine, container or VM.
 | Mode | How it plays | Best for |
 |---|---|---|
 | **Stream** (explicit `YENEY_PLAYBACK_MODE=stream`) | One continuous 24-bit FLAC stream per room, paced on the Sonos clock | Continuous sources; everything LMS can play |
-| **Queue** (default) | Local files: one Sonos queue item per LMS track (exact-length 24-bit WAV, hi-res converted by YeneY). Podcasts, radio and streaming services switch to the stream path automatically | Standalone rooms and group coordinators: per-track titles and artwork, fast starts, hi-res |
+| **Queue** (default) | Local files: one Sonos queue item per LMS track (exact-length 24-bit WAV, hi-res converted by YeneY). Finite remote tracks and podcasts use queue items with a 5 s duration margin and lossless continuations. Live radio and sources without an LMS duration use stream | Standalone rooms and group coordinators: per-track titles and artwork, fast starts, hi-res |
 
 Queue mode was rebuilt in October 2026 as a small relay that follows LMS strictly,
 in the spirit of philippe44's LMS-uPnP. The earlier, larger design is preserved at
@@ -109,7 +109,7 @@ tells the Sonos speaker to play that stream, while keeping play, pause, stop,
 volume, position and track information in step on both sides. LMS stays in charge
 of the playlist and the sound; the Sonos simply plays what it receives. In queue
 mode, local tracks are instead published one by one as exact-length items in the
-Sonos queue, while podcasts and radio keep using the stream. The full
+Sonos queue, while finite remote tracks use queue items with a 5 s margin and live radio keeps using the stream. The full
 story, including the Sonos pause problem YeneY solves, is in
 [How YeneY works](docs/how-it-works.md).
 
@@ -339,7 +339,7 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | `YENEY_PLAYBACK_MODE` | `queue`: source-aware relay/stream on the coordinator · `stream`: explicit continuous transport · `auto`: stream, logged as `auto-phase4` | `queue` |
 | `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |
 | `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |
-| `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; invalid/overflowing values fail queue configuration | `256` |
+| `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; explicit values apply to both paths | `256` local / `8192` estimated |
 | `YENEY_SHOW_SONOS_SUFFIX` | `yes`: LMS displays `<room> (Sonos)` · `no`: LMS displays `<room>`; identity stays unchanged | `yes` |
 | `YENEY_LMS_VOLUME` | `off`: ignore LMS volume · `speaker`: map LMS volume/mute to Sonos and mirror app changes to LMS; PCM remains unchanged | `off` |
 | `YENEY_VOLUME_MAX` | Maximum speaker volume YeneY writes, integer 0–100; applies in speaker mode | `100` |
@@ -386,15 +386,14 @@ removing members does not change its per-source path. A member of another group
 writes no transport commands and reports one LMS stop, rather than controlling
 the other room or walking the playlist.
 
-Queue mode owns only its
-prepared finite WAV entries for local files. At each LMS track start, remote
-flags, negative ids and non-file URLs (including podcasts, radio and streaming
-services) select the existing continuous stream path instead; unknown metadata
-also selects stream. Remote playback starts progressively without waiting for
-a finite download and does not acquire the Sonos queue. Local/remote class
-changes wait for the outgoing track to finish, then start the other path; a
-short measured gap is logged. Room diagnostics expose `path=relay|stream` and
-`reason=local-source|remote-source`. Pacing logs and socket-wait accumulation
+Queue mode owns only its prepared finite WAV entries. Local files retain exact
+promises. Remote flags, negative IDs and non-file URLs select `remote-finite`
+relay when LMS supplies a positive non-live duration; live and unknown-duration
+sources select the existing continuous stream path. Both paths start
+progressively without waiting for the whole source. Class changes wait for the
+outgoing track to finish, then start the other path; a short measured gap is
+logged. Diagnostics expose `path=relay|stream` and
+`reason=local-source|remote-finite|remote-source`. Pacing logs and socket-wait accumulation
 are suppressed on the relay path and unchanged on the stream path. LMS controls play, pause, resume, stop and source
 seeks; confirmed speaker starts advance LMS through SlimProto. Queue mode reports unambiguous speaker-originated stops and pause/resume to LMS
 through one logged CLI mutation path. Normal LMS commands never echo as CLI mutations; a confirmed room fault or
@@ -404,7 +403,7 @@ Whole-list mirroring, app next/previous/seek mapping, automatic fallback and aut
 `queue-full-v1`; see the [rebuild checklist](docs/designs/queue-parked-features.md).
 Owners can qualify a standalone room or an owner-formed group coordinator with
 `/usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23`,
-optionally `--album <id-or-name> --volume 10`. The suite saves/restores volume,
+optionally `--album <id-or-name> --volume 10 --podcast <episode-or-menu-name>`. The suite saves/restores volume,
 LMS state and room configuration; it checks album joins, LMS pause/resume and
 stop/new play, and a remote favourite/podcast when available, followed by a
 local album returning to the relay. Missing remote entries produce a documented
@@ -752,3 +751,31 @@ own musicTrack fields. An empty title stays empty; no non-empty queue fallback
 is added. `YENEY_TITLE_FORMAT` applies only to the stream path, whose radio-type
 DIDL makes the Sonos app display the title alone. Its artist-title default,
 sent-title log and continuous-stream display formatting remain unchanged.
+
+### Finite remote items
+
+| LMS source | Path | Published length |
+|---|---|---|
+| Local file | Relay / Sonos queue | Existing exact rendered frame count |
+| Remote, positive duration, `live_edge < 0` (or absent) | Relay, reason `remote-finite` | `ceil((duration - start offset) × rate) + 5 × rate` frames |
+| Live (`live_edge >= 0`) or no positive duration | Existing stream path | Continuous stream |
+
+The named five-second margin is an upper bound promise, not silence padding.
+If production ends early, the connection ends at the real audio end. If an
+advertisement makes the episode longer, a continuation is inserted immediately
+after the episode, before any following track, preserving every rendered sample.
+Continuations share the title, artist, album and artwork and keep one LMS track
+and continuous episode position. Each unfinished continuation declares another
+five seconds and can itself continue. Startup never waits for episode completion.
+
+All estimated items remain in the compressed spool for seek and resume after a
+long pause. Estimated playback raises the default per-room quota to 8 GiB;
+explicit `YENEY_QUEUE_DISK_MIB` still controls the quota. A measured three-hour,
+44.1 kHz, stereo 24-bit incompressible episode needed 2,868,842,882 disk bytes
+(2,857,680,000 PCM bytes). Current episode segments and the next item are retained. The budget accommodates
+two such incompressible three-hour episodes during decode-ahead.
+An explicitly inadequate quota fails with a logged storage fault; evicted history
+and future-range timeouts close the connection without fabricated audio.
+
+The generated-podcast regression uses the test-only `ffmpeg` encoder and the
+existing private LMS 9.1.1 harness.

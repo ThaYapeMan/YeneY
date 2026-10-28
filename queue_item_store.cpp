@@ -146,6 +146,7 @@ Config Config::environment() {
         if (!mib || used != s.size() || mib > UINT64_MAX / (1024 * 1024))
             throw std::invalid_argument("invalid YENEY_QUEUE_DISK_MIB");
         c.diskBytes = mib * 1024 * 1024;
+        c.estimatedDiskBytes = c.diskBytes;
     }
     return c;
 }
@@ -303,12 +304,16 @@ std::shared_ptr<Item> Store::create(Descriptor descriptor) {
     if (descriptor.occurrence.empty() || descriptor.occurrence.find('\0') != std::string::npos ||
         !descriptor.rate || descriptor.rate > 655350 || descriptor.channels != 2 || descriptor.bits != 24)
         throw std::invalid_argument("invalid item descriptor");
+    if (descriptor.kind == PromiseKind::UpperBound && !descriptor.promisedFrames)
+        throw std::invalid_argument("upper-bound item needs declared frames");
     if (descriptor.promisedFrames)
         wavLength(*descriptor.promisedFrames);
     std::lock_guard<std::mutex> lock(state->mutex);
     const auto key = std::to_string(descriptor.generation) + ":" + descriptor.occurrence;
     if (state->items.count(key))
         throw std::invalid_argument("duplicate occurrence/generation");
+    if (descriptor.kind == PromiseKind::UpperBound)
+        state->config.diskBytes = std::max(state->config.diskBytes, state->config.estimatedDiskBytes);
     auto item = std::make_shared<ItemState>(std::move(descriptor), ++state->serial);
     state->items.emplace(key, item);
     return std::shared_ptr<Item>(new Item(state, item));
@@ -340,13 +345,16 @@ std::shared_ptr<Item> Store::publish(const std::shared_ptr<Item> &pending, uint6
     return std::shared_ptr<Item>(new Item(state, item));
 }
 void Store::protect(const std::shared_ptr<Item> &current, const std::shared_ptr<Item> &next) {
+    protect(std::vector<std::shared_ptr<Item>>{current, next});
+}
+void Store::protect(const std::vector<std::shared_ptr<Item>> &items) {
     std::lock_guard<std::mutex> lock(state->mutex);
-    for (auto item : {current, next})
+    for (auto item : items)
         if (item && item->store != state)
             throw std::invalid_argument("foreign protected item");
     for (auto &pair : state->items)
         pair.second->protectedItem = false;
-    for (auto item : {current, next})
+    for (auto item : items)
         if (item)
             item->state->protectedItem = true;
 }
@@ -368,6 +376,11 @@ std::optional<uint64_t> Item::contentLength() const {
     if (state->descriptor.promisedFrames)
         return wavLength(*state->descriptor.promisedFrames);
     return state->finished ? std::optional<uint64_t>(wavLength(state->produced)) : std::nullopt;
+}
+bool Item::finished() const {
+    std::lock_guard<std::mutex> lock(store->mutex);
+    store->check(*state);
+    return state->finished;
 }
 uint64_t Item::producedFrames() const {
     std::lock_guard<std::mutex> lock(store->mutex);
@@ -421,7 +434,8 @@ void Item::finish() {
     if (state->finished)
         return;
     try {
-        if (state->descriptor.promisedFrames && state->produced != *state->descriptor.promisedFrames)
+        if (state->descriptor.kind == PromiseKind::Exact && state->descriptor.promisedFrames &&
+            state->produced != *state->descriptor.promisedFrames)
             throw LengthFault(*state->descriptor.promisedFrames, state->produced);
         while (!state->ram.empty())
             store->spill(*state, lock);
@@ -466,6 +480,9 @@ size_t Reader::read(char *output, size_t capacity, std::chrono::milliseconds tim
                 return n;
             }
             const uint64_t pcmOffset = offset - 44;
+            if (state->finished && state->descriptor.kind == PromiseKind::UpperBound &&
+                pcmOffset >= state->produced * frameBytes)
+                return 0;
             if (pcmOffset < state->produced * frameBytes) {
                 auto history =
                     std::upper_bound(state->history.begin(), state->history.end(), pcmOffset / frameBytes,

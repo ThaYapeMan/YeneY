@@ -10,12 +10,15 @@
 #include <vector>
 
 namespace queue_audio {
+enum class PromiseKind { Exact, UpperBound };
+constexpr unsigned remoteMarginSeconds = 5;
 struct Descriptor {
     std::string occurrence;
     uint32_t rate;
-    std::optional<uint64_t> promisedFrames; // nullopt: unpublished until finish()
+    std::optional<uint64_t> promisedFrames; // Exact or UpperBound; nullopt: sealed publication
     uint64_t generation;
     unsigned channels = 2, bits = 24;
+    PromiseKind kind = PromiseKind::Exact;
 };
 struct PublicationSuperseded : std::runtime_error {
     PublicationSuperseded() : std::runtime_error("pending item superseded by publication") {}
@@ -34,6 +37,7 @@ struct Config {
     std::filesystem::path root = "/var/lib/yeney/queue";
     size_t ramBytes = 8 * 1024 * 1024;
     uint64_t diskBytes = 256ull * 1024 * 1024;
+    uint64_t estimatedDiskBytes = 8ull * 1024 * 1024 * 1024;
     static Config environment(); // YENEY_QUEUE_DISK_MIB; invalid values fail
 };
 struct StoreState;
@@ -51,8 +55,9 @@ public:
     std::string room() const;
     std::optional<uint64_t> contentLength() const;
     uint64_t producedFrames() const;
+    bool finished() const;
     void append(const yeney::Frame *, size_t count, bool processed);
-    void finish(); // exact count required; sealed length becomes available
+    void finish(); // Exact requires count; UpperBound permits short EOF; pending seals
     void cancel(const std::string &reason = "cancelled");
     Reader reader(uint64_t byteOffset = 0) const;
 };
@@ -83,6 +88,7 @@ public:
     std::shared_ptr<Item> create(Descriptor);
     std::shared_ptr<Item> publish(const std::shared_ptr<Item> &, uint64_t promisedFrames);
     void protect(const std::shared_ptr<Item> &current, const std::shared_ptr<Item> &next);
+    void protect(const std::vector<std::shared_ptr<Item>> &items);
     uint64_t diskBytes() const;
     size_t ramBytes() const;
 };

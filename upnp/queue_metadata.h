@@ -8,6 +8,7 @@ struct QueueMetadata {
     uint64_t frames = 0, size = 0;
     uint32_t rate = 0;
     unsigned bits = 24, channels = 2;
+    bool preciseDuration = false; // estimated items; preserve local DIDL wire
 };
 // Finite music metadata keeps the plain LMS title and separate artist/album.
 // No stream title formatting, radio URI rewriting or streamContent changes.

@@ -66,6 +66,7 @@ struct QueueRoom::Impl {
         std::string sourceUrl;
         uint64_t frames;
         std::string title;
+        uint64_t owner = 0, segmentOffset = 0;
     };
     std::vector<Entry> items;
     std::map<uint64_t, bool> remote;

@@ -24,7 +24,9 @@ void roomLmsCommand(const std::string &host, const std::string &mac,
 }
 
 void QueueRoom::Impl::speakerCommand(const std::string &command, const std::string &reason) {
-    if (command == "pause 0" && current == queue.latestOccurrence() && queue.queueItemProduced(current)) {
+    const auto entry = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
+    const auto source = entry != items.end() && entry->owner ? entry->owner : current;
+    if (command == "pause 0" && source == queue.latestOccurrence() && queue.queueItemProduced(source)) {
         try {
             resumeEchoUntil = 0;
             resumeSnapshot = reader.read(host, mac);

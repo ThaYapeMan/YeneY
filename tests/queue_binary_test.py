@@ -192,7 +192,7 @@ class CLI(socketserver.ThreadingTCPServer):
                             entries=entries[current:current+1]
                         for at,i in entries:
                             fields += [f'playlist index:{at}', f'id:{-100-i}' if owner.remote_sources else f'id:track {i}:encoded',f'title:{owner.titles[i]}',
-                                       'duration:24','artist:Artist <one>',f'album:{owner.albums[i] if i<len(owner.albums) else "Album & fixture"}',f'url:http://fixture.invalid/{i}' if owner.remote_sources else f'url:file:///fixture/{i}']
+                                       f'duration:{owner.remote_duration if owner.remote_sources else 24}','artist:Artist <one>',f'album:{owner.albums[i] if i<len(owner.albums) else "Album & fixture"}',f'url:http://fixture.invalid/{i}' if owner.remote_sources else f'url:file:///fixture/{i}']
                         reply=' '.join(quote(f,safe='') for f in fields)
                     else: reply=''
                     self.wfile.write((quote(line,safe=': ')+(' '+reply if reply else '')+'\n').encode())
@@ -231,9 +231,10 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False, player_options=()):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, remote_duration=0, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False, player_options=()):
         self.titles=titles or [f'Title & {i}' for i in range(len(rates))]
         self.remote_sources=remote_sources
+        self.remote_duration=remote_duration
         self.resume_restart=resume_restart
         self.resume_changed=resume_changed
         self.partial_source=partial_source

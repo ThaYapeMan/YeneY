@@ -31,7 +31,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f volume-test lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f podcast-sink-test volume-test lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test test-run install
 test:
@@ -147,6 +147,7 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	python3 tests/installer_test.py
 	python3 tests/upnp_mock_test.py
 	python3 tests/own_display_test.py
+	./podcast-sink-test
 	./position-test
 	python3 tests/position_reconnect_test.py
 	python3 tests/send_error_test.py
@@ -170,6 +171,9 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	python3 tests/queue_dryrun_test.py
 	python3 tests/queue_suite_test.py
 	$(MAKE) -C third_party/yeney-core decimator-fixture
+	python3 tests/podcast_device_test.py
+	python3 tests/podcast_binary_test.py
+	YENEY_REAL_LMS_PODCAST_ONLY=1 python3 tests/real_lms_test.py
 	python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_VOLUME_ONLY=1 python3 tests/real_lms_test.py
 	python3 third_party/yeney-core/tests/decimator_quality.py --sox "$${YENEY_REAL_LMS_HOME:-$${YENEY_TEST_CACHE}/real-lms-9.1.1}/Bin/x86_64-linux/sox"
@@ -420,7 +424,7 @@ room-status-test: tests/room_status_test.cpp room_status.h
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $<
 test-run: room-status-test
 
-queue-source-test: tests/queue_source_test.cpp queue_source.h lms_artwork.h
+queue-source-test: tests/queue_source_test.cpp queue_source.h lms_artwork.h queue_playlist.h
 	$(CXX) -std=c++17 -Wall -Wextra -I. -o $@ tests/queue_source_test.cpp
 test-run: queue-source-test
 
@@ -464,3 +468,8 @@ test-run: volume-test
 upnp/own_speaker_control.o: upnp/own_speaker_control.h upnp/subscriptions.h upnp/speaker_state.h
 
 $(OBJS) stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test: player_name.h
+
+podcast-sink-test: tests/podcast_sink_test.cpp core_queue_sink.o libqueueitems.a
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $^ -lFLAC -pthread
+
+test-run: podcast-sink-test

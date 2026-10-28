@@ -17,6 +17,8 @@ int main() {
     });
     q.add("http://host/one", "didl");
     assert(action == "AddURIToQueue" && args["EnqueuedURI"] == "http://host/one");
+    q.add("http://host/continuation", "same-parent-didl", 3);
+    assert(args["DesiredFirstTrackNumberEnqueued"]=="3" && args["EnqueueAsNext"]=="0");
     q.remove(43, 2, 3);
     assert(args["UpdateID"] == "43" && args["StartingIndex"] == "2" && args["NumberOfTracks"] == "3");
     q.save("Before YeneY 2026-10-18 12:34");
