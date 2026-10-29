@@ -89,6 +89,7 @@ public:
     std::shared_ptr<Item> publish(const std::shared_ptr<Item> &, uint64_t promisedFrames);
     void protect(const std::shared_ptr<Item> &current, const std::shared_ptr<Item> &next);
     void protect(const std::vector<std::shared_ptr<Item>> &items);
+    std::optional<yeney::EncodedSpool> reserveEncoded(bool enabled);
     uint64_t diskBytes() const;
     size_t ramBytes() const;
 };

@@ -3,7 +3,12 @@
 namespace bridge {
 void QueueRoom::Impl::externalStop(const std::string &reason) {
     if (externalReleased) return;
+    logQueue("end decision=external-stop reason=" + reason + " occurrence=" + std::to_string(current) +
+             " source_class=" + takeoverSource + " elapsed_s=" + std::to_string(lastElapsed));
     expectedState = "STOPPED";
+    finitePause = false;
+    pausedFlushRetained = false;
+    remoteNaturalSuccessor = false;
     resumeEchoUntil = 0;
     resumeFlush = false;
     deferredStop = {};
@@ -56,7 +61,7 @@ void QueueRoom::Impl::observe() {
     nextPoll = now + std::chrono::milliseconds(now < fastUntil ? 100 : pollMs);
     const auto positionStarted = std::chrono::steady_clock::now();
     const auto p = actions.position().response;
-    const auto position = speakerChanges->poll(positionStarted,
+    auto position = speakerChanges->poll(positionStarted,
         {{"CurrentTrack", p.value("Track")}, {"CurrentTrackURI", p.value("TrackURI")},
          {"RelativeTimePosition", p.value("RelTime")}});
     const auto transportStarted = std::chrono::steady_clock::now();
@@ -83,6 +88,15 @@ void QueueRoom::Impl::observe() {
     }
     const auto transport = transportFields.at("TransportState");
     const auto reportedStatus = transportFields.at("TransportStatus");
+    // Seek and rebuffer both pass through TRANSITIONING mid-item.
+    if (pathReason == "remote-finite" && state == "PLAYING" && transport == "PAUSED_PLAYBACK") {
+        const auto stamp = std::chrono::steady_clock::now();
+        const auto pausedPosition = actions.position().response;
+        if (pausedPosition.value("TrackURI") == uri)
+            position = speakerChanges->poll(stamp,
+                {{"CurrentTrack", pausedPosition.value("Track")}, {"CurrentTrackURI", uri},
+                 {"RelativeTimePosition", pausedPosition.value("RelTime")}});
+    }
     if (reportedStatus != transportStatus) {
         transportStatus = reportedStatus;
         logQueue("TransportStatus=" + transportStatus + " uri=" + transportSourceLog(uri));
@@ -95,12 +109,23 @@ void QueueRoom::Impl::observe() {
     if (!reportedStatus.empty() && reportedStatus != "OK")
         throw std::runtime_error("playback-fault action=Play uri=" + uri +
                                  " TransportStatus=" + reportedStatus);
+    if (transport == "TRANSITIONING") return;
     if (waitingForPlay && transport == "STOPPED" &&
         std::chrono::steady_clock::now() - playAt > std::chrono::seconds(3))
         throw std::runtime_error("playback-fault action=Play uri=" + uri +
                                  " TransportStatus=" + reportedStatus + " stopped-after-play");
-    const auto previousItem =
+    auto previousItem =
         std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
+    // A sub-second final continuation may start and finish between polls.
+    // Its owned stopped URI is end evidence for the already-audible parent,
+    // not a fabricated new LMS track start.
+    const bool stoppedContinuation = transport == "STOPPED" && it != items.end() &&
+        previousItem != items.end() && it == std::prev(items.end()) && it->owner &&
+        it->owner == (previousItem->owner ? previousItem->owner : previousItem->stream);
+    if (stoppedContinuation && it != previousItem) {
+        previousItem = it;
+        lastElapsed = 0; // the previous segment's clock is not this segment's position
+    }
     const bool finalItem = previousItem != items.end() && previousItem == std::prev(items.end());
     bool cancelledCurrent = false;
     const auto checked = it != items.end() ? it : previousItem;
@@ -118,8 +143,34 @@ void QueueRoom::Impl::observe() {
     uint64_t realEnd = finalItem ? previousItem->frames : 0;
     if (finalItem && !cancelledCurrent && previousItem->item->descriptor().kind == queue_audio::PromiseKind::UpperBound &&
         previousItem->item->finished()) realEnd = previousItem->item->producedFrames();
-    const bool nearEnd =
-        finalItem && realEnd <= (endEvidence + 2) * previousItem->item->descriptor().rate;
+    bool episodeComplete = true;
+    uint64_t episodeProduced = 0, episodePlayed = 0;
+    bool estimatedEpisode = false;
+    if (previousItem != items.end()) {
+        const auto owner = previousItem->owner ? previousItem->owner : previousItem->stream;
+        for (const auto &record : queue.snapshot()) {
+            if (record.source.occurrence != owner && record.parent != owner) continue;
+            if (!record.estimated) continue;
+            estimatedEpisode = true;
+            episodeComplete = episodeComplete && record.productionComplete;
+            episodeProduced += record.actual;
+        }
+        episodePlayed = previousItem->segmentOffset +
+            std::min(realEnd, (endEvidence + 1) * previousItem->item->descriptor().rate);
+    }
+    const bool nearEnd = finalItem &&
+        (!estimatedEpisode || (episodeComplete && episodePlayed >= episodeProduced)) &&
+        realEnd <= (endEvidence + (estimatedEpisode ? 1 : 2)) * previousItem->item->descriptor().rate;
+    if (transport == "STOPPED" && state != "STOPPED") {
+        logQueue("end decision=" + std::string(nearEnd ? "natural" : estimatedEpisode && episodeProduced > episodePlayed ? "fault-unplayed-audio" : "external-stop") +
+                 " occurrence=" + std::to_string(current) + " final=" + std::to_string(finalItem) +
+                 " producer_complete=" + std::to_string(episodeComplete) + " produced_frames=" + std::to_string(episodeProduced) +
+                 " played_bound_frames=" + std::to_string(episodePlayed) + " elapsed_s=" + std::to_string(endEvidence) +
+                 " segment_end_frames=" + std::to_string(realEnd));
+        if (estimatedEpisode && !nearEnd && episodeProduced > episodePlayed &&
+            previousItem != items.end() && previousItem->frames <= (endEvidence + 1) * previousItem->item->descriptor().rate)
+            throw TrackFault("declared boundary stopped with unplayed episode audio");
+    }
     const auto source = avUri;
     const bool sourceChanged = media.child("CurrentURI") && source != "x-rincon-queue:" + room.uuid + "#0" &&
                                (!source.empty() || !nearEnd);
@@ -169,15 +220,30 @@ void QueueRoom::Impl::observe() {
         fastPoll();
         if (current && transport == "PLAYING" && queue.queueItemProduced(current)) trackFaults.clear();
     }
-    if (transport == "STOPPED" && nearEnd)
+    if (transport == "STOPPED" && nearEnd) {
         expectedState = "STOPPED";
+        remoteNaturalSuccessor = estimatedEpisode && selectedIndex >= 0 &&
+            size_t(selectedIndex+1) < playlist.entries.size();
+    }
     const auto previous = current;
     const auto old = state;
     current = it->stream;
     state = playback == yeney::PlaybackState::Playing  ? "PLAYING"
             : playback == yeney::PlaybackState::Paused ? "PAUSED"
                                                        : "STOPPED";
-    queue.speakerPosition(current, elapsed * it->item->descriptor().rate, playback);
+    std::optional<int64_t> pauseTime;
+    if (mutation == "pause 1" && pathReason == "remote-finite") {
+        try {
+            const auto snapshot = reader.read(host, mac);
+            const auto owner = it->owner ? it->owner : it->stream;
+            const auto before = queue.audibleElapsedMs(owner);
+            if (before && snapshot.index < snapshot.entries.size() &&
+                snapshot.entries[snapshot.index].url == it->sourceUrl)
+                pauseTime = int64_t(snapshot.timeMs) + int64_t(it->segmentOffset * 1000 / rate + elapsed * 1000) - *before;
+        } catch (const std::exception &) { logQueue("pause position baseline unavailable"); }
+    }
+    queue.speakerPosition(current, transport == "STOPPED" && nearEnd && estimatedEpisode ? realEnd :
+                          elapsed * it->item->descriptor().rate, playback);
     if (current != previous || state != old) {
         publish();
         logQueue("state=" + state + (state == "PLAYING" ? " audible occurrence=" : " occurrence=") +
@@ -185,6 +251,29 @@ void QueueRoom::Impl::observe() {
     }
     if (state == "PLAYING" && handoffAt != std::chrono::steady_clock::time_point{})
         handoffComplete();
+    if (pauseTime) {
+        // The CLI uses a different connection from SlimProto. Wait for the
+        // server's read-only clock acknowledgement before it saves resumeTime.
+        // This is a state barrier, not an audio delay or a CLI seek.
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        bool acknowledged = false;
+        int64_t observedTime = -1;
+        do {
+            try {
+                auto snapshot = reader.read(host, mac);
+                observedTime = snapshot.timeMs;
+                acknowledged = std::abs(observedTime - *pauseTime) <= 1250;
+                if (acknowledged) break;
+            } catch (const std::exception &) { break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        } while (std::chrono::steady_clock::now() < deadline);
+        logQueue(std::string("pause position ") + (acknowledged ? "acknowledged" : "unconfirmed") +
+                 " expected_lms_ms=" + std::to_string(*pauseTime) + " observed_lms_ms=" + std::to_string(observedTime));
+    }
+    if (pauseTime) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!commands.empty()) return; // New LMS control wins over an app echo.
+    }
     if (!mutation.empty())
         speakerCommand(mutation, mutation == "pause 1" ? "speaker-pause" : "speaker-resume");
 }

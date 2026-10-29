@@ -88,10 +88,12 @@ struct QueueRoom::Impl {
     std::string takeoverSource = "unknown";
     bool externalReleased = false, stopAcknowledged = false, sourceAway = false;
     std::atomic<int64_t> resumeEchoUntil{0};
-    std::atomic_bool resumeFlush{false};
+    std::atomic_bool resumeFlush{false}, finitePause{false};
+    std::map<std::string, std::string> plainRemoteTitles;
     std::chrono::steady_clock::time_point deferredStop{};
     uint64_t deferredNext = 0;
     queue_audio::PlaylistSnapshot resumeSnapshot;
+    bool pausedFlushRetained = false, remoteNaturalSuccessor = false;
     static int64_t milliseconds();
     std::string expectedState = "STOPPED";
     std::chrono::steady_clock::time_point ownUntil{};

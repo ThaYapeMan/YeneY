@@ -113,6 +113,8 @@ public:
     void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
     bool speakerDriven() const override;
+    std::optional<yeney::EncodedSpool> encodedSpool(uint64_t) override;
+    bool queueEndRequiresPlayed(uint64_t) const override;
     bool queueItemProduced(uint64_t) const override;
     bool queuePrefixProduced(uint64_t, uint64_t) const override;
     void failQueueTrack() { queueFailed = true; }

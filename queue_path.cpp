@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
+#include "podcast_title.h"
 namespace bridge {
 std::optional<yeney::FlacSourceInfo> QueueRoom::Impl::sourceInfo(uint64_t occurrence,
                                                                  std::optional<yeney::FlacSourceInfo> info) {
@@ -95,8 +96,9 @@ void QueueRoom::Impl::beginSelection(uint64_t request) {
     // A handoff temporarily releases transport before its new renderer is
     // confirmed. A fast source may already deliver its successor then; that
     // remains a track boundary, rather than a fresh play of the current index.
-    selectedNewPlay = stoppedPlay ||
-        (state == "STOPPED" && (handoffAt == std::chrono::steady_clock::time_point{} || externalReleased || faulted));
+    selectedNewPlay = !remoteNaturalSuccessor && (stoppedPlay ||
+        (state == "STOPPED" && (handoffAt == std::chrono::steady_clock::time_point{} || externalReleased || faulted)));
+    remoteNaturalSuccessor = false;
 }
 void QueueRoom::Impl::selectPath() {
     if (!selecting || selectedRequest != selectionRequest)
@@ -131,7 +133,38 @@ void QueueRoom::Impl::selectPath() {
             selecting = false;
             return;
         }
+        if (remotePlaybackSource(track.id, track.remote, track.url) && !track.url.empty()) {
+            if (track.finiteRemote() && selectedIndex == int(playlist.index) &&
+                std::isfinite(playlist.duration) && playlist.duration > track.duration) {
+                logQueue("duration inconsistent entry_s=" + std::to_string(track.duration) +
+                         " status_s=" + std::to_string(playlist.duration) + " decision=larger-status-bound");
+                track.duration = playlist.duration;
+            }
+            if (track.finiteRemote()) {
+                auto identity = track.url;
+                const auto marker = identity.rfind("{from=");
+                if (marker != std::string::npos && identity.back() == '}') identity.resize(marker);
+                auto known = plainRemoteTitles.find(identity);
+                if (known != plainRemoteTitles.end()) track.title = known->second;
+                else {
+                    bool resolved = false;
+                    if (track.url.compare(0,10,"podcast://") == 0) {
+                        try {
+                            if (auto plain = queue_audio::podcastPlainTitle(host,mac,track.title)) {
+                                track.title = *plain;resolved = true;
+                                logQueue("title source=podcast-menu");
+                            }
+                        } catch (const std::exception &) { logQueue("podcast title lookup unavailable"); }
+                    }
+                    if (!resolved) track.title = track.plainTitle();
+                    plainRemoteTitles.emplace(identity,track.title);
+                }
+            }
+        }
+        if (selectedRequest != selectionRequest) { selecting = false;return; }
         selectedLocal = !remotePlaybackSource(track.id, track.remote, track.url) || track.finiteRemote();
+        // Retain the status clock for diagnostics only. Remote promises never
+        // subtract this possibly previous-run value.
         if (selectedNewPlay) track.startOffsetMs = playlist.timeMs;
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
@@ -139,7 +172,7 @@ void QueueRoom::Impl::selectPath() {
         }
         selectionKnown = true;
         if (!selectedNewPlay && selectedLocal != paths.isRelay()) {
-            paths.waitBoundary();
+            paths.waitBoundary(state == "STOPPED" && started && expectedState == "STOPPED");
             logQueue("path-pending path=" + std::string(selectedLocal ? "relay" : "stream") +
                      " waiting=audible-end");
         }

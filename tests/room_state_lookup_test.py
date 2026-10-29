@@ -80,6 +80,7 @@ class LookupTests(unittest.TestCase):
                                 backend=Mock(); backend.run=backend_run; backend.now=time.monotonic
                                 for module in (PACING,DEVICE):
                                     suite=module['Suite'](room,'127.0.0.1',backend=backend,cli=Mock(),state_root=legacy,state_base=base/'var/lib',output=base/'out')
+                                    if module is DEVICE: suite.lock_root=base/'suite-locks'
                                     try:
                                         # Execute each installed tool's actual startup lookup, stopping
                                         # before it can mutate a service or contact an LMS player.

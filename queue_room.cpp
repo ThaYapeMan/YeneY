@@ -75,6 +75,12 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
     setRoomStatus(&status);
     publish();
     queue.onQueueCommand([this](char c, uint32_t) {
+        if (c == 'q' && finitePause) {
+            std::lock_guard<std::mutex> lock(mutex);
+            commands.push_back({'H', queue.latestOccurrence() + 1});
+            changed.notify_all();
+            return true;
+        }
         if (milliseconds() < resumeEchoUntil && (c == 'q' || (c == 's' && resumeFlush))) {
             std::lock_guard<std::mutex> lock(mutex);
             if (c == 'q') {

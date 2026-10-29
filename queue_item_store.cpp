@@ -177,7 +177,7 @@ struct StoreState {
     Config config;
     std::filesystem::path directory;
     std::map<std::string, std::shared_ptr<ItemState>> items;
-    uint64_t serial = 0, disk = 0;
+    uint64_t serial = 0, disk = 0, encodedReserved = 0;
     size_t ram = 0;
     bool stopped = false;
     int lockFd = -1;
@@ -198,12 +198,12 @@ struct StoreState {
         item.ram.clear();
         changed.notify_all();
     }
-    void space(uint64_t amount, const ItemState &writing) {
-        while (amount > config.diskBytes - disk) {
+    void space(uint64_t amount, const ItemState *writing) {
+        while (disk + encodedReserved > config.diskBytes || amount > config.diskBytes - disk - encodedReserved) {
             std::shared_ptr<ItemState> oldest;
             for (const auto &pair : items) {
                 const auto &i = pair.second;
-                if (i.get() != &writing && (i->finished || i->fault) && !i->protectedItem &&
+                if (i.get() != writing && (i->finished || i->fault) && !i->protectedItem &&
                     !i->history.empty() && (!oldest || i->serial < oldest->serial))
                     oldest = i;
             }
@@ -235,7 +235,7 @@ struct StoreState {
         lock.lock();
         check(item);
         auto &r = item.ram.front();
-        space(flac.size(), item);
+        space(flac.size(), &item);
         const auto path = directory / (std::to_string(item.serial) + "-" + std::to_string(r.first) + ".flac");
         // FLAC is fully encoded in bounded temporary RAM before quota admission.
         // No WAV or raw PCM file is ever written.
@@ -358,9 +358,23 @@ void Store::protect(const std::vector<std::shared_ptr<Item>> &items) {
         if (item)
             item->state->protectedItem = true;
 }
+std::optional<yeney::EncodedSpool> Store::reserveEncoded(bool enabled) {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->encodedReserved = 0;
+    if (!enabled) return std::nullopt;
+    state->config.diskBytes = std::max(state->config.diskBytes,state->config.estimatedDiskBytes);
+    const auto bytes = std::min<uint64_t>(state->config.diskBytes / 2,UINT32_MAX-65536ull);
+    if (!bytes) throw std::runtime_error("queue disk quota cannot reserve encoded input");
+    return yeney::EncodedSpool{state->directory.string(),bytes,[held=state](uint64_t allocated) {
+        std::lock_guard<std::mutex> lock(held->mutex);
+        if (held->stopped) throw std::runtime_error("encoded spool store closed");
+        if (allocated > held->encodedReserved) held->space(allocated-held->encodedReserved,nullptr);
+        held->encodedReserved = allocated;
+    }};
+}
 uint64_t Store::diskBytes() const {
     std::lock_guard<std::mutex> lock(state->mutex);
-    return state->disk;
+    return state->disk + state->encodedReserved;
 }
 size_t Store::ramBytes() const {
     std::lock_guard<std::mutex> lock(state->mutex);

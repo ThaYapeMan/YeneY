@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <cerrno>
 #include <limits>
 #include <stdexcept>
 namespace queue_audio {
@@ -65,13 +66,36 @@ ByteRange wavRange(const std::string &text, uint64_t length) {
 }
 bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &item,
               std::chrono::milliseconds wait) {
+    struct Diagnostic {
+        upnp::StreamRequest &request;
+        std::shared_ptr<Item> item;
+        unsigned status = 0;
+        uint64_t length = 0, served = 0, bodyStart = UINT64_MAX, backpressure = 0;
+        std::string ending = "cancelled";
+        ~Diagnostic() {
+            const auto sent = request.connectionSentBytes();
+            if (bodyStart != UINT64_MAX && sent != UINT64_MAX && sent >= bodyStart) served = sent-bodyStart;
+            // Only a valid numeric Range is logged. Never include URLs or tokens.
+            auto range = request.header("Range");
+            if (range.find_first_not_of("bytes=0123456789-, ") != std::string::npos || range.size() > 128)
+                range = "invalid";
+            std::printf("yeney: queue HTTP method=%s item=%s range=%s status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu\n",
+                request.method() == upnp::StreamRequest::Method::Get ? "GET" :
+                request.method() == upnp::StreamRequest::Method::Head ? "HEAD" : "OTHER",
+                item->descriptor().occurrence.c_str(), range.empty() ? "none" : range.c_str(), status,
+                (unsigned long long)length, (unsigned long long)(44 + item->producedFrames()*6),
+                (unsigned long long)served, ending.c_str(), (unsigned long long)backpressure);
+        }
+    } diagnostic{request, item};
     if (request.method() != upnp::StreamRequest::Method::Get &&
         request.method() != upnp::StreamRequest::Method::Head) {
+        diagnostic.status = 405; diagnostic.ending = "complete";
         request.reply(405);
         return true;
     }
     auto length = item->contentLength();
     if (!length) {
+        diagnostic.status = 503; diagnostic.ending = "complete";
         request.reply(503);
         return true;
     } // sealed assets are unpublished
@@ -79,11 +103,14 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &item,
     try {
         range = wavRange(request.header("Range"), *length);
     } catch (const std::exception &) {
+        diagnostic.status = 416; diagnostic.ending = "complete";
         const auto wire = "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */" +
                           std::to_string(*length) + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
         request.send(wire.data(), wire.size());
         return true;
     }
+    diagnostic.status = range.partial ? 206 : 200;
+    diagnostic.length = range.last - range.first + 1;
     auto wire =
         std::string("HTTP/1.1 ") + (range.partial ? "206 Partial Content" : "200 OK") +
         "\r\nContent-Type: audio/wav\r\nContent-Length: " + std::to_string(range.last - range.first + 1) +
@@ -92,11 +119,42 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &item,
         wire += "Content-Range: bytes " + std::to_string(range.first) + "-" + std::to_string(range.last) +
                 "/" + std::to_string(*length) + "\r\n";
     wire += "\r\n";
-    if (!request.send(wire.data(), wire.size()) || request.method() == upnp::StreamRequest::Method::Head)
+    auto send = [&](const char *bytes, size_t size) {
+        while (size && !request.aborted() && !request.peerClosed()) {
+            const auto before = request.connectionSentBytes();
+            if (request.send(bytes,size)) return true;
+            const auto error = errno;
+            const auto after = request.connectionSentBytes();
+            if ((error != EAGAIN && error != EWOULDBLOCK && error != ETIMEDOUT) ||
+                before == UINT64_MAX || after == UINT64_MAX || after < before || after-before > size) {
+                errno = error;
+                return false;
+            }
+            // A bounded send deadline is a backpressure observation, not EOF.
+            // The exact socket count fences a partially accepted chunk so no
+            // bytes are repeated when the healthy speaker starts reading again.
+            const auto accepted = size_t(after-before);
+            bytes += accepted;size -= accepted;
+            (void)item->contentLength(); // intentional flush/eviction cancels the wait
+            if (!diagnostic.backpressure++)
+                std::printf("yeney: queue HTTP backpressure item=%s waiting=receiver count_bytes=%llu\n",
+                            item->descriptor().occurrence.c_str(),(unsigned long long)after);
+        }
+        return !size;
+    };
+    if (!send(wire.data(), wire.size())) {
+        diagnostic.ending = errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT ? "timeout" : "speaker-closed";
         return true;
+    }
+    diagnostic.bodyStart = request.connectionSentBytes();
+    if (request.method() == upnp::StreamRequest::Method::Head) {
+        diagnostic.ending = "complete";
+        return true;
+    }
     auto reader = item->reader(range.first);
     uint64_t left = range.last - range.first + 1;
     auto deadline = std::chrono::steady_clock::now() + wait;
+    diagnostic.ending = "speaker-closed";
     try {
         while (left && !request.aborted() && !request.peerClosed()) {
             char bytes[8192];
@@ -112,12 +170,19 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &item,
                     throw;
                 continue;
             }
-            if (!n || !request.send(bytes, n))
+            if (!n) { diagnostic.ending = "early-EOF"; break; }
+            if (!send(bytes, n)) {
+                diagnostic.ending = errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT ? "timeout" : "speaker-closed";
                 break;
+            }
+            diagnostic.served += n;
             left -= n;
             deadline = std::chrono::steady_clock::now() + wait;
         }
+        if (!left) diagnostic.ending = "complete";
+        else if (request.aborted()) diagnostic.ending = "cancelled";
     } catch (const std::exception &e) {
+        diagnostic.ending = dynamic_cast<const ReadTimeout *>(&e) ? "timeout" : "cancelled";
         std::printf("yeney: queue HTTP read closed item=%s offset=%llu reason=%s\n",
                     item->descriptor().occurrence.c_str(),
                     static_cast<unsigned long long>(reader.position()), e.what());

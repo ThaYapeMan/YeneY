@@ -19,9 +19,9 @@ public:
     std::function<void(uint64_t)> describeSource;
     explicit QueuePathSink(queue_audio::CoreQueueSink &q, const uint8_t *mac) : relay(q), stream(mac) {}
     bool isRelay() const { return relayPath; }
-    void waitBoundary() {
-        boundary = false;
-        waiting = true;
+    void waitBoundary(bool alreadyStopped = false) {
+        boundary = alreadyStopped;
+        waiting = !alreadyStopped;
     }
     bool atBoundary() const { return boundary; }
     void cancelSelection() { waiting = ready = reset = false; }
@@ -97,6 +97,8 @@ public:
     bool takeQueueRefetch() override { return relayPath && relay.takeQueueRefetch(); }
     bool takeQueueCachedStart() override { return relayPath && relay.takeQueueCachedStart(); }
     bool takeQueueFailure() override { return relayPath && relay.takeQueueFailure(); }
+    std::optional<yeney::EncodedSpool> encodedSpool(uint64_t id) override { return relay.encodedSpool(id); }
+    bool queueEndRequiresPlayed(uint64_t id) const override { return target().queueEndRequiresPlayed(id); }
     bool queueItemProduced(uint64_t id) const override { return target().queueItemProduced(id); }
     bool takeAudibleStart(yeney::AudibleStart &s) override { return relayPath && relay.takeAudibleStart(s); }
     bool takeAudibleState(yeney::AudibleState &s) override {

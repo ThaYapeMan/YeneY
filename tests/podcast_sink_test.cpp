@@ -44,7 +44,7 @@ int main(int argc, char **) {
     sink.trackBoundary(0, {8000, 24, 2, false}, false);
     sink.waitIdle();
     auto records = sink.snapshot();
-    assert(records.size()==1 && records[0].promised==21*8000);
+    assert(records.size()==1 && records[0].promised==25*8000);
     assert(records[0].item->descriptor().kind==PromiseKind::UpperBound);
     auto future = std::async(std::launch::async,[item=records[0].item] {
         char data[6]; return item->reader(44+100000*6).read(data,6);
@@ -75,16 +75,47 @@ int main(int argc, char **) {
     yeney::AudibleStart start; assert(sink.takeAudibleStart(start) && start.occurrence==1);
     sink.speakerPosition(records[1].source.occurrence,2*8000,yeney::PlaybackState::Playing);
     assert(!sink.takeAudibleStart(start));
-    assert(sink.audibleElapsedMs(1)==23000);
+    assert(sink.audibleElapsedMs(1)==27000);
     sink.speakerPosition(records[1].source.occurrence,8000,yeney::PlaybackState::Playing);
-    assert(sink.audibleElapsedMs(1)==22000);
+    assert(sink.audibleElapsedMs(1)==26000);
     sink.restartCached();
     sink.speakerPosition(records[1].source.occurrence,8000,yeney::PlaybackState::Playing);
     assert(sink.takeAudibleStart(start) && start.occurrence==1 && start.frame==records[0].first);
-    assert(sink.audibleElapsedMs(1)==22000);
+    assert(sink.audibleElapsedMs(1)==26000);
     assert(sink.queueItemProduced(1));
     assert(sink.committedItemFrames(1)==pcm.size());
-    std::cout<<"PASS podcast: resumed declaration ceil((20-4)*8000)+5*8000; sample-exact 46 s with an exact completed continuation; one LMS start and continuous seek clock\n";
+    std::cout<<"PASS podcast: resumed declaration ceil(20*8000)+5*8000, stale/resume clock never subtracted; sample-exact 46 s with an exact completed continuation; one LMS start and continuous seek clock\n";
+    {
+        Config quota=c;quota.diskBytes=quota.estimatedDiskBytes=4096;
+        Store limited("EncodedQuota",quota);
+        auto reservation=limited.reserveEncoded(true);
+        assert(reservation && reservation->bytes==2048 && limited.diskBytes()==0);
+        reservation->allocate(1024);assert(limited.diskBytes()==1024);
+        bool exhausted=false;
+        try { reservation->allocate(4097); } catch(const std::runtime_error &) { exhausted=true; }
+        assert(exhausted && limited.diskBytes()==1024);
+        limited.reserveEncoded(false);assert(limited.diskBytes()==0);
+        std::cout<<"PASS encoded/PCM shared room quota: actual encoded file bytes counted, over-budget growth rejected atomically, release returns reservation\n";
+    }
+    {
+        CoreQueueSink shortTail("TinyContinuation",c,60);shortTail.useSpeakerClock();
+        shortTail.estimate(1,1,0);shortTail.coreEvent("strm",1,0);
+        shortTail.trackDescriptor({1,8000,{},0,0});shortTail.trackBoundary(0,{8000,24,2,false},false);
+        std::vector<yeney::Frame> audio(6*8000+8,{256,-256});
+        assert(shortTail.write(audio.data(),audio.size(),false)==audio.size());
+        shortTail.resolvedItemBoundary({1,0,audio.size(),0,"no-transition"});shortTail.waitIdle();
+        auto segments=shortTail.snapshot();assert(segments.size()==2);
+        shortTail.speakerPosition(segments.back().source.occurrence,8,yeney::PlaybackState::Stopped);
+        yeney::AudibleStart signal;assert(!shortTail.takeAudibleStart(signal));
+        shortTail.speakerPosition(1,5*8000,yeney::PlaybackState::Playing);
+        assert(shortTail.takeAudibleStart(signal));
+        shortTail.speakerPosition(segments.back().source.occurrence,8,yeney::PlaybackState::Stopped);
+        assert(!shortTail.takeAudibleStart(signal) && shortTail.audibleFrames()==audio.size());
+        yeney::AudibleState state;bool stopped=false;
+        while(shortTail.takeAudibleState(state))stopped=state.occurrence==1 && state.state==yeney::PlaybackState::Stopped;
+        assert(stopped);
+        std::cout<<"PASS sub-poll continuation EOF: stopped final owned segment advances the established parent only, all frames counted, no second LMS start\n";
+    }
     Store store("Short",c);
     auto shortItem=store.create({"short",8000,80000,0,2,24,PromiseKind::UpperBound});
     shortItem->append(pcm.data(),40000,false);shortItem->finish();

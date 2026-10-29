@@ -67,6 +67,20 @@ void QueueRoom::Impl::release(bool stop) {
     publish();
 }
 void QueueRoom::Impl::command(char c, uint64_t next) {
+    if (c == 'H') {
+        const auto snapshot = reader.read(host, mac);
+        const auto audible = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
+        if (snapshot.mode == "pause" && audible != items.end() &&
+            snapshot.index < snapshot.entries.size() && snapshot.entries[snapshot.index].url == audible->sourceUrl) {
+            pausedFlushRetained = true;
+            logQueue("pause flush retained: LMS mode=pause same source, queue and spool kept");
+            return;
+        }
+        finitePause = false;
+        queue.flush();
+        command('q', next);
+        return;
+    }
     if (c == 'M' || c == 'R') {
         if (!roomStopped) {
             if (c == 'M') {
@@ -99,12 +113,26 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         }
         const auto audible =
             std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
+        const auto source = audible != items.end() && audible->owner ? audible->owner : current;
+        const auto oldRunElapsed = queue.audibleElapsedMs(source).value_or(0);
+        const bool sameClock = std::abs(int64_t(snapshot.timeMs) - int64_t(resumeSnapshot.timeMs)) <= 500;
+        // Native LMS can expose the new seek offset plus the preceding run's
+        // STAT clock until our cached STMs reanchors that same source. Verify
+        // that exact clock equation, rather than widening the seek tolerance.
+        const bool pendingNativeClock = pausedFlushRetained && pathReason == "remote-finite" &&
+            std::abs(int64_t(snapshot.timeMs) - int64_t(oldRunElapsed) - int64_t(resumeSnapshot.timeMs)) <= 500;
         const bool same =
             known && audible != items.end() && snapshot.index == resumeSnapshot.index &&
             snapshot.index < snapshot.entries.size() && snapshot.index < resumeSnapshot.entries.size() &&
             snapshot.entries[snapshot.index].url == audible->sourceUrl &&
             snapshot.entries[snapshot.index].url == resumeSnapshot.entries[snapshot.index].url &&
-            std::abs(int64_t(snapshot.timeMs) - int64_t(resumeSnapshot.timeMs)) <= 500;
+            (sameClock || pendingNativeClock);
+        logQueue("resume echo decision=" + std::string(same ? "adopt" : "replace") +
+                 " lms_time_ms=" + std::to_string(snapshot.timeMs) +
+                 " saved_time_ms=" + std::to_string(resumeSnapshot.timeMs) +
+                 " old_run_elapsed_ms=" + std::to_string(oldRunElapsed) +
+                 " pending_native_clock=" + std::to_string(pendingNativeClock));
+        pausedFlushRetained = false;
         if (same) {
             queue.restartCached();
             queue.confirmCachedStart();
@@ -119,6 +147,9 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         return;
     }
     if (c == 'q') {
+        remoteNaturalSuccessor = false;
+        finitePause = false;
+        pausedFlushRetained = false;
         handoffAt = {};
         if (externalReleased)
             stopAcknowledged = true;
@@ -249,8 +280,17 @@ void QueueRoom::Impl::append() {
             if (previous == items.rend()) throw std::runtime_error("continuation predecessor missing");
             insertion = size_t(std::distance(items.begin(), previous.base()));
         }
-        const auto result = actions.add(metadata.url, upnp::queueDidl(metadata),
-                                        insertion == items.size() ? 0 : unsigned(insertion + 1));
+        if (record.parent) logQueue("continuation insertion attempted parent=" + std::to_string(record.parent) +
+                                    " occurrence=" + std::to_string(record.source.occurrence));
+        upnp::SoapResult result;
+        try {
+            result = actions.add(metadata.url, upnp::queueDidl(metadata),
+                                 insertion == items.size() ? 0 : unsigned(insertion + 1));
+        } catch (const std::exception &e) {
+            if (record.parent) logQueue("continuation insertion failed parent=" + std::to_string(record.parent) +
+                                       " reason=" + e.what());
+            throw;
+        }
         if (record.parent) {
             double remaining = double(record.segmentOffset) / metadata.rate;
             const auto playing = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
@@ -266,7 +306,12 @@ void QueueRoom::Impl::append() {
         const auto after = coordinator.browse();
         if (result.response.value("NumTracksAdded") != "1" || after.uris != expected ||
             after.update == before.update)
-            throw std::runtime_error("queue-enqueue-unconfirmed");
+            {
+                if (record.parent) logQueue("continuation insertion failed reason=queue-enqueue-unconfirmed parent=" + std::to_string(record.parent));
+                throw std::runtime_error("queue-enqueue-unconfirmed");
+            }
+        if (record.parent) logQueue("continuation insertion confirmed parent=" + std::to_string(record.parent) +
+                                   " occurrence=" + std::to_string(record.source.occurrence));
         items.insert(items.begin() + insertion, {record.source.occurrence, metadata.url, record.item, track.url,
                                                 metadata.frames, metadata.title, record.parent, record.segmentOffset});
         publish();
@@ -286,6 +331,7 @@ void QueueRoom::Impl::append() {
 void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
     if (roomStopped) return;
     roomStopped = true;
+    logQueue("end decision=fault occurrence=" + std::to_string(current) + " reason=" + reason);
     fault = reason;
     faulted = true;
     selecting = selectionKnown = false;

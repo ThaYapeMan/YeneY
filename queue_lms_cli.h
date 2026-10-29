@@ -104,7 +104,8 @@ inline bool controlLms(const std::string &host, const std::string &mac, const st
     if (question)
         expected.pop_back();
     const bool query =
-        question || command.rfind("status ", 0) == 0 || (global && command.rfind("players ", 0) == 0);
+        question || command.rfind("status ", 0) == 0 || command.rfind("podcasts items ", 0) == 0 ||
+        (global && command.rfind("players ", 0) == 0);
     // Some clients encode the complete acknowledgement, including separators.
     // Accept only an exact decoded mutation echo in that representation.
     if (!query && actual.size() == 1 && actual.front() == decodeLms(prefix + command))

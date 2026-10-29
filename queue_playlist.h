@@ -12,6 +12,17 @@ struct PlaylistEntry {
     std::string artworkUrl, remote;
     double duration = 0, liveEdge = -1;
     unsigned startOffsetMs = 0;
+    std::string plainTitle() const {
+        if (url.compare(0, 10, "podcast://")) return title;
+        // Native Podcast scanUrl can store getCurrentTitle's player formatting
+        // back into TITLE. Remove only the exact suffix made from these tags.
+        const auto suffix = (!artist.empty() ? " by " + artist : std::string{}) +
+                            (!album.empty() ? " from " + album : std::string{});
+        if (!suffix.empty() && title.size() >= suffix.size() &&
+            title.compare(title.size() - suffix.size(), suffix.size(), suffix) == 0)
+            return title.substr(0, title.size() - suffix.size());
+        return title;
+    }
     bool finiteRemote() const { return std::isfinite(duration) && duration > 0 && liveEdge < 0; }
     std::string artwork(const std::string &host) const {
         return bridge::lmsArtwork(host, id, artworkUrl, bridge::remoteArtworkTrack(id, remote, url));
@@ -19,6 +30,8 @@ struct PlaylistEntry {
 };
 struct PlaylistSnapshot {
     unsigned index = 0, timeMs = 0;
+    std::string mode;
+    double duration = 0;
     std::vector<PlaylistEntry> entries;
 };
 // Read-only metadata snapshot. LMS alone determines stream order; the relay
@@ -37,12 +50,16 @@ public:
             if (colon == std::string::npos)
                 continue;
             auto key = field.substr(0, colon), value = field.substr(colon + 1);
-            if (key == "playlist_cur_index")
+            if (key == "mode" && !entry)
+                out.mode = value;
+            else if (key == "playlist_cur_index")
                 out.index = value == "-1" ? 0 : std::stoul(value);
             else if (key == "playlist_tracks")
                 count = std::stoul(value);
             else if (key == "playlist_timestamp")
                 timestamp = value;
+            else if (key == "duration" && !entry)
+                out.duration = std::stod(value);
             else if (key == "time")
                 out.timeMs = unsigned(std::stod(value) * 1000);
             else if (key == "playlist index" || key == "index") {

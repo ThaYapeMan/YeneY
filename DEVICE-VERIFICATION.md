@@ -951,3 +951,32 @@ until a clean stop; listen for the final words and uninterrupted continuation.
 Check Next and Previous as with local relay items and confirm LMS remains on one
 episode across its continuation entries. Run only on the owner's chosen room;
 agents use loopback fakes and a private LMS instance, never the owner's devices.
+
+### Podcast field diagnostics (YENEY-PODCAST-02)
+
+Read the room journal with `journalctl -u yeney@Study --since "10 minutes ago"`
+(use the installed room service name), or capture stdout when running directly.
+Search for `queue promise`, `queue HTTP`, `queue continuation`, `queue end decision`
+and `pause flush retained`.
+
+The promise line records occurrence, LMS duration and observed start clock,
+immutable declared frames/seconds and promise kind. The start clock is diagnostic:
+remote declarations keep the larger duration instead of subtracting a possibly
+stale clock. Compare the first and repeated starts of the same episode.
+HTTP summaries record method, item, numeric Range, status, Content-Length,
+produced bytes, served bytes and complete/early-EOF/speaker-closed/timeout/cancelled.
+A pause connection close and a later GET probe followed by Range are expected.
+Continuation lines distinguish overflow, record creation, insertion attempt and
+confirmation. A boundary stop with unplayed audio must report a fault, never
+natural completion; TRANSITIONING during seek/rebuffer must not send STMu.
+A Sonos pause must keep queue URLs and spool, and resume must continue at the
+paused position. Include all these lines with the next field report; no private
+source URL, HTTP session token or media needs to be shared.
+
+`queue encoded spool capacity_bytes=` records the finite input FIFO capacity.
+The automated 120-second pause case now pauses a progressive HTTP reader while
+PCM production is incomplete, then resumes the same decoder from the spool.
+`pause position acknowledged` records the LMS clock barrier; `resume echo decision`
+records both clocks and the preceding run's elapsed time when LMS restarts its
+stream. A separate controlled full-buffer STAT stimulus verifies native q+s
+adoption for a completed spool. Physical speaker acceptance remains owner-run.

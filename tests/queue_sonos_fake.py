@@ -65,6 +65,7 @@ class Coordinator(ThreadingHTTPServer):
         self.worker.start()
 
     def close(self):
+        if getattr(self,'device_audio',None):self.device_audio.close()
         self.closing = True
         self.shutdown(); self.server_close(); self.worker.join()
         assert not self.errors, self.errors
@@ -265,3 +266,132 @@ def request(uri, method='GET', byte_range=None):
     connection.request(method, u.path+'?'+u.query, headers={} if byte_range is None else {'Range': byte_range})
     response = connection.getresponse()
     return connection, response
+
+def serialized_audio(method):
+    def call(self,*args,**kwargs):
+        with self.audio_lock:return method(self,*args,**kwargs)
+    return call
+
+class FiniteDeviceAudio:
+    """Opt-in device model: immutable WAV length, prefetch, disconnect and Range.
+
+    The control-only fixtures retain their explicit position controls. Audio
+    acceptance attaches this model and calls tick from GetPositionInfo.
+    """
+    def __init__(self, server, speed=1, progressive=False):
+        self.audio_lock=threading.RLock();self.active=False
+        self.progressive=progressive;self.real_eof=False
+        self.server=server;self.speed=speed;self.cache={};self.requests=[]
+        self.audio=bytearray();self.current=None;self.frame=0;self.stamp=time.monotonic()
+        self.paused=False;self.connection=None;self.prefetch=[]
+        self.closed=threading.Event()
+        def play_audio():
+            try:
+                while not self.closed.wait(.02) and not server.closing:
+                    self.tick()
+            except Exception as error:
+                server.errors.append('audio reader: '+repr(error))
+                print('DEVICE AUDIO ERROR '+repr(error),flush=True)
+        self.reader=threading.Thread(target=play_audio,daemon=True);self.reader.start()
+    def start(self):
+        with self.audio_lock:self.stamp=time.monotonic();self.active=True
+    def close(self):
+        self.closed.set();self.reader.join(5)
+        assert not self.reader.is_alive(),'device audio reader did not stop'
+        if self.connection:self.response.close();self.connection.close();self.connection=None
+    def fetch(self, item, offset=0, resume=False):
+        if resume:
+            c,r=request(item['uri']);r.read(16384);r.close();c.close()
+            self.requests.append(('GET',item['uri'],0,'probe-closed'))
+        c,r=request(item['uri'],byte_range=f'bytes={offset}-' if offset else None)
+        try:
+            try:body=r.read()
+            except http.client.IncompleteRead as error:body=error.partial
+            self.requests.append(('GET',item['uri'],offset,r.status))
+            return body
+        finally:c.close()
+    def open_current(self,offset):
+        if self.connection:self.response.close();self.connection.close()
+        self.connection,self.response=request(self.current['uri'],byte_range=f'bytes={offset}-' if offset else None)
+        assert self.response.status==(206 if offset else 200)
+        self.requests.append(('GET',self.current['uri'],offset,self.response.status))
+        if not offset:assert self.response.read(44)==self.cache[self.current['uri']][:44]
+    @serialized_audio
+    def pause(self):
+        self.tick();self.paused=True
+        if self.connection:self.response.close();self.connection.close();self.connection=None
+        self.server.transport_state='PAUSED_PLAYBACK'
+    @serialized_audio
+    def resume(self):
+        if self.current:
+            c,r=request(self.current['uri']);r.read(16384);r.close();c.close()
+            self.requests.append(('GET',self.current['uri'],0,'probe-closed'))
+            self.open_current(44+self.frame*6)
+        self.paused=False;self.stamp=time.monotonic();self.server.transport_state='PLAYING'
+    @serialized_audio
+    def transitioning(self):
+        self.tick();self.server.transport_state='TRANSITIONING'
+        self.transition_until=time.monotonic()+.5
+    def rebuffer(self):self.transitioning()
+    @serialized_audio
+    def seek(self,seconds):
+        self.tick()
+        body=self.cache[self.current['uri']];rate=int.from_bytes(body[24:28],'little')
+        self.frame=min((len(body)-44)//6,int(seconds*rate))
+        self.open_current(44+self.frame*6)
+        self.transitioning()
+    @serialized_audio
+    def tick(self):
+        if not self.active:return
+        s=self.server;now=time.monotonic()
+        if s.transport_state=='TRANSITIONING' and now>=getattr(self,'transition_until',float('inf')):
+            s.transport_state='PLAYING';self.stamp=now
+        if s.transport_state!='PLAYING' or self.paused:
+            self.stamp=now;return
+        uri=s.position['TrackURI']
+        item=next((i for i in s.items if i['uri']==uri),None)
+        if not item or 'resource' not in item:return
+        if self.current is not item:
+            self.current=item;self.frame=0
+            if self.progressive:
+                if self.connection:self.response.close();self.connection.close()
+                self.connection,self.response=request(uri)
+                self.requests.append(('GET',uri,0,self.response.status))
+                self.cache[uri]=self.response.read(44)
+                assert len(self.cache[uri])==44
+                self.real_eof=False
+            else:
+                if uri not in self.cache:self.cache[uri]=self.fetch(item)
+                self.open_current(0)
+            self.stamp=time.monotonic();return
+        body=self.cache[uri];rate=int.from_bytes(body[24:28],'little')
+        declared=int.from_bytes(body[40:44],'little')//6
+        real=declared if self.progressive else (len(body)-44)//6
+        limit=min(declared,real)
+        target=min(limit,self.frame+int((now-self.stamp)*rate*self.speed))
+        index=s.items.index(item)
+        def consume(to):
+            count=(to-self.frame)*6
+            received=self.response.read(count) if count else b''
+            if self.progressive:
+                assert len(received)%6==0
+                self.real_eof=len(received)<count
+            else:assert received==body[44+self.frame*6:44+to*6],'device Range changed PCM'
+            self.audio.extend(received);self.frame+=len(received)//6
+        threshold=max(0,declared-int(6.5*rate))
+        if index+1<len(s.items) and s.items[index+1]['uri'] not in self.cache and target>=threshold:
+            consume(max(self.frame,threshold))
+            following=s.items[index+1]
+            self.prefetch.append((uri,(declared-self.frame)/rate))
+            self.cache[following['uri']]=self.fetch(following)
+        consume(target);self.stamp=now
+        elapsed=self.frame//rate
+        s.position['RelTime']=f'{elapsed//3600:02}:{elapsed//60%60:02}:{elapsed%60:02}'
+        if self.frame==limit or self.real_eof:
+            if index+1<len(s.items):
+                following=s.items[index+1]
+                s.position=dict(Track=str(index+2),TrackURI=following['uri'],RelTime='00:00:00')
+                self.current=None
+            else:
+                s.transport_state='STOPPED'
+                if self.connection:self.response.close();self.connection.close();self.connection=None

@@ -72,7 +72,10 @@ Read-only LMS `status` requests include duration (`d`) and live edge (`V`).
 Local files retain their exact promises. A remote item with a finite positive
 LMS duration and no live marker (`live_edge` absent or negative) selects relay
 with `reason=remote-finite`; live/unknown-duration sources retain stream.
-Remaining duration excludes LMS's resume offset. `remoteMarginSeconds` is 5;
+The remote promise preserves LMS's positive duration as a safe larger bound;
+the pre-start status time can belong to the preceding run and is never subtracted.
+Native LMS 9.1.1 podcast continue reports a full duration and absolute time;
+keeping the full bound also handles a provider reporting remaining duration. `remoteMarginSeconds` is 5;
 header, Content-Length and DIDL derive from the same declared frame count.
 
 `PromiseKind::UpperBound` is distinct from exact local publication: short EOF
@@ -92,3 +95,35 @@ continuations created while the end is unknown keep the five-second upper bound.
 Cached resume from a continuation matches the parent LMS producer, retains the
 same queue assets, and reanchors the existing cached-start handshake to that
 parent. It does not turn the continuation into another LMS track.
+
+Permanent stdout diagnostics (default on) are `queue promise`, `queue HTTP`,
+`queue continuation` and `queue end decision`. They omit source URLs and HTTP
+session tokens. HTTP summaries include method, numeric Range, response length,
+produced/served bytes and termination. TRANSITIONING is never completion.
+Finite remote STMd waits for producer completion and the played episode frame
+count, including continuations; local decode-ahead behavior is unchanged.
+A native remote pause may flush LMS streaming while mode remains pause. Verify
+same source and pause mode before retaining the queue/spool; explicit stop still
+releases. The existing verified cached-start handshake handles resumed runs.
+
+Finite remote encoded input uses an unlinked disk FIFO in the existing room
+store, instead of the ordinary 256 KiB RAM FIFO. Its advertised capacity is real,
+bounded by half the room quota and the 32-bit STAT limit; actual encoded file
+bytes share quota accounting with PCM. HTTP reception continues during pause;
+ordinary p/u resumes the original unfinished decoder. Local/stream input remains
+the same RAM ring. A read-only clock acknowledgement precedes the finite remote
+pause mutation so LMS saves the speaker's position. A verified native q+s cache
+echo may temporarily expose new seek offset plus old-run STAT time; verify that
+clock equation explicitly, without widening the existing seek tolerance.
+
+Finite WAV HTTP sends distinguish receiver backpressure from EOF. Retry only
+transient send errors, preserving the exact accepted-byte offset from the socket
+counter; stop on peer close, cancellation or a real send error. Keep the existing
+500 ms socket deadline. HTTP summaries include backpressure retry counts.
+
+Native Podcast can store a player-formatted title while omitting artist/album
+fields. For a cold formatted title, `podcast_title.h` resolves the canonical
+title through the matching read-only podcast feed menu within a bounded metadata
+request budget. Cached canonical titles are keyed by source URL, excluding native
+bookmark markers. Tests use loopback LMS only; owner gateway reads are separate
+manual diagnostics and must never be added to `make test`.

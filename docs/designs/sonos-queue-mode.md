@@ -390,7 +390,8 @@ Owner-run probes, S2 firmware 86.10-81100:
 Source classification uses LMS duration and `live_edge` (tag V): positive finite
 duration with absent/negative live edge selects `remote-finite`; nonnegative live
 edge or unknown duration preserves the existing continuous path. Group size is
-irrelevant. The first promise is `ceil(max(0,duration-startOffset)*rate)+5*rate`.
+irrelevant. The first remote promise is `ceil(duration*rate)+5*rate`. The status clock is
+recorded but never subtracted from this conservative larger bound.
 Local exact promises and their WAV bytes are unchanged. Each overflow segment
 promises another 5 s while production is incomplete. Segments carry the parent's
 metadata, are inserted in parent/segment order, and report one continuous LMS
@@ -444,3 +445,77 @@ this race without changing the stream wire path.
 Cached resume from a continuation matches the parent LMS producer, retains the
 same queue assets, and reanchors the existing cached-start handshake to that
 parent. It does not turn the continuation into another LMS track.
+
+## 28 October field failure: YENEY-PODCAST-02
+
+Study on bridge 9c728e2 stopped a 33:19 episode after 63 seconds. The journal
+contained TRANSITIONING, an immediate bridge STOPPED/STMu, then queue removal.
+A second start was torn down by LMS strm q immediately after the app pause.
+The field record alone does not establish the owner's original bookmark.
+
+The old bound subtracted pre-start status time without proving its association
+with the new producer. Native LMS 9.1.1 exposes full duration and absolute time
+for a generated podcast continue entry; provider metadata remains an estimate.
+The safe bound now keeps the positive duration without subtracting that clock.
+Continuations have independent publication/lifecycle fields: a parent's flush
+marker must not make new overflow records invisible. They publish immediately;
+creation, attempt and confirmation are separately observable.
+
+TRANSITIONING is ignored as end evidence. An estimated episode can finish only
+once production is complete and the played position reaches all produced audio
+across its segments. Core also defers STMd until that point, with STMd preceding
+STMu. A declared-boundary stop with audio still unplayed is a track fault.
+Local exact promises, PCM, SOAP ordering and pause handling keep their existing
+behavior. Remote pause-flush adoption verifies LMS mode=pause and source identity;
+stop/selection changes retain normal release semantics. The cached resume gate
+continues to validate index, source and clock before adopting an LMS restart.
+
+Native Podcast scanUrl writes player-formatted current title back into TITLE.
+Queue selection strips the exact artist/album formatting suffix for podcasts
+and retains the first plain title by source identity, excluding native bookmarks.
+The audio fake opts into declared WAV length, short real EOF, 6.5-second prefetch,
+mid-item TRANSITIONING and pause/resume GET probe plus byte Range. Existing
+control-only fixtures keep their explicit position controls.
+
+The field pause mechanism is LMS's remote input-full policy. A paused decoder
+previously filled the 256 KiB input ring; `_CheckPaused` then stopped the remote
+stream and saved a resume position. Finite sources now have a bounded, unlinked
+encoded disk FIFO under the room store. Its capacity is at most half the room
+quota and fits the STAT 32-bit field; actual encoded high-water bytes and PCM
+share quota accounting. A wraparound reader uses only an 8 KiB cache, and flush
+closes the backing descriptor. Local and continuous input still use the original
+RAM ring. Reception can finish while PCM output is paused, preserving the same
+unfinished decoder and sample sequence through ordinary native p/u.
+
+The native regression pauses before production completes for 120 real seconds.
+Its progressive speaker closes the HTTP reader, then probes GET 0 and resumes
+with Range at the exact paused frame. It compares the entire received PCM with
+an independent decode of the actual MP3 Range served to LMS, including the final
+second. Another controlled full-buffer STAT stimulus exercises native q+s and
+verifies completed-spool reuse. The native status query temporarily reports
+new seek offset plus old-run elapsed before cached STMs reanchors it; the gate
+checks that equation explicitly. Finite pause also refreshes the paused position
+and waits for a read-only LMS clock acknowledgement before CLI saves resumeTime.
+No CLI seek, artificial silence, timer margin change or systemd dependency.
+
+The field journal did not capture the actual declared WAV/HTTP length, so the
+inferred 63-second declaration and presumed overflow remain hypotheses. New
+promise, HTTP, continuation and end-decision lines make those values observable.
+
+A reproduced transport cause can also explain a buffered stop: finite WAV writes
+previously treated a 500 ms `EAGAIN` from a healthy full receive window as EOF.
+The reader-stall regression now constrains that window, stops reading, then
+compares every returned byte. Transient writes retry from the exact socket-byte
+offset; peer close, cancellation and real errors still terminate. The existing
+socket deadline is unchanged. This fixes backpressure semantics rather than
+extending a timer. A natural remote end also retains successor admission credit
+so the following LMS item uses its own metadata and an already-confirmed boundary.
+
+Owner read-only metadata also confirmed that the cached `songinfo` title may
+contain the native by/from presentation while artist/album tags are absent. A
+bounded matching-feed menu lookup now supplies the canonical plain title on cold
+starts. Menu parsing and lookup are tested against actual private LMS menus; no
+owner gateway endpoint is used by automated tests. A final continuation shorter
+than the observation interval can be seen first as STOPPED: its final owned URI
+and completed production can finish the already-audible parent, without another
+LMS start. Unrelated unconfirmed sources retain the PLAYING requirement.

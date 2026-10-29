@@ -234,6 +234,14 @@ int main() {
                      "empty-run failure; TSV and Markdown verdict\n";
     }
     {
+        CoreQueueSink sink("EncodedStorageFault", c, 1);
+        sink.coreEvent("strm",1,0);
+        sink.coreEvent("fault:encoded spool disk I/O failed",1,0);
+        sink.waitIdle();
+        assert(sink.snapshot().front().storageFault);
+        std::cout<<"PASS encoded I/O fault: room storage failure, never a source failure/playlist walk\n";
+    }
+    {
         std::vector<QueueRecord> rows(2);
         rows[0].end = 30;
         rows[1].strm = 1;

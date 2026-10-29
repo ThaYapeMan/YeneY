@@ -85,6 +85,11 @@ class Device(Handler):
             threading.Thread(target=fetch,daemon=True).start()
             return {},None
         values,fault=super().action(service,action,args)
+        model=getattr(self.server,'device_audio',None)
+        if model and action=='Pause':model.pause()
+        if model and action=='Play' and model.paused:model.resume()
+        if model and action=='Seek' and args['Unit']=='REL_TIME':
+            model.seek(sum(int(v)*scale for v,scale in zip(args['Target'].split(':'),(3600,60,1))))
         if action=='GetPositionInfo' and getattr(self.server,'position_hook',None):
             values=dict(values)
             hook=self.server.position_hook;self.server.position_hook=None;hook()
@@ -184,7 +189,7 @@ class CLI(socketserver.ThreadingTCPServer):
                         else: value=str(getattr(owner,'cli_time',owner.source_ms/1000))
                         self.wfile.write((mac+' '+cmd[:-1]+value+'\n').encode());self.wfile.flush();return
                     if cmd.startswith('status '):
-                        fields=[f'playlist_cur_index:{owner.index if owner.index is not None else max(0,owner.model.playing-1) if owner.model else 0}',
+                        fields=[f'mode:{getattr(owner,"cli_mode","play")}',f'playlist_cur_index:{owner.index if owner.index is not None else max(0,owner.model.playing-1) if owner.model else 0}',
                                 f'playlist_tracks:{len(owner.order)}', f'time:{owner.source_ms/1000}', f'playlist_timestamp:{owner.revision}']
                         entries=list(enumerate(owner.order))
                         if cmd.split()[2]=='1':
@@ -216,7 +221,9 @@ class CLI(socketserver.ThreadingTCPServer):
                             source=HTTP(owner.bodies[index]);owner.sources.append(source)
                             owner.lms.strm('s',source,fmt='f',rate=owner.rates[index])
                         owner.lms.strm('u')
-                    elif cmd=='pause 1':owner.lms.strm('p')
+                    elif cmd=='pause 1':
+                        if getattr(owner,'pause_flush',False):owner.lms.strm('q')
+                        owner.lms.strm('p')
                     elif cmd in ('play','pause 0'):
                         if cmd=='pause 0' and owner.resume_restart:
                             owner.index=0
@@ -421,7 +428,13 @@ def polling():
         before=len(h.sonos.actions('GetPositionInfo'));time.sleep(.8)
         assert len(h.sonos.actions('GetPositionInfo'))-before>=4
         h.until(lambda:len(h.items())==2)
-        h.state(2,0);h.until(lambda:len(h.packets('STMs'))==2,2)
+        h.until(lambda:bool(getattr(h.sonos,'callback','')))
+        # Deliver the notification before a polling response can consume the
+        # same change; either observer may otherwise win this scheduler race.
+        with h.sonos.lock:
+            h.state(2,0)
+            h.until(lambda:'speaker-change source=GENA' in (h.base/'bridge.log').read_text())
+        h.until(lambda:len(h.packets('STMs'))==2,2)
         text=(h.base/'bridge.log').read_text()
         assert 'SOAP action=GetPositionInfo HTTP=200' not in text
         assert 'SOAP action=GetTransportInfo HTTP=200' not in text

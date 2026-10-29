@@ -2,6 +2,7 @@
 #include "queue_route.h"
 #include "wav_writer.h"
 #include <set>
+#include <cstdio>
 #include <utility>
 namespace queue_audio {
 namespace {
@@ -72,6 +73,11 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
             item = i->second.item;
     }
     if (!item) {
+        auto id = r.parameter("item");
+        if (id.empty() || id.size() > 32 || id.find_first_not_of("0123456789-_") != std::string::npos) id = "unknown";
+        std::printf("yeney: queue HTTP method=%s item=%s range=unavailable status=404 content_length=0 produced_bytes=0 served_bytes=0 end=complete\n",
+                    r.method() == upnp::StreamRequest::Method::Get ? "GET" :
+                    r.method() == upnp::StreamRequest::Method::Head ? "HEAD" : "OTHER", id.c_str());
         r.reply(404);
         return true;
     }

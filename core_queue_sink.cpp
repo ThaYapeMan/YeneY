@@ -2,6 +2,7 @@
 #include "core_queue_sink.h"
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 namespace queue_audio {
 double CoreQueueSink::now() const {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - epoch).count() * clockSpeed;
@@ -104,8 +105,10 @@ void CoreQueueSink::coreEvent(const std::string &event, uint64_t id, uint64_t) {
             r.decoded = stamp;
         else if (event == "STMd")
             r.stmd = stamp;
-        else if (event.rfind("fault:", 0) == 0)
+        else if (event.rfind("fault:", 0) == 0) {
             r.fault = event.substr(6);
+            r.storageFault = r.storageFault || r.fault.rfind("encoded spool",0) == 0 || r.fault.rfind("queue disk quota",0) == 0;
+        }
         else if (event == "STMs")
             r.stms = stamp;
         else if (event == "queue-refetch") {
@@ -175,13 +178,10 @@ void CoreQueueSink::commit(uint64_t previous, const yeney::TrackDescriptor &next
     }
 }
 void CoreQueueSink::estimate(uint64_t id, double duration, unsigned originMs) {
-    enqueue([=] {
-        std::lock_guard<std::mutex> lock(mutex);
-        auto &r = records[id];
-        r.estimated = true;
-        r.duration = duration;
-        r.sourceOriginMs = originMs;
-    });
+    // Source capability must be visible to the core before it opens input.
+    std::lock_guard<std::mutex> lock(mutex);
+    auto &r = records[id];
+    r.estimated = true;r.duration = duration;r.sourceOriginMs = originMs;
 }
 void CoreQueueSink::trackDescriptor(const yeney::TrackDescriptor &d) {
     enqueue([=] {
@@ -230,7 +230,10 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
         }
         Descriptor descriptor{std::to_string(id), f.rate, std::nullopt, 0};
         if (estimated.estimated) {
-            const auto remaining = std::max(0.0, estimated.duration - double(estimated.sourceOriginMs) / 1000);
+            // Remote status duration can describe the remaining stream already.
+            // The pre-start player clock can still belong to the previous run.
+            // Preserve the larger bound; never subtract that clock a second time.
+            const auto remaining = estimated.duration;
             descriptor.promisedFrames = uint64_t(std::ceil(remaining * f.rate)) + uint64_t(remoteMarginSeconds) * f.rate;
             descriptor.kind = PromiseKind::UpperBound;
         }
@@ -240,6 +243,9 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             records[id].promised = descriptor.promisedFrames;
             records[id].publication = "upper-bound";
             producingSegment = id;
+            std::printf("yeney: queue promise occurrence=%llu lms_duration_s=%.6f lms_start_offset_ms=0 lms_status_time_ms=%u declared_frames=%llu declared_s=%.6f kind=upper-bound reason=duration-preserved-clock-not-subtracted\n",
+                        (unsigned long long)id, estimated.duration, estimated.sourceOriginMs,
+                        (unsigned long long)*descriptor.promisedFrames, double(*descriptor.promisedFrames)/f.rate);
         }
         bool tailPlaying;
         {
@@ -386,12 +392,18 @@ void CoreQueueSink::appendEstimated(const std::vector<yeney::Frame> &pcm, bool p
             records.at(id).actual += n;
         }
         if (offset == pcm.size()) break;
+        std::printf("yeney: queue continuation overflow parent=%llu produced_frames=%llu declared_frames=%llu\n",
+                    (unsigned long long)(r.parent ? r.parent : id),
+                    (unsigned long long)(produced + pcm.size() - offset), (unsigned long long)*r.promised);
         r.item->finish();
         QueueRecord next = r;
         next.parent = r.parent ? r.parent : id;
         next.segmentOffset += *r.promised;
         next.first = r.first + *r.promised;
         next.actual = next.prefixFrames = 0;
+        next.incomplete.clear();
+        next.fault.clear();
+        next.productionComplete = false;
         next.source.occurrence = ++continuationSerial;
         next.promised = uint64_t(remoteMarginSeconds) * r.source.rate;
         auto kind = PromiseKind::UpperBound;
@@ -406,10 +418,17 @@ void CoreQueueSink::appendEstimated(const std::vector<yeney::Frame> &pcm, bool p
         next.publication = kind == PromiseKind::Exact ? "exact-continuation" : "upper-bound-continuation";
         next.item = store.create({std::to_string(next.source.occurrence), r.source.rate, next.promised,
                                   0, 2, 24, kind});
+        std::printf("yeney: queue promise occurrence=%llu lms_duration_s=%.6f lms_start_offset_ms=0 lms_status_time_ms=%u declared_frames=%llu declared_s=%.6f kind=%s reason=overflow-continuation\n",
+                    (unsigned long long)next.source.occurrence, next.duration, next.sourceOriginMs,
+                    (unsigned long long)*next.promised, double(*next.promised)/next.source.rate,
+                    kind == PromiseKind::Exact ? "exact" : "upper-bound");
         {
             std::lock_guard<std::mutex> lock(mutex);
             producingSegment = next.source.occurrence;
             records.emplace(producingSegment, next);
+            std::printf("yeney: queue continuation created parent=%llu occurrence=%llu offset_frames=%llu declared_frames=%llu\n",
+                        (unsigned long long)next.parent, (unsigned long long)producingSegment,
+                        (unsigned long long)next.segmentOffset, (unsigned long long)*next.promised);
         }
         protectItems();
     }
@@ -513,6 +532,20 @@ void CoreQueueSink::useSpeakerClock() {
     std::lock_guard<std::mutex> lock(mutex);
     speakerClock = true;
 }
+std::optional<yeney::EncodedSpool> CoreQueueSink::encodedSpool(uint64_t id) {
+    bool estimated = false;
+    if (id) {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto it = records.find(id);
+        estimated = it != records.end() && it->second.estimated;
+    }
+    return store.reserveEncoded(estimated);
+}
+bool CoreQueueSink::queueEndRequiresPlayed(uint64_t id) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = records.find(id);
+    return it != records.end() && it->second.estimated;
+}
 bool CoreQueueSink::queueItemProduced(uint64_t id) const {
     std::shared_ptr<Item> item;
     {
@@ -556,7 +589,9 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
     if (produced <= r.prefixFrames)
         return;
     const bool changed = audibleId != id;
-    if (changed && state != yeney::PlaybackState::Playing)
+    const bool completedContinuation = state == yeney::PlaybackState::Stopped && r.parent &&
+        audibleSource == r.parent && r.productionComplete;
+    if (changed && state != yeney::PlaybackState::Playing && !completedContinuation)
         return;
     if (changed) {
         audibleId = id;
@@ -715,7 +750,7 @@ void CoreQueueSink::flush() {
         {
             std::lock_guard<std::mutex> lock(mutex);
             for (auto &p : records)
-                if (p.second.end < 0 && p.second.incomplete.empty())
+                if ((p.second.item || !p.second.estimated) && p.second.end < 0 && p.second.incomplete.empty())
                     p.second.incomplete = "flushed";
             for (auto &p : records)
                 if (p.second.item)

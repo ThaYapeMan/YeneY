@@ -72,6 +72,15 @@ class Tap:
                 client.close();peer.close()
         except OSError as e:
             if not self.closed:self.errors.append(str(e))
+    def report_full_paused(self):
+        # Controlled protocol stimulus: reproduce the real server's remote
+        # buffer-full pause branch without needing a 33-minute download.
+        record=next(r for r in reversed(self.records) if r['op']=='STAT')
+        body=bytearray.fromhex(record['body']);body[:4]=b'STMp'
+        body[11:15]=body[7:11]
+        self.sockets[-1].sendall(b'STAT'+struct.pack('!I',len(body))+body)
+        self.records.append(dict(direction='player',op='STAT',event='STMp',when=time.monotonic(),
+                                 body=body.hex(),stimulus='remote-buffer-full-paused'))
     def close(self):
         self.closed=True;self.worker.join(4);self.listener.close()
         for s in self.sockets:s.close()

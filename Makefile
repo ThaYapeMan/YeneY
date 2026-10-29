@@ -473,3 +473,9 @@ podcast-sink-test: tests/podcast_sink_test.cpp core_queue_sink.o libqueueitems.a
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $^ -lFLAC -pthread
 
 test-run: podcast-sink-test
+
+# Sink capabilities and encoded-buffer reservations cross the static core/bridge ABI.
+$(OBJS) queue_item_store.o wav_writer.o queue_route.o: third_party/yeney-core/core/sink.h
+
+queue_path.o queue-source-test: podcast_title.h
+queue-source-test: queue_lms_cli.h
