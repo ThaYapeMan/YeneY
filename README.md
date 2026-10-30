@@ -348,7 +348,10 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | `YENEY_UPNP` | `yeney` or `own`; unsupported names warn and use YeneY | `yeney` |
 | `YENEY_STREAM_PACING` | `sonos`: follow the Sonos clock · `wall`: legacy host clock opt-out | `sonos` |
 | `YENEY_AUDIO` | `24/48`: 24-bit FLAC at the source's 44.1/48 kHz rate · `16/44`: legacy 16-bit/44.1 kHz | `24/48` |
-| `YENEY_TITLE_FORMAT` | Stream path only: `artist-title`: "artist - title" · `title`: title only; queue items always use the plain title | `artist-title` |
+| `YENEY_PODCAST_TITLE_PLAIN` | `yes`: plain native Podcast episode title; `no`: LMS formatted title unchanged | `yes` |
+| `YENEY_PODCAST_ARTIST_SHOW` | `yes`: show podcast name as inferred artist; `no`: omit it | `yes` |
+| `YENEY_PODCAST_ALBUM_PUBLISHER` | `yes`: show publisher as inferred album; `no`: omit it | `no` |
+| `YENEY_TITLE_FORMAT` | Stream path only: `artist-title`: "artist - title" · `title`: title only; queue items use the plain title (native Podcast settings below can retain its formatted title) | `artist-title` |
 | `YENEY_STREAM_CONTENT` | `structured`, `plain` or `off`: the radio-text field for other controllers | `structured` |
 | `YENEY_PAUSE` | `stop`: the Sonos-safe pause · `pause`: plain UPnP Pause (fallback) | `stop` |
 | `YENEY_DEBUG` | Comma-separated `events`, `stream`, `legacy-poll`, `stopped-mediainfo`; diagnostics and polling experiments only | empty |
@@ -779,3 +782,18 @@ and future-range timeouts close the connection without fabricated audio.
 
 The generated-podcast regression uses the test-only `ffmpeg` encoder and the
 existing private LMS 9.1.1 harness.
+
+### Podcast metadata settings
+
+Native LMS Podcast sometimes supplies only a formatted title. The matching
+read-only feed menu supplies the plain episode title and podcast name; its
+exact suffix identifies the publisher without splitting names containing
+` by ` or ` from `. Ambiguous fields stay empty with a diagnostic. The existing
+two-second lookup budget and canonical source URL cache are retained.
+
+Process environment takes precedence over `room.<name>.<KEY>` in
+`/etc/yeney/config` (`YENEY_CONFIG` override), then the global `<KEY>`, then the
+default. Each setting accepts `yes|no`; invalid values warn once and use its
+default. Effective values and sources appear once at startup and in room status.
+This works for direct starts without systemd. LMS's own artist/album win;
+local tracks and the LMS display are unchanged. Continuations inherit metadata.

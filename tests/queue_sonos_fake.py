@@ -228,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
             resource = next(n for n in item if n.tag.rsplit('}', 1)[-1] == 'res')
             assert fields['class'] == 'object.item.audioItem.musicTrack'
             assert fields['title'].startswith(getattr(s, 'expected_title_prefix', 'Title & '))
-            assert fields['album'] in getattr(s, 'expected_albums', ['Album & fixture'])
+            assert fields.get('album') in getattr(s, 'expected_albums', ['Album & fixture'])
             assert resource.text == uri and resource.attrib['protocolInfo'] == 'http-get:*:audio/wav:*'
             assert resource.attrib['bitsPerSample'] == '24' and resource.attrib['nrAudioChannels'] == '2'
             insertion=before-1 if before else len(s.items)

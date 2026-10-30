@@ -100,3 +100,5 @@ field-cold-test
 /volume-test
 
 /podcast-sink-test
+
+/podcast-metadata-fixture

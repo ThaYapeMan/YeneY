@@ -8,6 +8,7 @@ struct QueueMetadata {
     uint64_t frames = 0, size = 0;
     uint32_t rate = 0;
     unsigned bits = 24, channels = 2;
+    bool omitEmptyFields = false; // native podcast settings can omit artist/album
     bool preciseDuration = false; // estimated items; preserve local DIDL wire
 };
 // Finite music metadata keeps the plain LMS title and separate artist/album.

@@ -86,6 +86,9 @@ def run(g):
         assert title_lookup.stdout.strip()=='Episode 3',title_lookup.stdout
         print('PASS native podcast plain-title lookup: actual read-only menu resolves stored formatted TITLE with absent artist/album fields',flush=True)
         print('PASS real LMS 9.1.1 generated local podcast feed: four itunes:duration cases parsed by native podcast plugin',flush=True)
+        if g['os'].environ.get('YENEY_PODCAST_METADATA_MATRIX','1')=='1':
+            from podcast_metadata_test import native_matrix
+            native_matrix(cli,mac,origin,base,g['ROOT'])
         for i,url in enumerate(urls):
             cli('stop',mac);cli('playlist clear',mac)
             if i==3:

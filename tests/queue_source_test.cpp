@@ -28,8 +28,22 @@ int main(int argc,char **argv) {
     assert(track.plainTitle()=="Episode");
     auto menu=queue_audio::PodcastMenu::parse("id:4.0 type:link title:Lavrov%20dreigt%20met%20verdere%20escalatie isaudio:1 count:1703");
     assert(menu.count==1703 && menu.plainTitle("Lavrov dreigt met verdere escalatie by BNR Nieuwsradio from Boekestijn & De Wijk")=="Lavrov dreigt met verdere escalatie");
+    auto ambiguous=queue_audio::PodcastMenu::parse("id:1 title:Episode id:2 title:Episode%20by%20Writer count:2");
+    assert(!ambiguous.plainTitle("Episode by Writer by Publisher from Feed"));
     auto literal=queue_audio::PodcastMenu::parse("id:1 title:Story%20by%20Author%20from%20Place count:1");
     assert(literal.plainTitle("Story by Author from Place")=="Story by Author from Place");
+    for(unsigned mask=0;mask<8;++mask) {
+        auto settings=bridge::roomPodcastSettings();
+        for(unsigned i=0;i<3;++i)settings[i].enabled=mask&(1<<i);
+        for(bool local:{false,true}) {
+            queue_audio::PlaylistEntry own;own.url=local?"file:///local.flac":"podcast://remote";
+            own.title="LMS title";own.artist="Own artist";own.album="Own album";
+            queue_audio::applyPodcastMetadata(own,{"Episode","Name from Coast by Writer","Publisher by House from City"},settings);
+            assert(own.artist=="Own artist" && own.album=="Own album");
+            assert(own.title==(!local && settings[0].enabled?"Episode":"LMS title"));
+        }
+    }
+    puts("PASS podcast metadata: own LMS artist/album win for all eight settings; local metadata unchanged");
     track.url="file:///local.flac";assert(track.plainTitle()==track.title);
     track.liveEdge=0;assert(!track.finiteRemote());
     track.liveEdge=10;assert(!track.finiteRemote());

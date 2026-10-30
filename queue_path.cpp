@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
 #include "podcast_title.h"
+#include "podcast_settings.h"
 namespace bridge {
 std::optional<yeney::FlacSourceInfo> QueueRoom::Impl::sourceInfo(uint64_t occurrence,
                                                                  std::optional<yeney::FlacSourceInfo> info) {
@@ -145,20 +146,24 @@ void QueueRoom::Impl::selectPath() {
                 const auto marker = identity.rfind("{from=");
                 if (marker != std::string::npos && identity.back() == '}') identity.resize(marker);
                 auto known = plainRemoteTitles.find(identity);
-                if (known != plainRemoteTitles.end()) track.title = known->second;
-                else {
-                    bool resolved = false;
+                if (known == plainRemoteTitles.end()) {
+                    PodcastFields fields{roomPodcastSettings()[0].enabled ? track.plainTitle() : track.title,{}, {}};
                     if (track.url.compare(0,10,"podcast://") == 0) {
                         try {
-                            if (auto plain = queue_audio::podcastPlainTitle(host,mac,track.title)) {
-                                track.title = *plain;resolved = true;
+                            if (auto metadata = queue_audio::podcastMetadata(host,mac,track.title)) {
+                                auto resolved=track;
+                                resolved.artist.clear();resolved.album.clear();
+                                queue_audio::applyPodcastMetadata(resolved,*metadata,roomPodcastSettings());
+                                fields={resolved.title,resolved.artist,resolved.album};
                                 logQueue("title source=podcast-menu");
-                            }
-                        } catch (const std::exception &) { logQueue("podcast title lookup unavailable"); }
+                            } else logQueue("podcast metadata unavailable or ambiguous; retaining LMS fields");
+                        } catch (const std::exception &) { logQueue("podcast metadata lookup unavailable"); }
                     }
-                    if (!resolved) track.title = track.plainTitle();
-                    plainRemoteTitles.emplace(identity,track.title);
+                    known = plainRemoteTitles.emplace(identity,std::move(fields)).first;
                 }
+                if (roomPodcastSettings()[0].enabled) track.title = known->second.title;
+                if (track.artist.empty()) track.artist = known->second.artist;
+                if (track.album.empty()) track.album = known->second.album;
             }
         }
         if (selectedRequest != selectionRequest) { selecting = false;return; }

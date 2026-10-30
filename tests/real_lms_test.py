@@ -297,7 +297,7 @@ try:
     tap=Tap()
     env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(base))
     if volume_only:env['YENEY_LMS_VOLUME']='speaker'
-    bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
+    bridge=subprocess.Popen([os.environ.get('YENEY_ACCEPTANCE_BINARY',str(ROOT/'yeney')),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
                             stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
     wait(lambda:any(r['op']=='HELO' for r in tap.records),10,'HELO')
     hello=next(r for r in tap.records if r['op']=='HELO')
@@ -336,7 +336,7 @@ try:
             wait(lambda:cli('connected ?',mac)[-1]=='0',10,'disconnect')
             mark=len(tap.records)
             env['YENEY_SHOW_SONOS_SUFFIX']=suffix
-            bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
+            bridge=subprocess.Popen([os.environ.get('YENEY_ACCEPTANCE_BINARY',str(ROOT/'yeney')),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
             wait(lambda:cli('connected ?',mac)[-1]=='1' and cli('name ?',mac)[-1]==display,15,'configured display '+display)
             wait(lambda:any(r['op']=='SETD' for r in tap.records[mark:]),10,'SETD display exchange')
             names=[bytes.fromhex(r['body'])[1:].rstrip(b'\0').decode() for r in tap.records[mark:] if r['op']=='SETD' and bytes.fromhex(r['body'])[:1]==b'\0']
@@ -355,7 +355,7 @@ try:
             assert json.loads(state.read_text())['true_name']=='Study (Sonos)'
         stop(bridge);bridge=None
         env['YENEY_SHOW_SONOS_SUFFIX']='yes'
-        bridge=subprocess.Popen([str(ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
+        bridge=subprocess.Popen([os.environ.get('YENEY_ACCEPTANCE_BINARY',str(ROOT/'yeney')),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
         wait(lambda:cli('name ?',mac)[-1]=='Study (Sonos)',15,'restart overrides web rename')
         print('PASS LMS name mutation lasts until next YeneY restart; configured display reapplied through SETD, without CLI rename for toggle',flush=True)
         raise SystemExit(0)

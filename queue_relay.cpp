@@ -264,6 +264,7 @@ void QueueRoom::Impl::append() {
         metadata.frames = (*length - 44) / 6;
         metadata.rate = record.source.rate;
         metadata.preciseDuration = record.estimated;
+        metadata.omitEmptyFields = track.url.compare(0,10,"podcast://") == 0;
         const auto changes = upnp::sanitizeXmlFields({{"title", &metadata.title},
                                                       {"artist", &metadata.artist},
                                                       {"album", &metadata.album},

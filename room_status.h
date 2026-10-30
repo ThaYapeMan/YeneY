@@ -2,6 +2,7 @@
 #pragma once
 #include <atomic>
 #include "volume_control.h"
+#include "podcast_settings.h"
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -59,6 +60,9 @@ public:
         const auto &volume = roomVolumeSettings();
         out << ",\"lms_volume\":" << q(volume.speaker ? "speaker" : "off")
             << ",\"lms_volume_source\":" << q(volume.source) << ",\"volume_max\":" << volume.maximum;
+        for (const auto &setting : roomPodcastSettings())
+            out << "," << q(setting.key) << ":" << q(setting.enabled ? "yes" : "no")
+                << "," << q(std::string(setting.key)+"_source") << ":" << q(setting.source);
         if (!v.path.empty())
             out << ",\"path\":" << q(v.path);
         if (v.active == "queue") {

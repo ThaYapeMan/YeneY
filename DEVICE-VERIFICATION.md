@@ -980,3 +980,24 @@ PCM production is incomplete, then resumes the same decoder from the spool.
 records both clocks and the preceding run's elapsed time when LMS restarts its
 stream. A separate controlled full-buffer STAT stimulus verifies native q+s
 adoption for a completed spool. Physical speaker acceptance remains owner-run.
+
+### Podcast metadata settings
+
+Native LMS Podcast sometimes supplies only a formatted title. The matching
+read-only feed menu supplies the plain episode title and podcast name; its
+exact suffix identifies the publisher without splitting names containing
+` by ` or ` from `. Ambiguous fields stay empty with a diagnostic. The existing
+two-second lookup budget and canonical source URL cache are retained.
+
+Process environment takes precedence over `room.<name>.<KEY>` in
+`/etc/yeney/config` (`YENEY_CONFIG` override), then the global `<KEY>`, then the
+default. Each setting accepts `yes|no`; invalid values warn once and use its
+default. Effective values and sources appear once at startup and in room status.
+This works for direct starts without systemd. LMS's own artist/album win;
+local tracks and the LMS display are unchanged. Continuations inherit metadata.
+
+| Setting | Sonos app behavior | Default |
+|---|---|---|
+| `YENEY_PODCAST_TITLE_PLAIN` | `yes`: plain episode; `no`: LMS formatted title unchanged | `yes` |
+| `YENEY_PODCAST_ARTIST_SHOW` | `yes`: podcast name as artist; `no`: omit inferred artist | `yes` |
+| `YENEY_PODCAST_ALBUM_PUBLISHER` | `yes`: publisher as album; `no`: omit inferred album entirely | `no` |

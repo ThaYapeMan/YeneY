@@ -320,7 +320,7 @@ Play metadata and its cached renderer title keep their existing wire behavior.
 
 ## Queue and stream title policy
 
-Queue musicTrack `dc:title` is always the plain XML-1.0-sanitised LMS title.
+Queue musicTrack `dc:title` is the plain XML-1.0-sanitised LMS title, subject to the native Podcast title setting below.
 Artist, album and artwork retain their separate fields; prefixing the artist
 would duplicate what Sonos already displays. The queue path has no non-empty
 fallback: an empty title stays empty, as in its existing title-only behavior.
@@ -519,3 +519,26 @@ owner gateway endpoint is used by automated tests. A final continuation shorter
 than the observation interval can be seen first as STOPPED: its final owned URI
 and completed production can finish the already-audible parent, without another
 LMS start. Unrelated unconfirmed sources retain the PLAYING requirement.
+
+### Podcast metadata settings
+
+Native LMS Podcast sometimes supplies only a formatted title. The matching
+read-only feed menu supplies the plain episode title and podcast name; its
+exact suffix identifies the publisher without splitting names containing
+` by ` or ` from `. Ambiguous fields stay empty with a diagnostic. The existing
+two-second lookup budget and canonical source URL cache are retained.
+
+Process environment takes precedence over `room.<name>.<KEY>` in
+`/etc/yeney/config` (`YENEY_CONFIG` override), then the global `<KEY>`, then the
+default. Each setting accepts `yes|no`; invalid values warn once and use its
+default. Effective values and sources appear once at startup and in room status.
+This works for direct starts without systemd. LMS's own artist/album win;
+local tracks and the LMS display are unchanged. Continuations inherit metadata.
+
+| Setting | Sonos app behavior | Default |
+|---|---|---|
+| `YENEY_PODCAST_TITLE_PLAIN` | `yes`: plain episode; `no`: LMS formatted title unchanged | `yes` |
+| `YENEY_PODCAST_ARTIST_SHOW` | `yes`: podcast name as artist; `no`: omit inferred artist | `yes` |
+| `YENEY_PODCAST_ALBUM_PUBLISHER` | `yes`: publisher as album; `no`: omit inferred album entirely | `no` |
+
+A future LMS plugin exposes these three metadata settings as per-player checkboxes.

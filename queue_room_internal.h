@@ -89,7 +89,8 @@ struct QueueRoom::Impl {
     bool externalReleased = false, stopAcknowledged = false, sourceAway = false;
     std::atomic<int64_t> resumeEchoUntil{0};
     std::atomic_bool resumeFlush{false}, finitePause{false};
-    std::map<std::string, std::string> plainRemoteTitles;
+    struct PodcastFields { std::string title, artist, album; };
+    std::map<std::string, PodcastFields> plainRemoteTitles;
     std::chrono::steady_clock::time_point deferredStop{};
     uint64_t deferredNext = 0;
     queue_audio::PlaylistSnapshot resumeSnapshot;

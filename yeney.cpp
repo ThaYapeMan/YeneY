@@ -1041,6 +1041,8 @@ int main(int argc, char** argv)
     bridge::streamMetrics().configure(selectedSpeaker.name);
     bridge::roomVolumeSettings() = bridge::volumeSettings(selectedSpeaker.name, findOption(argc, argv, "--lms-volume"),
         std::getenv("YENEY_CONFIG") ? std::getenv("YENEY_CONFIG") : "/etc/yeney/config");
+    bridge::roomPodcastSettings() = bridge::podcastSettings(selectedSpeaker.name,
+        std::getenv("YENEY_CONFIG") ? std::getenv("YENEY_CONFIG") : "/etc/yeney/config");
     const auto playback = bridge::selectPlaybackMode(std::getenv("YENEY_PLAYBACK_MODE"), selectedSpeaker);
     if (playback.selected == bridge::PlaybackMode::Stream)
         printf("yeney: stream pacing room=%s selected=%s\n", upnp::logValue(selectedSpeaker.name).c_str(),
