@@ -466,6 +466,17 @@ void Item::cancel(const std::string &reason) {
     if (!state->fault)
         store->fail(*state, std::make_exception_ptr(ItemCancelled(reason)));
 }
+void Item::releaseAudio() {
+    std::lock_guard<std::mutex> lock(store->mutex);
+    store->fail(*state, std::make_exception_ptr(ItemCancelled("item left queue window")));
+    while (!state->history.empty()) {
+        const auto &chunk = state->history.back();
+        std::filesystem::remove(chunk.path);
+        store->disk -= chunk.bytes;
+        state->history.pop_back();
+    }
+    state->protectedItem = false;
+}
 Reader Item::reader(uint64_t pos) const { return Reader(store, state, pos); }
 Reader::Reader(std::shared_ptr<StoreState> s, std::shared_ptr<ItemState> i, uint64_t pos)
     : store(std::move(s)), state(std::move(i)), offset(pos) {}

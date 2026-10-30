@@ -494,5 +494,6 @@ queue-window-test: tests/queue_window_test.cpp queue_window.h queue_window_edits
 test-run: queue-window-test
 
 $(QUEUE_ROOM_OBJS): queue_route.h
+$(QUEUE_ROOM_OBJS): queue_window.h queue_window_edits.h
 
 queue-route-test: queue_lazy_item.h

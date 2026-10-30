@@ -209,7 +209,7 @@ print('REAL LMS transcript directory: '+str(base),flush=True)
 install()
 perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
-for i,rate in enumerate((44100,48000,44100,48000)):
+for i,rate in enumerate((44100,48000)*4):
     path=base/f'input-{i}.wav';path.write_bytes(wav(rate,24,noise=True))
     subprocess.run(['flac','-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
                     '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
@@ -289,8 +289,10 @@ try:
     tracks.sort(key=lambda t:t.get('url',''))
     (base/'library.json').write_text(json.dumps(tracks,indent=2))
     ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('0.flac','1.flac','2.flac','3.flac')]
+    window_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in tuple(f'{i}.flac' for i in range(8))]
     alac_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('4.m4a','5.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
+    assert len(window_ids)==8,tracks
     sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True;sonos.consume_stream=True
     sonos.volume=20;sonos.muted=0
     sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None]+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
@@ -400,23 +402,26 @@ try:
         raise SystemExit(0)
     hires_only=os.environ.get('YENEY_REAL_LMS_HIRES_ONLY')=='1'
     if not hires_only:
-        cli('playlistcontrol cmd:load track_id:'+','.join(ids),mac)
+        cli('playlistcontrol cmd:load track_id:'+','.join(window_ids),mac)
         wait(lambda:len(items())>=1,15,'initial takeover')
         select_item(0);wait(lambda:len(packets('STMs'))>=1)
         identity(0)
         assert len(sonos.actions('Play'))==1,sonos.calls
         controls_only=os.environ.get('YENEY_REAL_LMS_CONTROLS_ONLY')=='1'
-        for index in (() if controls_only else (1,2,3)):
+        for index in (() if controls_only else range(1,8)):
             # Keep the fake's RelTime continuous until the natural boundary.
             for second in range(1,24):
                 time.sleep(1)
                 with sonos.lock:sonos.position['RelTime']=f'00:00:{second:02}'
-            select_item(index);wait(lambda:len(packets('STMs'))>=index+1)
+            select_item(min(index,3));wait(lambda:len(packets('STMs'))>=index+1)
             identity(index)
+            if index>=3:
+                wait(lambda:len(items())<=4,3,'two history parents plus current/prepared')
+                wait(lambda:'reason=history-limit' in (base/'bridge.log').read_text(),3,'fenced history trim')
         if not controls_only:
-            assert len(sonos.actions('Play'))==1 and len(sonos.actions('AddURIToQueue'))==4
+            assert len(sonos.actions('Play'))==1 and len(sonos.actions('AddURIToQueue'))==8
             assert (base/'bridge.log').read_text().count('ownership acquired')==1
-        if not controls_only: print('PASS real LMS 9.1.1 album: FLAC 44.1/48 kHz, three audible joins, matching LMS index, no CLI mutation/rearm/restart',flush=True)
+        if not controls_only: print('PASS real LMS 9.1.1 eight-entry album: eight local FLAC tracks, 44.1/48 kHz, seven audible joins, two history parents, matching LMS index, no CLI mutation/rearm/restart',flush=True)
         for index in ((1,0) if controls_only else (2,3)):
             before=len(packets('STMs'));cli(f'playlist index {index}',mac)
             wait(lambda:len(packets('STMs'))>before,15,'LMS next/previous acknowledgement')
@@ -501,14 +506,15 @@ try:
         collected=[]
         for index in range(4):
             wait(lambda:len(items())>index,10,'native prepared successor')
+            selected_item=items()[index]
             if index:select_item(index)
             wait(lambda:int(cli('playlist index ?',mac)[-1])==index,3,'native LMS identity')
-            resource=items()[index]['resource']
+            resource=selected_item['resource']
             target=rate if rate<=48000 else 44100 if rate==88200 else 48000
             assert int(resource['sampleFrequency'])==target and resource['bitsPerSample']=='24',resource
             import http.client
             from urllib.parse import urlsplit
-            u=urlsplit(items()[index]['uri']);c=http.client.HTTPConnection(u.netloc,timeout=8)
+            u=urlsplit(selected_item['uri']);c=http.client.HTTPConnection(u.netloc,timeout=8)
             c.request('GET',u.path+'?'+u.query);response=c.getresponse();body=response.read();c.close()
             expected_frames=rate*4//(rate//target)
             assert len(body)==44+expected_frames*6 and int(resource['size'])==len(body),(len(body),resource)

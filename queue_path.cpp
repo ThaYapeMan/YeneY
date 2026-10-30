@@ -177,6 +177,7 @@ void QueueRoom::Impl::selectPath() {
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
             selectedTrack = track;
+            selectedSourceIndex = selectedIndex;
         }
         selectionKnown = true;
         if (!selectedNewPlay && selectedLocal != paths.isRelay()) {

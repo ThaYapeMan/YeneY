@@ -1,4 +1,4 @@
-"""Compare four complete real-binary 44.1 kHz queue WAV items (loopback only)."""
+"""Compare eight complete real-binary 44.1 kHz queue WAV items (loopback only)."""
 import argparse
 import hashlib
 import http.client
@@ -7,13 +7,16 @@ from urllib.parse import urlsplit
 from queue_binary_test import Binary
 
 def album(binary):
-    host=Binary(rates=(44100,)*4,seconds=8,binary=Path(binary).resolve(),queue_title_prefix="")
+    host=Binary(rates=(44100,)*8,seconds=8,binary=Path(binary).resolve(),queue_title_prefix="")
     bodies=[]
     try:
-        for index in range(4):
-            host.state(index+1)
+        for index in range(8):
+            title=host.titles[index]
+            host.until(lambda:any(i.get('metadata',{}).get('title')==title for i in host.items()))
+            ordinal=next(n+1 for n,i in enumerate(host.items()) if i['metadata']['title']==title)
+            url=urlsplit(host.items()[ordinal-1]['uri'])
+            host.state(ordinal)
             host.until(lambda:len(host.packets('STMs'))>=index+1)
-            url=urlsplit(host.items()[index]['uri'])
             connection=http.client.HTTPConnection(url.netloc,timeout=10)
             try:
                 connection.request('GET',url.path+'?'+url.query)

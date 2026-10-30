@@ -54,6 +54,9 @@ upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
 void QueueRoom::Impl::release(bool stop) {
     auto cleanupOwned = std::move(owned);
     owned.clear();
+    std::set<uint64_t> parents;
+    for (const auto &item : items) parents.insert(item.owner ? item.owner : item.stream);
+    for (auto parent : parents) queue.releaseParent(parent);
     items.clear();
     releasing = true;
     ownership.release(!sourceAway,
@@ -355,6 +358,52 @@ void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
     publish();
     speakerCommand("stop", member ? "group-member" : reason == "track-fault-limit" ? reason : "room-fault");
 }
+void QueueRoom::Impl::trimHistory() {
+    if (!started || faulted || externalReleased || sourceAway || !current) return;
+    using Edits = queue_audio::WindowEdits;
+    std::vector<Edits::Parent> parents;
+    uint64_t audible = 0;
+    for (const auto &item : items) {
+        const auto parent = item.owner ? item.owner : item.stream;
+        if (parents.empty() || parents.back().token != parent) parents.push_back({parent, {}});
+        parents.back().uris.push_back(item.uri);
+        if (item.stream == current) audible = parent;
+    }
+    const auto playing = std::find_if(parents.begin(), parents.end(),
+        [audible](const auto &p) { return p.token == audible; });
+    if (playing == parents.end()) return;
+    const auto history = size_t(playing - parents.begin());
+    if (history <= queue_audio::QueueWindow::historyCount) return;
+    const auto count = history - queue_audio::QueueWindow::historyCount;
+    std::vector<Edits::Parent> wanted(parents.begin() + count, parents.end());
+    Edits::IO io;
+    io.browse = [this] {
+        const auto snapshot = coordinator.browse();
+        return Edits::Snapshot{snapshot.update, snapshot.uris};
+    };
+    io.remove = [this](auto update, auto first, auto n) { actions.remove(update, first, n); };
+    io.insert = [](auto, auto, auto) { throw std::logic_error("history trim attempted insertion"); };
+    io.log = [this, &parents](const auto &message) {
+        std::string indices;
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        for (const auto &parent : parents) {
+            const auto found = sourceIndices.find(parent.token);
+            indices += (indices.empty() ? "" : ",") +
+                (found == sourceIndices.end() ? std::string("unknown") : std::to_string(found->second));
+        }
+        logQueue(message + " lms_indices=" + indices + " reason=history-limit");
+    };
+    Edits(std::move(io)).apply(parents, wanted, audible);
+    for (size_t n = 0; n < count; ++n) {
+        const auto token = parents[n].token;
+        for (const auto &uri : parents[n].uris) owned.erase(uri);
+        items.erase(std::remove_if(items.begin(), items.end(), [token](const auto &item) {
+            return (item.owner ? item.owner : item.stream) == token;
+        }), items.end());
+        queue.releaseParent(token);
+    }
+    publish();
+}
 void QueueRoom::Impl::run() {
     for (;;) {
         std::deque<std::pair<char, uint64_t>> pending;
@@ -391,6 +440,7 @@ void QueueRoom::Impl::run() {
             }
             observe();
             append();
+            trimHistory();
         } catch (const queue_audio::ItemCancelled &) {
             // Producer cancellation raced a snapshot; observe the next run.
         } catch (const std::exception &e) {

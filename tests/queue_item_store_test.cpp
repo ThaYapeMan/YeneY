@@ -320,6 +320,52 @@ void quotaAndStartup() {
     std::cout << "PASS quota/startup: deterministic FLAC, oldest eviction, current/next protected, bounded "
                  "disk/RAM, exclusive room cleanup, immutable generations\n";
 }
+void windowQuota() {
+    Temp tmp;
+    Config c;
+    c.root = tmp.root;
+    c.ramBytes = 24576;
+    const auto pcm = signal(4096);
+    uint64_t cost;
+    {
+        Store measure("Measure", c);
+        auto item = measure.create({"cost", 44100, 4096, 1});
+        item->append(pcm.data(), pcm.size(), false);
+        item->finish();
+        cost = measure.diskBytes();
+    }
+    // Two history parents, current plus its continuation, three upcoming.
+    c.diskBytes = cost * 7 + cost / 2;
+    Store store("Window", c);
+    std::vector<std::shared_ptr<Item>> window;
+    for (unsigned n = 0; n < 7; ++n) {
+        auto item = store.create({std::to_string(n), 44100, 4096, 1});
+        window.push_back(item);
+        store.protect(window);
+        item->append(pcm.data(), pcm.size(), false);
+        item->finish();
+    }
+    assert(store.diskBytes() == 7 * cost);
+    auto overflow = store.create({"overflow", 44100, 4096, 1});
+    overflow->append(pcm.data(), pcm.size(), false);
+    fails([&] { overflow->finish(); }, "quota exhausted");
+    for (const auto &item : window) assert(readAll(item->reader()) == reference(pcm, 44100));
+    auto oldReader = window.front()->reader();
+    window.front()->releaseAudio();
+    window.front()->releaseAudio(); // repeat release is idempotent
+    assert(store.diskBytes() == 6 * cost);
+    fails([&] { readAll(oldReader); }, "left queue window");
+    auto replacement = store.create({"replacement", 44100, 4096, 1});
+    window.erase(window.begin());
+    window.push_back(replacement);
+    store.protect(window);
+    replacement->append(pcm.data(), pcm.size(), false);
+    replacement->finish();
+    assert(store.diskBytes() == 7 * cost);
+    std::cout << "PASS window quota: parents=6 segments=7 chunk_bytes=" << cost
+              << " quota_bytes=" << c.diskBytes << " retained_bytes=" << store.diskBytes()
+              << "; protected history/continuation survive pressure; release frees one chunk immediately\n";
+}
 void lifecycleAndCorruption() {
     Temp tmp;
     Config c;
@@ -430,6 +476,7 @@ int main() {
     processedHistory();
     waitsAndFaults();
     quotaAndStartup();
+    windowQuota();
     lifecycleAndCorruption();
     http();
 }

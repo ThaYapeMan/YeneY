@@ -67,11 +67,13 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
     paths.describeSource = [this](uint64_t id) {
         std::lock_guard<std::mutex> lock(sourceMutex);
         sourceTracks[id] = selectedTrack;
+        if (selectedSourceIndex >= 0) sourceIndices[id] = unsigned(selectedSourceIndex);
         if (remotePlaybackSource(selectedTrack.id, selectedTrack.remote, selectedTrack.url) && selectedTrack.finiteRemote())
             queue.estimate(id, selectedTrack.duration, selectedTrack.startOffsetMs);
     };
     logQueue("settings poll_ms=" + std::to_string(pollMs));
     queue.useSpeakerClock();
+    queue.windowRetention(queue_audio::QueueWindow::historyCount, queue_audio::QueueWindow::upcomingCount);
     setRoomStatus(&status);
     publish();
     queue.onQueueCommand([this](char c, uint32_t) {

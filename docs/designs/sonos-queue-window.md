@@ -1,9 +1,11 @@
 # Sonos queue window implementation record
 
-YENEY-APPCONTROL-02 is in progress. The existing room relay does not yet call
-these building blocks. Next, Previous, restart and seek are not newly enabled
-by this change. The README feature row and step 3 qualification stay unchanged
-until the controller integration and acceptance scenarios pass.
+YENEY-APPCONTROL-03 is incomplete. The room relay uses the fenced editor for
+natural history trimming and protects two history parents and their audio.
+Lazy playlist publication and LMS navigation reconciliation are still absent.
+Next, Previous, restart and seek are not newly enabled. The README feature row
+and step 3 qualification stay unchanged until controller integration and its
+acceptance scenarios pass.
 
 ## Decisions
 
@@ -48,9 +50,33 @@ until the controller integration and acceptance scenarios pass.
 
 ## Remaining integration
 
-The room worker still needs to publish the window, determine exact local lazy
-promises using the existing render/transition rules, bind produced assets,
-protect window audio under the shared quota, and reconcile LMS navigation and
-playlist changes through `WindowEdits`. App intent settling, echo matching,
-retained history navigation, restart/seek, the owner checker, private real LMS
-acceptance and the requested feature documentation are still outstanding.
+The production worker trims older history after observing a new audible parent,
+preserving the audible parent URI and all continuation blocks. `WindowEdits`
+refreshes Browse and fences each removal. Removed parents are invalidated and
+their RAM and compressed disk chunks released immediately. The sink protects
+two history parents, current and up to three produced upcoming parents; every
+continuation of a protected parent shares protection. The default standalone
+sink policy remains current/next for other callers. No LMS mutation is added.
+Trims log ordinals, parent count, LMS indices and `reason=history-limit`.
+
+The room worker still needs to publish the complete playlist window, determine
+exact local lazy promises using the existing render/transition rules, bind
+produced assets to immutable lazy routes and reconcile LMS navigation and
+playlist changes through `WindowEdits`. Unknown/live duration must stop lazy
+lookahead. It must add the single reason-checked lazy activation LMS selection
+and permanent activation/binding/abandonment diagnostics. Existing prepared
+production must bind with no LMS selection. The production checkpoint here
+does not activate lazy routes and does not add app-driven LMS navigation.
+
+Stage 2 remains app intent settling, matching retained ordinals to LMS indices,
+one LMS selection for the final app target, restart and parent-relative seek,
+and echo matching. Stage 3 is the owner checker; stage 4 is the feature README
+and device qualification documentation. Those stages remain out of scope of
+APPCONTROL-03. Complete stage 1 private LMS acceptance (lazy items, edits,
+retained target navigation and continuation history) also remains outstanding.
+
+ALAC bounds test failures came from its harness polling `error()` before
+draining output, then accepting `done()` without rechecking the terminal error.
+The decoder publishes error before completion. The corrected fixture checks
+error after observing completion, matching the existing queue decoder policy;
+no decoder/audio algorithm change is needed.

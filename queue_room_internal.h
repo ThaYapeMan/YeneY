@@ -10,6 +10,7 @@
 #include "queue_route.h"
 #include "queue_source.h"
 #include "queue_speaker_changes.h"
+#include "queue_window_edits.h"
 #include "transport_source.h"
 #include "stream_metrics.h"
 #include "stream_session.h"
@@ -47,7 +48,9 @@ struct QueueRoom::Impl {
     std::atomic<uint64_t> selectionRequest{0};
     uint64_t selectedRequest = 0;
     queue_audio::PlaylistEntry selectedTrack;
+    int selectedSourceIndex = -1;
     std::map<uint64_t, queue_audio::PlaylistEntry> sourceTracks;
+    std::map<uint64_t, unsigned> sourceIndices;
     std::map<std::string, yeney::FlacSourceInfo> flacCounts;
     std::chrono::steady_clock::time_point handoffAt{};
     std::string pathReason = "local-source";
@@ -121,6 +124,7 @@ struct QueueRoom::Impl {
     void release(bool stop = false);
     void command(char c, uint64_t next);
     void append();
+    void trimHistory();
     void observe();
     void run();
     void shutdown();

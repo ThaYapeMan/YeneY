@@ -37,6 +37,7 @@ int main(int argc, char **) {
     for(unsigned seconds:{80u,320u,50u,100u}) {
         Config cfg;cfg.root=testTempRoot()+"/podcast-decisions";
         CoreQueueSink trial("Case"+std::to_string(seconds),cfg,600);trial.useSpeakerClock();
+        trial.windowRetention(2,3);
         trial.estimate(1,20,0);trial.coreEvent("strm",1,0);
         trial.trackDescriptor({1,8000,{},0,0});trial.trackBoundary(0,{8000,24,2,false},false);
         std::vector<yeney::Frame> audio(seconds*8000);
@@ -92,6 +93,15 @@ int main(int argc, char **) {
                     seconds==50?"one deadline-forced bound at 10 s lead, 5 s overflow + 25 s parent, clean early EOF":
                     "deadline-forced bound then one bound-exceeded exact remainder")
                  <<"; sample-exact concatenation, one LMS start, continuous clock\n";
+        trial.releaseParent(1);trial.waitIdle();
+        for (const auto &part:parts) {
+            bool released=false;
+            try { char byte;part.item->reader(44).read(&byte,1); }
+            catch (const ItemCancelled &) { released=true; }
+            assert(released);
+        }
+        for (const auto &record:trial.snapshot()) assert(record.incomplete=="outside queue window");
+        std::cout<<"PASS continuation parent release case="<<seconds<<"s: all segments invalidated together after window removal\n";
     }
     {
         Config quota;quota.root=testTempRoot()+"/podcast-bound-cap";

@@ -121,33 +121,49 @@ void CoreQueueSink::coreEvent(const std::string &event, uint64_t id, uint64_t) {
         }
     });
 }
+void CoreQueueSink::windowRetention(unsigned history, unsigned upcoming) {
+    std::lock_guard<std::mutex> lock(mutex);
+    retainedHistory = history;
+    retainedUpcoming = upcoming;
+}
+void CoreQueueSink::releaseParent(uint64_t owner) {
+    enqueue([this, owner] {
+        std::vector<std::shared_ptr<Item>> released;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            for (auto &p : records) {
+                if (p.first != owner && p.second.parent != owner) continue;
+                p.second.incomplete = "outside queue window";
+                if (p.second.item) released.push_back(p.second.item);
+            }
+        }
+        for (auto &item : released) item->releaseAudio();
+        protectItems();
+    });
+}
 void CoreQueueSink::protectItems() {
-    std::shared_ptr<Item> current, next;
+    std::vector<std::shared_ptr<Item>> retained;
     {
         std::lock_guard<std::mutex> lock(mutex);
         const auto id = audibleId ? audibleId : active;
         const auto audible = records.find(id);
         const auto owner = audible != records.end() && audible->second.parent ? audible->second.parent :
                            id > UINT64_MAX / 2 ? UINT64_MAX - id : id;
-        auto it = records.find(id);
-        if (it != records.end())
-            current = it->second.item;
-        for (const auto &p : records)
-            if (p.first > owner && p.first < UINT64_MAX / 2 && p.second.item) {
-                next = p.second.item;
-                break;
-            }
-    }
-    std::vector<std::shared_ptr<Item>> retained{current, next};
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        for (auto item : {current, next}) if (item) {
-            const auto found = std::find_if(records.begin(), records.end(), [&](const auto &p) { return p.second.item == item; });
-            if (found == records.end() || !found->second.estimated) continue;
-            const auto owner = found->second.parent ? found->second.parent : found->first;
-            for (const auto &p : records)
-                if (p.first == owner || p.second.parent == owner) retained.push_back(p.second.item);
+        std::vector<uint64_t> before, after;
+        for (const auto &p : records) {
+            if (p.first >= UINT64_MAX / 2 || !p.second.item || !p.second.incomplete.empty()) continue;
+            (p.first <= owner ? before : after).push_back(p.first);
         }
+        if (before.size() > retainedHistory + 1) before.erase(before.begin(), before.end() - retainedHistory - 1);
+        if (after.size() > retainedUpcoming) after.resize(retainedUpcoming);
+        before.insert(before.end(), after.begin(), after.end());
+        for (const auto &p : records) {
+            const auto parent = p.second.parent ? p.second.parent : p.first;
+            if (std::find(before.begin(), before.end(), parent) != before.end()) retained.push_back(p.second.item);
+        }
+        // Temporary outgoing tails remain protected until carried or published.
+        const auto tail = records.find(id);
+        if (tail != records.end()) retained.push_back(tail->second.item);
     }
     store.protect(retained);
 }

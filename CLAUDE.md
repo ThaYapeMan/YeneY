@@ -68,6 +68,30 @@ server-side fade. Reverse control preserves the app's mute state and waits
 400 ms for a mute transition before setting its new level, so a late fade
 callback cannot undo that level. The real LMS volume test exercises this.
 
+## Sonos queue window
+
+The window model has two history parents, the current parent and three upcoming
+parents. Continuations share their parent's history slot. The production relay
+now retains two played parents and trims older parent blocks through
+`WindowEdits`, with fresh Browse/UpdateID fencing and the audible parent as
+anchor. It does not issue an LMS command when sliding history. The natural
+producer and its WAV declaration remain unchanged.
+
+The sink protects retained history and all its continuation audio from quota
+eviction. Parents removed by the worker release RAM and compressed files
+immediately; existing readers fail rather than receiving invented audio. Default
+local/finite-remote quotas remain 256 MiB/8 GiB, with explicit quotas authoritative.
+Permanent `queue window remove ordinal=... count=... lms_indices=...
+reason=history-limit` stdout lines describe trims without source URLs or tokens.
+
+Lazy HTTP declarations and the six-parent playlist model are still building
+blocks: the production relay does not yet publish lazy upcoming entries or
+reconcile LMS navigation/playlist edits against that model. Lazy activation,
+binding and abandonment diagnostics are therefore not production features yet.
+Stage 2 app navigation/seek commands remain unimplemented. See
+`docs/designs/sonos-queue-window.md` for the integration checkpoint. All current
+retention and diagnostics work without systemd.
+
 ## Finite remote queue items
 
 Read-only LMS `status` requests include duration (`d`) and live edge (`V`).

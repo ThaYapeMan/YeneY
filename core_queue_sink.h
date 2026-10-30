@@ -62,6 +62,7 @@ class CoreQueueSink : public yeney::Sink {
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
     uint64_t continuationSerial = UINT64_MAX / 2, producingSegment = 0;
     uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
+    unsigned retainedHistory = 0, retainedUpcoming = 1;
     bool prefixPending = false, freshRender = false, cachedReanchor = false;
     std::atomic_bool refetchRequested{false}, startRequested{false}, cachedStartRequested{false};
     std::atomic<uint64_t> latestProducer{0};
@@ -135,6 +136,9 @@ public:
     uint64_t audibleFrames() const override;
     uint64_t audibleOccurrence() const;
     void waitIdle();
+    // Configure before playback. Parent budgets do not count continuations.
+    void windowRetention(unsigned history, unsigned upcoming);
+    void releaseParent(uint64_t occurrence);
     std::vector<QueueRecord> snapshot() const;
     double secondsSinceStart() const { return now(); }
     double wallSecondsSinceStart() const { return now() / clockSpeed; }

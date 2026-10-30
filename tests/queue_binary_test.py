@@ -309,13 +309,14 @@ class Binary:
         self.until(lambda:len(self.items())>=track and 'resource' in self.items()[track-1])
         rel=f'{int(seconds)//3600:02}:{int(seconds)//60%60:02}:{int(seconds)%60:02}'
         with self.sonos.lock:
-            self.sonos.position=dict(Track=str(track),TrackURI=self.items()[track-1]['uri'],RelTime=rel)
+            uri=self.sonos.items[track-1]['uri']
+            self.sonos.position=dict(Track=str(track),TrackURI=uri,RelTime=rel)
             self.sonos.transport_state=state
             self.sonos.clock_base=time.monotonic()-seconds
         callback=getattr(self.sonos,'callback','')
         if callback:
             self.sequence+=1
-            fields=dict(CurrentTrack=str(track),CurrentTrackURI=self.items()[track-1]['uri'],RelativeTimePosition=rel,TransportState=state)
+            fields=dict(CurrentTrack=str(track),CurrentTrackURI=uri,RelativeTimePosition=rel,TransportState=state)
             change='<Event><InstanceID val="0">'+''.join('<'+k+' val='+quoteattr(v)+'/>' for k,v in fields.items())+'</InstanceID></Event>'
             body='<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0"><e:property><LastChange>'+escape(change)+'</LastChange></e:property></e:propertyset>'
             u=urlsplit(callback);c=http.client.HTTPConnection(u.netloc,timeout=3)
@@ -360,6 +361,38 @@ def relay_replay():
         h.lms.strm('q');h.until(lambda:h.sonos.transport_state=='STOPPED' and not h.items())
         assert all(c.startswith('status ') for c in h.commands),h.commands
         print('PASS relay field replay: q/q/q+s, sanitized album, one enqueue/Play/HELO, synchronous status, pause/resume/stop, no CLI mutation',flush=True)
+    finally:h.close()
+
+def window_history():
+    h=Binary(rates=(44100,)*8, seconds=2)
+    try:
+        for index in range(8):
+            title=h.titles[index]
+            h.until(lambda:any(i.get('metadata',{}).get('title')==title for i in h.items()))
+            ordinal=next(n+1 for n,i in enumerate(h.items()) if i['metadata']['title']==title)
+            h.state(ordinal)
+            h.until(lambda:len(h.packets('STMs'))>=index+1)
+            if index>=3:
+                h.until(lambda:h.items()[0]['metadata']['title']==h.titles[index-2])
+            entries=h.items()
+            position=next(n for n,i in enumerate(entries) if i['metadata']['title']==title)
+            assert position==min(index,2),entries
+            assert len(entries)<=4,entries
+            for retained in entries[:position+1]:
+                url=urlsplit(retained['uri'])
+                connection=http.client.HTTPConnection(url.netloc,timeout=10)
+                try:
+                    connection.request('GET',url.path+'?'+url.query)
+                    response=connection.getresponse();body=response.read()
+                    assert response.status==200 and len(body)==44+44100*2*6
+                    assert body[44:]==b'\0\xe8\x03\0\x18\xfc'*(44100*2)
+                finally:connection.close()
+            if index>=3:
+                log=(h.base/'bridge.log').read_text()
+                assert 'queue window remove ordinal=1 count=1 lms_indices=' in log,log
+        assert all(c.startswith('status ') for c in h.commands),h.commands
+        assert len(h.sonos.actions('Play'))==1
+        print('PASS production history window: eight local parents, two retained history with exact WAV audio, fenced trims, one Play, zero LMS mutations',flush=True)
     finally:h.close()
 
 def preparing_repeat():
@@ -574,4 +607,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item();cancelled_audible_stop();source_change_with_lms_stop()
+    relay_replay();window_history();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item();cancelled_audible_stop();source_change_with_lms_stop()
