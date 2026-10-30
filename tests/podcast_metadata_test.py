@@ -1,5 +1,6 @@
 """Native LMS menu metadata, all setting combinations and fixed DIDL bytes."""
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import xml.etree.ElementTree as ET
 import itertools
 import os
 from pathlib import Path
@@ -21,6 +22,8 @@ def native_matrix(cli,mac,origin,base,root):
             env.update(zip(KEYS,bits))
             result=subprocess.check_output([str(root/'podcast-metadata-fixture'),'127.0.0.1',mac,formatted,str(base/'no-config')],env=env)
             didl=result.split(b'<DIDL-Lite',1)[1]
+            item=ET.fromstring(b'<DIDL-Lite'+didl)[0]
+            assert [n.tag.rsplit('}',1)[-1] for n in item][:4]==['title','creator','artist','album']
             fixture=root/'tests/fixtures'/('podcast-'+('from' if ' from ' in name else 'by')+'-'+''.join('1' if v=='yes' else '0' for v in bits)+'.xml')
             assert b'<DIDL-Lite'+didl==fixture.read_bytes(),(name,bits,result)
         print('PASS native LMS 9.1.1 podcast metadata: '+name+'; all eight settings, byte-exact DIDL wire fixtures, direct binary without systemd',flush=True)

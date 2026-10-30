@@ -46,11 +46,24 @@ int main() {
             m.title = std::string("Bad") + char(255);
             assert(upnp::parseXml(upnp::queueDidl(m), root));
             assert(root.child("item")->value("title") == "Bad\xef\xbf\xbd");
+            // Empty fields must be present, not merely read back as empty.
+            for (unsigned mask = 0; mask < 8; ++mask) {
+                auto empty = m;
+                if (mask & 1) empty.title.clear();
+                if (mask & 2) empty.artist.clear();
+                if (mask & 4) empty.album.clear();
+                upnp::XmlNode parsed;
+                assert(upnp::parseXml(upnp::queueDidl(empty), parsed));
+                const auto fields = parsed.child("item");
+                for (const char *field : {"title", "creator", "artist", "album"})
+                    assert(fields->child(field));
+            }
             m.title.clear();
             assert(upnp::parseXml(upnp::queueDidl(m), root));
             assert(root.child("item")->value("title").empty());
         }
     }
+    std::cout << "PASS queue DIDL element presence: title/creator/artist/album retained for every empty-field combination\n";
     std::cout << "PASS queue plain title: unset/artist-title/title identical, empty stays empty, controls/invalid UTF-8 repaired, Unicode retained\n";
     std::cout << "PASS queue DIDL: escaped title/artist/album, session ownership, native rates, exact WAV "
                  "size and musicTrack protocol\n";

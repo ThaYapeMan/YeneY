@@ -8,10 +8,11 @@ struct QueueMetadata {
     uint64_t frames = 0, size = 0;
     uint32_t rate = 0;
     unsigned bits = 24, channels = 2;
-    bool omitEmptyFields = false; // native podcast settings can omit artist/album
     bool preciseDuration = false; // estimated items; preserve local DIDL wire
 };
 // Finite music metadata keeps the plain LMS title and separate artist/album.
+// Always emit title/creator/artist/album, even empty: Sonos discards DIDL
+// without album. Settings control values, never element presence.
 // No stream title formatting, radio URI rewriting or streamContent changes.
 std::string queueDidl(const QueueMetadata &);
 } // namespace upnp

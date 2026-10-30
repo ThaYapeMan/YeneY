@@ -537,8 +537,8 @@ local tracks and the LMS display are unchanged. Continuations inherit metadata.
 | Setting | Sonos app behavior | Default |
 |---|---|---|
 | `YENEY_PODCAST_TITLE_PLAIN` | `yes`: plain episode; `no`: LMS formatted title unchanged | `yes` |
-| `YENEY_PODCAST_ARTIST_SHOW` | `yes`: podcast name as artist; `no`: omit inferred artist | `yes` |
-| `YENEY_PODCAST_ALBUM_PUBLISHER` | `yes`: publisher as album; `no`: omit inferred album entirely | `no` |
+| `YENEY_PODCAST_ARTIST_SHOW` | `yes`: podcast name as artist; `no`: send empty inferred artist elements | `yes` |
+| `YENEY_PODCAST_ALBUM_PUBLISHER` | `yes`: publisher as album; `no`: send an empty inferred album element | `no` |
 
 A future LMS plugin exposes these three metadata settings as per-player checkboxes.
 
@@ -546,3 +546,24 @@ At the ten-second deadline, an unfinished producer gets its upper-bound fallback
 even if no overflow is available yet. If the real source ends inside the parent
 bound, the unused fallback closes at real EOF without padding, another LMS start
 or a jump in the episode clock. Further items require an exceeded fallback bound.
+
+### Sonos queue DIDL evidence (30 October 2026)
+
+On a Sonos Port with bridge f97fc73, the default podcast settings showed
+"Geen content". GetPositionInfo returned the queue.wav file name as title:
+the speaker had discarded the supplied DIDL. The owner's 30-second probe used
+title "Media smullen van Trump versus Obama" and artist "Amerika in 15 minuten".
+
+| Variant | Fields after dc:title | DIDL retained | Sonos app |
+|---|---|---|---|
+| a | dc:creator + upnp:artist; no upnp:album | no | nothing |
+| b | dc:creator + upnp:artist + empty upnp:album | yes | episode + podcast name |
+| c | empty dc:creator + empty upnp:artist + empty upnp:album | yes | episode only |
+| d | dc:creator + upnp:artist + upnp:album BNR Nieuwsradio | yes | episode, podcast name and publisher (scrolling line) |
+
+Queue DIDL always sends dc:title, dc:creator, upnp:artist and upnp:album in
+that order. Disabled or unknown values are empty elements. With default settings
+(plain title yes, artist yes, album no), the app shows episode and podcast name.
+Artist no leaves the episode only; album yes adds the publisher when known.
+Title plain no preserves LMS's formatted title. LMS's explicit artist/album
+values still win over inferred values. Continuations inherit the same metadata.

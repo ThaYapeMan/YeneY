@@ -11,7 +11,6 @@ int main(int argc,char **argv) {
     queue_audio::PlaylistEntry track;track.title=argv[3];track.url="podcast://fixture";
     queue_audio::applyPodcastMetadata(track,*metadata,settings);
     upnp::QueueMetadata item;item.title=track.title;item.artist=track.artist;item.album=track.album;
-    item.omitEmptyFields=true;
     item.url="http://fixture.invalid/episode.wav";item.session="fixture";item.frames=44100*65;item.rate=44100;item.size=44+item.frames*6;
     std::cout<<upnp::queueDidl(item)<<"\n";
 }

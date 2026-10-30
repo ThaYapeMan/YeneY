@@ -223,6 +223,13 @@ class Handler(BaseHTTPRequestHandler):
             assert metadata.tag == '{urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/}DIDL-Lite'
             assert len(metadata) == 1 and metadata[0].tag.rsplit('}', 1)[-1] == 'item'
             item = metadata[0]
+            # All queue submissions, including remote-finite continuations, need
+            # these elements even when disabled/unknown (Sonos discards otherwise).
+            expected = ['{http://purl.org/dc/elements/1.1/}title',
+                        '{http://purl.org/dc/elements/1.1/}creator',
+                        '{urn:schemas-upnp-org:metadata-1-0/upnp/}artist',
+                        '{urn:schemas-upnp-org:metadata-1-0/upnp/}album']
+            assert [node.tag for node in item][:4] == expected, a['EnqueuedURIMetaData']
             assert len([n for n in item if n.tag.rsplit('}', 1)[-1] == 'res']) == 1
             fields = {n.tag.rsplit('}', 1)[-1]: n.text for n in item}
             resource = next(n for n in item if n.tag.rsplit('}', 1)[-1] == 'res')

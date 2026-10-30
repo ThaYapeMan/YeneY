@@ -28,10 +28,8 @@ std::string queueDidl(const QueueMetadata &m) {
            "<dc:title>" +
            esc(m.title) +
            "</dc:title>" +
-           (m.omitEmptyFields && m.artist.empty() ? std::string{} :
-               "<dc:creator>" + esc(m.artist) + "</dc:creator><upnp:artist>" + esc(m.artist) + "</upnp:artist>") +
-           (m.omitEmptyFields && m.album.empty() ? std::string{} :
-               "<upnp:album>" + esc(m.album) + "</upnp:album>") +
+           "<dc:creator>" + esc(m.artist) + "</dc:creator><upnp:artist>" + esc(m.artist) + "</upnp:artist>" +
+           "<upnp:album>" + esc(m.album) + "</upnp:album>" +
            (m.artwork.empty() ? std::string{}
                               : "<upnp:albumArtURI>" + esc(m.artwork) + "</upnp:albumArtURI>") +
            "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
