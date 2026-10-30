@@ -18,6 +18,7 @@ struct Route::State {
     struct Entry {
         uint64_t epoch, revision;
         std::shared_ptr<Item> item;
+        Resolver resolve;
     };
     std::map<std::string, Entry> entries;
     std::set<uint64_t> revoked;
@@ -35,7 +36,7 @@ void Route::registerWith(upnp::StreamServer &server) {
                           [held = state](upnp::StreamRequest &r) { return serve(held, r); });
 }
 std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t revision,
-                           const std::shared_ptr<Item> &item) {
+                           const std::shared_ptr<Item> &item, Resolver resolve) {
     if (owner != state->room || !item || item->room() != state->room || !item->contentLength() ||
         !token(item->descriptor().occurrence))
         throw std::invalid_argument("queue route ownership or unpublished item");
@@ -44,8 +45,9 @@ std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t re
     std::lock_guard<std::mutex> lock(state->mutex);
     if (state->revoked.count(epoch))
         throw std::logic_error("queue epoch revoked");
-    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, item});
-    if (!inserted.second && inserted.first->second.item != item)
+    const bool lazy = bool(resolve);
+    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, item, std::move(resolve)});
+    if (!inserted.second && (inserted.first->second.item != item || lazy || inserted.first->second.resolve))
         throw std::logic_error("immutable queue URL reused");
     return "/music/queue.wav?session=" + state->session + "&epoch=" + std::to_string(epoch) + "&item=" + id +
            "&revision=" + std::to_string(revision);
@@ -65,12 +67,15 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
     if (r.path() != "/music/queue.wav")
         return false;
     std::shared_ptr<Item> item;
+    Resolver resolve;
     if (r.parameter("session") == state->session) {
         const auto key = r.parameter("epoch") + "/" + r.parameter("item") + "/" + r.parameter("revision");
         std::lock_guard<std::mutex> lock(state->mutex);
         auto i = state->entries.find(key);
-        if (i != state->entries.end())
+        if (i != state->entries.end()) {
             item = i->second.item;
+            resolve = i->second.resolve;
+        }
     }
     if (!item) {
         auto id = r.parameter("item");
@@ -81,6 +86,6 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         r.reply(404);
         return true;
     }
-    return serveWav(r, item);
+    return serveWav(r, item, std::chrono::seconds(15), std::move(resolve));
 }
 } // namespace queue_audio

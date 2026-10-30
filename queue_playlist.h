@@ -33,6 +33,8 @@ struct PlaylistSnapshot {
     std::string mode;
     double duration = 0;
     std::vector<PlaylistEntry> entries;
+    std::string revision;
+    unsigned shuffle = 0, repeat = 0;
 };
 // Read-only metadata snapshot. LMS alone determines stream order; the relay
 // has no occurrence matching, playlist edit inference or mirroring policy.
@@ -41,7 +43,7 @@ public:
     PlaylistSnapshot parse(const std::string &wire) {
         PlaylistSnapshot out;
         std::istringstream input(wire);
-        std::string field, timestamp;
+        std::string field;
         PlaylistEntry *entry = nullptr;
         unsigned count = 0;
         while (input >> field) {
@@ -57,7 +59,12 @@ public:
             else if (key == "playlist_tracks")
                 count = std::stoul(value);
             else if (key == "playlist_timestamp")
-                timestamp = value;
+                out.revision = value;
+            else if (key == "playlist shuffle" || key == "playlist repeat") {
+                const auto policy = std::stoul(value);
+                if (policy > 2) throw std::runtime_error("playlist-policy-invalid");
+                (key == "playlist shuffle" ? out.shuffle : out.repeat) = unsigned(policy);
+            }
             else if (key == "duration" && !entry)
                 out.duration = std::stod(value);
             else if (key == "time")

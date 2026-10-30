@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
+#include <functional>
 #include <string>
 namespace upnp {
 class StreamRequest;
@@ -19,5 +20,6 @@ struct ByteRange {
 ByteRange wavRange(const std::string &header, uint64_t length);
 // Finite WAV handler shared by the production route and storage tests.
 bool serveWav(upnp::StreamRequest &, const std::shared_ptr<Item> &,
-              std::chrono::milliseconds wait = std::chrono::seconds(15));
+              std::chrono::milliseconds wait = std::chrono::seconds(15),
+              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve = {});
 } // namespace queue_audio

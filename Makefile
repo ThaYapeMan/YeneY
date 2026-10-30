@@ -31,7 +31,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f podcast-metadata-fixture podcast-sink-test volume-test lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	rm -f queue-window-test podcast-metadata-fixture podcast-sink-test volume-test lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test test-run install
 test:
@@ -67,6 +67,7 @@ test-run: export YENEY_TIMING_LOCKED_EVERY_S = 5
 test-run: export YENEY_AUDIBLE_OFFSET_MS = 0
 test-run: export YENEY_TIMING_STALE_S = 60
 test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	./queue-window-test
 	./volume-test
 	python3 tests/volume_test.py
 	python3 tests/player_name_test.py
@@ -487,3 +488,11 @@ podcast-metadata-fixture: tests/podcast_metadata_fixture.cpp podcast_title.h pod
 	$(CXX) -std=c++17 -O2 -Wall -Wextra -I. -pthread -o $@ $< libqueuecontroller.a upnp/xml.o
 
 test-run: podcast-metadata-fixture
+
+queue-window-test: tests/queue_window_test.cpp queue_window.h queue_window_edits.h queue_playlist.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. -o $@ $<
+test-run: queue-window-test
+
+$(QUEUE_ROOM_OBJS): queue_route.h
+
+queue-route-test: queue_lazy_item.h

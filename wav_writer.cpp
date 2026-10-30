@@ -64,8 +64,10 @@ ByteRange wavRange(const std::string &text, uint64_t length) {
         throw std::invalid_argument("unsatisfiable Range");
     return {first, last, true};
 }
-bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &item,
-              std::chrono::milliseconds wait) {
+bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &published,
+              std::chrono::milliseconds wait,
+              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve) {
+    auto item = published;
     struct Diagnostic {
         upnp::StreamRequest &request;
         std::shared_ptr<Item> item;
@@ -150,6 +152,34 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &item,
     if (request.method() == upnp::StreamRequest::Method::Head) {
         diagnostic.ending = "complete";
         return true;
+    }
+    if (resolve && range.last >= 44) {
+        // The immutable declaration has already reached the speaker. HEAD and
+        // rejected ranges never select LMS; an abandoned GET may end here with
+        // headers only. The room resolver owns settle/selection, never this HTTP
+        // worker. It must observe peer close and its bounded startup deadline.
+        std::shared_ptr<Item> produced;
+        try {
+            produced = resolve(request);
+            if (produced && (produced->room() != published->room() ||
+                produced->descriptor().rate != published->descriptor().rate ||
+                produced->contentLength() != length ||
+                produced->descriptor().kind != published->descriptor().kind)) {
+                diagnostic.ending = "declaration-mismatch";
+                request.disconnect();
+                return true;
+            }
+        } catch (const std::exception &) {
+            diagnostic.ending = "resolution-failed";
+            request.disconnect();
+            return true;
+        }
+        if (!produced || request.aborted() || request.peerClosed()) {
+            diagnostic.ending = "abandoned";
+            return true;
+        }
+        item = std::move(produced);
+        diagnostic.item = item;
     }
     auto reader = item->reader(range.first);
     uint64_t left = range.last - range.first + 1;
