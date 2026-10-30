@@ -146,24 +146,27 @@ void QueueRoom::Impl::selectPath() {
                 const auto marker = identity.rfind("{from=");
                 if (marker != std::string::npos && identity.back() == '}') identity.resize(marker);
                 auto known = plainRemoteTitles.find(identity);
-                if (known == plainRemoteTitles.end()) {
-                    PodcastFields fields{roomPodcastSettings()[0].enabled ? track.plainTitle() : track.title,{}, {}};
+                if (known == plainRemoteTitles.end() || !known->second.complete) {
+                    if (known != plainRemoteTitles.end()) logQueue("podcast metadata step=cache reason=cache hit without podcast fields; fresh lookup");
+                    PodcastFields fields{roomPodcastSettings()[0].enabled ? track.plainTitle() : track.title,{}, {},
+                        track.url.compare(0,10,"podcast://") != 0};
                     if (track.url.compare(0,10,"podcast://") == 0) {
                         try {
-                            if (auto metadata = queue_audio::podcastMetadata(host,mac,track.title)) {
-                                auto resolved=track;
-                                resolved.artist.clear();resolved.album.clear();
-                                queue_audio::applyPodcastMetadata(resolved,*metadata,roomPodcastSettings());
-                                fields={resolved.title,resolved.artist,resolved.album};
+                            std::string diagnostic;
+                            if (auto metadata = queue_audio::podcastMetadata(host,mac,track.title,&diagnostic)) {
+                                fields={metadata->title,metadata->podcast,metadata->publisher,
+                                    !metadata->podcast.empty() && !metadata->publisher.empty()};
                                 logQueue("title source=podcast-menu");
-                            } else logQueue("podcast metadata unavailable or ambiguous; retaining LMS fields");
-                        } catch (const std::exception &) { logQueue("podcast metadata lookup unavailable"); }
+                                if (!diagnostic.empty()) logQueue("podcast metadata step=" + diagnostic);
+                            } else logQueue("podcast metadata step=" + diagnostic);
+                        } catch (const std::exception &) { logQueue("podcast metadata step=lookup reason=exception"); }
                     }
-                    known = plainRemoteTitles.emplace(identity,std::move(fields)).first;
+                    plainRemoteTitles[identity]=std::move(fields);
+                    known = plainRemoteTitles.find(identity);
                 }
                 if (roomPodcastSettings()[0].enabled) track.title = known->second.title;
-                if (track.artist.empty()) track.artist = known->second.artist;
-                if (track.album.empty()) track.album = known->second.album;
+                if (track.artist.empty() && roomPodcastSettings()[1].enabled) track.artist = known->second.artist;
+                if (track.album.empty() && roomPodcastSettings()[2].enabled) track.album = known->second.album;
             }
         }
         if (selectedRequest != selectionRequest) { selecting = false;return; }

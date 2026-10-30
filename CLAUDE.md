@@ -21,7 +21,7 @@ YeneY is the only backend. `YENEY_UPNP=yeney` and `own` are accepted; other valu
 
 ## Our modifications
 
-- **Podcast metadata**: `podcast_settings.h` resolves environment, room config, global config and defaults (`YENEY_PODCAST_TITLE_PLAIN=yes`, `YENEY_PODCAST_ARTIST_SHOW=yes`, `YENEY_PODCAST_ALBUM_PUBLISHER=no`). The bounded matching feed/menu lookup caches canonical source metadata; own LMS fields win. Disabled or unknown fields are sent as empty elements; a Sonos discards DIDL without upnp:album. Sanitised logs/status match the sent values, without LMS display mutation. Direct starts work without systemd.
+- **Podcast metadata**: `podcast_settings.h` resolves environment, room config, global config and defaults (`YENEY_PODCAST_TITLE_PLAIN=yes`, `YENEY_PODCAST_ARTIST_SHOW=yes`, `YENEY_PODCAST_ALBUM_PUBLISHER=no`). The bounded matching feed/menu lookup handles plain native titles and decorated feed names, resolves formatted by/from splits against episode/menu data, and caches title, podcast and publisher; incomplete cache entries trigger a fresh lookup. Step/reason diagnostics omit URLs and tokens. Own LMS fields win. Disabled or unknown fields are sent as empty elements; a Sonos discards DIDL without upnp:album. Sanitised logs/status match the sent values, without LMS display mutation. Direct starts work without systemd.
 
 - **Track metadata**: LMS CLI (port 9090) is queried for title, artist, album and artwork at stream start. `YENEY_TITLE_FORMAT=artist-title|title` formats the stream-path sent title only (default artist-title), because radio-type DIDL shows only the title. Queue musicTrack items always send the plain sanitised LMS title (empty stays empty), with separate artist/album fields; keep the sent-title log and cached renderer title consistent with DIDL. Continuous-stream status alone follows confirmed LMS track changes (title and duration) without rewriting DIDL. `scripts/meta-variant.py` is an owner-run device diagnostic.
 - **MAC address**: sent raw, not URL-encoded. URL-encoding causes LMS to silently fail to match the player.
@@ -133,3 +133,20 @@ At the ten-second deadline, an unfinished producer gets its upper-bound fallback
 even if no overflow is available yet. If the real source ends inside the parent
 bound, the unused fallback closes at real EOF without padding, another LMS start
 or a jump in the episode clock. Further items require an exceeded fallback bound.
+
+### Podcast field matching (PODCAST-05)
+
+The 30 October owner gateway returns plain America episode titles, so requiring
+` by ` / ` from ` before browsing rejects them. The Plus menu decoration also
+must not become the inferred podcast name. Match the known episode first; for
+formatted LMS titles, keep its publisher and podcast text, using menu names
+with ` | …` decorations removed to choose among delimiter splits. Names can
+contain ` by ` and ` from `. Plain titles use the matched feed name; an absent
+publisher stays empty. Multiple episode matches or splits remain unresolved.
+The two-second total lookup budget is unchanged. Incomplete cached fields cause
+a fresh lookup; canonical title alone is insufficient.
+
+Send the `queue podcast metadata step=` journal/stdout line with the next
+report. It names feed/episode matching, lookup timeout or CLI failure, cache hit
+without podcast fields, or ambiguous split and candidate names. Include title,
+feed menu name and settings; omit source URLs, tokens and descriptions.

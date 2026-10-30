@@ -984,9 +984,10 @@ adoption for a completed spool. Physical speaker acceptance remains owner-run.
 ### Podcast metadata settings
 
 Native LMS Podcast sometimes supplies only a formatted title. The matching
-read-only feed menu supplies the plain episode title and podcast name; its
-exact suffix identifies the publisher without splitting names containing
-` by ` or ` from `. Ambiguous fields stay empty with a diagnostic. The existing
+read-only feed menu supplies the plain episode title and podcast name; LMS formatted
+title supplies publisher and podcast after matching the plain episode prefix.
+Menu decorations such as ` | Plus` are ignored when selecting delimiter splits
+for names containing ` by ` or ` from `. Ambiguous fields stay empty with a diagnostic. The existing
 two-second lookup budget and canonical source URL cache are retained.
 
 Process environment takes precedence over `room.<name>.<KEY>` in
@@ -1048,3 +1049,20 @@ tone, plays it, then stops and empties the queue. YeneY sees external takeover
 and stops LMS for that room; restart playback from LMS afterward. The owner
 observes the app during each run. Never run this probe in `make test`; agents
 must not contact the owner's speakers.
+
+### Podcast field matching (PODCAST-05)
+
+The 30 October owner gateway returns plain America episode titles, so requiring
+` by ` / ` from ` before browsing rejects them. The Plus menu decoration also
+must not become the inferred podcast name. Match the known episode first; for
+formatted LMS titles, keep its publisher and podcast text, using menu names
+with ` | …` decorations removed to choose among delimiter splits. Names can
+contain ` by ` and ` from `. Plain titles use the matched feed name; an absent
+publisher stays empty. Multiple episode matches or splits remain unresolved.
+The two-second total lookup budget is unchanged. Incomplete cached fields cause
+a fresh lookup; canonical title alone is insufficient.
+
+Send the `queue podcast metadata step=` journal/stdout line with the next
+report. It names feed/episode matching, lookup timeout or CLI failure, cache hit
+without podcast fields, or ambiguous split and candidate names. Include title,
+feed menu name and settings; omit source URLs, tokens and descriptions.

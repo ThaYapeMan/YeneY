@@ -43,7 +43,8 @@ def run(g):
                 suffix='?feed='+quote(feed_name,safe='') if feed_query else ''
                 guid_prefix=escape(feed_name+':') if feed_query else ''
                 entries=''.join(f'<item><title>Episode {i}</title><guid>{guid_prefix}{i}</guid><itunes:duration>00:{d//60:02}:{d%60:02}</itunes:duration><enclosure url="{origin}/{i}.{"flac" if i==0 else "mp3"}{suffix}" type="{"audio/flac" if i==0 else "audio/mpeg"}" length="{len(media_items[i])}"/></item>' for i,d in enumerate((60,64,140,200)))
-                data=('<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>'+escape(feed_name)+'</title><itunes:author>Fixture Author</itunes:author>'+entries+'</channel></rss>').encode()
+                author='Fixture by Author' if feed_name=='Plain' else 'Fixture Author'
+                data=('<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>'+escape(feed_name.split(' | ')[0])+'</title><itunes:author>'+escape(author)+'</itunes:author>'+entries+'</channel></rss>').encode()
                 self.send_response(200);self.send_header('Content-Type','application/rss+xml');self.send_header('Content-Length',str(len(data)));self.end_headers()
                 if send:self.wfile.write(data)
                 return
@@ -274,10 +275,14 @@ def run(g):
             print(f'PASS podcast case {i}: real EOF reaches LMS only after every produced frame played',flush=True)
         cli('stop',mac)
         repeated=len(packets('STMs'))
+        lookups=sum(' podcasts items ' in r['request'] for r in g['proxy'].records)
         cli('podcasts playlist play item_id:'+ident+'.3',mac)
         wait(lambda:len(packets('STMs'))>repeated and status().get('title')=='Episode 3',5,'restart plain episode title')
         print('RESTART native LMS status='+repr(cli('status 0 60000 tags:alKudV',mac)),flush=True)
         print('PASS same episode fresh/continue/restart: identical plain title Episode 3',flush=True)
+        assert 'cache hit without podcast fields; fresh lookup' in (base/'bridge.log').read_text()
+        assert sum(' podcasts items ' in r['request'] for r in g['proxy'].records)>lookups
+        print('PASS incomplete canonical cache: same source restart issues fresh podcast menu lookup; missing fields never suppress lookup',flush=True)
         for record in g['proxy'].records:
             if 'status 0 60000 tags:alKudV' in record['request']:
                 print('BRIDGE STATUS '+record['reply'],flush=True)

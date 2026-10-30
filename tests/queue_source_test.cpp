@@ -11,6 +11,23 @@ int main(int argc,char **argv) {
         if(!title)return 1;
         std::printf("%s\n",title->c_str());return 0;
     }
+    std::string reason;
+    auto owner=queue_audio::splitPodcastTitle("Lavrov dreigt met verdere escalatie by BNR Nieuwsradio from Boekestijn & De Wijk",
+        "Lavrov dreigt met verdere escalatie","Boekestijn & De Wijk | Plus",reason);
+    assert(owner && owner->podcast=="Boekestijn & De Wijk" && owner->publisher=="BNR Nieuwsradio");
+    auto america=queue_audio::splitPodcastTitle("Trump vestigt zijn hoop op het linkse Maine",
+        "Trump vestigt zijn hoop op het linkse Maine","Amerika in 15 minuten",reason);
+    assert(america && america->podcast=="Amerika in 15 minuten" && america->publisher.empty());
+    auto delimiters=queue_audio::splitPodcastTitle("Episode by House by Writer from City from Coast",
+        "Episode","City from Coast | Plus",reason);
+    assert(delimiters && delimiters->publisher=="House by Writer" && delimiters->podcast=="City from Coast");
+    puts("PASS owner title/name fixtures: suffix decoration, plain America title, publisher by and podcast from");
+    auto split=queue_audio::splitPodcastTitle("Episode by Publisher from Feed | Series from Feed",
+        "Episode","Feed | Plus",reason);
+    assert(!split && reason.find("ambiguous split")!=std::string::npos);
+    assert(reason.find("publisher=Publisher, podcast=Feed | Series from Feed")!=std::string::npos);
+    assert(reason.find("publisher=Publisher from Feed | Series, podcast=Feed")!=std::string::npos);
+    puts("PASS ambiguous split diagnostic: both candidate publisher/podcast pairs retained without source URLs");
     using bridge::remotePlaybackSource;
     assert(!remotePlaybackSource("123", "0", "file:///music/local.flac"));
     assert(!remotePlaybackSource("123", "", "file:///music/local.flac"));
