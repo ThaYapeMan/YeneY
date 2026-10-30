@@ -318,7 +318,7 @@ std::shared_ptr<Item> Store::create(Descriptor descriptor) {
     state->items.emplace(key, item);
     return std::shared_ptr<Item>(new Item(state, item));
 }
-std::shared_ptr<Item> Store::publish(const std::shared_ptr<Item> &pending, uint64_t promised) {
+std::shared_ptr<Item> Store::publish(const std::shared_ptr<Item> &pending, uint64_t promised, PromiseKind kind) {
     wavLength(promised);
     std::lock_guard<std::mutex> writer(state->producer);
     std::lock_guard<std::mutex> lock(state->mutex);
@@ -330,6 +330,7 @@ std::shared_ptr<Item> Store::publish(const std::shared_ptr<Item> &pending, uint6
         throw std::invalid_argument("publication conflicts with produced frames");
     auto descriptor = old.descriptor;
     descriptor.promisedFrames = promised;
+    descriptor.kind = kind;
     ++descriptor.generation;
     const auto key = std::to_string(descriptor.generation) + ":" + descriptor.occurrence;
     if (state->items.count(key))

@@ -238,7 +238,7 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, remote_duration=0, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False, player_options=()):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, remote_duration=0, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False, player_options=(), queue_disk_mib=64, partial_bytes=14000):
         self.titles=titles or [f'Title & {i}' for i in range(len(rates))]
         self.remote_sources=remote_sources
         self.remote_duration=remote_duration
@@ -263,7 +263,7 @@ class Binary:
         self.sonos.follow_controls=True
         self.sonos.expected_albums=self.albums if expected_albums is None else expected_albums
         self.cli=CLI(self);self.lms=LMS();self.log=open(self.base/'bridge.log','w')
-        env=dict(os.environ,YENEY_PLAYBACK_MODE=mode,YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(self.base))
+        env=dict(os.environ,YENEY_PLAYBACK_MODE=mode,YENEY_POLL='events',YENEY_QUEUE_DISK_MIB=str(queue_disk_mib),STATE_DIRECTORY=str(self.base))
         self.proc=subprocess.Popen([str(binary or ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',
                                    '--server=127.0.0.1:'+str(self.lms.listener.getsockname()[1])]+list(player_options),stdout=self.log,stderr=self.log,env=env)
         try:
@@ -283,7 +283,7 @@ class Binary:
                     subprocess.run(['flac','-s','-f','-o',str(target),str(path)],check=True)
                     body=target.read_bytes()
                 self.bodies[i]=body
-                source=HTTP(body,first=14000 if partial_source and i==0 else 16 if slow and i==0 else None,delay=8 if (slow or partial_source) and i==0 else 0);self.sources.append(source)
+                source=HTTP(body,first=partial_bytes if partial_source and i==0 else 16 if slow and i==0 else None,delay=8 if (slow or partial_source) and i==0 else 0);self.sources.append(source)
                 yield source,dict(fmt=codec,rate=rate if rate in (44100,48000) else 44100,transition=int(fade),period=10 if fade else 0)
         self.lms.connection.settimeout(30)
         if initial_stop:

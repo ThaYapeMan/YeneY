@@ -8,7 +8,8 @@ double CoreQueueSink::now() const {
     return std::chrono::duration<double>(std::chrono::steady_clock::now() - epoch).count() * clockSpeed;
 }
 CoreQueueSink::CoreQueueSink(const std::string &room, Config c, double seconds, double speed)
-    : store(room, c), budget(seconds), clockSpeed(speed) {
+    : store(room, c), continuationLimit(std::min<uint64_t>((UINT32_MAX-36ull)/6,
+          std::max(c.diskBytes,c.estimatedDiskBytes)/6)), budget(seconds), clockSpeed(speed) {
     if (!std::isfinite(speed) || speed <= 0)
         throw std::invalid_argument("invalid queue clock speed");
     if (!std::isfinite(seconds) || seconds < 1 || seconds > 600)
@@ -373,6 +374,80 @@ void CoreQueueSink::append(const std::vector<yeney::Frame> &pcm, bool processed)
         records[active].actual += n;
     }
 }
+// Only the storage worker publishes pending overflow. Unpublished PCM remains
+// in the quota-accounted compressed store; no HTTP route exposes a mutable header.
+void CoreQueueSink::publishEstimated(uint64_t id, bool force) {
+    QueueRecord r, parent;
+    double lead;
+    uint64_t submittedThrough=0;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        r=records.at(id);
+        if(!r.parent || r.promised || !r.item || !r.incomplete.empty())return;
+        parent=records.at(r.parent);
+        if(active==r.parent)submittedThrough=submitted;
+        lead=double(r.segmentOffset)/r.source.rate;
+        if(audibleSource==r.parent && speakerElapsed)lead-=double(*speakerElapsed)/1000;
+    }
+    const auto produced=r.item->producedFrames();
+    const bool resolved=parent.finalFrame && *parent.finalFrame>r.first;
+    const double resolvedLead=double(r.segmentOffset)/r.source.rate-double(parent.finalElapsedMs.value_or(0))/1000;
+    const bool exact=resolved && (resolvedLead>=10 || lead>=10);
+    if(!exact && !force && lead>10)return;
+    // A resolved end includes submitted PCM still awaiting the storage worker.
+    const auto acceptedOverflow=resolved?*parent.finalFrame-r.first:
+        submittedThrough>r.first?submittedThrough-r.first:0;
+    const auto overflowProduced=std::max(produced,acceptedOverflow);
+    const auto promised=exact?*parent.finalFrame-r.first:
+        std::min(continuationLimit,overflowProduced+*parent.promised);
+    if(!promised || promised<produced)throw std::runtime_error("continuation exceeds room/WAV bound");
+    const auto kind=exact?PromiseKind::Exact:PromiseKind::UpperBound;
+    auto item=store.publish(r.item,promised,kind);
+    const auto decision=r.continuationDecision=="bound-exceeded"?r.continuationDecision:
+        exact?"exact":"deadline-forced";
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto &next=records.at(id);
+        next.item=item;next.promised=promised;next.continuationDecision=decision;
+        next.publication=exact?"exact-continuation":"upper-bound-continuation";
+    }
+    std::printf("yeney: queue continuation published parent=%llu occurrence=%llu decision=%s kind=%s offset_frames=%llu declared_frames=%llu produced_frames=%llu spooled_frames=%llu remaining_lead_s=%.6f\n",
+        (unsigned long long)r.parent,(unsigned long long)id,decision.c_str(),exact?"exact":"upper-bound",
+        (unsigned long long)r.segmentOffset,(unsigned long long)promised,(unsigned long long)overflowProduced,
+        (unsigned long long)produced,lead);
+}
+uint64_t CoreQueueSink::continuationAfter(uint64_t predecessor) {
+    QueueRecord r;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        r=records.at(predecessor);
+        const auto parent=r.parent?r.parent:predecessor;
+        for(const auto &p:records)
+            if(p.second.parent==parent && p.second.segmentOffset==r.segmentOffset+*r.promised)
+                return p.first;
+    }
+    const auto id=predecessor;
+        QueueRecord next = r;
+        next.parent = r.parent ? r.parent : id;
+        next.segmentOffset += *r.promised;
+        next.first = r.first + *r.promised;
+        next.actual = next.prefixFrames = 0;
+        next.incomplete.clear();next.fault.clear();next.promised.reset();
+        next.productionComplete = false;
+        next.source.occurrence = ++continuationSerial;
+        next.publication = "pending-continuation";
+        next.continuationDecision=r.parent?"bound-exceeded":"pending";
+        next.item = store.create({std::to_string(next.source.occurrence), r.source.rate, std::nullopt,0});
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            records.emplace(next.source.occurrence, next);
+            std::printf("yeney: queue continuation created parent=%llu occurrence=%llu offset_frames=%llu decision=%s\n",
+                        (unsigned long long)next.parent, (unsigned long long)next.source.occurrence,
+                        (unsigned long long)next.segmentOffset,next.continuationDecision.c_str());
+        }
+        protectItems();
+    return next.source.occurrence;
+}
 void CoreQueueSink::appendEstimated(const std::vector<yeney::Frame> &pcm, bool processed) {
     size_t offset = 0;
     while (offset < pcm.size()) {
@@ -381,10 +456,15 @@ void CoreQueueSink::appendEstimated(const std::vector<yeney::Frame> &pcm, bool p
         {
             std::lock_guard<std::mutex> lock(mutex);
             id = producingSegment;
+        }
+        publishEstimated(id);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
             r = records.at(id);
         }
         const auto produced = r.item->producedFrames();
-        const size_t n = std::min<uint64_t>(pcm.size() - offset, *r.promised - produced);
+        const auto limit=r.promised.value_or(continuationLimit);
+        const size_t n = std::min<uint64_t>(pcm.size() - offset, limit - produced);
         if (n) r.item->append(pcm.data() + offset, n, processed);
         offset += n;
         {
@@ -392,45 +472,21 @@ void CoreQueueSink::appendEstimated(const std::vector<yeney::Frame> &pcm, bool p
             records.at(id).actual += n;
         }
         if (offset == pcm.size()) break;
+        if(!r.promised) {
+            publishEstimated(id,true);
+            std::lock_guard<std::mutex> lock(mutex);
+            r=records.at(id);
+            if (*r.promised > produced + n) continue; // end resolved during the pending append
+        }
         std::printf("yeney: queue continuation overflow parent=%llu produced_frames=%llu declared_frames=%llu\n",
                     (unsigned long long)(r.parent ? r.parent : id),
-                    (unsigned long long)(produced + pcm.size() - offset), (unsigned long long)*r.promised);
+                    (unsigned long long)(*r.promised + pcm.size() - offset), (unsigned long long)*r.promised);
         r.item->finish();
-        QueueRecord next = r;
-        next.parent = r.parent ? r.parent : id;
-        next.segmentOffset += *r.promised;
-        next.first = r.first + *r.promised;
-        next.actual = next.prefixFrames = 0;
-        next.incomplete.clear();
-        next.fault.clear();
-        next.productionComplete = false;
-        next.source.occurrence = ++continuationSerial;
-        next.promised = uint64_t(remoteMarginSeconds) * r.source.rate;
-        auto kind = PromiseKind::UpperBound;
+        const auto next=continuationAfter(id);
         {
             std::lock_guard<std::mutex> lock(mutex);
-            const auto end = records.at(next.parent).finalFrame;
-            if (end && *end > next.first) {
-                next.promised = *end - next.first;
-                kind = PromiseKind::Exact;
-            }
+            producingSegment=next;
         }
-        next.publication = kind == PromiseKind::Exact ? "exact-continuation" : "upper-bound-continuation";
-        next.item = store.create({std::to_string(next.source.occurrence), r.source.rate, next.promised,
-                                  0, 2, 24, kind});
-        std::printf("yeney: queue promise occurrence=%llu lms_duration_s=%.6f lms_start_offset_ms=0 lms_status_time_ms=%u declared_frames=%llu declared_s=%.6f kind=%s reason=overflow-continuation\n",
-                    (unsigned long long)next.source.occurrence, next.duration, next.sourceOriginMs,
-                    (unsigned long long)*next.promised, double(*next.promised)/next.source.rate,
-                    kind == PromiseKind::Exact ? "exact" : "upper-bound");
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            producingSegment = next.source.occurrence;
-            records.emplace(producingSegment, next);
-            std::printf("yeney: queue continuation created parent=%llu occurrence=%llu offset_frames=%llu declared_frames=%llu\n",
-                        (unsigned long long)next.parent, (unsigned long long)producingSegment,
-                        (unsigned long long)next.segmentOffset, (unsigned long long)*next.promised);
-        }
-        protectItems();
     }
 }
 void CoreQueueSink::finish(const yeney::ItemBoundary &b) {
@@ -443,6 +499,12 @@ void CoreQueueSink::finish(const yeney::ItemBoundary &b) {
             tail = it->second;
     }
     if (r.estimated) {
+        uint64_t pending=0;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            for(const auto &p:records)if(p.second.parent==b.occurrence && !p.second.promised)pending=p.first;
+        }
+        if(pending)publishEstimated(pending);
         std::vector<std::shared_ptr<Item>> segments;
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -484,6 +546,7 @@ void CoreQueueSink::resolvedItemBoundary(const yeney::ItemBoundary &b) {
         // an already announced segment always keeps its immutable promise.
         std::lock_guard<std::mutex> lock(mutex);
         records[b.occurrence].finalFrame = b.frame;
+        records[b.occurrence].finalElapsedMs = audibleSource == b.occurrence ? speakerElapsed.value_or(0) : 0;
     }
     enqueue([=] { finish(b); });
 }
@@ -586,6 +649,18 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
     auto &r = it->second;
     // A confirmed start still needs actual source PCM, not silence-only output.
     const auto produced = r.item->producedFrames();
+    if (!produced && r.parent && r.productionComplete &&
+        state==yeney::PlaybackState::Stopped && audibleSource==r.parent) {
+        uint64_t total=0;
+        for(const auto &p:records)
+            if(p.first==r.parent || p.second.parent==r.parent)total+=p.second.actual;
+        audibleId=id;
+        audibleFrame=records.at(r.parent).first+total;
+        speakerElapsed=uint32_t(std::min<uint64_t>(UINT32_MAX,total*1000/r.source.rate));
+        if(speakerState!=state)speakerStates.push_back({r.parent,state});
+        speakerState=state;paused=true;
+        return;
+    }
     if (produced <= r.prefixFrames)
         return;
     const bool changed = audibleId != id;
@@ -636,9 +711,28 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
         speakerStates.push_back({audibleSource, state});
     }
     paused = state != yeney::PlaybackState::Playing;
+    const bool estimatedEpisode = r.estimated;
     lock.unlock();
-    if (changed)
-        enqueue([this] { protectItems(); });
+    if (changed || estimatedEpisode) enqueue([this, changed, id] {
+        bool deadline=false;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            const auto &playing=records.at(id);
+            const auto parent=playing.parent?playing.parent:id;
+            deadline=playing.estimated && !playing.parent && playing.promised && !records.at(parent).finalFrame &&
+                playing.incomplete.empty() && audibleId==id && audibleSource==parent && speakerElapsed &&
+                double(*playing.promised)/playing.source.rate-double(*speakerElapsed)/1000<=10;
+        }
+        if(deadline)publishEstimated(continuationAfter(id));
+        std::vector<uint64_t> pending;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            for(const auto &p:records)
+                if(p.second.parent && !p.second.promised && p.second.item && p.second.incomplete.empty())pending.push_back(p.first);
+        }
+        for(auto id:pending)publishEstimated(id);
+        if(changed)protectItems();
+    });
 }
 bool CoreQueueSink::takeAudibleState(yeney::AudibleState &state) {
     std::lock_guard<std::mutex> lock(mutex);

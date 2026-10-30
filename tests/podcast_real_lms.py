@@ -7,7 +7,8 @@ import subprocess
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
+from xml.sax.saxutils import escape
 
 def run(g):
     cli,wait,mac,sonos,base=(g[k] for k in ('cli','wait','mac','sonos','base'))
@@ -37,20 +38,25 @@ def run(g):
         def do_GET(self):self.respond(True)
         def respond(self,send):
             if self.path.startswith('/feed'):
-                entries=''.join(f'<item><title>Episode {i}</title><guid>{i}</guid><itunes:duration>00:{d//60:02}:{d%60:02}</itunes:duration><enclosure url="{origin}/{i}.{"flac" if i==0 else "mp3"}" type="{"audio/flac" if i==0 else "audio/mpeg"}" length="{len(media_items[i])}"/></item>' for i,d in enumerate((60,64,140,200)))
-                data=('<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>YeneY generated test</title><itunes:author>Fixture Author</itunes:author>'+entries+'</channel></rss>').encode()
+                feed_query=urlsplit(self.path).query
+                feed_name=unquote(feed_query) or 'YeneY generated test'
+                suffix='?feed='+quote(feed_name,safe='') if feed_query else ''
+                guid_prefix=escape(feed_name+':') if feed_query else ''
+                entries=''.join(f'<item><title>Episode {i}</title><guid>{guid_prefix}{i}</guid><itunes:duration>00:{d//60:02}:{d%60:02}</itunes:duration><enclosure url="{origin}/{i}.{"flac" if i==0 else "mp3"}{suffix}" type="{"audio/flac" if i==0 else "audio/mpeg"}" length="{len(media_items[i])}"/></item>' for i,d in enumerate((60,64,140,200)))
+                data=('<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>'+escape(feed_name)+'</title><itunes:author>Fixture Author</itunes:author>'+entries+'</channel></rss>').encode()
                 self.send_response(200);self.send_header('Content-Type','application/rss+xml');self.send_header('Content-Length',str(len(data)));self.end_headers()
                 if send:self.wfile.write(data)
                 return
-            media=media_items[int(self.path.split('/')[1].split('.')[0])]
+            media_path=urlsplit(self.path).path
+            media=media_items[int(media_path.split('/')[1].split('.')[0])]
             start,end=0,len(media)-1
             ranged=bool(self.headers.get('Range'))
             if ranged:
                 first,last=self.headers['Range'].split('=')[1].split('-')
                 start=int(first);end=min(int(last) if last else end,end)
-            if send:source_ranges.append((int(self.path.split('/')[1].split('.')[0]),start,end))
+            if send:source_ranges.append((int(media_path.split('/')[1].split('.')[0]),start,end))
             self.send_response(206 if ranged else 200)
-            self.send_header('Content-Type','audio/flac' if self.path.endswith('.flac') else 'audio/mpeg')
+            self.send_header('Content-Type','audio/flac' if media_path.endswith('.flac') else 'audio/mpeg')
             self.send_header('Accept-Ranges','bytes')
             self.send_header('Content-Length',str(end-start+1))
             if ranged:self.send_header('Content-Range',f'bytes {start}-{end}/{len(media)}')
@@ -61,6 +67,15 @@ def run(g):
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
     origin=f'http://127.0.0.1:{server.server_port}'
     thread=threading.Thread(target=server.serve_forever);thread.start()
+    def feed_id():
+        rows=[]
+        for field in cli('podcasts items 0 100 want_url:1',mac):
+            key,sep,value=field.partition(':')
+            if key=='id':rows.append({'id':value})
+            elif rows and sep:rows[-1][key]=value
+        matches=[row['id'] for row in rows if row.get('url')==origin+'/feed.xml']
+        assert len(matches)==1,rows
+        return matches[0]
     def status():
         return json.loads((base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
     def fetch(uri,offset=None):
@@ -90,6 +105,7 @@ def run(g):
             from podcast_metadata_test import native_matrix
             native_matrix(cli,mac,origin,base,g['ROOT'])
         for i,url in enumerate(urls):
+            ident=feed_id()
             cli('stop',mac);cli('playlist clear',mac)
             if i==3:
                 # Let the native plugin save a bookmark from real STAT time,
@@ -104,10 +120,15 @@ def run(g):
                 wait(lambda:100<=float(cli('time ?',mac)[-1])<102,5,'bookmark source time')
                 cli('stop',mac)
                 wait(lambda:status().get('state')=='STOPPED',5,'bookmark saved')
-                cli('podcasts items 0 100 want_url:1 item_id:'+ident,mac)
-                bookmark=cli('podcasts items 0 100 want_url:1 item_id:'+ident+'.3',mac)
+                ident=feed_id()
+                bookmark=[]
+                def bookmark_saved():
+                    nonlocal bookmark
+                    cli('podcasts items 0 100 want_url:1 item_id:'+ident,mac)
+                    bookmark=cli('podcasts items 0 100 want_url:1 item_id:'+ident+'.3',mac)
+                    return 'id:'+ident+'.3.0' in bookmark
+                wait(bookmark_saved,5,'native bookmark menu published')
                 (base/'podcast-bookmark-menu.txt').write_text(repr(bookmark))
-                assert 'id:'+ident+'.3.0' in bookmark,bookmark
                 print('PASS native podcast saved bookmark: real STAT time 100 s, stop stores progress, continue menu selected',flush=True)
             mark=len((base/'bridge.log').read_text());starts=len(packets('STMs'));decoded_reports=len(packets('STMd'))
             now=time.monotonic();range_mark=len(source_ranges)
@@ -142,7 +163,7 @@ def run(g):
             fields=cli('status 0 1 tags:udV',mac)
             (base/f'podcast-{i}-status.txt').write_text(repr(fields))
             wait(lambda:'queue item-end' in (base/'bridge.log').read_text()[mark:],60,'podcast decoded')
-            time.sleep(.3)
+            if i==2:wait(lambda:len(items())==2,5,'exact continuation confirmed in queue')
             current=items()
             assert len(packets('STMd'))==decoded_reports,'finite episode STMd before playback end'
             chunks=[fetch(e['uri']) for e in current]
@@ -156,6 +177,11 @@ def run(g):
                 assert int(chunk[1]['Content-Length'])==44+declared_frames*6==int(entry['resource']['size'])
                 h,m,s=map(float,entry['resource']['duration'].split(':'))
                 assert abs(h*3600+m*60+s-declared_frames/44100)<.0011
+            if i==2:
+                assert len(current)==2,len(current)
+                text=(base/'bridge.log').read_text()[mark:]
+                assert 'decision=exact kind=exact' in text,text[-10000:]
+                print('PASS native LMS continuation: exactly one exact remainder for the underestimated MP3 episode',flush=True)
             print(f'PODCAST case={i} startup={delay:.3f}s declared_frames={frames} items={len(current)} LMS={fields}',flush=True)
             assert delay<5
             joined=b''.join(c[2][44:] for c in chunks)

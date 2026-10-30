@@ -214,6 +214,8 @@ void QueueRoom::Impl::append() {
         std::optional<uint64_t> length;
         try {
             length = record.item->contentLength();
+        } catch (const queue_audio::PublicationSuperseded &) {
+            continue; // Storage published this pending item after snapshot(); retry the new immutable item.
         } catch (const queue_audio::ItemCancelled &) {
             continue;
         }
@@ -299,7 +301,7 @@ void QueueRoom::Impl::append() {
                 remaining -= double(playing->segmentOffset) / metadata.rate + lastElapsed;
             const auto margin = remaining - 10;
             logQueue(std::string(margin < 0 ? "WARNING " : "") + "continuation inserted parent=" +
-                     std::to_string(record.parent) + " prefetch_margin_s=" + std::to_string(margin));
+                     std::to_string(record.parent) + " decision=" + record.continuationDecision + " prefetch_margin_s=" + std::to_string(margin));
         }
         logQueue("item occurrence=" + std::to_string(record.source.occurrence) +
                  " title=" + RoomStatus::quote(metadata.title));

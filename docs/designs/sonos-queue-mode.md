@@ -384,7 +384,7 @@ Owner-run probes, S2 firmware 86.10-81100:
 | 40 s tone, first item declares 30 s | Second item plays remaining 10 s seamlessly; embedded second header ignored | Immutable headers; overflow gets another queue item |
 | Far seek and 120 s pause | Chunked fails; constant bitrate with Content-Length and standard 206 works | Progressive PCM WAV and persistent compressed spool |
 | 33 s declaration, 30 s body | Empty 206 at real EOF advances immediately without error | Short EOF and at-end Range close without padding |
-| Fetch pattern | GET probe (~32 KiB), HEAD, GET; next fetch 6–7 s before declared end | Insert continuations immediately; warn if under 10 s lead |
+| Fetch pattern | GET probe (~32 KiB), HEAD, GET; next fetch 6–7 s before declared end | Resolve exact continuation by 10 s lead, otherwise publish generous bound |
 | Publisher / scanner duration | Feed whole seconds may change after scanning; inserted adverts may add minutes | LMS duration is an estimate, never an exact truncation point |
 
 Source classification uses LMS duration and `live_edge` (tag V): positive finite
@@ -392,8 +392,7 @@ duration with absent/negative live edge selects `remote-finite`; nonnegative liv
 edge or unknown duration preserves the existing continuous path. Group size is
 irrelevant. The first remote promise is `ceil(duration*rate)+5*rate`. The status clock is
 recorded but never subtracted from this conservative larger bound.
-Local exact promises and their WAV bytes are unchanged. Each overflow segment
-promises another 5 s while production is incomplete. Segments carry the parent's
+Local exact promises and their WAV bytes are unchanged. Overflow stays unpublished in the compressed spool until the producer end is resolved or the preceding segment has ten seconds left. It then publishes one exact remainder or a generous upper bound (produced overflow plus the original parent declaration, capped by room quota and WAV limits). Only exceeding that bound creates another continuation. Segments carry the parent's
 metadata, are inserted in parent/segment order, and report one continuous LMS
 track clock without an extra STMs. The relay logs insertion lead relative to the
 10 s prefetch deadline, including negative margins for late production.
@@ -433,9 +432,9 @@ in LMS as approximately 30 s through the existing STAT clock; no CLI seek is
 added. Estimated DIDL retains fractional seconds derived from declared frames;
 local DIDL retains its existing whole-second wire format.
 
-A newly created continuation uses the exact remaining frame count when the
-producer has already resolved its end. Existing published promises stay immutable;
-continuations created while the end is unknown keep the five-second upper bound.
+A continuation uses the exact remaining frame count when the producer's end
+resolves before the ten-second deadline. Existing published promises stay immutable;
+unpublished overflow stays in the compressed spool until the end is resolved or ten seconds remain before the preceding segment ends. Exact completion publishes one exact remainder; the deadline publishes overflow produced so far plus the parent full duration, capped by room quota and WAV limits. Only exceeding that generous bound creates another segment.
 
 A source successor arriving while a class handoff awaits renderer confirmation
 is still a track boundary. The temporary STOPPED state is not idle: selection
@@ -458,8 +457,8 @@ with the new producer. Native LMS 9.1.1 exposes full duration and absolute time
 for a generated podcast continue entry; provider metadata remains an estimate.
 The safe bound now keeps the positive duration without subtracting that clock.
 Continuations have independent publication/lifecycle fields: a parent's flush
-marker must not make new overflow records invisible. They publish immediately;
-creation, attempt and confirmation are separately observable.
+marker must not make new overflow records invisible. PODCAST-02 published them immediately; PODCAST-03 uses the exact/deadline rule above.
+Creation, attempt and confirmation are separately observable.
 
 TRANSITIONING is ignored as end evidence. An estimated episode can finish only
 once production is complete and the played position reaches all produced audio
@@ -542,3 +541,8 @@ local tracks and the LMS display are unchanged. Continuations inherit metadata.
 | `YENEY_PODCAST_ALBUM_PUBLISHER` | `yes`: publisher as album; `no`: omit inferred album entirely | `no` |
 
 A future LMS plugin exposes these three metadata settings as per-player checkboxes.
+
+At the ten-second deadline, an unfinished producer gets its upper-bound fallback
+even if no overflow is available yet. If the real source ends inside the parent
+bound, the unused fallback closes at real EOF without padding, another LMS start
+or a jump in the episode clock. Further items require an exceeded fallback bound.

@@ -158,6 +158,8 @@ void QueueRoom::Impl::observe() {
         episodePlayed = previousItem->segmentOffset +
             std::min(realEnd, (endEvidence + 1) * previousItem->item->descriptor().rate);
     }
+    if (estimatedEpisode && episodeComplete && finalItem && previousItem->owner && realEnd==0)
+        episodePlayed=episodeProduced; // empty deadline fallback: preceding real EOF already played
     const bool nearEnd = finalItem &&
         (!estimatedEpisode || (episodeComplete && episodePlayed >= episodeProduced)) &&
         realEnd <= (endEvidence + (estimatedEpisode ? 1 : 2)) * previousItem->item->descriptor().rate;

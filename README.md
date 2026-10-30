@@ -760,7 +760,7 @@ sent-title log and continuous-stream display formatting remain unchanged.
 | LMS source | Path | Published length |
 |---|---|---|
 | Local file | Relay / Sonos queue | Existing exact rendered frame count |
-| Remote, positive duration, `live_edge < 0` (or absent) | Relay, reason `remote-finite` | `ceil((duration - start offset) × rate) + 5 × rate` frames |
+| Remote, positive duration, `live_edge < 0` (or absent) | Relay, reason `remote-finite` | `ceil(duration × rate) + 5 × rate` frames |
 | Live (`live_edge >= 0`) or no positive duration | Existing stream path | Continuous stream |
 
 The named five-second margin is an upper bound promise, not silence padding.
@@ -768,8 +768,7 @@ If production ends early, the connection ends at the real audio end. If an
 advertisement makes the episode longer, a continuation is inserted immediately
 after the episode, before any following track, preserving every rendered sample.
 Continuations share the title, artist, album and artwork and keep one LMS track
-and continuous episode position. Each unfinished continuation declares another
-five seconds and can itself continue. Startup never waits for episode completion.
+and continuous episode position. Overflow is held in the compressed spool until its exact remaining length is known, with a deadline ten seconds before the current segment ends. At the deadline an unfinished producer gets one generous upper bound: overflow already produced plus the parent full declared duration, capped by room quota and WAV limits. Only audio exceeding that bound gets another continuation. Startup never waits for episode completion.
 
 All estimated items remain in the compressed spool for seek and resume after a
 long pause. Estimated playback raises the default per-room quota to 8 GiB;
@@ -797,3 +796,8 @@ default. Each setting accepts `yes|no`; invalid values warn once and use its
 default. Effective values and sources appear once at startup and in room status.
 This works for direct starts without systemd. LMS's own artist/album win;
 local tracks and the LMS display are unchanged. Continuations inherit metadata.
+
+At the ten-second deadline, an unfinished producer gets its upper-bound fallback
+even if no overflow is available yet. If the real source ends inside the parent
+bound, the unused fallback closes at real EOF without padding, another LMS start
+or a jump in the episode clock. Further items require an exceeded fallback bound.

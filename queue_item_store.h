@@ -86,7 +86,7 @@ public:
     Store(const Store &) = delete;
     Store &operator=(const Store &) = delete;
     std::shared_ptr<Item> create(Descriptor);
-    std::shared_ptr<Item> publish(const std::shared_ptr<Item> &, uint64_t promisedFrames);
+    std::shared_ptr<Item> publish(const std::shared_ptr<Item> &, uint64_t promisedFrames, PromiseKind kind = PromiseKind::Exact);
     void protect(const std::shared_ptr<Item> &current, const std::shared_ptr<Item> &next);
     void protect(const std::vector<std::shared_ptr<Item>> &items);
     std::optional<yeney::EncodedSpool> reserveEncoded(bool enabled);

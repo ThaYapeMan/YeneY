@@ -86,6 +86,20 @@ def mock_lms(host, rooms):
 
 
 class InstallerTests(unittest.TestCase):
+    def test_podcast_settings_are_not_room_enable_flags(self):
+        keys=('YENEY_PODCAST_TITLE_PLAIN','YENEY_PODCAST_ARTIST_SHOW','YENEY_PODCAST_ALBUM_PUBLISHER')
+        for mask in range(8):
+            settings=''.join('room.Study.'+key+' = '+('yes' if mask&(1<<i) else 'no')+'\n' for i,key in enumerate(keys))
+            original='room.Study=yes\n'+settings
+            warnings=[]
+            self.assertEqual(installer.parse_rooms(original,warnings.append),{'Study':True})
+            self.assertEqual(warnings,[])
+            merged,new=installer.merge_config(original,['Study','Kitchen'],['Study'])
+            self.assertIn(settings,merged)
+            self.assertEqual(new,['Kitchen'])
+            self.assertEqual(installer.parse_rooms(merged,warnings.append),{'Study':True,'Kitchen':False})
+        print('PASS installer podcast settings: all eight combinations preserved as settings, no phantom rooms or services')
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='sonos-installer-')
         self.addCleanup(self.temp.cleanup)

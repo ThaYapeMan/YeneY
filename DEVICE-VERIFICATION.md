@@ -1001,3 +1001,21 @@ local tracks and the LMS display are unchanged. Continuations inherit metadata.
 | `YENEY_PODCAST_TITLE_PLAIN` | `yes`: plain episode; `no`: LMS formatted title unchanged | `yes` |
 | `YENEY_PODCAST_ARTIST_SHOW` | `yes`: podcast name as artist; `no`: omit inferred artist | `yes` |
 | `YENEY_PODCAST_ALBUM_PUBLISHER` | `yes`: publisher as album; `no`: omit inferred album entirely | `no` |
+
+### Continuation length verification
+
+For an episode longer than LMS predicts, expect one extra Sonos queue item with
+the same title/artist/album/artwork and a timer for the complete remainder.
+With slow delivery its timer may overestimate; playback advances at real EOF.
+Only audio exceeding that generous declaration adds a further item. The journal
+records `queue continuation published` with `decision=exact`, `deadline-forced`
+or `bound-exceeded`, declared/produced frames and `remaining_lead_s`. Insertion
+logs retain prefetch margin and confirmation. Require natural end only after
+all produced frames, one continuous LMS episode clock, no lost/duplicate audio,
+and the existing 120-second pause, Range and seek checks. Agents use loopback;
+physical audible acceptance remains an owner check.
+
+At the ten-second deadline, an unfinished producer gets its upper-bound fallback
+even if no overflow is available yet. If the real source ends inside the parent
+bound, the unused fallback closes at real EOF without padding, another LMS start
+or a jump in the episode clock. Further items require an exceeded fallback bound.

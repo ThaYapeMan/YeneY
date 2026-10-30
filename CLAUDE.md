@@ -84,15 +84,14 @@ header, Content-Length and DIDL derive from the same declared frame count.
 finishes normally without padding or LengthFault. Range at/beyond a short EOF
 still announces the declared 206 range and closes with no body. Overflow is
 spooled into ordered continuations with the same metadata, inserted after their
-parent segments before the following LMS item. Insert immediately; warn when
-less than ten seconds remain before their boundary. Ordinary continuation transitions never produce
+parent segments before the following LMS item. Publish an exact remainder as soon as the producer end resolves, or a generous upper bound at the ten-second prefetch deadline; log the remaining lead. Ordinary continuation transitions never produce
 another LMS start and use parent-relative positions. Estimated episode segments
 are retained together; default quota becomes 8 GiB, explicit quotas take priority.
 No runtime feature depends on systemd.
 
-A newly created continuation uses the exact remaining frame count when the
-producer has already resolved its end. Existing published promises stay immutable;
-continuations created while the end is unknown keep the five-second upper bound.
+A continuation uses the exact remaining frame count when the producer's end
+resolves before the ten-second deadline. Existing published promises stay immutable;
+unpublished overflow stays in the compressed spool until the end is resolved or ten seconds remain before the preceding segment ends. Exact completion publishes one exact remainder; the deadline publishes overflow produced so far plus the parent full duration, capped by room quota and WAV limits. Only exceeding that generous bound creates another segment.
 
 Cached resume from a continuation matches the parent LMS producer, retains the
 same queue assets, and reanchors the existing cached-start handshake to that
@@ -129,3 +128,8 @@ title through the matching read-only podcast feed menu within a bounded metadata
 request budget. Cached canonical titles are keyed by source URL, excluding native
 bookmark markers. Tests use loopback LMS only; owner gateway reads are separate
 manual diagnostics and must never be added to `make test`.
+
+At the ten-second deadline, an unfinished producer gets its upper-bound fallback
+even if no overflow is available yet. If the real source ends inside the parent
+bound, the unused fallback closes at real EOF without padding, another LMS start
+or a jump in the episode clock. Further items require an exceeded fallback bound.

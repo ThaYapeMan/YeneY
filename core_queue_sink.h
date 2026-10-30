@@ -22,6 +22,8 @@ struct QueueRecord {
     double strm = -1, decoded = -1, stmd = -1, audible = -1, stms = -1, end = -1;
     uint64_t first = 0, actual = 0, overlap = 0, prefixFrames = 0;
     std::optional<uint64_t> promised, finalFrame;
+    std::optional<uint32_t> finalElapsedMs;
+    std::string continuationDecision;
     std::string publication = "pending", transition, fault, incomplete;
     bool storageFault = false;
     struct LmsSample {
@@ -41,6 +43,7 @@ class CoreQueueSink : public yeney::Sink {
         std::function<void()> run;
     };
     Store store;
+    const uint64_t continuationLimit;
     mutable std::mutex mutex;
     std::condition_variable changed;
     std::deque<Job> jobs;
@@ -69,6 +72,8 @@ class CoreQueueSink : public yeney::Sink {
     void enqueue(std::function<void()>, double seconds = 0);
     void work();
     void append(const std::vector<yeney::Frame> &, bool);
+    uint64_t continuationAfter(uint64_t predecessor);
+    void publishEstimated(uint64_t id, bool force = false);
     void appendEstimated(const std::vector<yeney::Frame> &, bool);
     void protectItems();
     void commit(uint64_t previous, const yeney::TrackDescriptor &next);

@@ -34,6 +34,122 @@ int main(int argc, char **) {
         std::filesystem::remove_all(config.root);
         return 0;
     }
+    for(unsigned seconds:{80u,320u,50u,100u}) {
+        Config cfg;cfg.root=testTempRoot()+"/podcast-decisions";
+        CoreQueueSink trial("Case"+std::to_string(seconds),cfg,600);trial.useSpeakerClock();
+        trial.estimate(1,20,0);trial.coreEvent("strm",1,0);
+        trial.trackDescriptor({1,8000,{},0,0});trial.trackBoundary(0,{8000,24,2,false},false);
+        std::vector<yeney::Frame> audio(seconds*8000);
+        for(size_t i=0;i<audio.size();++i)audio[i]={int32_t(i<<8),-int32_t(i<<8)};
+        const bool forced=seconds==50 || seconds==100;
+        const size_t first=forced?30*8000:audio.size();
+        assert(trial.write(audio.data(),first,false)==first);trial.waitIdle();
+        auto parts=trial.snapshot();assert(parts.size()==2 && !parts.back().promised);
+        const auto pendingSnapshot=parts.back().item;
+        trial.speakerPosition(1,14*8000,yeney::PlaybackState::Playing);trial.waitIdle();
+        assert(!trial.snapshot().back().promised);
+        if(forced) {
+            trial.speakerPosition(1,15*8000,yeney::PlaybackState::Playing);trial.waitIdle();
+            parts=trial.snapshot();assert(parts.size()==2 && parts.back().promised==30*8000);
+            assert(parts.back().continuationDecision=="deadline-forced");
+            assert(parts.back().item->descriptor().kind==PromiseKind::UpperBound);
+            assert(trial.write(audio.data()+first,audio.size()-first,false)==audio.size()-first);
+        }
+        trial.resolvedItemBoundary({1,0,audio.size(),0,"no-transition"});trial.waitIdle();
+        parts=trial.snapshot();assert(parts.size()==(seconds==100?3u:2u));
+        if(seconds==80) {
+            std::optional<uint64_t> staleLength;
+            try { staleLength=pendingSnapshot->contentLength(); }
+            catch(const PublicationSuperseded &) {}
+            assert(!staleLength && parts.back().item!=pendingSnapshot);
+            assert(parts.back().item->contentLength()==wavLength(*parts.back().promised));
+            std::cout<<"PASS pending continuation snapshot: stale private snapshot has no usable header; latest immutable promise remains available\n";
+        }
+        if(!forced) {
+            assert(parts.back().promised==(seconds-25)*8000);
+            assert(parts.back().continuationDecision=="exact");
+            assert(parts.back().item->descriptor().kind==PromiseKind::Exact);
+        }
+        if(seconds==100)assert(parts.back().continuationDecision=="bound-exceeded");
+        std::vector<char> bytes;
+        for(const auto &part:parts) {
+            assert(part.item->finished());
+            auto reader=part.item->reader(44);char chunk[8192];
+            while(auto n=reader.read(chunk,sizeof chunk))bytes.insert(bytes.end(),chunk,chunk+n);
+        }
+        assert(bytes.size()==audio.size()*6);
+        for(size_t i=0;i<audio.size();++i)for(unsigned b=0;b<3;++b) {
+            assert(uint8_t(bytes[i*6+b])==uint8_t(uint32_t(audio[i].left)>>(8+b*8)));
+            assert(uint8_t(bytes[i*6+3+b])==uint8_t(uint32_t(audio[i].right)>>(8+b*8)));
+        }
+        yeney::AudibleStart start;assert(trial.takeAudibleStart(start) && start.occurrence==1);
+        for(size_t i=1;i<parts.size();++i) {
+            trial.speakerPosition(parts[i].source.occurrence,parts[i].item->producedFrames(),yeney::PlaybackState::Playing);
+            assert(!trial.takeAudibleStart(start));
+        }
+        std::cout<<"PASS continuation decision case="<<seconds<<"s: "
+                 <<(!forced?"one exact remainder, 11 s lead, LMS underestimate "+std::to_string(seconds-20)+" s":
+                    seconds==50?"one deadline-forced bound at 10 s lead, 5 s overflow + 25 s parent, clean early EOF":
+                    "deadline-forced bound then one bound-exceeded exact remainder")
+                 <<"; sample-exact concatenation, one LMS start, continuous clock\n";
+    }
+    {
+        Config quota;quota.root=testTempRoot()+"/podcast-bound-cap";
+        quota.diskBytes=quota.estimatedDiskBytes=32ull*8000*6;
+        CoreQueueSink capped("Capped",quota,60);capped.useSpeakerClock();
+        capped.estimate(1,20,0);capped.coreEvent("strm",1,0);
+        capped.trackDescriptor({1,8000,{},0,0});capped.trackBoundary(0,{8000,24,2,false},false);
+        std::vector<yeney::Frame> pcm(35*8000,{256,-256});
+        assert(capped.write(pcm.data(),pcm.size(),false)==pcm.size());capped.waitIdle();
+        capped.speakerPosition(1,15*8000,yeney::PlaybackState::Playing);capped.waitIdle();
+        auto records=capped.snapshot();assert(records.size()==2 && records.back().promised==32*8000);
+        assert(records.back().item->descriptor().kind==PromiseKind::UpperBound);
+        capped.resolvedItemBoundary({1,0,pcm.size(),0,"no-transition"});capped.waitIdle();
+        assert(capped.snapshot().back().item->producedFrames()==10*8000);
+        std::cout<<"PASS continuation quota cap: 10 s overflow + 25 s parent capped at explicit 32 s PCM budget; clean 10 s early EOF\n";
+    }
+    for(unsigned seconds:{22u,45u,55u,80u}) {
+        Config cfg;cfg.root=testTempRoot()+"/podcast-before-overflow";
+        CoreQueueSink slow("Slow"+std::to_string(seconds),cfg,120);slow.useSpeakerClock();
+        slow.estimate(1,20,0);slow.coreEvent("strm",1,0);
+        slow.trackDescriptor({1,8000,{},0,0});slow.trackBoundary(0,{8000,24,2,false},false);
+        std::vector<yeney::Frame> pcm(seconds*8000);
+        for(size_t i=0;i<pcm.size();++i)pcm[i]={int32_t(i<<8),-int32_t(i<<8)};
+        assert(slow.write(pcm.data(),20*8000,false)==20*8000);slow.waitIdle();
+        slow.speakerPosition(1,14*8000,yeney::PlaybackState::Playing);slow.waitIdle();
+        assert(slow.snapshot().size()==1);
+        slow.speakerPosition(1,15*8000,yeney::PlaybackState::Playing);slow.waitIdle();
+        auto records=slow.snapshot();assert(records.size()==2);
+        assert(records.back().continuationDecision=="deadline-forced" && records.back().promised==25*8000);
+        assert(records.back().item->producedFrames()==0);
+        assert(slow.write(pcm.data()+20*8000,pcm.size()-20*8000,false)==pcm.size()-20*8000);
+        slow.resolvedItemBoundary({1,0,pcm.size(),0,"no-transition"});slow.waitIdle();
+        records=slow.snapshot();assert(records.size()==(seconds>50?3u:2u));
+        std::vector<char> bytes;
+        for(const auto &record:records) {
+            auto reader=record.item->reader(44);char chunk[8192];
+            while(auto n=reader.read(chunk,sizeof chunk))bytes.insert(bytes.end(),chunk,chunk+n);
+        }
+        assert(bytes.size()==pcm.size()*6);
+        for(size_t i=0;i<pcm.size();++i)for(unsigned b=0;b<3;++b) {
+            assert(uint8_t(bytes[i*6+b])==uint8_t(uint32_t(pcm[i].left)>>(8+b*8)));
+            assert(uint8_t(bytes[i*6+3+b])==uint8_t(uint32_t(pcm[i].right)>>(8+b*8)));
+        }
+        yeney::AudibleStart start;assert(slow.takeAudibleStart(start) && start.occurrence==1);
+        if(seconds==22) {
+            slow.speakerPosition(1,22*8000,yeney::PlaybackState::Playing);
+            slow.speakerPosition(records.back().source.occurrence,0,yeney::PlaybackState::Stopped);
+            assert(slow.audibleElapsedMs(1)==22000 && slow.audibleFrames()==pcm.size());
+            yeney::AudibleState state;bool stopped=false;
+            while(slow.takeAudibleState(state))stopped=state.occurrence==1 && state.state==yeney::PlaybackState::Stopped;
+            assert(stopped);
+        }
+        assert(!slow.takeAudibleStart(start));
+        std::cout<<"PASS continuation pre-overflow deadline case="<<seconds
+                 <<"s: published at 10 s lead with zero overflow; "
+                 <<(seconds==22?"empty fallback ends with actual 22 s parent clock":seconds<=50?"one generous upper bound, clean early EOF":"further exact item only after bound exceeded")
+                 <<"; sample-exact PCM, one LMS track\n";
+    }
     auto root = testTempRoot() + "/podcast-store";
     Config c; c.root = root; c.ramBytes = 24576;
     CoreQueueSink sink("Podcast", c, 60);
@@ -56,7 +172,7 @@ int main(int argc, char **) {
     sink.waitIdle();
     assert(future.get()==6);
     records=sink.snapshot();
-    assert(records.size()>=2);
+    assert(records.size()==2);
     assert(records.back().item->descriptor().kind==PromiseKind::Exact);
     std::vector<char> actual;
     for (const auto &r:records) {
