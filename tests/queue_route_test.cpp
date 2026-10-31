@@ -151,7 +151,68 @@ int main() {
         assert(std::chrono::steady_clock::now() - timeoutStart < std::chrono::seconds(1));
         assert(activations == 2);
         assert(!timeout.resolve(*lazyRequest, std::chrono::milliseconds(1)) && activations == 2);
+        assert(!timeout.claimActivation());
+        timeout.publish(item);
+        assert(!timeout.resolve(*lazyRequest, std::chrono::milliseconds(1)));
+        assert(!ready->claimActivation());
+
+        // Hold the room worker until the HTTP reader has actually left. Its
+        // queued work must no longer authorize a playlist-index command.
+        std::atomic_bool peerGone{false};
+        auto departingIO = lazyIO;
+        departingIO.peerClosed = [&] { return peerGone.load(); };
+        auto departingRequest = upnp::httpRequestFromHeaders("GET " + delayedUrl +
+            " HTTP/1.1\r\nHost: localhost\r\n\r\n", departingIO);
+        std::atomic<unsigned> queued{0};
+        LazyItem departing(declaration, [&] { ++queued; });
+        auto departed = std::async(std::launch::async, [&] {
+            return departing.resolve(*departingRequest);
+        });
+        const auto queuedDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (!queued && std::chrono::steady_clock::now() < queuedDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        assert(queued == 1);
+        peerGone = true;
+        assert(!departing.claimActivation()); // no 50 ms polling grace for the worker
+        assert(!departed.get());
+        departing.publish(item);
+        assert(!departing.resolve(*lazyRequest));
+
+        std::atomic<unsigned> sharedQueued{0};
+        auto shared = std::make_shared<LazyItem>(declaration, [&] { ++sharedQueued; });
+        peerGone = false;
+        auto firstReader = std::async(std::launch::async, [&] {
+            return shared->resolve(*departingRequest);
+        });
+        while (!sharedQueued && std::chrono::steady_clock::now() < queuedDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        // The second reader signals from its peer check under the item's
+        // mutex, so its lease exists before the first reader can leave.
+        std::atomic_bool secondEntered{false};
+        auto secondIO = lazyIO;
+        secondIO.peerClosed = [&] { secondEntered = true; return false; };
+        auto secondRequest = upnp::httpRequestFromHeaders("GET " + delayedUrl +
+            " HTTP/1.1\r\nHost: localhost\r\n\r\n", secondIO);
+        auto secondReader = std::async(std::launch::async, [&] {
+            return shared->resolve(*secondRequest);
+        });
+        while (!secondEntered && std::chrono::steady_clock::now() < queuedDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        assert(secondEntered);
+        peerGone = true;
+        assert(!firstReader.get());
+        assert(shared->claimActivation());
+        assert(!shared->claimActivation());
+        shared->publish(item);
+        assert(secondReader.get() == item && sharedQueued == 1);
+        LazyItem throwing(declaration, [] { throw std::runtime_error("enqueue failed"); });
+        bool enqueueFailed = false;
+        try { throwing.resolve(*lazyRequest); }
+        catch (const std::runtime_error &) { enqueueFailed = true; }
+        assert(enqueueFailed && !throwing.claimActivation());
+        assert(!throwing.resolve(*lazyRequest));
         std::cout << "PASS lazy activation: concurrent ranges select once; natural prepared source selects zero; cancellation/late producer/timeout fenced\n";
+        std::cout << "PASS lazy abandonment: departed last reader fences queued activation and late binding; surviving range permits one worker claim; enqueue exception releases reader\n";
         auto full = get(url);
         assert(lazyFull == full);
         auto body = full.substr(full.find("\r\n\r\n") + 4);

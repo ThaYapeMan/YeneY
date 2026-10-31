@@ -110,3 +110,13 @@ draining output, then accepting `done()` without rechecking the terminal error.
 The decoder publishes error before completion. The corrected fixture checks
 error after observing completion, matching the existing queue decoder policy;
 no decoder/audio algorithm change is needed.
+
+The lazy request primitive now fences worker activation against live PCM readers.
+The worker must call `LazyItem::claimActivation()` immediately before issuing
+its selection command; a queued HTTP callback alone is insufficient. The claim
+checks peer close and cancellation again, so a disconnect need not wait for the
+resolver's 50 ms polling interval. The final departing reader cancels an unbound
+item, including on timeout or enqueue failure; a late producer cannot revive it.
+One surviving concurrent range reader preserves a single activation claim.
+This lifecycle fence does not connect production lazy publication or LMS
+selection, and does not complete stage 1b.

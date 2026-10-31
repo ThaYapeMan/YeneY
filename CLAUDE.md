@@ -95,6 +95,10 @@ reason=audible-anchor-gone lms_commands=0` and releases the owned queue. No LMS
 mutation answers these snapshots. This is a partial stage 1b checkpoint; it
 does not yet create the missing upcoming lazy entries. Lazy activation,
 binding and abandonment diagnostics are therefore not production features yet.
+The lazy request primitive now requires a single worker activation claim against
+connected PCM readers. The final unbound reader's disconnect or timeout cancels
+that item and fences a late producer; a concurrent surviving reader preserves
+its one activation. This fence is not yet connected to production LMS commands.
 Stage 2 app navigation/seek commands remain unimplemented. See
 `docs/designs/sonos-queue-window.md` for the integration checkpoint. All current
 retention and diagnostics work without systemd.

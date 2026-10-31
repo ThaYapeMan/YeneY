@@ -26,6 +26,9 @@ for late,seconds in ((False,80),(False,320),(True,55)):
                 partial_source=late,queue_title_prefix='',queue_disk_mib=256)
     try:
         host.until(lambda:len(host.items())>=1)
+        # Enqueue is visible before the initial TRACK_NR Seek. Wait until
+        # that Seek has completed so it cannot erase this simulated position.
+        host.until(lambda:bool(host.sonos.actions('Play')))
         host.state(1,20 if late else 0)
         host.until(lambda:'queue item-end occurrence=1' in (host.base/'bridge.log').read_text(),timeout=60 if seconds>80 else 25)
         host.until(lambda:sum((int(e["resource"]["size"])-44)//6 for e in host.items())>=44100*seconds)
@@ -105,6 +108,7 @@ host=Binary(rates=(44100,),seconds=20,remote_sources=True,remote_duration=20,
             partial_source=True,partial_bytes=9000,queue_title_prefix='')
 try:
     host.until(lambda:len(host.items())==1)
+    host.until(lambda:bool(host.sonos.actions('Play')))
     host.state(1,15)
     host.until(lambda:len(host.items())==2)
     assert 'queue item-end occurrence=1' not in (host.base/'bridge.log').read_text()
