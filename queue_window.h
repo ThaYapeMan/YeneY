@@ -66,6 +66,9 @@ public:
         observedPolicy = {snapshot.revision, snapshot.shuffle, snapshot.repeat};
     }
     const Policy &policy() const { return observedPolicy; }
+    std::optional<Slot> atIndex(unsigned index) const {
+        return index < playlist.size() ? std::optional<Slot>(playlist[index]) : std::nullopt;
+    }
     std::vector<Slot> around(unsigned index) const {
         if (playlist.empty()) return {};
         if (index >= playlist.size()) throw std::out_of_range("window index");

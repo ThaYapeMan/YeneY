@@ -122,6 +122,7 @@ void QueueRoom::Impl::selectPath() {
         selectedIndex = -1;
         try {
             playlist = reader.read(host, mac);
+            window.reconcile(playlist);
             const auto index = playlist.index + (selectedNewPlay ? 0 : 1);
             if (index < playlist.entries.size()) {
                 track = playlist.entries[index];
@@ -178,6 +179,8 @@ void QueueRoom::Impl::selectPath() {
             std::lock_guard<std::mutex> lock(sourceMutex);
             selectedTrack = track;
             selectedSourceIndex = selectedIndex;
+            const auto slot = selectedIndex < 0 ? std::nullopt : window.atIndex(unsigned(selectedIndex));
+            selectedToken = slot ? slot->token : 0;
         }
         selectionKnown = true;
         if (!selectedNewPlay && selectedLocal != paths.isRelay()) {

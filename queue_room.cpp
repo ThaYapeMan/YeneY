@@ -68,6 +68,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
         std::lock_guard<std::mutex> lock(sourceMutex);
         sourceTracks[id] = selectedTrack;
         if (selectedSourceIndex >= 0) sourceIndices[id] = unsigned(selectedSourceIndex);
+        if (selectedToken) sourceTokens[id] = selectedToken;
         if (remotePlaybackSource(selectedTrack.id, selectedTrack.remote, selectedTrack.url) && selectedTrack.finiteRemote())
             queue.estimate(id, selectedTrack.duration, selectedTrack.startOffsetMs);
     };

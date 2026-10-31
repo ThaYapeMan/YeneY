@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_queue_sink.h"
+#include "queue_declaration.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -175,17 +176,10 @@ void CoreQueueSink::commit(uint64_t previous, const yeney::TrackDescriptor &next
     }
     if (old.estimated || !old.item || old.promised || !old.source.sourceFrames)
         return;
-    uint64_t overlap = 0;
-    if (next.transition == 1 && next.rate == old.source.rate) {
-        if (!next.sourceFrames)
-            return; // no speculative short-track prediction
-        overlap = std::min({next.transitionFrames,
-                            *old.source.sourceFrames ? *old.source.sourceFrames - 1 : 0, *next.sourceFrames});
-    }
-    auto promise = *old.source.sourceFrames - overlap + old.prefixFrames;
-    if (old.item->producedFrames() > promise)
+    const auto promise = declaredLocalFrames(old.source, next, old.prefixFrames);
+    if (!promise || old.item->producedFrames() > *promise)
         return; // already sealed/late: preserve audio
-    auto item = store.publish(old.item, promise);
+    auto item = store.publish(old.item, *promise);
     {
         std::lock_guard<std::mutex> lock(mutex);
         auto &r = records[previous];
@@ -251,7 +245,7 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             // The pre-start player clock can still belong to the previous run.
             // Preserve the larger bound; never subtract that clock a second time.
             const auto remaining = estimated.duration;
-            descriptor.promisedFrames = uint64_t(std::ceil(remaining * f.rate)) + uint64_t(remoteMarginSeconds) * f.rate;
+            descriptor.promisedFrames = declaredRemoteFrames(remaining, f.rate);
             descriptor.kind = PromiseKind::UpperBound;
         }
         auto item = store.create(descriptor);

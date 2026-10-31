@@ -51,6 +51,12 @@ struct QueueRoom::Impl {
     int selectedSourceIndex = -1;
     std::map<uint64_t, queue_audio::PlaylistEntry> sourceTracks;
     std::map<uint64_t, unsigned> sourceIndices;
+    std::map<uint64_t, uint64_t> sourceTokens;
+    uint64_t selectedToken = 0;
+    queue_audio::QueueWindow window;
+    queue_audio::QueueWindow::Policy publishedWindowPolicy;
+    bool windowDirty = false;
+    std::chrono::steady_clock::time_point nextWindowPoll{};
     std::map<std::string, yeney::FlacSourceInfo> flacCounts;
     std::chrono::steady_clock::time_point handoffAt{};
     std::string pathReason = "local-source";
@@ -70,6 +76,7 @@ struct QueueRoom::Impl {
         uint64_t frames;
         std::string title;
         uint64_t owner = 0, segmentOffset = 0;
+        std::string didl;
     };
     std::vector<Entry> items;
     std::map<uint64_t, bool> remote;
@@ -125,6 +132,7 @@ struct QueueRoom::Impl {
     void command(char c, uint64_t next);
     void append();
     void trimHistory();
+    void reconcileWindow();
     void observe();
     void run();
     void shutdown();

@@ -395,6 +395,48 @@ def window_history():
         print('PASS production history window: eight local parents, two retained history with exact WAV audio, fenced trims, one Play, zero LMS mutations',flush=True)
     finally:h.close()
 
+def window_playlist_edits():
+    h=Binary(rates=(44100,)*8, seconds=2)
+    try:
+        for index in range(3):
+            h.until(lambda:any(i.get('metadata',{}).get('title')==h.titles[index] for i in h.items()))
+            ordinal=next(n+1 for n,i in enumerate(h.items()) if i['metadata']['title']==h.titles[index])
+            h.state(ordinal)
+            h.until(lambda:len(h.packets('STMs'))>=index+1)
+        h.until(lambda:len(h.items())==4)
+        h.index=2
+        before={i['metadata']['title']:dict(i) for i in h.items()}
+        anchor=before[h.titles[2]]['uri']
+        # Move a prepared parent before the audible item. The audible URI
+        # survives; move is a fenced remove plus a verified insertion.
+        h.order=[0,3,2,1,4,5,6,7];h.revision+=1
+        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (0,3,2,1)])
+        after={i['metadata']['title']:i for i in h.items()}
+        assert all(after[title]==item for title,item in before.items()),(before,after)
+        assert h.sonos.position['TrackURI']==anchor
+        assert len(h.sonos.actions('Play'))==1
+        moved=urlsplit(after[h.titles[3]]['uri'])
+        connection=http.client.HTTPConnection(moved.netloc,timeout=10)
+        try:
+            connection.request('GET',moved.path+'?'+moved.query)
+            response=connection.getresponse();audio=response.read()
+            assert response.status==200 and audio[44:]==b'\0\xe8\x03\0\x18\xfc'*(44100*2)
+        finally:connection.close()
+        # Remove a retained history occurrence without disturbing playback.
+        h.order=[3,2,1,4,5,6,7];h.index=1;h.revision+=1
+        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (3,2,1)])
+        assert h.sonos.position['TrackURI']==anchor
+        # A clear removes the audible identity and explicitly releases. The
+        # worker must never answer a read-only LMS edit with a CLI mutation.
+        h.order=[];h.index=0;h.revision+=1
+        h.until(lambda:not h.items())
+        log=(h.base/'bridge.log').read_text()
+        assert 'queue window replace reason=audible-anchor-gone lms_commands=0' in log,log
+        assert 'queue window insert ordinal=' in log and 'reason=playlist-change' in log,log
+        assert all(command.startswith('status ') for command in h.commands),h.commands
+        print('PASS production playlist reconciliation: prepared move preserves URI/DIDL/audio and audible anchor; retained delete; clear releases with zero LMS mutations',flush=True)
+    finally:h.close()
+
 def preparing_repeat():
     h=Binary(rates=(44100,),slow=True,initial_stop=True)
     try:
@@ -607,4 +649,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();window_history();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item();cancelled_audible_stop();source_change_with_lms_stop()
+    relay_replay();window_history();window_playlist_edits();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item();cancelled_audible_stop();source_change_with_lms_stop()

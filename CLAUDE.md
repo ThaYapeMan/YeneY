@@ -86,11 +86,24 @@ reason=history-limit` stdout lines describe trims without source URLs or tokens.
 
 Lazy HTTP declarations and the six-parent playlist model are still building
 blocks: the production relay does not yet publish lazy upcoming entries or
-reconcile LMS navigation/playlist edits against that model. Lazy activation,
+reconcile LMS navigation against that model. The room worker now reads LMS
+status at its normal poll interval, preserves occurrence tokens across playlist
+edits and reconciles already-published parents through the fenced editor.
+Moves reinsert the original URI and DIDL; deletion releases the removed audio.
+Deleting or clearing the audible identity logs `queue window replace
+reason=audible-anchor-gone lms_commands=0` and releases the owned queue. No LMS
+mutation answers these snapshots. This is a partial stage 1b checkpoint; it
+does not yet create the missing upcoming lazy entries. Lazy activation,
 binding and abandonment diagnostics are therefore not production features yet.
 Stage 2 app navigation/seek commands remain unimplemented. See
 `docs/designs/sonos-queue-window.md` for the integration checkpoint. All current
 retention and diagnostics work without systemd.
+
+`queue_declaration.h` now shares the natural sink's exact local promise and
+remote upper-bound calculation. Its source-count conversion uses the core's
+decimation rate policy. Equality tests compare WAV headers, Content-Length and
+DIDL against produced sink items, including carried prefixes. Metadata probing
+and use of these declarations for production lazy routes remain unfinished.
 
 ## Finite remote queue items
 

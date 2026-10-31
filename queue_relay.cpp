@@ -208,6 +208,14 @@ void QueueRoom::Impl::append() {
             { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
         if (!record.item || !record.incomplete.empty())
             continue;
+        if (!record.parent) {
+            std::lock_guard<std::mutex> lock(sourceMutex);
+            const auto token = sourceTokens.find(owner);
+            if (token != sourceTokens.end() && !window.find(token->second)) {
+                queue.releaseParent(owner);
+                continue; // An LMS edit removed this producer before publication.
+            }
+        }
         if (std::any_of(items.begin(), items.end(),
                         [&](const auto &i) { return i.stream == record.source.occurrence; }))
             continue;
@@ -288,8 +296,9 @@ void QueueRoom::Impl::append() {
         if (record.parent) logQueue("continuation insertion attempted parent=" + std::to_string(record.parent) +
                                     " occurrence=" + std::to_string(record.source.occurrence));
         upnp::SoapResult result;
+        const auto didl = upnp::queueDidl(metadata);
         try {
-            result = actions.add(metadata.url, upnp::queueDidl(metadata),
+            result = actions.add(metadata.url, didl,
                                  insertion == items.size() ? 0 : unsigned(insertion + 1));
         } catch (const std::exception &e) {
             if (record.parent) logQueue("continuation insertion failed parent=" + std::to_string(record.parent) +
@@ -318,7 +327,8 @@ void QueueRoom::Impl::append() {
         if (record.parent) logQueue("continuation insertion confirmed parent=" + std::to_string(record.parent) +
                                    " occurrence=" + std::to_string(record.source.occurrence));
         items.insert(items.begin() + insertion, {record.source.occurrence, metadata.url, record.item, track.url,
-                                                metadata.frames, metadata.title, record.parent, record.segmentOffset});
+                                                metadata.frames, metadata.title, record.parent, record.segmentOffset, didl});
+        windowDirty = true;
         publish();
         if (!started) {
             if (!queueSelectedForAdmission) actions.selectQueue(room.uuid);
@@ -441,6 +451,7 @@ void QueueRoom::Impl::run() {
             observe();
             append();
             trimHistory();
+            reconcileWindow();
         } catch (const queue_audio::ItemCancelled &) {
             // Producer cancellation raced a snapshot; observe the next run.
         } catch (const std::exception &e) {

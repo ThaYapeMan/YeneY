@@ -3,6 +3,8 @@
 YENEY-APPCONTROL-03 is incomplete. The room relay uses the fenced editor for
 natural history trimming and protects two history parents and their audio.
 Lazy playlist publication and LMS navigation reconciliation are still absent.
+The APPCONTROL-04 partial checkpoint additionally connects read-only LMS status
+to the production model for edits of already-published parents.
 Next, Previous, restart and seek are not newly enabled. The README feature row
 and step 3 qualification stay unchanged until controller integration and its
 acceptance scenarios pass.
@@ -49,6 +51,34 @@ acceptance scenarios pass.
   this task. No owner speaker, gateway, or deployment host is used by tests.
 
 ## Remaining integration
+
+The production worker now captures each producer's playlist occurrence token
+alongside its LMS index. At the room poll interval it reads the full LMS status,
+reconciles timestamp/shuffle/repeat and occurrence identities, then applies
+fenced remove/insert edits to the published parents in the audible window.
+Moving a parent reuses its original URI and byte-identical DIDL, including all
+continuations; no audio is decoded again. Removed parents release audio and
+their ownership claims. The audible URI is the edit anchor. If that occurrence
+is deleted (including playlist clear), the worker logs the explicit missing
+anchor decision, releases its owned queue and resets the relay without an LMS
+mutation. Failed status reads preserve the previous publication.
+
+This checkpoint does not publish absent upcoming parents: the natural producer
+still supplies the published assets. Consequently the full six-slot publication
+requirement of stage 1b remains open. Stage 1b must finish exact declarations,
+lazy activation/binding, abandonment and temporary history-selection safety
+before stage 1c adds LMS-originated navigation. Stage 2 remains app intent
+settling, restart/seek and complete echo matching. The owner checker and feature
+qualification documentation remain later stages.
+
+The shared declaration calculation is now used by the natural sink. It keeps
+the existing overlap subtraction and carried-prefix addition, and preserves the
+finite remote duration plus margin. Source-rate conversion delegates to the
+core's decimation policy and rounds exact source counts up after division.
+The declaration fixture compares eight per-item WAV headers, Content-Lengths
+and DIDLs with naturally published sink items: six source rates, an outgoing
+transition and a carried prefix. It does not establish production lazy metadata
+probing, ordinal publication or activation/binding acceptance.
 
 The production worker trims older history after observing a new audible parent,
 preserving the audible parent URI and all continuation blocks. `WindowEdits`
