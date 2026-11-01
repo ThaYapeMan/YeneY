@@ -1,12 +1,13 @@
 extern "C" void yeney_stream_track_changed() __attribute__((weak));
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
+#include "queue_uri_log.h"
 namespace bridge {
 namespace queue_room_detail {
 std::atomic_bool roomStop{false};
 void stopRoom(int) { roomStop = true; }
 void logQueue(const std::string &s) {
-    std::printf("yeney: %s%s\n", s.compare(0, 6, "queue ") == 0 ? "" : "queue ", s.c_str());
+    std::printf("yeney: %s%s\n", s.compare(0, 6, "queue ") == 0 ? "" : "queue ", queueUriLog(s).c_str());
 }
 unsigned pollSetting() {
     if (const char *text = std::getenv("YENEY_QUEUE_POLL_MS")) {

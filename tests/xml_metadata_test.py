@@ -136,9 +136,9 @@ def strict_fakes():
     try:
         sonos.crossfade = False
         for bad in ('\x16', '&#x16;', '\ufffe', '&#xD800;'):
-            metadata = '<DIDL-Lite><item><album>'+bad+'</album><res>http://127.0.0.1/music/queue.wav</res></item></DIDL-Lite>'
+            metadata = '<DIDL-Lite><item><album>'+bad+'</album><res>http://127.0.0.1/yeney/q/fixture/1/1/1.wav</res></item></DIDL-Lite>'
             post_fault(sonos, PATHS['AVTransport'], 'AddURIToQueue',
-                       dict(InstanceID='0', EnqueuedURI='http://127.0.0.1/music/queue.wav',
+                       dict(InstanceID='0', EnqueuedURI='http://127.0.0.1/yeney/q/fixture/1/1/1.wav',
                             EnqueuedURIMetaData=metadata, DesiredFirstTrackNumberEnqueued='0', EnqueueAsNext='0'))
             post_fault(stream, '/MediaRenderer/AVTransport/Control', 'SetAVTransportURI',
                        dict(InstanceID='0', CurrentURI='http://127.0.0.1/music/stream.flac', CurrentURIMetaData=metadata))

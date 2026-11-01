@@ -14,19 +14,9 @@ QueueOwnership::QueueOwnership(QueueOwnershipIO callbacks, std::string token)
 bool QueueOwnership::owns(const std::string &uri) const {
     if (io.owned)
         return io.owned(uri);
-    const auto path = uri.find("/music/queue.wav?");
-    if (path == std::string::npos)
-        return false;
-    auto at = path + 17;
-    while (at < uri.size()) {
-        const auto end = uri.find('&', at);
-        if (uri.substr(at, end == std::string::npos ? end : end - at) == "session=" + session)
-            return true;
-        if (end == std::string::npos)
-            break;
-        at = end + 1;
-    }
-    return false;
+    const auto scheme = uri.find("://");
+    const auto path = scheme == std::string::npos ? 0 : uri.find('/', scheme + 3);
+    return path != std::string::npos && uri.compare(path, 10 + session.size(), "/yeney/q/" + session + "/") == 0;
 }
 void QueueOwnership::acquire(const std::string &title) {
     if (held || restoring)

@@ -168,3 +168,22 @@ item, including on timeout or enqueue failure; a late producer cannot revive it.
 One surviving concurrent range reader preserves a single activation claim.
 This lifecycle fence does not connect production lazy publication or LMS
 selection, and does not complete stage 1b.
+
+## Queue URL device evidence (1 November 2026)
+
+The Sonos app showed every YeneY queue row blank (no title, artist or artwork), although the speaker stores complete metadata (Browse Q:0 returns correct dc:title, artist, album, albumArtURI). Owner probes replayed YeneY's exact stored DIDL from a neutral HTTP server, changing one factor at a time:
+
+| Probe | What differs from YeneY | App rows |
+|---|---|---|
+| res attributes (with/without size and sampleFrequency) | — | titles shown |
+| HEAD/non-zero Range answered 503 | — | titles shown |
+| all items share one DIDL item id vs unique ids | — | titles shown |
+| YeneY's exact DIDL, added in one batch, URL `/replay-N.wav` | content identical | titles shown |
+| same, inserted one at a time at explicit positions | edit pattern | titles shown |
+| same, plus a RemoveTrackRangeFromQueue history trim | edit pattern | titles shown |
+| **same, URL `/music/queue.wav?session=…&epoch=1&item=N&revision=1`** | **URL shape only** | **blank rows** |
+
+So the URL shape alone blanks the rows: either the `/music/` path prefix or the query string (or both). Other device facts from the same probes: a Sonos never sends HEAD; it fetches the next item about 6 s before the current one ends with a plain GET from 0; after a skip into an item it already prefetched, it sends GET from 0 and then `Range: bytes=<buffered>-`.
+
+
+All queue items now use `/yeney/q/<session>/<epoch>/<revision>/<item>.wav`. Stream CurrentURI remains unchanged. Old query routes are removed: the session and queue assets do not survive process restart. HTTP fencing, declarations and audio are unchanged.

@@ -22,12 +22,14 @@ int main() {
         Route route("Study", "random-session");
         upnp::HttpServer server(0);
         route.registerWith(server);
-        assert(server.resource("queue").uri == "/music/queue.wav");
+        assert(server.resource("queue").uri == "/yeney/q/");
         std::vector<yeney::Frame> pcm(44100, {0x12345600, -0x12345600});
         auto item = store.create({"occurrence-1", 44100, pcm.size(), 1});
         item->append(pcm.data(), pcm.size(), false);
         item->finish();
         auto url = route.publish("Study", 2, 3, item);
+        assert(url == "/yeney/q/random-session/2/3/occurrence-1.wav");
+        assert(url.find('?') == std::string::npos && url.find("/music/") != 0);
         auto get = [&](std::string target, std::string method = "GET", std::string range = "") {
             std::string bytes;
             upnp::HttpRequestIO io;
@@ -52,6 +54,7 @@ int main() {
             ++deferredStarts;
             return item;
         });
+        assert(deferredUrl == "/yeney/q/random-session/2/1/deferred-1.wav");
         assert(get(deferredUrl, "HEAD").find("503") != std::string::npos);
         assert(get(deferredUrl, "GET", "bytes=0-43").find("503") != std::string::npos);
         assert(get(deferredUrl, "GET", "invalid").find("416") != std::string::npos);
@@ -243,6 +246,8 @@ int main() {
         estimated->append(pcm.data(),pcm.size(),false);
         estimated->finish();
         auto upperUrl = route.publish("Study",2,3,estimated);
+        assert(upperUrl.find('?') == std::string::npos && upperUrl.find("/music/") != 0);
+        std::cout << "PASS queue URL guard: natural, deferred/lazy and upper-bound paths have no query and no /music/ prefix\n";
         auto shortWire = get(upperUrl);
         assert(shortWire.find("Content-Length: 529244\r\n") != std::string::npos);
         assert(shortWire.substr(shortWire.find("\r\n\r\n")+4).size()==264644);
@@ -263,8 +268,10 @@ int main() {
         assert(a.get() == full);
         auto tail = b.get();
         assert(tail.substr(tail.find("\r\n\r\n") + 4) == body.substr(100));
-        assert(get("/music/queue.wav?session=other&epoch=2&item=occurrence-1&revision=3").find("404") !=
+        assert(get("/yeney/q/other/2/3/occurrence-1.wav").find("404") !=
                std::string::npos);
+        assert(get("/yeney/q/random-session/9/3/occurrence-1.wav").find("404") != std::string::npos);
+        assert(get("/yeney/q/random-session/2/9/occurrence-1.wav").find("404") != std::string::npos);
         bool refused = false;
         try {
             route.publish("Kitchen", 2, 3, item);

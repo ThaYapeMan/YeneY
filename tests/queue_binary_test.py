@@ -1,5 +1,6 @@
 """Acceptance through the real application; every endpoint is loopback."""
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import re
 import http.client
 import json
 import xml.etree.ElementTree as ET
@@ -240,7 +241,7 @@ class CLI(socketserver.ThreadingTCPServer):
     def close(self): self.shutdown();self.server_close();self.worker.join()
 
 class Binary:
-    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, remote_duration=0, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False, player_options=(), queue_disk_mib=64, partial_bytes=14000):
+    def __init__(self, codec='f', rates=(44100,)*4, fade=False, binary=None, slow=False, initial_stop=False, fail_add=False, albums=None, expected_albums=None, stopped_play=False, seconds=24, resume_restart=False, resume_changed=False, partial_source=False, grouped=False, member=False, mode="queue", consume_stream=False, remote_sources=False, remote_duration=0, titles=None, queue_title_prefix=None, initial_foreign=None, crossfade_fault=None, crossfade_race=False, player_options=(), queue_disk_mib=64, partial_bytes=14000, legacy_queue_urls=False):
         self.titles=titles or [f'Title & {i}' for i in range(len(rates))]
         self.remote_sources=remote_sources
         self.remote_duration=remote_duration
@@ -251,6 +252,7 @@ class Binary:
         self.tmp=tempfile.TemporaryDirectory(prefix='yeney-binary-');self.base=Path(self.tmp.name)
         # Coordinator initialization is reused, but bind the production Sonos port.
         self.sonos=Coordinator(('127.0.0.1',1400),Device)
+        self.sonos.legacy_queue_urls=legacy_queue_urls
         if initial_foreign:
             self.sonos.uri=initial_foreign
             self.sonos.items=[dict(uri=initial_foreign)]
@@ -313,7 +315,7 @@ class Binary:
         url=urlsplit(entries[track-1]['uri'])
         connection=http.client.HTTPConnection(url.netloc,timeout=2)
         try:
-            connection.request('HEAD',url.path+'?'+url.query)
+            connection.request('HEAD',url.path+('?' + url.query if url.query else ''))
             response=connection.getresponse();response.read()
             return response.status==200
         finally:connection.close()
@@ -367,7 +369,7 @@ def relay_replay():
         log=(h.base/'bridge.log').read_text()
         assert 'metadata sanitized mode=queue' in log,log
         status=json.loads((h.base/('stream-pacing-'+b'Study'.hex()+'.json')).read_text())['playback']
-        assert status['state']=='PLAYING' and status['owned'] and status['current_owned_item']==h.sonos.position['TrackURI'],status
+        assert status['state']=='PLAYING' and status['owned'] and status['current_owned_item']==re.sub(r'(/yeney/q/)[^/]+', r'\1...', h.sonos.position['TrackURI']),status
         h.lms.strm('p');h.until(lambda:len(h.packets('STMp'))==1)
         h.lms.strm('u');h.until(lambda:len(h.packets('STMr'))==1)
         h.lms.strm('q');h.until(lambda:h.sonos.transport_state=='STOPPED' and not h.items())
@@ -395,7 +397,7 @@ def window_history():
                 url=urlsplit(retained['uri'])
                 connection=http.client.HTTPConnection(url.netloc,timeout=10)
                 try:
-                    connection.request('GET',url.path+'?'+url.query)
+                    connection.request('GET',url.path+('?' + url.query if url.query else ''))
                     response=connection.getresponse();body=response.read()
                     assert response.status==200 and len(body)==44+44100*2*6
                     assert body[44:]==b'\0\xe8\x03\0\x18\xfc'*(44100*2)
@@ -431,7 +433,7 @@ def window_playlist_edits():
         moved=urlsplit(after[h.titles[3]]['uri'])
         connection=http.client.HTTPConnection(moved.netloc,timeout=10)
         try:
-            connection.request('GET',moved.path+'?'+moved.query)
+            connection.request('GET',moved.path+('?' + moved.query if moved.query else ''))
             response=connection.getresponse();audio=response.read()
             assert response.status==200 and audio[44:]==b'\0\xe8\x03\0\x18\xfc'*(44100*2)
         finally:connection.close()

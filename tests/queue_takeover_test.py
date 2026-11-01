@@ -1,4 +1,5 @@
 """October 25 Study/MBR takeover regressions; loopback fakes only."""
+import re
 import json
 import http.client
 from urllib.parse import urlsplit
@@ -118,7 +119,7 @@ def stale_join():
         h.until(lambda:bool(joined))
         h.until(lambda:len(h.packets('STMs'))==2,timeout=.5)
         assert time.monotonic()-joined[0]<=.5
-        h.until(lambda:status(h)['current_owned_item']==h.items()[1]['uri'])
+        h.until(lambda:status(h)['current_owned_item']==re.sub(r'(/yeney/q/)[^/]+', r'\1...', h.items()[1]['uri']))
         time.sleep(1.2)
         assert len(h.packets('STMs'))==2
         text=(h.base/'bridge.log').read_text()

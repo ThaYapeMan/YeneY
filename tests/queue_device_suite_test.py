@@ -172,7 +172,7 @@ class SOAP(Handler):
             if not model.urls or model.mode=='stop':return dict(Track='0',TrackURI='',RelTime='00:00:00',TrackMetaData=''),None
             t=model.track();position=model.time
             if model.fault=='regression' and model.time>4:position=0
-            uri=f'http://127.0.0.1/music/queue.wav?epoch={model.epoch}&item={t["id"]}' if model.owned else 'http://127.0.0.1/music/yeney.flac?session=fixture&stream=1'
+            uri=f'http://127.0.0.1/yeney/q/fixture/{model.epoch}/1/{t["id"]}.wav' if model.owned else 'http://127.0.0.1/music/yeney.flac?session=fixture&stream=1'
             from xml.sax.saxutils import escape
             title='Wrong' if model.fault=='identity' else t['artist']+' - '+t['title'] if model.title_format=='artist-title' and not t.get('url','').startswith('file://') and t.get('artist') else t['title']
             tags=dict(title=title,album=t['album']);tags.update(model.speaker_metadata.get(t['id'],{}))
@@ -200,10 +200,10 @@ class Backend:
         self.snapshot()
     def snapshot(self):
         if self.model.owned:
-            self.sonos.items=[dict(uri='http://127.0.0.1/music/queue.wav?session=fixture')]
+            self.sonos.items=[dict(uri='http://127.0.0.1/yeney/q/fixture/1/1/1.wav')]
         p=dict(state='PLAYING' if self.model.mode=='play' else 'PAUSED' if self.model.mode=='pause' else 'STOPPED',requested='queue' if self.model.queue else 'stream',active='queue' if self.model.queue else 'stream',reason='local-source' if self.model.owned else 'remote-source',path='relay' if self.model.owned else 'stream',occurrence=self.model.index+1+getattr(self.model,'occurrence_base',0),epoch=self.model.epoch,
                rendered_rate=(44100 if not self.model.urls or int(self.model.track().get('samplerate','44100'))%44100==0 else 48000),owned=self.model.owned,mirrored_ahead=3,last_fallback='soap-error' if self.model.fault=='fallback' else '',handoff_gap_ms=-1,latched=False)
-        uri=f'http://127.0.0.1/music/queue.wav?epoch={self.model.epoch}&item={self.model.track()["id"]}' if self.model.owned and self.model.urls else ''
+        uri=f'http://127.0.0.1/yeney/q/fixture/{self.model.epoch}/1/{self.model.track()["id"]}.wav' if self.model.owned and self.model.urls else ''
         p.update(current_owned_item=uri,owned_item_uris=[uri] if uri else [])
         path=self.root/('stream-pacing-'+b'Study'.hex()+'.json')
         path.write_text(json.dumps(dict(mac=MAC,true_name="Study (Sonos)",display_name="Study",pid=self.pid,monotonic_ms=self.now()*1000,playback=p)))
@@ -278,9 +278,9 @@ class Tests(unittest.TestCase):
         return clean
 
     def test_owned_join_window(self):
-        one='http://bridge/music/queue.wav?item=1'
-        two='http://bridge/music/queue.wav?item=2'
-        three='http://bridge/music/queue.wav?item=3'
+        one='http://bridge/yeney/q/fixture/1/1/1.wav'
+        two='http://bridge/yeney/q/fixture/1/1/2.wav'
+        three='http://bridge/yeney/q/fixture/1/1/3.wav'
         row=dict(monotonic=0,speaker=dict(uri=two),playback=dict(owned=True,
                  current_owned_item=one,owned_item_uris=[one,two,three]))
         self.assertTrue(self.suite.owned_item(row))
@@ -295,7 +295,7 @@ class Tests(unittest.TestCase):
         self.assertFalse(self.suite.owned_item(row))
         row['playback']['current_owned_item']=two
         self.assertFalse(self.suite.owned_item(row))
-        row['speaker']['uri']='http://foreign/music/queue.wav?item=2'
+        row['speaker']['uri']='http://foreign/yeney/q/fixture/1/1/2.wav'
         self.assertFalse(self.suite.owned_item(row))
         row['speaker']['uri']=three
         row['playback']['current_owned_item']=one
@@ -655,7 +655,7 @@ class Tests(unittest.TestCase):
     def test_backup_not_needed(self):
         for label,entries,note in (
                 ('empty',[],'queue empty'),
-                ('owned',[dict(uri='http://127.0.0.1/music/queue.wav?session=previous&epoch=1&item=1')],'only owned entries')):
+                ('owned',[dict(uri='http://127.0.0.1/yeney/q/previous/1/1/1.wav')],'only owned entries')):
             with self.subTest(queue=label):
                 self.sonos.items=entries
                 self.sonos.fail_save=True  # Match the field failure if SaveQueue is attempted.

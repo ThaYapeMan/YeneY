@@ -88,7 +88,7 @@ class Run:
             conn = http.client.HTTPConnection(urlsplit(url).netloc, timeout=12)
             self.clients.append(conn)
             try:
-                u = urlsplit(url); conn.request('GET', u.path + '?' + u.query)
+                u = urlsplit(url); conn.request('GET', u.path+('?' + u.query if u.query else ''))
                 response = conn.getresponse(); assert response.status == 200, response.status
                 while True:
                     data = response.read1(65536)

@@ -528,7 +528,7 @@ try:
             import http.client
             from urllib.parse import urlsplit
             u=urlsplit(selected_item['uri']);c=http.client.HTTPConnection(u.netloc,timeout=8)
-            c.request('GET',u.path+'?'+u.query);response=c.getresponse();body=response.read();c.close()
+            c.request('GET',u.path+('?' + u.query if u.query else ''));response=c.getresponse();body=response.read();c.close()
             expected_frames=rate*4//(rate//target)
             assert len(body)==44+expected_frames*6 and int(response.getheader('Content-Length'))==len(body),(len(body),resource)
             assert struct.unpack_from('<I',body,24)[0]==target

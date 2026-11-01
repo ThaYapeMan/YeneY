@@ -31,7 +31,7 @@ class Lengths(unittest.TestCase):
                             continue
                         h.until(lambda:len(h.packets('STMs'))==1)
                         item=h.items()[0];u=urlsplit(item['uri']);connection=http.client.HTTPConnection(u.netloc,timeout=8)
-                        connection.request('GET',u.path+'?'+u.query);response=connection.getresponse();wave=response.read();connection.close()
+                        connection.request('GET',u.path+('?' + u.query if u.query else ''));response=connection.getresponse();wave=response.read();connection.close()
                         target=rate if rate<=48000 else 48000;factor=rate//target
                         expected=(len(values)+1000+factor-1)//factor
                         self.assertEqual(len(wave),44+expected*6);self.assertEqual(int(item['resource']['size']),len(wave))
@@ -61,7 +61,7 @@ class Lengths(unittest.TestCase):
                         self.assertFalse(h.items());print('PASS real binary FLAC large short: one STMn and owned release',flush=True);continue
                     h.until(lambda:len(h.packets('STMs'))==1)
                     item=h.items()[0];u=urlsplit(item['uri']);c=http.client.HTTPConnection(u.netloc,timeout=8)
-                    c.request('GET',u.path+'?'+u.query);response=c.getresponse();body=response.read();c.close()
+                    c.request('GET',u.path+('?' + u.query if u.query else ''));response=c.getresponse();body=response.read();c.close()
                     self.assertEqual(len(body),44+(44100*4+delta)*6)
                     log=(h.base/'bridge.log').read_text();message='source-short padded' if delta>0 else 'source-long truncated'
                     self.assertEqual(log.count(message),1);self.assertFalse(h.packets('STMn'));self.assertNotIn('relay fault=',log)

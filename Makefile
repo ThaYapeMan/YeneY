@@ -504,3 +504,8 @@ $(QUEUE_ROOM_OBJS): queue_route.h
 $(QUEUE_ROOM_OBJS): queue_window.h queue_window_edits.h
 
 queue-route-test: queue_lazy_item.h
+
+$(OBJS) room-status-test streamer-test range-test oct12-boundary-test: queue_uri_log.h
+stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test: queue_uri_log.h
+
+upnp/own_speaker_control.o speaker-state-test own-control-test timing-probe-http-test: queue_uri_log.h

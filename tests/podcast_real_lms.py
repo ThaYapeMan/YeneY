@@ -82,7 +82,7 @@ def run(g):
     def fetch(uri,offset=None):
         url=urlsplit(uri);conn=http.client.HTTPConnection(url.netloc,timeout=20)
         try:
-            conn.request('GET',url.path+'?'+url.query,headers={} if offset is None else {'Range':f'bytes={offset}-'})
+            conn.request('GET',url.path+('?' + url.query if url.query else ''),headers={} if offset is None else {'Range':f'bytes={offset}-'})
             response=conn.getresponse();headers=dict(response.getheaders())
             try:data=response.read()
             except http.client.IncompleteRead as e:data=e.partial

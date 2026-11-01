@@ -38,9 +38,9 @@ int main() {
     lease.acquire("Before YeneY 2026-10-18 12:34");
     assert(lease.active() && !crossfade && queue.uris.empty() && saves == 1 && removes == 1 &&
            saved.size() == 6);
-    const std::string own = "http://bridge/music/queue.wav?session=session&epoch=1&item=2&revision=1";
+    const std::string own = "http://bridge/yeney/q/session/1/1/2.wav";
     queue.uris = {own, "foreign-new", own,
-                  "http://bridge/music/queue.wav?session=session-other&epoch=1&item=2&revision=1"};
+                  "http://bridge/yeney/q/session-other/1/1/2.wav"};
     ++queue.update;
     lease.release();
     assert(!lease.active() && crossfade);

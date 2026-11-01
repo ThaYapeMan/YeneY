@@ -218,7 +218,8 @@ class Handler(BaseHTTPRequestHandler):
             before=int(a['DesiredFirstTrackNumberEnqueued'])
             assert 0 <= before <= len(s.items)+1
             uri = a['EnqueuedURI']; u = urlsplit(uri)
-            assert u.hostname == '127.0.0.1' and u.path == '/music/queue.wav'
+            assert u.hostname == '127.0.0.1'
+            assert (getattr(s, 'legacy_queue_urls', False) and u.path == '/music/queue.wav') or u.path.startswith('/yeney/q/') and u.path.endswith('.wav') and not u.query and not u.path.startswith('/music/')
             metadata = ET.fromstring(a['EnqueuedURIMetaData'])
             assert metadata.tag == '{urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/}DIDL-Lite'
             assert len(metadata) == 1 and metadata[0].tag.rsplit('}', 1)[-1] == 'item'
@@ -270,7 +271,7 @@ class Handler(BaseHTTPRequestHandler):
 def request(uri, method='GET', byte_range=None):
     u = urlsplit(uri); assert u.hostname == '127.0.0.1'
     connection = http.client.HTTPConnection(u.hostname, u.port, timeout=3)
-    connection.request(method, u.path+'?'+u.query, headers={} if byte_range is None else {'Range': byte_range})
+    connection.request(method, u.path+('?' + u.query if u.query else ''), headers={} if byte_range is None else {'Range': byte_range})
     response = connection.getresponse()
     return connection, response
 

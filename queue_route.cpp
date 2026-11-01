@@ -33,7 +33,7 @@ Route::Route(std::string r, std::string s) {
 void Route::registerWith(upnp::StreamServer &server) {
     // Each connection retains room state, even if the controller is released.
     // Revocation fences new readers while existing readers retain their asset.
-    server.registerStream("queue", "/music/queue.wav", "YeneY queue", "audio/wav", "",
+    server.registerStream("queue", "/yeney/q/", "YeneY queue", "audio/wav", "",
                           [held = state](upnp::StreamRequest &r) { return serve(held, r); });
 }
 std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t revision,
@@ -42,7 +42,7 @@ std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t re
         !token(item->descriptor().occurrence))
         throw std::invalid_argument("queue route ownership or unpublished item");
     const auto id = item->descriptor().occurrence;
-    const auto key = std::to_string(epoch) + "/" + id + "/" + std::to_string(revision);
+    const auto key = std::to_string(epoch) + "/" + std::to_string(revision) + "/" + id;
     std::lock_guard<std::mutex> lock(state->mutex);
     if (state->revoked.count(epoch))
         throw std::logic_error("queue epoch revoked");
@@ -50,17 +50,16 @@ std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t re
     auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, item, std::move(resolve), {}});
     if (!inserted.second && (inserted.first->second.item != item || lazy || inserted.first->second.resolve))
         throw std::logic_error("immutable queue URL reused");
-    return "/music/queue.wav?session=" + state->session + "&epoch=" + std::to_string(epoch) + "&item=" + id +
-           "&revision=" + std::to_string(revision);
+    return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/" +
+           std::to_string(revision) + "/" + id + ".wav";
 }
 std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, std::function<std::shared_ptr<Item>()> ready) {
     if (!token(identity) || !resolve) throw std::invalid_argument("invalid deferred route");
-    const auto key = std::to_string(epoch) + "/" + identity + "/1";
+    const auto key = std::to_string(epoch) + "/1/" + identity;
     std::lock_guard<std::mutex> lock(state->mutex);
     if (state->revoked.count(epoch) || !state->entries.emplace(key, State::Entry{epoch, 1, {}, std::move(resolve), std::move(ready)}).second)
         throw std::logic_error("deferred route reused");
-    return "/music/queue.wav?session=" + state->session + "&epoch=" + std::to_string(epoch) +
-           "&item=" + identity + "&revision=1";
+    return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/1/" + identity + ".wav";
 }
 void Route::revoke(uint64_t epoch) {
     std::lock_guard<std::mutex> lock(state->mutex);
@@ -74,12 +73,17 @@ void Route::revoke(uint64_t epoch) {
 }
 bool Route::serve(upnp::StreamRequest &r) { return serve(state, r); }
 bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
-    if (r.path() != "/music/queue.wav")
+    if (r.path().compare(0, 9, "/yeney/q/") != 0)
         return false;
     std::shared_ptr<Item> item;
     Resolver resolve;
-    if (r.parameter("session") == state->session) {
-        const auto key = r.parameter("epoch") + "/" + r.parameter("item") + "/" + r.parameter("revision");
+    const auto path = r.path();
+    const auto prefix = "/yeney/q/" + state->session + "/";
+    std::string key;
+    if (path.compare(0, prefix.size(), prefix) == 0 && path.size() > 4 && path.substr(path.size()-4) == ".wav") {
+        key = path.substr(prefix.size(), path.size()-prefix.size()-4);
+    }
+    if (!key.empty()) {
         std::lock_guard<std::mutex> lock(state->mutex);
         auto i = state->entries.find(key);
         if (i != state->entries.end()) {
@@ -104,11 +108,9 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         resolve = {};
     }
     if (!item) {
-        auto id = r.parameter("item");
-        if (id.empty() || id.size() > 32 || id.find_first_not_of("0123456789-_") != std::string::npos) id = "unknown";
-        std::printf("yeney: queue HTTP method=%s item=%s range=unavailable status=404 content_length=0 produced_bytes=0 served_bytes=0 end=complete\n",
+        std::printf("yeney: queue HTTP method=%s item=unknown range=unavailable status=404 content_length=0 produced_bytes=0 served_bytes=0 end=complete\n",
                     r.method() == upnp::StreamRequest::Method::Get ? "GET" :
-                    r.method() == upnp::StreamRequest::Method::Head ? "HEAD" : "OTHER", id.c_str());
+                    r.method() == upnp::StreamRequest::Method::Head ? "HEAD" : "OTHER");
         r.reply(404);
         return true;
     }

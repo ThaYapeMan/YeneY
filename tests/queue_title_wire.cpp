@@ -14,7 +14,7 @@ int main(int argc, char **argv) {
         return coordinator.transport(name, args);
     });
     upnp::QueueMetadata m;
-    m.url = "http://127.0.0.1:1401/music/queue.wav?session=title-fixture&epoch=1&item=1&revision=1";
+    m.url = "http://127.0.0.1:1401/yeney/q/title-fixture/1/1/1.wav";
     m.session = "title-fixture";
     m.title = "When I Fall In Love & <live>";
     m.artist = "Michael Bublé";

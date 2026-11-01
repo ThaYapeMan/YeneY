@@ -2,6 +2,7 @@
 #pragma once
 #include <atomic>
 #include "volume_control.h"
+#include "queue_uri_log.h"
 #include "podcast_settings.h"
 #include <mutex>
 #include <sstream>
@@ -67,12 +68,12 @@ public:
             out << ",\"path\":" << q(v.path);
         if (v.active == "queue") {
             out << ",\"occurrence\":" << v.occurrence << ",\"owned\":" << (v.owned ? "true" : "false")
-                << ",\"rendered_rate\":" << v.renderedRate << ",\"current_owned_item\":" << q(v.currentUri)
-                << ",\"last_fault\":" << q(v.lastFault) << ",\"owned_item_uris\":[";
+                << ",\"rendered_rate\":" << v.renderedRate << ",\"current_owned_item\":" << q(queueUriLog(v.currentUri))
+                << ",\"last_fault\":" << q(queueUriLog(v.lastFault)) << ",\"owned_item_uris\":[";
             for (size_t i = 0; i < v.ownedUris.size(); ++i) {
                 if (i)
                     out << ',';
-                out << q(v.ownedUris[i]);
+                out << q(queueUriLog(v.ownedUris[i]));
             }
             out << "]";
             if (v.path == "relay") out << ",\"title\":" << quote(v.title);

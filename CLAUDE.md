@@ -17,7 +17,7 @@ LXC 113 (192.168.178.31) is deployment only. Agents must never SSH to it or depl
 
 ## UPnP layer
 
-YeneY is the only backend. `YENEY_UPNP=yeney` and `own` are accepted; other values warn and continue with YeneY. Keep HTTP Server constants, wire fixtures, URLs, transport ordering and timing unchanged unless the task explicitly requires a change. The encoded buffer capacity is in packets, not bytes.
+YeneY is the only backend. `YENEY_UPNP=yeney` and `own` are accepted; other values warn and continue with YeneY. Keep HTTP Server constants, wire fixtures, URLs, transport ordering and timing unchanged unless the task explicitly requires a change. Queue item URLs use `/yeney/q/<session>/<epoch>/<revision>/<item>.wav`; the Sonos app blanks rows for the old `/music/queue.wav` query shape. Live/stream URLs are unchanged. The encoded buffer capacity is in packets, not bytes.
 
 ## Our modifications
 
@@ -69,6 +69,8 @@ server-side fade. Reverse control preserves the app's mute state and waits
 callback cannot undo that level. The real LMS volume test exercises this.
 
 ## Sonos queue window
+
+Queue URLs are path only: `/yeney/q/<session>/<epoch>/<revision>/<item>.wav`, including lazy and continuation items. Session path segments are masked in logs/status. The old query route is removed because assets and sessions are process-local and cannot survive restart.
 
 The window model has two history parents, the current parent and three upcoming
 parents. Continuations share their parent's history slot. The production relay

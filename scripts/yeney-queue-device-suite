@@ -503,10 +503,11 @@ class Suite(PACING['Suite']):
 
     def owned_item(self, row):
         p=row['playback'];uri=row['speaker']['uri']
-        owned=p.get('owned_item_uris',[])
-        if not (p.get('owned') and '/music/queue.wav?' in uri and uri in owned):
+        uri = re.sub(r'(/yeney/q/)[^/]+', r'\1...', uri)
+        owned=[re.sub(r'(/yeney/q/)[^/]+', r'\1...', value) for value in p.get('owned_item_uris',[])]
+        if not (p.get('owned') and '/yeney/q/' in uri and uri in owned):
             return False
-        current=p.get('current_owned_item')
+        current=re.sub(r'(/yeney/q/)[^/]+', r'\1...', p.get('current_owned_item') or '')
         # Retain the start until catch-up, including the first matching sample.
         pending=getattr(self,'owned_join',None)
         now=row['monotonic']
@@ -616,7 +617,7 @@ class Suite(PACING['Suite']):
         self.log('metadata comparison title_format='+self.title_format)
         (self.work/'before.json').write_text(json.dumps(self.before,indent=2)+'\n')
         original = self.speaker.browse('Q:0')
-        owned = sum('/music/queue.wav?' in entry.get('res','') for entry in original)
+        owned = sum('/yeney/q/' in entry.get('res','') for entry in original)
         foreign = len(original)-owned
         self.log(f'Q:0 before takeover: entries={len(original)} owned={owned} foreign={foreign}')
         self.isolated()
@@ -1049,7 +1050,7 @@ class Suite(PACING['Suite']):
                 self.isolated()
                 if self.speaker.crossfade()!=self.before['crossfade']:
                     raise SuiteError('CrossfadeMode not restored')
-                if any('/music/queue.wav?' in r.get('res','') for r in self.speaker.browse('Q:0')):
+                if any('/yeney/q/' in r.get('res','') for r in self.speaker.browse('Q:0')):
                     raise SuiteError('YeneY-owned entries remain')
                 self.release_verified=True
                 self.backend.run('systemctl','restart',self.unit)

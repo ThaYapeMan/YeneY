@@ -9,7 +9,7 @@ int main() {
     const auto snapshot = reader.parse("playlist_tracks:1 playlist_cur_index:0 playlist%20index:0 " + wire);
     const auto &entry = snapshot.entries.at(0);
     upnp::QueueMetadata metadata;
-    metadata.url = "http://127.0.0.1/music/queue.wav?session=test&item=1";
+    metadata.url = "http://127.0.0.1/yeney/q/test/1/1/1.wav";
     metadata.session = "test";
     metadata.frames = metadata.rate = 44100;
     metadata.size = 44 + 6 * metadata.frames;

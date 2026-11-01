@@ -276,7 +276,9 @@ struct HttpServer::Impl {
         {
             std::lock_guard<std::mutex> lock(routesMutex);
             for (const auto& r : routes) {
-                if (r.second.resource.uri == request->path()) handler = r.second.handler;
+                if (r.second.resource.uri == request->path() ||
+                    (r.first == "queue" && r.second.resource.uri == "/yeney/q/" &&
+                     request->path().compare(0, 9, "/yeney/q/") == 0)) handler = r.second.handler;
                 if (r.second.resource.iconUri.substr(0, r.second.resource.iconUri.find('?')) == request->path()) icon = true;
             }
         }

@@ -8,6 +8,16 @@
 using namespace upnp;
 static std::string file(const char* name) { std::ifstream f(name); assert(f); return {std::istreambuf_iterator<char>(f), {}}; }
 int main() {
+    const std::string queueBody = "<item id=\"yeney:secret-session\">&amp;quot;yeney:second-session&amp;quot;<CurrentTrackURI>http://bridge/yeney/q/secret-session/2/1/lazy-7.wav</CurrentTrackURI>"
+        "&lt;res&gt;http://bridge/yeney/q/second-session/2/1/8.wav&lt;/res&gt;";
+    const auto logged = logValue(queueBody);
+    assert(logged.find("secret-session") == std::string::npos && logged.find("second-session") == std::string::npos);
+    assert(logged == queueUriLog(queueBody));
+    const auto cut = queueBody.find("secret-session") + 4;
+    assert(logValue(queueBody, cut) == queueUriLog(queueBody).substr(0, cut));
+    assert(logValue("ordinary\nvalue") == "ordinary value");
+    std::cout << "PASS queue NOTIFY logging: URI sessions masked in raw and escaped XML before truncation; ordinary diagnostics unchanged\n";
+
     StateUpdate u;
     assert(parseAvTransport(file("tests/fixtures/sonos-lastchange.xml"), u) && *u.state == "PLAYING");
     assert(parseRenderingControl(file("tests/fixtures/rendering-lastchange.xml"), u) && *u.volume == 26);

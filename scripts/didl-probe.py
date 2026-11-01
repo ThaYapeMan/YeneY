@@ -58,7 +58,7 @@ def browse_queue(ip):
     r = soap(ip, "Browse", [("ObjectID", "Q:0"), ("BrowseFlag", "BrowseDirectChildren"), ("Filter", "*"),
                             ("StartingIndex", "0"), ("RequestedCount", "5"), ("SortCriteria", "")],
              service=cd, path="/MediaServer/ContentDirectory/Control")
-    return re.sub(r"session=[^&]+", "session=...", r.get("Result", ""))
+    return re.sub(r"(/yeney/q/)[^/]+", r"\1...", re.sub(r"session=[^&]+", "session=...", r.get("Result", "")))
 
 
 def didl(variant, url, length):
@@ -86,9 +86,9 @@ def main():
     ip, variant = sys.argv[1], sys.argv[2]
     if variant == "show":
         pos = soap(ip, "GetPositionInfo", [("InstanceID", "0")])
-        print("TrackURI:", re.sub(r"session=[^&]+", "session=...", pos.get("TrackURI", "")))
+        print("TrackURI:", re.sub(r"(/yeney/q/)[^/]+", r"\1...", re.sub(r"session=[^&]+", "session=...", pos.get("TrackURI", ""))))
         print("TrackMetaData:")
-        print(pos.get("TrackMetaData", ""))
+        print(re.sub(r"(/yeney/q/)[^/]+", r"\g<1>...", pos.get("TrackMetaData", "")))
         print("Sonos queue (Browse Q:0), what the app uses:")
         print(browse_queue(ip))
         return

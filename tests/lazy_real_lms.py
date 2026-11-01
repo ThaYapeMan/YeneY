@@ -24,7 +24,7 @@ def run(context):
         conn=http.client.HTTPConnection(url.netloc, timeout=10)
         start=time.monotonic()
         try:
-            conn.request('GET',url.path+'?'+url.query)
+            conn.request('GET',url.path+('?' + url.query if url.query else ''))
             response=conn.getresponse()
             elapsed=time.monotonic()-start
             headers=response.getheaders()
@@ -54,7 +54,7 @@ def run(context):
         for method,headers in [('HEAD',{}),('GET',{'Range':'bytes=0-43'}),('GET',{'Range':'bytes=broken'})]:
             conn=http.client.HTTPConnection(url.netloc,timeout=5)
             try:
-                conn.request(method,url.path+'?'+url.query,headers=headers)
+                conn.request(method,url.path+('?' + url.query if url.query else ''),headers=headers)
                 response=conn.getresponse();response.read()
                 assert response.status in (416,503)
             finally:conn.close()
@@ -118,7 +118,7 @@ def run(context):
     before=len(proxy.records)
     url=urlsplit(items()[2]['uri'])
     conn=socket.create_connection((url.hostname,url.port),timeout=5)
-    conn.sendall(('GET '+url.path+'?'+url.query+' HTTP/1.1\r\nHost: localhost\r\n\r\n').encode())
+    conn.sendall(('GET '+url.path+('?' + url.query if url.query else '')+' HTTP/1.1\r\nHost: localhost\r\n\r\n').encode())
     time.sleep(.1);conn.close();time.sleep(.9)
     proxy.request_hook=None
     assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
@@ -138,7 +138,7 @@ def run(context):
     url=urlsplit(items()[2]['uri'])
     conn=socket.create_connection((url.hostname,url.port),timeout=5)
     start=time.monotonic()
-    conn.sendall(('GET '+url.path+'?'+url.query+' HTTP/1.1\r\nHost: localhost\r\n\r\n').encode())
+    conn.sendall(('GET '+url.path+('?' + url.query if url.query else '')+' HTTP/1.1\r\nHost: localhost\r\n\r\n').encode())
     assert conn.recv(4096)==b''
     elapsed=time.monotonic()-start;conn.close()
     assert 2.8<elapsed<3.8,elapsed

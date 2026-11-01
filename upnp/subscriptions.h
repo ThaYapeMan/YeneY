@@ -1,5 +1,6 @@
 #pragma once
 #include "gena.h"
+#include "../queue_uri_log.h"
 #include "http_server.h"
 #include <thread>
 #include "http.h"
@@ -14,6 +15,7 @@
 #include <unistd.h>
 namespace upnp {
 inline std::string logValue(std::string value, size_t limit = 4096) {
+    value = queueUriLog(std::move(value));
     value.resize(std::min(value.size(), limit));
     for (char& c : value) if (static_cast<unsigned char>(c) < 32 || c == 127) c = ' ';
     return value;

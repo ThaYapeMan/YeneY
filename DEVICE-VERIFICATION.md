@@ -1066,3 +1066,21 @@ Send the `queue podcast metadata step=` journal/stdout line with the next
 report. It names feed/episode matching, lookup timeout or CLI failure, cache hit
 without podcast fields, or ambiguous split and candidate names. Include title,
 feed menu name and settings; omit source URLs, tokens and descriptions.
+
+## Queue row visibility after deployment (QUEUE-URL-01)
+
+After deploying, confirm the Sonos app queue shows titles, artists and artwork
+for retained history, current and upcoming items, including lazy items and
+continuations. Close and reopen the queue view once. Confirm playback and skip
+still work. This physical check remains owner-run.
+
+Owner diagnostic: `python3 scripts/queue-replay-probe.py <speaker-ip> [mode]`.
+It replaces the room queue, plays a neutral tone for 30 seconds, then stops and
+empties it; restart from LMS afterwards. Run only on an intentionally chosen room.
+`batch` replays exact stored DIDL with neutral URLs and proved metadata displays;
+`positions` proved explicit single-item insertions display;
+`remove` proved a fenced history trim displays; `url` reproduces the old
+`/music/queue.wav?session=…` shape and proved that URL shape alone blanks rows.
+The other owner probes ruled out resource attributes, HEAD/nonzero Range 503,
+and shared versus unique DIDL ids. The replay script is preserved unchanged
+apart from its repository SPDX header.

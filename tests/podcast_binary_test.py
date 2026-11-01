@@ -1,5 +1,6 @@
 """Real bridge overflow/late-overflow qualification on loopback only."""
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import re
 import http.client
 import socket
 import json
@@ -17,7 +18,7 @@ def fetch(uri,stall=False):
     try:
         if stall:
             conn.connect();conn.sock.setsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF,256*1024)
-        conn.request('GET',url.path+'?'+url.query);response=conn.getresponse()
+        conn.request('GET',url.path+('?' + url.query if url.query else ''));response=conn.getresponse()
         first=response.read(16384) if stall else b''
         if stall:
             time.sleep(2)
@@ -56,7 +57,7 @@ for late,seconds in ((False,80),(False,320),(True,55)):
         else:assert 'prefetch_margin_s=15.' in text,text[-10000:]
         for i in range(1,following+1):
             host.state(i,0)
-            host.until(lambda:json.loads((host.base/'stream-pacing-5374756479.json').read_text())['playback']['current_owned_item']==entries[i-1]['uri'])
+            host.until(lambda:json.loads((host.base/'stream-pacing-5374756479.json').read_text())['playback']['current_owned_item']==re.sub(r'(/yeney/q/)[^/]+', r'\1...', entries[i-1]['uri']))
         assert not host.packets('STMd'),'estimated episode reported decoded before audible end'
         assert len(host.packets('STMs'))==1,host.packets('STMs')
         tail_frames=(len(bodies[-1])-44)//6
