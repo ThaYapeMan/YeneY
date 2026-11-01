@@ -27,7 +27,7 @@ for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP):
     signal.signal(sig,interrupted)
 with tempfile.TemporaryDirectory(prefix='yeney-tests-',dir=parent) as work:
     try:
-        env = dict(os.environ, TMPDIR=work, YENEY_TEST_CACHE=str(cache))
+        env = dict(os.environ, TMPDIR=work, YENEY_TEST_CACHE=str(cache), YENEY_ACTIVE_TEST_RUN=str(run))
         with (run/'console.log').open('w') as log:
             child = subprocess.Popen(sys.argv[1:],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,start_new_session=True)
             for line in iter(child.stdout.readline,b''):
@@ -47,6 +47,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-tests-',dir=parent) as work:
             if path.is_file() and not path.is_symlink() and path.suffix in ('.log','.txt','.json','.jsonl','.md','.tsv','.csv','.xml'):
                 target=run/'evidence'/path.relative_to(work)
                 target.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(path,target)
+        os.utime(run, None) # Retain this completed run ahead of its child transcripts.
         (run/'result.txt').write_text('exit status '+str(code)+'\n')
         for old in sorted(logs.iterdir(), key=lambda p:p.stat().st_mtime,reverse=True)[5:]:
             if old.is_dir(): shutil.rmtree(old)

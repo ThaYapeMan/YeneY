@@ -8,8 +8,8 @@
 #include <mutex>
 
 namespace queue_audio {
-// A lazy route has a real immutable WAV declaration and a separately supplied
-// producer. Selection is queued exactly once; neither HTTP nor HEAD executes
+// A lazy route has an optional immutable WAV declaration and a separate
+// producer. Deferred routes publish the natural declaration only after binding. Selection is queued exactly once; neither HTTP nor HEAD executes
 // an LMS command. The room callback must only enqueue work and return promptly.
 class LazyItem {
     std::shared_ptr<Item> declaration, produced;
@@ -19,9 +19,9 @@ class LazyItem {
     bool requested = false, cancelled = false, activationClaimed = false;
     std::vector<upnp::StreamRequest *> readers;
 public:
-    LazyItem(std::shared_ptr<Item> declared, std::function<void()> enqueue)
+    LazyItem(std::shared_ptr<Item> declared, std::function<void()> enqueue, bool deferred = false)
         : declaration(std::move(declared)), activate(std::move(enqueue)) {
-        if (!declaration || !declaration->contentLength() || !activate)
+        if ((!deferred && (!declaration || !declaration->contentLength())) || !activate)
             throw std::invalid_argument("lazy item needs an immutable declaration and selector");
     }
     // The room worker must claim immediately before an LMS mutation. Enqueueing
@@ -40,17 +40,30 @@ public:
         activationClaimed = true;
         return true;
     }
-    void publish(std::shared_ptr<Item> item) {
-        if (!item || item->room() != declaration->room() ||
+    bool publish(std::shared_ptr<Item> item) {
+        if (!item || (declaration && (item->room() != declaration->room() ||
             item->descriptor().rate != declaration->descriptor().rate ||
             item->descriptor().kind != declaration->descriptor().kind ||
-            item->contentLength() != declaration->contentLength())
+            item->contentLength() != declaration->contentLength())))
             throw std::invalid_argument("lazy producer differs from declared WAV");
         std::lock_guard<std::mutex> lock(mutex);
-        if (cancelled) return; // late producer cannot resurrect an abandoned window
+        if (cancelled) return false; // late producer cannot resurrect an abandoned window
         if (produced && produced != item) throw std::logic_error("lazy producer already bound");
         produced = std::move(item);
         changed.notify_all();
+        return true;
+    }
+    std::shared_ptr<Item> ready() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return cancelled ? nullptr : produced;
+    }
+    bool abandoned() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return cancelled;
+    }
+    unsigned commandCount() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return activationClaimed ? 1 : 0;
     }
     void cancel() {
         std::lock_guard<std::mutex> lock(mutex);

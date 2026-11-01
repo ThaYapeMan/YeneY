@@ -123,7 +123,9 @@ void QueueRoom::Impl::selectPath() {
         try {
             playlist = reader.read(host, mac);
             window.reconcile(playlist);
-            const auto index = playlist.index + (selectedNewPlay ? 0 : 1);
+            const auto target = lazyTarget.load();
+            const auto index = target >= 0 && playlist.index == unsigned(target) ? unsigned(target) :
+                playlist.index + (selectedNewPlay ? 0 : 1);
             if (index < playlist.entries.size()) {
                 track = playlist.entries[index];
                 selectedIndex = int(index);

@@ -2,12 +2,60 @@
 
 YENEY-APPCONTROL-03 is incomplete. The room relay uses the fenced editor for
 natural history trimming and protects two history parents and their audio.
-Lazy playlist publication and LMS navigation reconciliation are still absent.
+Lazy playlist publication is integrated by APPCONTROL-06 below; LMS navigation
+reconciliation remains incomplete.
 The APPCONTROL-04 partial checkpoint additionally connects read-only LMS status
 to the production model for edits of already-published parents.
 Next, Previous, restart and seek are not newly enabled. The README feature row
 and step 3 qualification stay unchanged until controller integration and its
 acceptance scenarios pass.
+
+## APPCONTROL-06 production deferred headers
+
+The worker now publishes missing upcoming parents with the fenced editor, up to
+three in LMS playback order. DIDL retains rounded LMS duration and omits exact
+size and sample frequency. A naturally prepared producer binds to that same URI
+with zero LMS commands. Continuations remain part of their parent's block.
+Two history parents remain protected; history selection is outside this task.
+
+On a live activating PCM GET, the room worker claims the reader once and sends
+one `playlist index` through `roomLmsCommand` with reason `lazy-pcm-get`.
+The resulting start is assigned to the requested occurrence only when the LMS
+snapshot confirms its index; an unrelated natural next start retains its normal
+identity. The selection's flush/start echo resets the core producer while
+preserving the owned speaker window. No echo issues another selection or
+rebuilds the window. Binding uses the natural sink's actual immutable item:
+STREAMINFO/M4A counts, rate conversion, transitions and carried prefixes are
+unchanged. Finite remote sources keep their natural upper-bound promise;
+unknown local counts keep sealed publication and may exceed the header deadline.
+A late producer cannot revive a cancelled lazy route.
+
+The header deadline is **3 seconds**, six times the previously measured 0.5 s
+upper end of private LMS start times. It bounds the HTTP connection without
+sending a partial header. This is a provisional software budget: physical Sonos
+HTTP tolerance is an owner-run acceptance check, not established by loopback.
+Expiry, reader abandonment and activation failure close without headers and log
+numeric identities/counts, omitting source URLs, tokens and MACs. Existing exact
+routes and the original declared lazy primitive retain their wire behavior.
+
+Unbound HEAD and header-only probes return 503 without activation; malformed
+ranges return 416. Unbound nonzero/suffix ranges return 503: their bounds cannot
+be validated without an exact declaration, and no range probe may select LMS
+speculatively. Initial PCM GET (no Range or a zero-based range including PCM)
+activates; once naturally bound, HEAD and all ordinary ranges use the existing
+exact response path. A missing/unknown LMS duration ends lookahead.
+
+Owner-run later: request an unprepared item in the Sonos app while delaying LMS
+start beyond three seconds; verify clean headerless disconnect, the speaker's
+retry/skip behavior, one selection per live claim, no echo loop and the chosen
+three-second budget within the device's actual HTTP tolerance. Also verify
+normal app Next to a local, 96 kHz and ALAC lazy item. This task contacts no
+owner speaker and does not modify the owner checker or feature qualification.
+
+History selection (APPCONTROL-05 C), stage 1c, stage 2, the owner checker and
+README/DEVICE-VERIFICATION remain separate work.
+
+## Earlier checkpoints (historical)
 
 ## Decisions
 

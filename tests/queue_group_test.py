@@ -11,8 +11,10 @@ WRITES={'SetAVTransportURI','AddURIToQueue','Play','Pause','Stop','Seek',
 
 def coordinator():
     h=Binary(codec='l',grouped=2)
+    h.sonos.clocked=True
     try:
         for index in range(1,5):
+            h.until(lambda:h.prepared(index))
             h.state(index)
             h.until(lambda:len(h.packets('STMs'))==index)
             assert h.model.playing==index

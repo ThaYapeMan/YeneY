@@ -109,7 +109,7 @@ def stale_join():
     h=Binary(rates=(44100,44100),seconds=24)
     try:
         h.state(1,5);h.until(lambda:len(h.packets('STMs'))==1)
-        h.until(lambda:len(h.items())==2)
+        h.until(lambda:len(h.items())==2 and h.prepared(2))
         joined=[]
         def join():
             joined.append(time.monotonic())

@@ -19,6 +19,7 @@ public:
     void registerWith(upnp::StreamServer &);
     std::string publish(const std::string &room, uint64_t epoch, uint64_t revision,
                         const std::shared_ptr<Item> &, Resolver = {});
+    std::string publishDeferred(uint64_t epoch, const std::string &identity, Resolver, std::function<std::shared_ptr<Item>()> ready = {});
     void revoke(uint64_t epoch);
     bool serve(upnp::StreamRequest &);
 };

@@ -129,6 +129,7 @@ void QueueRoom::Impl::observe() {
     const bool finalItem = previousItem != items.end() && previousItem == std::prev(items.end());
     bool cancelledCurrent = false;
     const auto checked = it != items.end() ? it : previousItem;
+    if (checked != items.end() && !checked->item) return;
     if (checked != items.end()) {
         try {
             (void)checked->item->contentLength();
@@ -230,6 +231,7 @@ void QueueRoom::Impl::observe() {
     const auto previous = current;
     const auto old = state;
     current = it->stream;
+    if (current != previous) windowDirty = true; // Refill lookahead on the audible boundary itself.
     state = playback == yeney::PlaybackState::Playing  ? "PLAYING"
             : playback == yeney::PlaybackState::Paused ? "PAUSED"
                                                        : "STOPPED";

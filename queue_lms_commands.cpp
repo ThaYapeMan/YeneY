@@ -7,7 +7,10 @@ void roomLmsCommand(const std::string &host, const std::string &mac,
     const auto volume = command.rfind("mixer volume ", 0) == 0 ? command.substr(13) : std::string{};
     const bool validVolume = !volume.empty() && volume.size() <= 3 &&
         volume.find_first_not_of("0123456789") == std::string::npos && std::stoi(volume) <= 100;
+    const auto index = command.rfind("playlist index ", 0) == 0 ? command.substr(15) : std::string{};
+    const bool validIndex = !index.empty() && index.size() <= 5 && index.find_first_not_of("0123456789") == std::string::npos;
     const bool allowed =
+        (reason == "lazy-pcm-get" && validIndex) ||
         (reason == "speaker-volume" && (validVolume || command == "mixer muting 0" || command == "mixer muting 1")) ||
         (command == "stop" && (reason == "speaker-stop" || reason == "speaker-source-change" ||
                                reason == "room-fault" || reason == "group-member" || reason == "track-fault-limit")) ||
@@ -16,6 +19,7 @@ void roomLmsCommand(const std::string &host, const std::string &mac,
     if (!allowed) throw std::logic_error("invalid speaker command");
     log("LMS mutation reason=" + reason + " command=" + command);
     if (!queue_audio::controlLms(host, mac, command)) {
+        if (reason == "lazy-pcm-get") throw std::runtime_error("lazy selection unconfirmed");
         std::string reply;
         const bool verified = queue_audio::controlLms(host, mac, "mode ?", 9090, &reply, 3000);
         log("LMS mutation uncertain command=" + command + " verification=" +

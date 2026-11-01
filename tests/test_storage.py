@@ -24,7 +24,8 @@ def workspace(name):
         finally:
             shutil.rmtree(root)
         for old in sorted(cache.iterdir(),key=lambda p:p.stat().st_mtime,reverse=True)[5:]:
-            if old.is_dir():shutil.rmtree(old)
+            if old.is_dir() and str(old.resolve())!=os.environ.get('YENEY_ACTIVE_TEST_RUN'):
+                shutil.rmtree(old)
     atexit.register(finish)
     def interrupted(number,frame):raise SystemExit(128+number)
     for sig in (signal.SIGTERM,signal.SIGHUP):signal.signal(sig,interrupted)

@@ -16,7 +16,7 @@ void QueueRoom::Impl::publish() {
         if (item.stream == current) {
             v.currentUri = item.uri;
             v.title = item.title;
-            v.renderedRate = item.item->descriptor().rate;
+            v.renderedRate = item.item ? item.item->descriptor().rate : 0;
         }
     }
     if (publishedState != v.state || publishedUri != v.currentUri) {

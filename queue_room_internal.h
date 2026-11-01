@@ -8,6 +8,7 @@
 #include "queue_room.h"
 #include "queue_lms_commands.h"
 #include "queue_route.h"
+#include "queue_lazy_item.h"
 #include "queue_source.h"
 #include "queue_speaker_changes.h"
 #include "queue_window_edits.h"
@@ -79,6 +80,11 @@ struct QueueRoom::Impl {
         std::string didl;
     };
     std::vector<Entry> items;
+    std::map<uint64_t, std::shared_ptr<queue_audio::LazyItem>> lazyItems;
+    std::atomic<int> lazyTarget{-1};
+    uint64_t activatingToken = 0, lazySerial = 0;
+    void activateLazy(uint64_t token);
+
     std::map<uint64_t, bool> remote;
     std::mutex mutex, sourceMutex;
     std::condition_variable changed;

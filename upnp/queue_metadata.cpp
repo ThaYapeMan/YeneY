@@ -4,8 +4,8 @@
 #include <stdexcept>
 namespace upnp {
 std::string queueDidl(const QueueMetadata &m) {
-    if (!m.rate || m.url.compare(0, 7, "http://") || m.session.empty() || m.size < 44 || m.bits != 24 ||
-        m.channels != 2 || m.frames > (UINT32_MAX - 36ull) / 6 || m.size != 44 + 6 * m.frames)
+    if (!m.rate || m.url.compare(0, 7, "http://") || m.session.empty() || (!m.deferred && m.size < 44) || m.bits != 24 ||
+        m.channels != 2 || (!m.deferred && m.frames > (UINT32_MAX - 36ull) / 6) || (!m.deferred && m.size != 44 + 6 * m.frames))
         throw std::invalid_argument("invalid finite queue metadata");
     auto seconds = m.frames / m.rate;
     char duration[64];
@@ -34,8 +34,7 @@ std::string queueDidl(const QueueMetadata &m) {
                               : "<upnp:albumArtURI>" + esc(m.artwork) + "</upnp:albumArtURI>") +
            "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
            "<res protocolInfo=\"http-get:*:audio/wav:*\" duration=\"" +
-           declaredDuration + "\" size=\"" + std::to_string(m.size) + "\" sampleFrequency=\"" +
-           std::to_string(m.rate) + "\" bitsPerSample=\"24\" nrAudioChannels=\"2\">" + esc(m.url) +
+           declaredDuration + "\"" + (m.deferred ? std::string{} : " size=\"" + std::to_string(m.size) + "\"") + (m.deferred ? std::string{} : " sampleFrequency=\"" + std::to_string(m.rate) + "\"") + " bitsPerSample=\"24\" nrAudioChannels=\"2\">" + esc(m.url) +
            "</res></item></DIDL-Lite>";
 }
 } // namespace upnp

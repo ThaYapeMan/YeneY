@@ -57,6 +57,9 @@ void QueueRoom::Impl::release(bool stop) {
     std::set<uint64_t> parents;
     for (const auto &item : items) parents.insert(item.owner ? item.owner : item.stream);
     for (auto parent : parents) queue.releaseParent(parent);
+    for (const auto &lazy : lazyItems) lazy.second->cancel();
+    lazyItems.clear();
+    lazyTarget = -1; activatingToken = 0;
     items.clear();
     releasing = true;
     ownership.release(!sourceAway,
@@ -149,6 +152,12 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         }
         return;
     }
+    if (c == 'q' && lazyTarget >= 0) {
+        // Only the matching selection echo retains ownership. An explicit LMS
+        // stop or different selection must still perform its normal release.
+        const auto snapshot = reader.read(host, mac);
+        if (snapshot.mode != "stop" && snapshot.index == unsigned(lazyTarget.load())) return;
+    }
     if (c == 'q') {
         remoteNaturalSuccessor = false;
         finitePause = false;
@@ -234,6 +243,31 @@ void QueueRoom::Impl::append() {
             continue;
         if (!record.fault.empty())
             { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
+        if (!record.parent) {
+            std::lock_guard<std::mutex> lock(sourceMutex);
+            const auto token = sourceTokens.find(owner);
+            if (token != sourceTokens.end()) {
+                const auto lazy = lazyItems.find(token->second);
+                auto entry = std::find_if(items.begin(), items.end(), [&](const auto &i) {
+                    return !i.item && sourceTokens[i.stream] == token->second;
+                });
+                if (lazy != lazyItems.end() && entry != items.end()) {
+                    if (!lazy->second->publish(record.item)) {
+                        queue.releaseParent(owner);
+                        if (activatingToken == token->second) { activatingToken = 0; lazyTarget = -1; }
+                        continue;
+                    }
+                    entry->stream = record.source.occurrence;
+                    entry->item = record.item;
+                    entry->frames = (*length - 44) / 6;
+                    logQueue("lazy bound lms_index=" + std::to_string(sourceIndices[owner]) +
+                        " lms_commands=" + std::to_string(activatingToken == token->second ? 1 : 0));
+                    if (activatingToken == token->second) { activatingToken = 0; lazyTarget = -1; }
+                    windowDirty = true;
+                    continue;
+                }
+            }
+        }
         queue_audio::PlaylistEntry track;
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
@@ -427,7 +461,8 @@ void QueueRoom::Impl::run() {
         }
         try {
             for (const auto &c : pending) {
-                if (c.first == 'I')
+                if (c.first == 'L') activateLazy(c.second);
+                else if (c.first == 'I')
                     beginSelection(c.second);
                 else if (c.first == 'Q') {
                     if (externalReleased) stopAcknowledged = true;
@@ -438,6 +473,11 @@ void QueueRoom::Impl::run() {
                     publish();
                 } else
                     command(c.first, c.second);
+            }
+            if (activatingToken && lazyItems.at(activatingToken)->abandoned()) {
+                logQueue("lazy abandoned reason=reader-left lms_commands=1");
+                activatingToken = 0;
+                lazyTarget = -1;
             }
             selectPath();
             if (deferredStop != std::chrono::steady_clock::time_point{} &&

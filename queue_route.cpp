@@ -19,6 +19,7 @@ struct Route::State {
         uint64_t epoch, revision;
         std::shared_ptr<Item> item;
         Resolver resolve;
+        std::function<std::shared_ptr<Item>()> ready;
     };
     std::map<std::string, Entry> entries;
     std::set<uint64_t> revoked;
@@ -46,11 +47,20 @@ std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t re
     if (state->revoked.count(epoch))
         throw std::logic_error("queue epoch revoked");
     const bool lazy = bool(resolve);
-    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, item, std::move(resolve)});
+    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, item, std::move(resolve), {}});
     if (!inserted.second && (inserted.first->second.item != item || lazy || inserted.first->second.resolve))
         throw std::logic_error("immutable queue URL reused");
     return "/music/queue.wav?session=" + state->session + "&epoch=" + std::to_string(epoch) + "&item=" + id +
            "&revision=" + std::to_string(revision);
+}
+std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, std::function<std::shared_ptr<Item>()> ready) {
+    if (!token(identity) || !resolve) throw std::invalid_argument("invalid deferred route");
+    const auto key = std::to_string(epoch) + "/" + identity + "/1";
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (state->revoked.count(epoch) || !state->entries.emplace(key, State::Entry{epoch, 1, {}, std::move(resolve), std::move(ready)}).second)
+        throw std::logic_error("deferred route reused");
+    return "/music/queue.wav?session=" + state->session + "&epoch=" + std::to_string(epoch) +
+           "&item=" + identity + "&revision=1";
 }
 void Route::revoke(uint64_t epoch) {
     std::lock_guard<std::mutex> lock(state->mutex);
@@ -75,7 +85,23 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         if (i != state->entries.end()) {
             item = i->second.item;
             resolve = i->second.resolve;
+            if (!item && i->second.ready) {
+                item = i->second.ready();
+                if (item) resolve = {};
+            }
         }
+    }
+    if (!item && resolve) {
+        // Validate probes before enrolling a PCM reader. Bounds are checked
+        // against the natural declaration once it is available.
+        if (r.method() != upnp::StreamRequest::Method::Get) { r.reply(503); return true; }
+        try {
+            const auto range = wavRange(r.header("Range"), UINT64_MAX);
+            if (range.last < 44 || range.first != 0) { r.reply(503); return true; }
+        } catch (const std::exception &) { r.reply(416); return true; }
+        try { item = resolve(r); } catch (const std::exception &) { }
+        if (!item || r.aborted() || r.peerClosed()) { r.disconnect(); return true; }
+        resolve = {};
     }
     if (!item) {
         auto id = r.parameter("item");

@@ -47,6 +47,23 @@ int main() {
             assert(route.serve(*r));
             return bytes;
         };
+        unsigned deferredStarts = 0;
+        auto deferredUrl = route.publishDeferred(2, "deferred-1", [&](upnp::StreamRequest &) {
+            ++deferredStarts;
+            return item;
+        });
+        assert(get(deferredUrl, "HEAD").find("503") != std::string::npos);
+        assert(get(deferredUrl, "GET", "bytes=0-43").find("503") != std::string::npos);
+        assert(get(deferredUrl, "GET", "invalid").find("416") != std::string::npos);
+        assert(get(deferredUrl, "GET", "bytes=999999-").find("503") != std::string::npos);
+        assert(deferredStarts == 0);
+        assert(get(deferredUrl) == get(url));
+        assert(deferredStarts == 1);
+        auto failedDeferred = route.publishDeferred(2, "deferred-fail", [](upnp::StreamRequest &) {
+            return std::shared_ptr<Item>{};
+        });
+        assert(get(failedDeferred).empty());
+        std::cout << "PASS deferred HTTP: probes do not activate; natural headers/audio identical; failure sends no headers" << std::endl;
         auto declaration = store.create({"lazy-1", 44100, pcm.size(), 1});
         unsigned starts = 0;
         bool abandoned = false;

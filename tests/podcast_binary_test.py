@@ -7,6 +7,11 @@ import time
 from urllib.parse import urlsplit
 from queue_binary_test import Binary
 
+def episode_items(host):
+    # Upcoming lazy parents have no exact size and are not continuations of
+    # the episode under test. Their publication is independently exercised.
+    return [entry for entry in host.items() if entry.get('metadata',{}).get('title')==host.titles[0]]
+
 def fetch(uri,stall=False):
     url=urlsplit(uri);conn=http.client.HTTPConnection(url.netloc,timeout=20)
     try:
@@ -25,14 +30,14 @@ for late,seconds in ((False,80),(False,320),(True,55)):
     host=Binary(rates=(44100,44100),seconds=seconds,remote_sources=True,remote_duration=20,
                 partial_source=late,queue_title_prefix='',queue_disk_mib=256)
     try:
-        host.until(lambda:len(host.items())>=1)
+        host.until(lambda:len(episode_items(host))>=1)
         # Enqueue is visible before the initial TRACK_NR Seek. Wait until
         # that Seek has completed so it cannot erase this simulated position.
         host.until(lambda:bool(host.sonos.actions('Play')))
         host.state(1,20 if late else 0)
         host.until(lambda:'queue item-end occurrence=1' in (host.base/'bridge.log').read_text(),timeout=60 if seconds>80 else 25)
-        host.until(lambda:sum((int(e["resource"]["size"])-44)//6 for e in host.items())>=44100*seconds)
-        entries=host.items()
+        host.until(lambda:sum((int(e["resource"]["size"])-44)//6 for e in episode_items(host))>=44100*seconds)
+        entries=episode_items(host)
         following=len(entries)
         assert following>=2
         if not late:assert following==2,following
@@ -68,20 +73,20 @@ host=Binary(rates=(44100,),seconds=55,remote_sources=True,remote_duration=20,
             resume_restart=True,queue_title_prefix='')
 try:
     host.pause_flush=True
-    host.until(lambda:len(host.items())>=2)
+    host.until(lambda:len(episode_items(host))>=2)
     host.state(2,2)
     time.sleep(3.2)
     additions=len(host.sonos.actions('AddURIToQueue'))
     host.state(2,2,state='PAUSED_PLAYBACK')
     host.until(lambda:'pause flush retained:' in (host.base/'bridge.log').read_text())
-    assert len(host.items())>=2
+    assert len(episode_items(host))>=2
     host.state(2,2,state='PLAYING')
     host.until(lambda:'resume echo adopted:' in (host.base/'bridge.log').read_text())
     host.until(lambda:len(host.packets('STMs'))>=2)
     assert len(host.sonos.actions('AddURIToQueue'))==additions
     mutations=[c for c in host.commands if not c.startswith('status ') and not c.endswith('?')]
     assert mutations==['pause 1','pause 0'],mutations
-    assert host.items()[1]['metadata']['title']=='Title & 0'
+    assert episode_items(host)[1]['metadata']['title']=='Title & 0'
     print('PASS continuation cached resume: parent LMS identity, pause/resume only, same immutable queue assets, no re-enqueue or audio restart',flush=True)
 finally:host.close()
 
@@ -89,7 +94,7 @@ finally:host.close()
 # retained overflow is a fault, even when the producer has already finished.
 host=Binary(rates=(44100,),seconds=55,remote_sources=True,remote_duration=20,queue_title_prefix='')
 try:
-    host.until(lambda:len(host.items())>=2)
+    host.until(lambda:len(episode_items(host))>=2)
     host.state(1,4)
     time.sleep(3.2)
     ends=len(host.packets('STMu'))
@@ -107,13 +112,13 @@ finally:host.close()
 host=Binary(rates=(44100,),seconds=20,remote_sources=True,remote_duration=20,
             partial_source=True,partial_bytes=9000,queue_title_prefix='')
 try:
-    host.until(lambda:len(host.items())==1)
+    host.until(lambda:len(episode_items(host))==1)
     host.until(lambda:bool(host.sonos.actions('Play')))
     host.state(1,15)
-    host.until(lambda:len(host.items())==2)
+    host.until(lambda:len(episode_items(host))==2)
     assert 'queue item-end occurrence=1' not in (host.base/'bridge.log').read_text()
     host.until(lambda:'queue item-end occurrence=1' in (host.base/'bridge.log').read_text(),timeout=25)
-    bodies=[fetch(entry['uri']) for entry in host.items()]
+    bodies=[fetch(entry['uri']) for entry in episode_items(host)]
     assert len(bodies)==2 and len(bodies[1])==44
     assert bodies[0][44:]==(b'\0\xe8\x03\0\x18\xfc')*(44100*20)
     host.state(1,19)

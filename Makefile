@@ -179,6 +179,7 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	python3 tests/podcast_binary_test.py
 	YENEY_REAL_LMS_PODCAST_ONLY=1 python3 tests/real_lms_test.py
 	python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_LAZY_ONLY=1 python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_VOLUME_ONLY=1 python3 tests/real_lms_test.py
 	python3 third_party/yeney-core/tests/decimator_quality.py --sox "$${YENEY_REAL_LMS_HOME:-$${YENEY_TEST_CACHE}/real-lms-9.1.1}/Bin/x86_64-linux/sox"
 	$(MAKE) -C third_party/yeney-core test
@@ -409,7 +410,7 @@ stream-metrics-lifetime-test: tests/stream_metrics_lifetime_test.cpp stream_metr
 	g++ -std=c++17 -g -O1 -Wall -Wextra -fsanitize=address -fno-omit-frame-pointer -I. -pthread -o $@ $<
 test-run: stream-metrics-lifetime-test
 
-$(QUEUE_ROOM_OBJS): %.o: %.cpp queue_room_internal.h queue_room.h room_status.h queue_playlist.h queue_lms_cli.h upnp/queue_actions.h core_queue_sink.h
+$(QUEUE_ROOM_OBJS): %.o: %.cpp queue_room_internal.h queue_room.h room_status.h queue_playlist.h queue_lms_cli.h queue_lazy_item.h queue_route.h upnp/queue_metadata.h upnp/queue_actions.h core_queue_sink.h
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
 
 

@@ -95,6 +95,13 @@ class CLIProxy(socketserver.ThreadingTCPServer):
             def handle(self):
                 wire=self.rfile.readline()
                 if not wire:return
+                hook=getattr(owner,'request_hook',None)
+                if hook:
+                    replacement=hook(wire)
+                    if replacement is not None:
+                        owner.records.append(dict(request=wire.decode().strip(),reply=replacement.decode().strip(),when=time.monotonic()))
+                        self.wfile.write(replacement)
+                        return
                 response=bytearray()
                 with socket.create_connection(('127.0.0.1',19090),timeout=30) as peer:
                     peer.sendall(wire)
@@ -400,12 +407,17 @@ try:
         from podcast_real_lms import run
         run(globals())
         raise SystemExit(0)
+    if os.environ.get('YENEY_REAL_LMS_LAZY_ONLY')=='1':
+        from lazy_real_lms import run
+        run(globals())
+        raise SystemExit(0)
     hires_only=os.environ.get('YENEY_REAL_LMS_HIRES_ONLY')=='1'
     if not hires_only:
         cli('playlistcontrol cmd:load track_id:'+','.join(window_ids),mac)
         wait(lambda:len(items())>=1,15,'initial takeover')
         select_item(0);wait(lambda:len(packets('STMs'))>=1)
         identity(0)
+        wait(lambda:len(items())==4,3,'current and three upcoming parents')
         assert len(sonos.actions('Play'))==1,sonos.calls
         controls_only=os.environ.get('YENEY_REAL_LMS_CONTROLS_ONLY')=='1'
         for index in (() if controls_only else range(1,8)):
@@ -415,8 +427,9 @@ try:
                 with sonos.lock:sonos.position['RelTime']=f'00:00:{second:02}'
             select_item(min(index,3));wait(lambda:len(packets('STMs'))>=index+1)
             identity(index)
+            wait(lambda:len(items())==min(index,2)+1+min(3,7-index),3,'complete natural six-parent window')
             if index>=3:
-                wait(lambda:len(items())<=4,3,'two history parents plus current/prepared')
+                wait(lambda:len(items())<=6,3,'two history parents plus current and upcoming')
                 wait(lambda:'reason=history-limit' in (base/'bridge.log').read_text(),3,'fenced history trim')
         if not controls_only:
             assert len(sonos.actions('Play'))==1 and len(sonos.actions('AddURIToQueue'))==8
@@ -511,13 +524,15 @@ try:
             wait(lambda:int(cli('playlist index ?',mac)[-1])==index,3,'native LMS identity')
             resource=selected_item['resource']
             target=rate if rate<=48000 else 44100 if rate==88200 else 48000
-            assert int(resource['sampleFrequency'])==target and resource['bitsPerSample']=='24',resource
+            assert ('sampleFrequency' not in resource or int(resource['sampleFrequency'])==target) and resource['bitsPerSample']=='24',resource
             import http.client
             from urllib.parse import urlsplit
             u=urlsplit(selected_item['uri']);c=http.client.HTTPConnection(u.netloc,timeout=8)
             c.request('GET',u.path+'?'+u.query);response=c.getresponse();body=response.read();c.close()
             expected_frames=rate*4//(rate//target)
-            assert len(body)==44+expected_frames*6 and int(resource['size'])==len(body),(len(body),resource)
+            assert len(body)==44+expected_frames*6 and int(response.getheader('Content-Length'))==len(body),(len(body),resource)
+            assert struct.unpack_from('<I',body,24)[0]==target
+            if 'size' in resource:assert int(resource['size'])==len(body)
             collected.append(body[44:])
         raw=(source_pcm.astype(np.int64)*256).astype('<i4');raw.tofile(base/'native-reference.raw')
         if rate>48000:

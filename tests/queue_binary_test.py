@@ -161,6 +161,8 @@ class CLI(socketserver.ThreadingTCPServer):
             def handle(self):
                 for wire in self.rfile:
                     line=wire.decode().strip()
+                    if line.startswith('players '):
+                        self.wfile.write((line+' count%3A0\n').encode());self.wfile.flush();continue
                     if line=='listen 1':
                         self.wfile.write(b'listen 1\n');self.wfile.flush();continue
                     mac,cmd=line.split(' ',1)
@@ -305,6 +307,16 @@ class Binary:
         raise AssertionError((self.errors,(self.base/'bridge.log').read_text()))
     def items(self):
         with self.sonos.lock:return list(self.sonos.items)
+    def prepared(self,track):
+        entries=self.items()
+        if len(entries)<track or 'resource' not in entries[track-1]:return False
+        url=urlsplit(entries[track-1]['uri'])
+        connection=http.client.HTTPConnection(url.netloc,timeout=2)
+        try:
+            connection.request('HEAD',url.path+'?'+url.query)
+            response=connection.getresponse();response.read()
+            return response.status==200
+        finally:connection.close()
     def state(self,track,seconds=0,state='PLAYING'):
         self.until(lambda:len(self.items())>=track and 'resource' in self.items()[track-1])
         rel=f'{int(seconds)//3600:02}:{int(seconds)//60%60:02}:{int(seconds)%60:02}'
@@ -374,10 +386,11 @@ def window_history():
             h.until(lambda:len(h.packets('STMs'))>=index+1)
             if index>=3:
                 h.until(lambda:h.items()[0]['metadata']['title']==h.titles[index-2])
+            h.until(lambda:len(h.items())==min(index,2)+1+min(3,7-index))
             entries=h.items()
             position=next(n for n,i in enumerate(entries) if i['metadata']['title']==title)
             assert position==min(index,2),entries
-            assert len(entries)<=4,entries
+            assert len(entries)<=6,entries
             for retained in entries[:position+1]:
                 url=urlsplit(retained['uri'])
                 connection=http.client.HTTPConnection(url.netloc,timeout=10)
@@ -403,14 +416,14 @@ def window_playlist_edits():
             ordinal=next(n+1 for n,i in enumerate(h.items()) if i['metadata']['title']==h.titles[index])
             h.state(ordinal)
             h.until(lambda:len(h.packets('STMs'))>=index+1)
-        h.until(lambda:len(h.items())==4)
+        h.until(lambda:len(h.items())==6)
         h.index=2
         before={i['metadata']['title']:dict(i) for i in h.items()}
         anchor=before[h.titles[2]]['uri']
         # Move a prepared parent before the audible item. The audible URI
         # survives; move is a fenced remove plus a verified insertion.
         h.order=[0,3,2,1,4,5,6,7];h.revision+=1
-        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (0,3,2,1)])
+        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (0,3,2,1,4,5)])
         after={i['metadata']['title']:i for i in h.items()}
         assert all(after[title]==item for title,item in before.items()),(before,after)
         assert h.sonos.position['TrackURI']==anchor
@@ -424,7 +437,7 @@ def window_playlist_edits():
         finally:connection.close()
         # Remove a retained history occurrence without disturbing playback.
         h.order=[3,2,1,4,5,6,7];h.index=1;h.revision+=1
-        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (3,2,1)])
+        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (3,2,1,4,5)])
         assert h.sonos.position['TrackURI']==anchor
         # A clear removes the audible identity and explicitly releases. The
         # worker must never answer a read-only LMS edit with a CLI mutation.

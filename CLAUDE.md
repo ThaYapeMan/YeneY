@@ -84,30 +84,19 @@ local/finite-remote quotas remain 256 MiB/8 GiB, with explicit quotas authoritat
 Permanent `queue window remove ordinal=... count=... lms_indices=...
 reason=history-limit` stdout lines describe trims without source URLs or tokens.
 
-Lazy HTTP declarations and the six-parent playlist model are still building
-blocks: the production relay does not yet publish lazy upcoming entries or
-reconcile LMS navigation against that model. The room worker now reads LMS
-status at its normal poll interval, preserves occurrence tokens across playlist
-edits and reconciles already-published parents through the fenced editor.
-Moves reinsert the original URI and DIDL; deletion releases the removed audio.
-Deleting or clearing the audible identity logs `queue window replace
-reason=audible-anchor-gone lms_commands=0` and releases the owned queue. No LMS
-mutation answers these snapshots. This is a partial stage 1b checkpoint; it
-does not yet create the missing upcoming lazy entries. Lazy activation,
-binding and abandonment diagnostics are therefore not production features yet.
-The lazy request primitive now requires a single worker activation claim against
-connected PCM readers. The final unbound reader's disconnect or timeout cancels
-that item and fences a late producer; a concurrent surviving reader preserves
-its one activation. This fence is not yet connected to production LMS commands.
-Stage 2 app navigation/seek commands remain unimplemented. See
-`docs/designs/sonos-queue-window.md` for the integration checkpoint. All current
-retention and diagnostics work without systemd.
-
-`queue_declaration.h` now shares the natural sink's exact local promise and
-remote upper-bound calculation. Its source-count conversion uses the core's
-decimation rate policy. Equality tests compare WAV headers, Content-Length and
-DIDL against produced sink items, including carried prefixes. Metadata probing
-and use of these declarations for production lazy routes remain unfinished.
+The room worker publishes absent upcoming parents through the fenced editor,
+using LMS duration as informational DIDL and omitting size and sampleFrequency.
+A deferred route waits up to three seconds for the natural sink declaration
+before sending any HTTP headers. HEAD, header-only and invalid range probes do
+not activate. A live PCM reader authorizes one reason-checked playlist index
+command through roomLmsCommand; natural preparation binds with zero commands.
+The worker confirms the requested LMS index before assigning its stream, keeps
+the owned window through the selection echo, and fences cancelled/late binding.
+Local source counts, decimation, M4A counts, transitions and carried prefixes
+remain owned by the natural sink. Finite remote items retain upper bounds;
+unknown source counts wait for sealed publication within the same deadline.
+History selection, stage 1c and stage 2 navigation remain unfinished. See
+`docs/designs/sonos-queue-window.md` for the owner-run deadline check.
 
 ## Finite remote queue items
 

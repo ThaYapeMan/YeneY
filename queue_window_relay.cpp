@@ -54,9 +54,51 @@ void QueueRoom::Impl::reconcileWindow() {
     }
     for (const auto &slot : window.around(audible->index)) {
         const auto found = entries.find(slot.token);
-        if (found == entries.end()) continue; // Lazy declaration/publication is a separate integration step.
+        if (found == entries.end()) {
+            if (slot.index <= audible->index) continue; // History selection is a later stage.
+            const auto lazy = std::make_shared<queue_audio::LazyItem>(nullptr, [this, token = slot.token] {
+                std::lock_guard<std::mutex> lock(mutex);
+                if (closing) return;
+                commands.push_back({'L', token});
+                this->changed.notify_all();
+            }, true);
+            upnp::QueueMetadata metadata;
+            metadata.url = speaker->controllerUri() + route.publishDeferred(1, "lazy-" + std::to_string(slot.token) + "-" + std::to_string(++lazySerial),
+                [lazy, token = slot.token](upnp::StreamRequest &request) {
+                    const auto start = std::chrono::steady_clock::now();
+                    auto item = lazy->resolve(request, std::chrono::seconds(3));
+                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
+                    std::printf("yeney: queue lazy %s token=%llu elapsed_ms=%lld lms_commands=%u\n",
+                        item ? "headers" : (ms >= 2990 ? "deadline" : "abandoned"),
+                        (unsigned long long)token, (long long)ms, lazy->commandCount());
+                    return item;
+                }, [lazy] { return lazy->ready(); });
+            metadata.session = session;
+            metadata.title = slot.track.title; metadata.artist = slot.track.artist; metadata.album = slot.track.album;
+            metadata.artwork = slot.track.artwork(host);
+            metadata.rate = 1; // Duration scale only; deferred DIDL omits sampleFrequency.
+            metadata.frames = uint64_t(slot.track.duration);
+            metadata.deferred = true;
+            upnp::sanitizeXmlFields({{"title", &metadata.title}, {"artist", &metadata.artist},
+                {"album", &metadata.album}, {"artwork", &metadata.artwork}});
+            // Placeholder identities descend from the top; core continuations grow
+            // upward from the midpoint. Never alias their first continuation IDs.
+            const auto id = UINT64_MAX - slot.token;
+            {
+                std::lock_guard<std::mutex> lock(sourceMutex);
+                sourceTokens[id] = slot.token;
+                sourceIndices[id] = slot.index;
+            }
+            lazyItems[slot.token] = lazy;
+            entries[slot.token].push_back({id, metadata.url, {}, slot.track.url, 0, metadata.title, 0, 0, upnp::queueDidl(metadata)});
+            owned.insert(metadata.url);
+            size_t ordinal = 1;
+            for (const auto &parent : wanted) ordinal += parent.uris.size();
+            logQueue("lazy declared ordinal=" + std::to_string(ordinal) + " lms_index=" + std::to_string(slot.index) +
+                " kind=" + (remotePlaybackSource(slot.track.id, slot.track.remote, slot.track.url) ? "upper-bound" : "deferred"));
+        }
         Edits::Parent parent{slot.token, {}};
-        for (const auto &entry : found->second) parent.uris.push_back(entry.uri);
+        for (const auto &entry : entries.at(slot.token)) parent.uris.push_back(entry.uri);
         wanted.push_back(std::move(parent));
     }
     // Live/unknown duration is outside the finite window model. Preserve the
@@ -93,6 +135,7 @@ void QueueRoom::Impl::reconcileWindow() {
     for (const auto &parent : before) {
         if (retained.count(parent.token)) continue;
         const auto &entry = entries.at(parent.token).front();
+        if (const auto lazy = lazyItems.find(parent.token); lazy != lazyItems.end()) lazy->second->cancel();
         queue.releaseParent(entry.owner ? entry.owner : entry.stream);
         for (const auto &uri : parent.uris) owned.erase(uri);
     }
@@ -101,5 +144,30 @@ void QueueRoom::Impl::reconcileWindow() {
     publishedWindowPolicy = window.policy();
     windowDirty = false;
     publish();
+}
+void QueueRoom::Impl::activateLazy(uint64_t token) {
+    // A naturally arriving stream owns its declaration even while count/rate
+    // discovery is pending. Its HTTP reader waits, without selecting it again.
+    append();
+    {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        for (const auto &record : queue.snapshot()) {
+            const auto identity = sourceTokens.find(record.source.occurrence);
+            if (!record.parent && identity != sourceTokens.end() && identity->second == token &&
+                record.incomplete.empty() && record.fault.empty()) return;
+        }
+    }
+    auto found = lazyItems.find(token);
+    const auto slot = window.find(token);
+    if (found == lazyItems.end() || !slot || activatingToken || !found->second->claimActivation()) return;
+    activatingToken = token;
+    lazyTarget = int(slot->index);
+    try {
+        roomLmsCommand(host, mac, "playlist index " + std::to_string(slot->index), "lazy-pcm-get", logQueue);
+        logQueue("lazy activated lms_index=" + std::to_string(slot->index) + " lms_commands=1");
+    } catch (...) {
+        found->second->cancel(); lazyTarget = -1; activatingToken = 0;
+        logQueue("lazy abandoned reason=activation-failed lms_commands=1");
+    }
 }
 } // namespace bridge
