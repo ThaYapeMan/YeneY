@@ -164,7 +164,7 @@ struct ItemState {
     const Descriptor descriptor;
     const uint64_t serial;
     uint64_t produced = 0;
-    bool finished = false, protectedItem = false;
+    bool finished = false, protectedItem = false, interrupted = false;
     std::exception_ptr fault;
     std::deque<RamChunk> ram;
     std::vector<HistoryChunk> history;
@@ -461,6 +461,16 @@ void Item::finish() {
     }
     store->changed.notify_all();
 }
+void Item::interrupt() {
+    std::lock_guard<std::mutex> writer(store->producer);
+    std::unique_lock<std::mutex> lock(store->mutex);
+    store->check(*state);
+    if (state->finished) return;
+    while (!state->ram.empty()) store->spill(*state, lock);
+    state->interrupted = true;
+    state->finished = true;
+    store->changed.notify_all();
+}
 void Item::cancel(const std::string &reason) {
     std::lock_guard<std::mutex> lock(store->mutex);
     if (!state->fault)
@@ -506,6 +516,8 @@ size_t Reader::read(char *output, size_t capacity, std::chrono::milliseconds tim
                 return n;
             }
             const uint64_t pcmOffset = offset - 44;
+            if (state->interrupted && pcmOffset >= state->produced * frameBytes)
+                throw ItemCancelled("LMS interrupted production; retained prefix only");
             if (state->finished && state->descriptor.kind == PromiseKind::UpperBound &&
                 pcmOffset >= state->produced * frameBytes)
                 return 0;

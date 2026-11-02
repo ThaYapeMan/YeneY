@@ -97,7 +97,16 @@ the owned window through the selection echo, and fences cancelled/late binding.
 Local source counts, decimation, M4A counts, transitions and carried prefixes
 remain owned by the natural sink. Finite remote items retain upper bounds;
 unknown source counts wait for sealed publication within the same deadline.
-History selection, stage 1c and stage 2 navigation remain unfinished. See
+Stage 1c is complete: LMS Next/Previous/jump/seek starts keep the owned queue
+and reconcile overlapping parents with fresh Browse/UpdateID fences. User Next
+retains the outgoing current and prior history parent, trimming beyond two.
+Retained complete targets reuse their audio; seek replaces only its declaration.
+Unproduced lazy rows never count as history. An out-of-range jump with no
+retained overlap, clear or loss of the current through reorder permits a rebuild,
+logged as `window rebuild reason=out-of-range|clear|reorder lms_commands=0`.
+Navigation diagnostics include from/to indices, slide/rebuild and history count;
+no LMS command echoes these changes. History selection from the app and stage 2
+navigation remain unfinished. See
 `docs/designs/sonos-queue-window.md` for the owner-run deadline check.
 
 ## Finite remote queue items

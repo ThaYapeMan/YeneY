@@ -1084,3 +1084,16 @@ empties it; restart from LMS afterwards. Run only on an intentionally chosen roo
 The other owner probes ruled out resource attributes, HEAD/nonzero Range 503,
 and shared versus unique DIDL ids. The replay script is preserved unchanged
 apart from its repository SPDX header.
+
+## LMS navigation history (stage 1c owner check)
+
+Play an album until two played rows appear above the current row in the Sonos
+app. Press Next in LMS or another LMS controller while the track is mid-play.
+Confirm that two history rows stay above the new current, three upcoming rows
+remain where available, and the queue does not visibly refill. Repeat with LMS
+Previous, a nearby jump and seek within the current track. Journal output must
+show `queue window lms-nav ... action=slide ... lms_commands=0` without a window
+rebuild. A distant jump without retained overlap may log exactly one
+`window rebuild reason=out-of-range lms_commands=0` and show fewer history rows
+when earlier audio has never been produced. App history selection and app
+Previous remain later-stage work.

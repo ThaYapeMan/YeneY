@@ -3,10 +3,10 @@
 YENEY-APPCONTROL-03 is incomplete. The room relay uses the fenced editor for
 natural history trimming and protects two history parents and their audio.
 Lazy playlist publication is integrated by APPCONTROL-06 below; LMS navigation
-reconciliation remains incomplete.
+reconciliation is integrated by APPCONTROL-07 (stage 1c).
 The APPCONTROL-04 partial checkpoint additionally connects read-only LMS status
 to the production model for edits of already-published parents.
-Next, Previous, restart and seek are not newly enabled. The README feature row
+App history selection, app Previous, restart and seek remain later work. The README feature row
 and step 3 qualification stay unchanged until controller integration and its
 acceptance scenarios pass.
 
@@ -52,8 +52,54 @@ three-second budget within the device's actual HTTP tolerance. Also verify
 normal app Next to a local, 96 kHz and ALAC lazy item. This task contacts no
 owner speaker and does not modify the owner checker or feature qualification.
 
-History selection (APPCONTROL-05 C), stage 1c, stage 2, the owner checker and
-README/DEVICE-VERIFICATION remain separate work.
+History selection (APPCONTROL-05 C), stage 2, the owner checker and
+README feature qualification remain separate work.
+
+## APPCONTROL-07 LMS navigation (stage 1c)
+
+An LMS controller navigation sends a flush/start pair, whereas natural
+decode-ahead sends another start without the flush. Previously `command('q')`
+unconditionally called `release`, discarded the published parents and advanced
+`firstStream`; `selectedNewPlay` then started the new queue at ordinal one.
+This is earlier than the missing-audible-anchor fallback. It explains why a
+mid-track user Next lost history while natural advance preserved it.
+
+The room worker keeps ownership for a 250 ms flush/start settle interval and
+marks the next producer as an LMS navigation. A flush without a paired start
+still honours an explicit stop. The next start reads status and is
+assigned to the confirmed status index itself, not the natural decode-ahead
+`index + 1`. Old speaker evidence is fenced until that producer has a natural
+immutable declaration. No LMS mutation is issued. App lazy activation keeps
+its existing single-command echo path.
+
+Reconciliation expands the new target's two-history/three-upcoming span using
+retained parents and new lazy upcoming declarations. A fresh target declaration
+can replace only its parent block; other overlapping blocks keep their original
+URIs, DIDL and continuation audio. The fenced editor uses a private plan identity
+for a changed declaration and anchors on an unchanged common parent. Complete
+retained targets with matching length and zero source offset reuse their audio.
+The speaker is sought to the resulting current ordinal after edits finish.
+
+Only existing produced audio can supply history. A placeholder does not become
+history merely because a jump crosses it. Interrupted production preserves the
+existing PCM prefix and immutable promise; a read into the unavailable suffix
+fails, without padding or fabricated audio. Explicit window protection keeps
+published audio protected even when producer chronology changes after Previous.
+Removing a parent releases its retained audio.
+
+If no retained parent bridges the windows, the same fenced editor replaces the
+parent vector and logs `window rebuild reason=out-of-range lms_commands=0`
+(or `reorder` when shuffle changes). Clear/missing current identity uses the
+explicit owned-queue release with `clear`/`reorder`. No unrelated queue is
+flushed. Navigation diagnostics are `queue window lms-nav from_index=<i>
+to_index=<j> action=<slide|rebuild> history=<n> lms_commands=0 kind=<kind>`;
+they contain no source URL or token. Natural boundaries also log their slide.
+
+Private LMS 9.1.1 tests use a fake Sonos speaker and an eight-entry album,
+checking user Next, Previous, seek, distant jump, retained PCM/URIs and zero
+bridge LMS selections. Physical speaker behavior remains an owner check.
+App history selection/tapping a played row and app Previous are deferred,
+as are stage 2 intent settling and parent-relative app seek.
 
 ## Earlier checkpoints (historical)
 
@@ -98,7 +144,7 @@ README/DEVICE-VERIFICATION remain separate work.
   LampaStream checkout is `/home/codex/src/LampaStream-consumer`, read-only for
   this task. No owner speaker, gateway, or deployment host is used by tests.
 
-## Remaining integration
+## Earlier integration notes (superseded by APPCONTROL-06/07 above)
 
 The production worker now captures each producer's playlist occurrence token
 alongside its LMS index. At the room poll interval it reads the full LMS status,

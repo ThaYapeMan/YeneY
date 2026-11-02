@@ -146,13 +146,15 @@ void CoreQueueSink::protectItems() {
     std::vector<std::shared_ptr<Item>> retained;
     {
         std::lock_guard<std::mutex> lock(mutex);
+        retained = publishedItems;
         const auto id = audibleId ? audibleId : active;
         const auto audible = records.find(id);
         const auto owner = audible != records.end() && audible->second.parent ? audible->second.parent :
                            id > UINT64_MAX / 2 ? UINT64_MAX - id : id;
         std::vector<uint64_t> before, after;
         for (const auto &p : records) {
-            if (p.first >= UINT64_MAX / 2 || !p.second.item || !p.second.incomplete.empty()) continue;
+            if (p.first >= UINT64_MAX / 2 || !p.second.item ||
+                (!p.second.incomplete.empty() && p.second.incomplete != "flushed")) continue;
             (p.first <= owner ? before : after).push_back(p.first);
         }
         if (before.size() > retainedHistory + 1) before.erase(before.begin(), before.end() - retainedHistory - 1);
@@ -167,6 +169,13 @@ void CoreQueueSink::protectItems() {
         if (tail != records.end()) retained.push_back(tail->second.item);
     }
     store.protect(retained);
+}
+void CoreQueueSink::protectWindow(std::vector<std::shared_ptr<Item>> items) {
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        publishedItems = std::move(items);
+    }
+    enqueue([this] { protectItems(); });
 }
 void CoreQueueSink::commit(uint64_t previous, const yeney::TrackDescriptor &next) {
     QueueRecord old;
@@ -837,6 +846,7 @@ void CoreQueueSink::resume() {
 }
 void CoreQueueSink::stop() { pause(); }
 void CoreQueueSink::flush() {
+    const bool retainInterrupted = retainInterruptedFlush.exchange(false);
     {
         std::lock_guard<std::mutex> lock(mutex);
         audibleSignals.clear();
@@ -849,7 +859,7 @@ void CoreQueueSink::flush() {
         prefixPending = false;
         mismatchSince = -1;
     }
-    enqueue([this] {
+    enqueue([this, retainInterrupted] {
         std::vector<std::shared_ptr<Item>> items;
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -872,7 +882,8 @@ void CoreQueueSink::flush() {
             } catch (const std::exception &) {
                 continue;
             } // Already failed/cancelled.
-            i->cancel("queue flushed");
+            if (retainInterrupted && retainedHistory && i->producedFrames()) i->interrupt();
+            else i->cancel("queue flushed");
         }
     });
 }

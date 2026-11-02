@@ -26,6 +26,7 @@ void QueueRoom::Impl::externalStop(const std::string &reason) {
     speakerCommand("stop", reason);
 }
 void QueueRoom::Impl::observe() {
+    if (lmsNavigation) return; // Old speaker evidence cannot echo a new LMS selection.
     const auto live = speaker->speaker();
     if (live.coordinator != room.name && (!stoppedPlay || started || state == "PLAYING" || state == "PAUSED") && !externalReleased) {
         takeoverSource = "other-group member";

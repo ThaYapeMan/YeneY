@@ -407,6 +407,10 @@ try:
         from podcast_real_lms import run
         run(globals())
         raise SystemExit(0)
+    if os.environ.get('YENEY_REAL_LMS_NAV_ONLY')=='1':
+        from navigation_real_lms import run
+        run(globals())
+        raise SystemExit(0)
     if os.environ.get('YENEY_REAL_LMS_LAZY_ONLY')=='1':
         from lazy_real_lms import run
         run(globals())
@@ -446,7 +450,8 @@ try:
         wait(lambda:len(packets('STMs'))>before and sonos.transport_state=='PLAYING',10,'seek confirmed start')
         # A relay seek is a newly rendered remaining source, never REL_TIME on
         # the previous asset. Its duration proves LMS applied the source offset.
-        duration=items()[0]['resource']['duration']
+        with sonos.lock: current_uri=sonos.position['TrackURI']
+        duration=next(item for item in items() if item['uri']==current_uri)['resource']['duration']
         seconds=sum(int(v)*factor for v,factor in zip(duration.split(':'),(3600,60,1)))
         assert 10<=seconds<=15,('seek remaining duration',duration)
         wait(lambda:9<=float(cli('time ?',mac)[-1])<=14,3,'LMS seek source offset')
@@ -554,7 +559,9 @@ try:
         # source count is available before the boundary, independently of EOF.
         if kind=='flac':
             assert 'exact remaining=' in (base/'bridge.log').read_text().split('queue command strm s')[-1]
-        assert 1.8 <= (int(items()[0]['resource']['size'])-44)/6/target <= 2.2,items()[0]['resource']
+        with sonos.lock: seek_uri=sonos.position['TrackURI']
+        seek_resource=next(item for item in items() if item['uri']==seek_uri)['resource']
+        assert 1.8 <= (int(seek_resource['size'])-44)/6/target <= 2.2,seek_resource
         print(f'PASS real LMS native {kind} album {rate} -> {target}: first publication {first_add-request["when"]:.3f} s before DSCO, exact WAV sizes, three PCM-continuous joins, matching LMS index; seek {time.monotonic()-seek_start:.3f} s',flush=True)
         cli('stop',mac)
     unknown_track=next(t for t in tracks if t['url'].endswith('unknown-96000.flac'))

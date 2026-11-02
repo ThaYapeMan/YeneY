@@ -51,12 +51,34 @@ upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
     io.log = logQueue;
     return io;
 }
+void QueueRoom::Impl::releaseWindowParent(uint64_t token, uint64_t before) {
+    std::lock_guard<std::mutex> lock(sourceMutex);
+    for (const auto &source : sourceTokens)
+        if (source.second == token && source.first < before && source.first < UINT64_MAX / 2)
+            queue.releaseParent(source.first);
+}
 void QueueRoom::Impl::release(bool stop) {
+    lmsNavigation = false;
+    navigationDeadline = {};
+    navigationItem.reset();
+    publishedWindowIndex.reset();
     auto cleanupOwned = std::move(owned);
     owned.clear();
     std::set<uint64_t> parents;
-    for (const auto &item : items) parents.insert(item.owner ? item.owner : item.stream);
+    for (const auto &item : items) {
+        parents.insert(item.owner ? item.owner : item.stream);
+        if (item.owner && !item.segmentOffset) parents.insert(item.stream);
+    }
     for (auto parent : parents) queue.releaseParent(parent);
+    std::set<uint64_t> tokens;
+    {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        for (auto parent : parents) {
+            const auto token = sourceTokens.find(parent);
+            if (token != sourceTokens.end()) tokens.insert(token->second);
+        }
+    }
+    for (auto token : tokens) releaseWindowParent(token);
     for (const auto &lazy : lazyItems) lazy.second->cancel();
     lazyItems.clear();
     lazyTarget = -1; activatingToken = 0;
@@ -73,6 +95,8 @@ void QueueRoom::Impl::release(bool stop) {
     publish();
 }
 void QueueRoom::Impl::command(char c, uint64_t next) {
+    const bool navigationTimeout = c == 'Z';
+    if (navigationTimeout) c = 'q';
     if (c == 'H') {
         const auto snapshot = reader.read(host, mac);
         const auto audible = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
@@ -146,7 +170,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
             logQueue("resume echo adopted: same LMS item/time, retained audio, no renderer restart");
         } else {
             queue.flush();
-            command('q', next);
+            command('Z', next); // Existing cached-resume mismatch replacement.
             queue.resumeReceivedStart();
             logQueue("resume echo changed item/time: honour LMS selection");
         }
@@ -159,6 +183,32 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         if (snapshot.mode != "stop" && snapshot.index == unsigned(lazyTarget.load())) return;
     }
     if (c == 'q') {
+        if (!navigationTimeout && started && !externalReleased && !sourceAway) {
+            // A controller navigation starts a fresh producer (q+s), unlike
+            // decode-ahead's natural s. Wait for the paired start; its status
+            // read verifies the target before any speaker edit.
+            {
+                std::lock_guard<std::mutex> lock(sourceMutex);
+                navigationFrom = playlist.index;
+                for (const auto &entry : items) if (entry.stream == current) {
+                    const auto owner = entry.owner ? entry.owner : entry.stream;
+                    const auto index = sourceIndices.find(owner);
+                    if (index != sourceIndices.end()) navigationFrom = index->second;
+                }
+                lmsNavigation = true;
+                remoteNaturalSuccessor = false;
+                finitePause = false;
+                pausedFlushRetained = false;
+                handoffAt = {};
+                navigationFirst = next;
+                navigationItem.reset();
+                navigationDeadline = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(queue_audio::QueueWindow::settleMs);
+                stoppedPlay = true; // The next s describes snapshot.index itself.
+                ownUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                return;
+            }
+        }
         remoteNaturalSuccessor = false;
         finitePause = false;
         pausedFlushRetained = false;
@@ -226,7 +276,7 @@ void QueueRoom::Impl::append() {
             }
         }
         if (std::any_of(items.begin(), items.end(),
-                        [&](const auto &i) { return i.stream == record.source.occurrence; }))
+                        [&](const auto &i) { return i.stream == record.source.occurrence || i.owner == record.source.occurrence; }))
             continue;
         if (record.source.rate > queue.maxSampleRate())
             throw TrackFault("queue-rate-unsupported rate=" + std::to_string(record.source.rate) +
@@ -248,10 +298,29 @@ void QueueRoom::Impl::append() {
             const auto token = sourceTokens.find(owner);
             if (token != sourceTokens.end()) {
                 const auto lazy = lazyItems.find(token->second);
+                if (!lmsNavigation || owner != navigationFirst) {
+                    auto cached = std::find_if(items.begin(), items.end(), [&](const auto &i) {
+                        const auto identity = sourceTokens.find(i.owner ? i.owner : i.stream);
+                        return i.item && !i.segmentOffset && identity != sourceTokens.end() &&
+                               identity->second == token->second;
+                    });
+                    if (cached != items.end() && record.source.occurrence < cached->stream)
+                        continue; // A newer producer already owns this retained URI's clock.
+                    if (cached != items.end() && cached->item->descriptor().kind == queue_audio::PromiseKind::Exact && !cached->originMs &&
+                        cached->frames == (*length - 44) / 6 && cached->item->producedFrames() == cached->frames) {
+                        // After LMS Previous, natural decode-ahead may revisit
+                        // a retained upcoming parent. Bind its new producer
+                        // clock to the existing URI instead of appending it.
+                        if (!cached->owner) cached->owner = cached->stream;
+                        cached->stream = record.source.occurrence;
+                        windowDirty = true;
+                        continue;
+                    }
+                }
                 auto entry = std::find_if(items.begin(), items.end(), [&](const auto &i) {
                     return !i.item && sourceTokens[i.stream] == token->second;
                 });
-                if (lazy != lazyItems.end() && entry != items.end()) {
+                if (!lmsNavigation && lazy != lazyItems.end() && entry != items.end()) {
                     if (!lazy->second->publish(record.item)) {
                         queue.releaseParent(owner);
                         if (activatingToken == token->second) { activatingToken = 0; lazyTarget = -1; }
@@ -331,6 +400,13 @@ void QueueRoom::Impl::append() {
                                     " occurrence=" + std::to_string(record.source.occurrence));
         upnp::SoapResult result;
         const auto didl = upnp::queueDidl(metadata);
+        if (lmsNavigation && owner == navigationFirst && !record.parent) {
+            navigationItem = Entry{record.source.occurrence, metadata.url, record.item, track.url,
+                                  metadata.frames, metadata.title, 0, 0, didl, track.startOffsetMs};
+            windowDirty = true;
+            nextWindowPoll = {};
+            return;
+        }
         try {
             result = actions.add(metadata.url, didl,
                                  insertion == items.size() ? 0 : unsigned(insertion + 1));
@@ -440,6 +516,15 @@ void QueueRoom::Impl::trimHistory() {
     Edits(std::move(io)).apply(parents, wanted, audible);
     for (size_t n = 0; n < count; ++n) {
         const auto token = parents[n].token;
+        uint64_t identity = 0;
+        {
+            std::lock_guard<std::mutex> lock(sourceMutex);
+            const auto found = sourceTokens.find(token);
+            if (found != sourceTokens.end()) identity = found->second;
+        }
+        if (identity) releaseWindowParent(identity);
+        for (const auto &item : items)
+            if (item.owner == token && !item.segmentOffset) queue.releaseParent(item.stream);
         for (const auto &uri : parents[n].uris) owned.erase(uri);
         items.erase(std::remove_if(items.begin(), items.end(), [token](const auto &item) {
             return (item.owner ? item.owner : item.stream) == token;
@@ -480,13 +565,26 @@ void QueueRoom::Impl::run() {
                 lazyTarget = -1;
             }
             selectPath();
+            if (navigationDeadline != std::chrono::steady_clock::time_point{} &&
+                std::chrono::steady_clock::now() >= navigationDeadline) {
+                navigationDeadline = {};
+                try {
+                    const auto snapshot = reader.read(host, mac);
+                    if (snapshot.entries.empty()) {
+                        logQueue("window rebuild reason=clear lms_commands=0");
+                        logQueue("window lms-nav from_index=" + std::to_string(navigationFrom) +
+                            " to_index=0 action=rebuild history=0 lms_commands=0 kind=clear");
+                    }
+                } catch (const std::exception &) { logQueue("window snapshot unavailable reason=cli-read"); }
+                command('Z', navigationFirst); // No paired start: honour the stop.
+            }
             if (deferredStop != std::chrono::steady_clock::time_point{} &&
                 std::chrono::steady_clock::now() >= deferredStop) {
                 deferredStop = {};
                 resumeEchoUntil = 0;
                 resumeFlush = false;
                 queue.flush();
-                command('q', deferredNext);
+                command('Z', deferredNext); // Resume echo expired without a start.
             }
             observe();
             append();

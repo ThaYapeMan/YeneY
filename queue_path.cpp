@@ -92,6 +92,8 @@ void QueueRoom::Impl::beginSelection(uint64_t request) {
     if (stoppedPlay && stopAcknowledged) roomStopped = false;
     selectedRequest = request;
     selectedCommand = requestedCommand;
+    navigationSelecting = navigationDeadline != std::chrono::steady_clock::time_point{};
+    navigationDeadline = {}; // A paired start now owns the pending navigation.
     selecting = true;
     selectionKnown = false;
     // A handoff temporarily releases transport before its new renderer is
@@ -124,7 +126,7 @@ void QueueRoom::Impl::selectPath() {
             playlist = reader.read(host, mac);
             window.reconcile(playlist);
             const auto target = lazyTarget.load();
-            const auto index = target >= 0 && playlist.index == unsigned(target) ? unsigned(target) :
+            const auto index = navigationSelecting ? playlist.index : target >= 0 && playlist.index == unsigned(target) ? unsigned(target) :
                 playlist.index + (selectedNewPlay ? 0 : 1);
             if (index < playlist.entries.size()) {
                 track = playlist.entries[index];
@@ -183,6 +185,7 @@ void QueueRoom::Impl::selectPath() {
             selectedSourceIndex = selectedIndex;
             const auto slot = selectedIndex < 0 ? std::nullopt : window.atIndex(unsigned(selectedIndex));
             selectedToken = slot ? slot->token : 0;
+            if (navigationSelecting) navigationToken = selectedToken;
         }
         selectionKnown = true;
         if (!selectedNewPlay && selectedLocal != paths.isRelay()) {

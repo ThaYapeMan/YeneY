@@ -99,6 +99,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
             return true; // Keep immutable audio until the paired start is verified.
         }
         if (c == 'q' || c == 's' || c == 'p' || c == 'u' || c == 'f') {
+            if (c == 'q') queue.retainInterruptedOnNextFlush();
             std::lock_guard<std::mutex> lock(mutex);
             commands.push_back({c, queue.latestOccurrence() + 1});
             changed.notify_all();

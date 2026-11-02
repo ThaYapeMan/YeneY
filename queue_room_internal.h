@@ -78,8 +78,17 @@ struct QueueRoom::Impl {
         std::string title;
         uint64_t owner = 0, segmentOffset = 0;
         std::string didl;
+        unsigned originMs = 0;
     };
     std::vector<Entry> items;
+    bool lmsNavigation = false;
+    bool navigationSelecting = false;
+    unsigned navigationFrom = 0;
+    std::optional<unsigned> publishedWindowIndex;
+    uint64_t navigationFirst = 0;
+    uint64_t navigationToken = 0;
+    std::optional<Entry> navigationItem;
+    std::chrono::steady_clock::time_point navigationDeadline{};
     std::map<uint64_t, std::shared_ptr<queue_audio::LazyItem>> lazyItems;
     std::atomic<int> lazyTarget{-1};
     uint64_t activatingToken = 0, lazySerial = 0;
@@ -135,6 +144,7 @@ struct QueueRoom::Impl {
     void handoffComplete();
     void publish();
     void release(bool stop = false);
+    void releaseWindowParent(uint64_t token, uint64_t before = UINT64_MAX);
     void command(char c, uint64_t next);
     void append();
     void trimHistory();

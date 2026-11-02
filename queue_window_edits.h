@@ -42,7 +42,22 @@ public:
         auto expected = flatten(current);
         (void)flatten(wanted);
         std::vector<QueueWindow::Token> from, to;
-        for (const auto &parent : current) from.push_back(parent.token);
+        // A fresh LMS seek may replace one parent's immutable declaration.
+        // Give only that old block a private plan identity; other blocks and
+        // their URIs remain eligible for the anchored common subsequence.
+        auto alias = UINT64_MAX;
+        for (auto &parent : current) {
+            const auto replacement = std::find_if(wanted.begin(), wanted.end(),
+                [&](const auto &p) { return p.token == parent.token; });
+            if (replacement != wanted.end() && replacement->uris != parent.uris) {
+                if (anchor && *anchor == parent.token)
+                    throw std::invalid_argument("cannot replace window anchor");
+                while (std::any_of(current.begin(), current.end(), [&](const auto &p) { return p.token == alias; }) ||
+                       std::any_of(wanted.begin(), wanted.end(), [&](const auto &p) { return p.token == alias; })) --alias;
+                parent.token = alias--;
+            }
+            from.push_back(parent.token);
+        }
         for (const auto &parent : wanted) {
             to.push_back(parent.token);
             const auto old = std::find_if(current.begin(), current.end(),

@@ -476,5 +476,29 @@ int main() {
         std::cout << "PASS immutable completed queue asset: LMS producer flush preserves exact WAV bytes and "
                      "length\n";
     }
+    for (bool navigation : {false, true}) {
+        CoreQueueSink sink(navigation ? "NavigationFlush" : "OrdinaryFlush", c, 1);
+        sink.windowRetention(2, 3);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 100, 0, 0});
+        sink.trackBoundary(0, {8000, 16, 2, false}, false);
+        std::vector<yeney::Frame> pcm(50, {65536, -65536});
+        assert(sink.write(pcm.data(), pcm.size(), false) == pcm.size());
+        sink.waitIdle();
+        auto item = sink.snapshot().front().item;
+        if (navigation) sink.retainInterruptedOnNextFlush();
+        sink.flush();
+        sink.waitIdle();
+        bool failed = false;
+        try {
+            (void)item->contentLength();
+            assert(navigation);
+            char bytes[300];
+            assert(item->reader(44).read(bytes, sizeof(bytes)) == sizeof(bytes));
+            assert(item->producedFrames() == 50);
+        } catch (const ItemCancelled &) { failed = true; }
+        assert(failed != navigation);
+    }
+    puts("PASS navigation flush retention: interrupted prefix survives LMS navigation; ordinary flush cancellation unchanged");
     std::filesystem::remove_all(root);
 }

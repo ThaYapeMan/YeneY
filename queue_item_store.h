@@ -58,6 +58,7 @@ public:
     bool finished() const;
     void append(const yeney::Frame *, size_t count, bool processed);
     void finish(); // Exact requires count; UpperBound permits short EOF; pending seals
+    void interrupt(); // Retain produced audio; unavailable suffix still fails.
     void cancel(const std::string &reason = "cancelled");
     void releaseAudio(); // invalidate readers and release RAM/disk immediately
     Reader reader(uint64_t byteOffset = 0) const;

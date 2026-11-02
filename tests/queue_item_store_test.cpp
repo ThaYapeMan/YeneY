@@ -471,6 +471,24 @@ void http() {
 }
 } // namespace
 int main() {
+    {
+        Temp temp;
+        Store store("interrupted", {temp.root, 4096, 1024 * 1024});
+        auto item = store.create({"retained", 44100, 1000, 1});
+        const auto pcm = signal(200);
+        item->append(pcm.data(), pcm.size(), false);
+        item->interrupt();
+        assert(item->contentLength() == 6044);
+        auto reader = item->reader(44);
+        std::vector<char> bytes(1200);
+        assert(reader.read(bytes.data(), bytes.size()) == bytes.size());
+        const auto expected = reference(pcm, 44100);
+        assert(std::equal(bytes.begin(), bytes.end(), expected.begin() + 44));
+        fails([&] { reader.read(bytes.data(), 1); }, "retained prefix");
+        item->releaseAudio();
+        fails([&] { item->reader(44).read(bytes.data(), 1); }, "left queue window");
+        puts("PASS interrupted history: produced PCM preserved byte-identically, promise unchanged, unavailable suffix fails, removal releases audio");
+    }
     packing();
     history();
     processedHistory();

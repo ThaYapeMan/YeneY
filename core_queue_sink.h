@@ -56,6 +56,7 @@ class CoreQueueSink : public yeney::Sink {
     std::deque<yeney::AudibleState> speakerStates;
     bool speakerClock = false;
     std::atomic_bool queueFailed{false};
+    std::atomic_bool retainInterruptedFlush{false};
     std::function<bool(char, uint32_t)> commandHandler;
     std::optional<yeney::PlaybackState> speakerState;
     std::optional<uint32_t> speakerElapsed;
@@ -63,6 +64,7 @@ class CoreQueueSink : public yeney::Sink {
     uint64_t continuationSerial = UINT64_MAX / 2, producingSegment = 0;
     uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
     unsigned retainedHistory = 0, retainedUpcoming = 1;
+    std::vector<std::shared_ptr<Item>> publishedItems;
     bool prefixPending = false, freshRender = false, cachedReanchor = false;
     std::atomic_bool refetchRequested{false}, startRequested{false}, cachedStartRequested{false};
     std::atomic<uint64_t> latestProducer{0};
@@ -102,6 +104,7 @@ public:
     void useSpeakerClock();
     // Bind before Player::run. The handler enqueues work and must not wait.
     void onQueueCommand(std::function<bool(char, uint32_t)>);
+    void retainInterruptedOnNextFlush() { retainInterruptedFlush = true; }
     bool queueCommand(char, uint32_t) override;
     // Before an LMS re-render/seek run: do not carry an old outgoing tail
     // into the independently selected asset. Cached mixed intros are untouched.
@@ -138,6 +141,7 @@ public:
     void waitIdle();
     // Configure before playback. Parent budgets do not count continuations.
     void windowRetention(unsigned history, unsigned upcoming);
+    void protectWindow(std::vector<std::shared_ptr<Item>>);
     void releaseParent(uint64_t occurrence);
     std::vector<QueueRecord> snapshot() const;
     double secondsSinceStart() const { return now(); }

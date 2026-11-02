@@ -2,6 +2,9 @@
 #include "queue_room_internal.h"
 namespace bridge {
 void QueueRoom::Impl::publish() {
+    std::vector<std::shared_ptr<queue_audio::Item>> retained;
+    for (const auto &entry : items) if (entry.item) retained.push_back(entry.item);
+    queue.protectWindow(std::move(retained));
     ModeStatus v;
     v.requested = v.active = "queue";
     v.reason = pathReason;

@@ -446,7 +446,7 @@ def window_playlist_edits():
         h.order=[];h.index=0;h.revision+=1
         h.until(lambda:not h.items())
         log=(h.base/'bridge.log').read_text()
-        assert 'queue window replace reason=audible-anchor-gone lms_commands=0' in log,log
+        assert 'queue window rebuild reason=clear lms_commands=0' in log,log
         assert 'queue window insert ordinal=' in log and 'reason=playlist-change' in log,log
         assert all(command.startswith('status ') for command in h.commands),h.commands
         print('PASS production playlist reconciliation: prepared move preserves URI/DIDL/audio and audible anchor; retained delete; clear releases with zero LMS mutations',flush=True)

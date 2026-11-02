@@ -3,6 +3,7 @@
 namespace bridge {
 void QueueRoom::Impl::reconcileWindow() {
     if (!started || faulted || externalReleased || sourceAway || !current || selecting) return;
+    if (lmsNavigation && !navigationItem) return;
     const auto now = std::chrono::steady_clock::now();
     if (now < nextWindowPoll) return;
     nextWindowPoll = now + std::chrono::milliseconds(pollMs);
@@ -38,11 +39,14 @@ void QueueRoom::Impl::reconcileWindow() {
             if (const auto slot = window.find(token->second)) sourceIndices[owner] = slot->index;
         }
     }
-    const auto audible = window.find(anchor);
+    const auto audible = lmsNavigation ? window.find(navigationToken) : window.find(anchor);
     if (!audible) {
         // Deleting/clearing the audible occurrence makes preserving its LMS
         // identity impossible. Release only our owned queue; no CLI echo.
-        logQueue("window replace reason=audible-anchor-gone lms_commands=0");
+        logQueue("window rebuild reason=" + std::string(snapshot.entries.empty() ? "clear" : "reorder") + " lms_commands=0");
+        logQueue("window lms-nav from_index=" + std::to_string(publishedWindowIndex.value_or(playlist.index)) +
+            " to_index=" + std::to_string(snapshot.index) + " action=rebuild history=0 lms_commands=0 kind=" +
+            (snapshot.entries.empty() ? "clear" : "reorder"));
         release(true);
         queue.flush();
         firstStream = queue.latestOccurrence() + 1;
@@ -52,8 +56,48 @@ void QueueRoom::Impl::reconcileWindow() {
         windowDirty = false;
         return;
     }
+    bool reused = false;
+    if (lmsNavigation) {
+        auto &target = entries[navigationToken];
+        // A complete retained target serves the speaker from its existing URI.
+        // Seek runs have a different declaration and need a new URI.
+        if (target.size() == 1 && target.front().item &&
+            target.front().item->descriptor().kind == queue_audio::PromiseKind::Exact &&
+            target.front().item->producedFrames() == target.front().frames &&
+            !target.front().originMs && target.front().frames == navigationItem->frames && snapshot.timeMs < 500) {
+            if (!target.front().owner) target.front().owner = target.front().stream;
+            target.front().stream = navigationItem->stream;
+            owned.erase(navigationItem->uri);
+            reused = true;
+        } else {
+            for (const auto &entry : target) owned.erase(entry.uri);
+            if (!target.empty()) queue.releaseParent(target.front().owner ? target.front().owner : target.front().stream);
+            releaseWindowParent(navigationToken, navigationFirst);
+            if (const auto lazy = lazyItems.find(navigationToken); lazy != lazyItems.end()) {
+                lazy->second->cancel();
+                lazyItems.erase(lazy);
+            }
+            target = {*navigationItem};
+        }
+    }
     for (const auto &slot : window.around(audible->index)) {
-        const auto found = entries.find(slot.token);
+        auto found = entries.find(slot.token);
+        if (lmsNavigation && slot.index > audible->index && found != entries.end() &&
+            !found->second.empty() && found->second.front().item &&
+            (found->second.front().originMs || (found->second.front().item->finished() &&
+             found->second.front().item->producedFrames() < found->second.front().frames))) {
+            // A seek/interrupted suffix is valid history, but cannot supply a later
+            // full play of that parent from the beginning.
+            const auto &old = found->second.front();
+            queue.releaseParent(old.owner ? old.owner : old.stream);
+            releaseWindowParent(slot.token, navigationFirst);
+            for (const auto &entry : found->second) owned.erase(entry.uri);
+            if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end()) lazy->second->cancel();
+            entries.erase(found);
+            found = entries.end();
+        }
+        if (slot.index < audible->index && found != entries.end() &&
+            (found->second.empty() || !found->second.front().item)) continue;
         if (found == entries.end()) {
             if (slot.index <= audible->index) continue; // History selection is a later stage.
             const auto lazy = std::make_shared<queue_audio::LazyItem>(nullptr, [this, token = slot.token] {
@@ -125,7 +169,17 @@ void QueueRoom::Impl::reconcileWindow() {
         logQueue(message + " lms_indices=" + indices + " reason=playlist-change" +
                  " shuffle=" + std::to_string(snapshot.shuffle) + " repeat=" + std::to_string(snapshot.repeat));
     };
-    Edits(std::move(io)).apply(before, wanted, anchor);
+    std::optional<uint64_t> editAnchor = anchor;
+    bool overlap = false;
+    if (lmsNavigation) {
+        editAnchor.reset();
+        for (const auto &old : before) for (const auto &next : wanted) {
+            if (old.token != next.token) continue;
+            overlap = true;
+            if (old.uris == next.uris) editAnchor = old.token;
+        }
+    }
+    Edits(std::move(io)).apply(before, wanted, editAnchor);
     std::vector<Entry> reordered;
     std::set<uint64_t> retained;
     for (const auto &parent : wanted) {
@@ -137,9 +191,50 @@ void QueueRoom::Impl::reconcileWindow() {
         const auto &entry = entries.at(parent.token).front();
         if (const auto lazy = lazyItems.find(parent.token); lazy != lazyItems.end()) lazy->second->cancel();
         queue.releaseParent(entry.owner ? entry.owner : entry.stream);
+        releaseWindowParent(parent.token);
+        // A cached target may have a newer LMS producer clock while serving
+        // its retained older audio. Retire both when the parent leaves.
+        if (entry.owner && entry.owner != entry.stream) queue.releaseParent(entry.stream);
         for (const auto &uri : parent.uris) owned.erase(uri);
     }
     items.swap(reordered);
+    if (lmsNavigation) {
+        const auto target = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
+            return entry.stream == navigationItem->stream;
+        });
+        if (target == items.end()) throw std::logic_error("navigation target missing");
+        current = target->stream;
+        actions.seekTrack(unsigned(target - items.begin()) + 1);
+        expectedState = "PLAYING";
+        actions.play();
+        waitingForPlay = true;
+        playAt = std::chrono::steady_clock::now();
+        fastPoll();
+        if (!overlap) logQueue("window rebuild reason=" + std::string(snapshot.shuffle != previous.shuffle ? "reorder" : "out-of-range") + " lms_commands=0");
+        unsigned history = 0;
+        for (const auto &parent : wanted) {
+            if (parent.token == navigationToken) break;
+            ++history;
+        }
+        logQueue("window lms-nav from_index=" + std::to_string(navigationFrom) + " to_index=" +
+            std::to_string(audible->index) + " action=" + (overlap ? "slide" : "rebuild") +
+            " history=" + std::to_string(history) + " lms_commands=0 kind=" +
+            (navigationFrom == audible->index ? "seek" : navigationFrom + 1 == audible->index ? "next" :
+             navigationFrom == audible->index + 1 ? "previous" : "jump"));
+        if (reused) logQueue("window retained target audio reused lms_commands=0");
+        lmsNavigation = false;
+        navigationItem.reset();
+    } else if (publishedWindowIndex && *publishedWindowIndex != audible->index) {
+        unsigned history = 0;
+        for (const auto &parent : wanted) {
+            if (parent.token == audible->token) break;
+            ++history;
+        }
+        logQueue("window lms-nav from_index=" + std::to_string(*publishedWindowIndex) +
+            " to_index=" + std::to_string(audible->index) + " action=slide history=" +
+            std::to_string(history) + " lms_commands=0 kind=natural");
+    }
+    publishedWindowIndex = audible->index;
     playlist = std::move(snapshot);
     publishedWindowPolicy = window.policy();
     windowDirty = false;

@@ -136,6 +136,14 @@ int main() {
     assert(queue.uris == std::vector<std::string>{"three"});
     executor.apply(wanted, {});
     assert(queue.uris.empty());
+    before = {{1,{"history"}},{2,{"old-current"}},{3,{"upcoming"}}};
+    wanted = {{1,{"history"}},{2,{"seek-current"}},{3,{"upcoming"}}};
+    queue = {50,{"history","old-current","upcoming"}};
+    const auto removedBefore = removes, insertedBefore = inserts;
+    executor.apply(before, wanted, 1);
+    assert(queue.uris == std::vector<std::string>({"history","seek-current","upcoming"}));
+    assert(removes == removedBefore + 1 && inserts == insertedBefore + 1);
+    puts("PASS LMS seek window: replace only changed declaration, retained history/upcoming URIs preserved with fresh fences");
     puts("PASS queue window fencing: continuation blocks, fresh UpdateID, no-op ownership, foreign edit and unchanged revision stop edits");
     puts("PASS queue window edit plans: 4320 anchored permutations; append, trim and missing-anchor fence");
 }
