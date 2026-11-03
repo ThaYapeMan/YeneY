@@ -97,6 +97,19 @@ the owned window through the selection echo, and fences cancelled/late binding.
 Local source counts, decimation, M4A counts, transitions and carried prefixes
 remain owned by the natural sink. Finite remote items retain upper bounds;
 unknown source counts wait for sealed publication within the same deadline.
+The audible identity is the exact owned `CurrentTrackURI`; queue ordinals and
+NumberOfTracks never select a different occurrence. Before each queue add/remove,
+the worker records the expected URI/renumbered ordinal/queue length/transport.
+Matched GENA echoes (including delayed PLAYING/TRANSITIONING pairs) do not replace
+fresh poll evidence or schedule navigation. Fence before the shared transport
+cache, including release edits and relay/stream handoffs. An explicit confirmed seek clears old
+position-event precedence. History trimming waits for an LMS navigation to finish.
+A jump builds current plus three upcoming parents even without retained overlap;
+only unchanged URI blocks count as overlap, and a no-overlap rebuild logs once.
+Navigation diagnostics include the number of queue edits. For finite single-segment
+parents the plan is bounded by six removals plus six insertions; ordinary Next and
+Previous need at most four in the regression cases. Continuations add their own
+segment insertions but retain their parent's history slot.
 Stage 1c is complete: LMS Next/Previous/jump/seek starts keep the owned queue
 and reconcile overlapping parents with fresh Browse/UpdateID fences. User Next
 retains the outgoing current and prior history parent, trimming beyond two.

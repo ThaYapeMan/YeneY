@@ -1,4 +1,5 @@
 #include "upnp/event_parsers.h"
+#include "../queue_speaker_changes.h"
 #include "upnp/monitor.h"
 #include "upnp/targets.h"
 #include "upnp/subscriptions.h"
@@ -17,6 +18,36 @@ int main() {
     assert(logValue(queueBody, cut) == queueUriLog(queueBody).substr(0, cut));
     assert(logValue("ordinary\nvalue") == "ordinary value");
     std::cout << "PASS queue NOTIFY logging: URI sessions masked in raw and escaped XML before truncation; ordinary diagnostics unchanged\n";
+
+    {
+        bridge::SpeakerChanges changes;
+        auto event = [](unsigned sequence, const std::string &uri, const std::string &state) {
+            GenaEvent e;
+            e.sid = "test"; e.sequence = sequence;
+            e.body = "<propertyset><property><LastChange>" + xmlEscape(
+                "<Event><InstanceID val='0'><CurrentTrack val='2'/><CurrentTrackURI val='"+uri+
+                "'/><NumberOfTracks val='5'/><AVTransportURI val='queue'/><TransportState val='"+state+
+                "'/></InstanceID></Event>") + "</LastChange></property></propertyset>";
+            return e;
+        };
+        changes.expectEdit("old", 2, 5, "queue");
+        const auto started = std::chrono::steady_clock::now();
+        assert(!changes.event(event(1, "old", "TRANSITIONING")));
+        assert(!changes.event(event(2, "old", "PLAYING")));
+        assert(changes.poll(started, {{"CurrentTrackURI", "new"}}).at("CurrentTrackURI") == "new");
+        assert(changes.event(event(3, "next", "PLAYING"))); // App Next is real evidence.
+        assert(changes.poll(started, {{"CurrentTrackURI", "old"}}).at("CurrentTrackURI") == "next");
+        changes.expectEdit("next", 2, 5, "queue");
+        assert(changes.event(event(4, "next", "PAUSED_PLAYBACK"))); // Do not fence app pause.
+        assert(!changes.event(event(3, "old", "PLAYING"))); // Subscription ordering remains enforced.
+        auto partial = event(5, "old", "PLAYING");
+        partial.body = "<propertyset><property><LastChange>" + xmlEscape(
+            "<Event><InstanceID val='0'><CurrentTrack val='2'/><NumberOfTracks val='5'/></InstanceID></Event>") +
+            "</LastChange></property></propertyset>";
+        assert(!changes.event(partial));
+        assert(changes.poll(std::chrono::steady_clock::now(), {{"CurrentTrackURI", "next"}}).at("CurrentTrackURI") == "next");
+        std::cout << "PASS self-edit GENA fence: delayed old URI cannot supersede target poll; app Next/pause and SEQ retained\n";
+    }
 
     StateUpdate u;
     assert(parseAvTransport(file("tests/fixtures/sonos-lastchange.xml"), u) && *u.state == "PLAYING");

@@ -69,12 +69,21 @@ void OwnSpeakerControl::apply(StateUpdate update) {
         printf("yeney: group room=%s coordinator=%s members=%s\n", logValue(after.room.name).c_str(),
             logValue(after.group.name).c_str(), logValue(groupDescription(after.room)).c_str());
 }
-void OwnSpeakerControl::queueEvents(GenaHandler handler) {
+void OwnSpeakerControl::queueEvents(GenaHandler handler, bool ownsPosition) {
     std::lock_guard<std::mutex> lock(queueObserverMutex);
     queueObserver = std::move(handler);
+    queueOwnsPosition = ownsPosition;
 }
 bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
     if (event.service == Service::RenderingControl || event.service == Service::GroupRenderingControl) ++volumeEvents;
+    GenaHandler observer;
+    {
+        std::lock_guard<std::mutex> lock(queueObserverMutex);
+        observer = queueObserver;
+    }
+    // An acknowledged self-edit echo must be fenced before shared transport
+    // state and stream takeover observers can see it.
+    if (observer && !observer(event)) return true;
     auto update = event.update;
     update.source = Source::Event;
     if (event.service == Service::ZoneGroupTopology) {
@@ -88,12 +97,6 @@ bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
     if (debugEvents) printf("yeney: event service=%s TransportState=%s seq=%u\n",
         serviceName(event.service), logValue(state.snapshot().transport.state).c_str(), event.sequence);
     if (eventCallback) eventCallback();
-    GenaHandler observer;
-    {
-        std::lock_guard<std::mutex> lock(queueObserverMutex);
-        observer = queueObserver;
-    }
-    if (observer) observer(event);
     return true;
 }
 Speaker OwnSpeakerControl::speaker() const { return state.snapshot().room; }
@@ -305,7 +308,7 @@ bool OwnSpeakerControl::positionInfo(uint32_t& ms, std::string* text) {
     auto cached = [&] { const auto s = state.snapshot(); ms = s.positionMs; if (text && s.positionKnown) *text = s.positionText; return s.positionKnown; };
     {
         std::lock_guard<std::mutex> lock(queueObserverMutex);
-        if (queueObserver) return cached();
+        if (queueObserver && queueOwnsPosition) return cached();
     }
     {
         std::lock_guard<std::mutex> lock(runtimeMutex);
@@ -346,7 +349,7 @@ bool OwnSpeakerControl::readTransportInfo(TransportInfo& info) {
 void OwnSpeakerControl::poll() {
     {
         std::lock_guard<std::mutex> lock(queueObserverMutex);
-        if (queueObserver) return; // The queue relay owns its adaptive SOAP schedule.
+        if (queueObserver && queueOwnsPosition) return; // The queue relay owns its adaptive SOAP schedule.
     }
     const auto health = subscriptions ? subscriptions->health() : SubscriptionHealth{};
     const auto activity = streamActivity ? streamActivity() : StreamActivity{};

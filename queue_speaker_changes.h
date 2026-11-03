@@ -4,6 +4,7 @@
 #include "transport_source.h"
 #include <chrono>
 #include <iomanip>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -19,6 +20,8 @@ class SpeakerChanges {
     std::string sid;
     uint32_t sequence = 0;
     bool sequenced = false;
+    struct EditEcho { std::string uri, ordinal, count, transport; };
+    std::deque<EditEcho> edits;
 
 public:
     std::string foreignTransport(const std::string &queueUri) {
@@ -69,10 +72,29 @@ public:
         report("poll", fields);
         return fields;
     }
-    void event(const upnp::GenaEvent &event) {
+    // Register before SOAP: GENA may arrive before the action response.
+    // Exact expected states fence delayed edit echoes without a timed blackout
+    // that could swallow a real app Next or pause.
+    void expectEdit(std::string uri, unsigned ordinal, unsigned count, std::string transport) {
+        std::lock_guard<std::mutex> lock(mutex);
+        edits.push_back({std::move(uri), std::to_string(ordinal), std::to_string(count), std::move(transport)});
+        if (edits.size() > 64) edits.pop_front();
+    }
+    void transportSelected(const std::string &uri) {
+        std::lock_guard<std::mutex> lock(mutex);
+        report("command", {{"AVTransportURI", uri}});
+        eventTimes.erase("AVTransportURI");
+    }
+    void selected() {
+        std::lock_guard<std::mutex> lock(mutex);
+        // A confirmed explicit seek supersedes observations of the old item.
+        for (const auto *name : {"CurrentTrack", "CurrentTrackURI", "RelativeTimePosition", "TransportState"})
+            eventTimes.erase(name);
+    }
+    bool event(const upnp::GenaEvent &event) {
         upnp::XmlNode instance;
         if (!upnp::lastChangeInstance(event.body, instance))
-            return;
+            return false;
         std::map<std::string, std::string> fields;
         for (const auto *name : {"TransportState", "TransportStatus", "CurrentTrack", "CurrentTrackURI",
                                  "NumberOfTracks", "AVTransportURI", "RelativeTimePosition"})
@@ -84,13 +106,38 @@ public:
         // SEQ is scoped to the subscription and wraps as an unsigned counter.
         if (sequenced && sid == event.sid &&
             (event.sequence == sequence || uint32_t(event.sequence - sequence) >= 0x80000000u))
-            return;
+            return false;
         sid = event.sid;
         sequence = event.sequence;
         sequenced = true;
+        const auto field = [&fields](const std::string &name) -> std::string {
+            const auto found = fields.find(name);
+            return found == fields.end() ? std::string{} : found->second;
+        };
+        const auto matches = [&fields](const std::string &name, const std::string &expected) {
+            const auto found = fields.find(name);
+            return found == fields.end() || found->second == expected;
+        };
+        for (const auto &edit : edits) {
+            // LastChange may contain only the changed ordinal/count, with the
+            // unchanged URI omitted. Never swallow state-only app controls or
+            // a playback error as queue feedback.
+            const auto state = field("TransportState");
+            if ((fields.count("CurrentTrack") || fields.count("NumberOfTracks")) &&
+                matches("CurrentTrackURI", edit.uri) && matches("CurrentTrack", edit.ordinal) &&
+                matches("NumberOfTracks", edit.count) && matches("AVTransportURI", edit.transport) &&
+                (state.empty() || state == "PLAYING" || state == "TRANSITIONING" ||
+                 (edit.uri.empty() && state == "STOPPED")) &&
+                (field("TransportStatus").empty() || field("TransportStatus") == "OK")) {
+                std::printf("yeney: queue self-edit echo fenced tracks=%s ordinal=%s\n",
+                            edit.count.c_str(), edit.ordinal.c_str());
+                return false;
+            }
+        }
         const auto now = Clock::now();
         for (const auto &field : fields) eventTimes[field.first] = now;
         report("GENA", fields);
+        return true;
     }
 };
 } // namespace bridge

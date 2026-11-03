@@ -74,6 +74,8 @@ void QueueRoom::Impl::observe() {
     const auto media = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response;
     const auto mediaFields = speakerChanges->poll(mediaStarted,
         {{"NumberOfTracks", media.value("NrTracks")}, {"AVTransportURI", media.value("CurrentURI")}});
+    // Only this exact owned URI identifies the audible item. CurrentTrack and
+    // NumberOfTracks may renumber during our edits without a playback boundary.
     const auto uri = position.at("CurrentTrackURI");
     const auto avUri = mediaFields.at("AVTransportURI");
     if (media.child("CurrentURI")) {

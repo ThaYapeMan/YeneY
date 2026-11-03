@@ -53,10 +53,46 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
           if (name == "Play" || name == "Pause" || name == "Stop" || name == "Seek" ||
               name == "SetAVTransportURI")
               ownUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+          if (name == "AddURIToQueue" || name == "RemoveTrackRangeFromQueue" ||
+              name == "SetAVTransportURI" || name == "Play") {
+              const auto argument = [&args](const std::string &key) {
+                  const auto found = std::find_if(args.begin(), args.end(), [&](const auto &a) { return a.first == key; });
+                  if (found == args.end()) throw std::logic_error("queue edit argument missing");
+                  return found->second;
+              };
+              const auto read = [this](const std::string &action) {
+                  // Ordinary reads are non-mutating and remain valid during
+                  // release; the release action allowlist is for cleanup writes.
+                  return coordinator.transport(action, {{"InstanceID", "0"}}).response;
+              };
+              const auto position = read("GetPositionInfo");
+              const auto media = read("GetMediaInfo");
+              auto ordinal = unsigned(std::stoul(position.value("Track")));
+              auto count = unsigned(std::stoul(media.value("NrTracks")));
+              auto uri = position.value("TrackURI");
+              if (name == "AddURIToQueue") {
+                  const auto first = unsigned(std::stoul(argument("DesiredFirstTrackNumberEnqueued")));
+                  if (first && first <= ordinal) ++ordinal;
+                  ++count;
+              } else if (name == "RemoveTrackRangeFromQueue") {
+                  const auto first = unsigned(std::stoul(argument("StartingIndex")));
+                  const auto removed = unsigned(std::stoul(argument("NumberOfTracks")));
+                  if (ordinal >= first && ordinal < first + removed) { ordinal = 0; uri.clear(); }
+                  else if (ordinal >= first + removed) ordinal -= removed;
+                  count -= removed;
+              }
+              if (name == "SetAVTransportURI" && !count) { ordinal = 0; uri.clear(); }
+              speakerChanges->expectEdit(uri, ordinal, count,
+                  name == "SetAVTransportURI" ? argument("CurrentURI") : media.value("CurrentURI"));
+          }
           auto result =
               releasing ? coordinator.releaseTransport(name, args) : coordinator.transport(name, args);
-          if (name == "SetAVTransportURI" && result.ok)
+          if (result.ok && (name == "AddURIToQueue" || name == "RemoveTrackRangeFromQueue")) ++queueEdits;
+          if (name == "Seek" && result.ok) speakerChanges->selected();
+          if (name == "SetAVTransportURI" && result.ok) {
               sourceAway = false;
+              speakerChanges->transportSelected("x-rincon-queue:" + room.uuid + "#0");
+          }
           return result;
       }),
       ownership(ownershipIO(), session) {

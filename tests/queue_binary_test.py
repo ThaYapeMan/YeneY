@@ -67,7 +67,9 @@ class Device(Handler):
             if args.get('CurrentURIMetaData'):
                 metadata=ET.fromstring(args['CurrentURIMetaData'])
                 self.server.stream_metadata={n.tag.rsplit('}',1)[-1]:n.text for n in metadata.iter()}
-            self.server.uri=args['CurrentURI'];self.server.stream_uri=args['CurrentURI'];return {},None
+            self.server.uri=args['CurrentURI'];self.server.stream_uri=args['CurrentURI']
+            self.server.position=dict(Track='1',TrackURI=args['CurrentURI'],RelTime='00:00:00')
+            return {},None
         if action=='Play' and self.server.uri.startswith('http://'):
             self.server.transport_state='PLAYING'
             self.server.stream_started=time.monotonic()
@@ -327,15 +329,7 @@ class Binary:
             self.sonos.position=dict(Track=str(track),TrackURI=uri,RelTime=rel)
             self.sonos.transport_state=state
             self.sonos.clock_base=time.monotonic()-seconds
-        callback=getattr(self.sonos,'callback','')
-        if callback:
-            self.sequence+=1
-            fields=dict(CurrentTrack=str(track),CurrentTrackURI=uri,RelativeTimePosition=rel,TransportState=state)
-            change='<Event><InstanceID val="0">'+''.join('<'+k+' val='+quoteattr(v)+'/>' for k,v in fields.items())+'</InstanceID></Event>'
-            body='<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0"><e:property><LastChange>'+escape(change)+'</LastChange></e:property></e:propertyset>'
-            u=urlsplit(callback);c=http.client.HTTPConnection(u.netloc,timeout=3)
-            c.request('NOTIFY',u.path,body,headers={'NT':'upnp:event','NTS':'upnp:propchange','SID':'uuid:binary','SEQ':str(self.sequence)})
-            r=c.getresponse();r.read();assert r.status==200;c.close()
+        self.sonos.notify_transport()
     def elapsed(self):
         stamp=12345+len(self.lms.packets)
         self.lms.strm('t',value=stamp)

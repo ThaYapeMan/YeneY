@@ -175,8 +175,10 @@ void QueueRoom::Impl::reconcileWindow() {
         editAnchor.reset();
         for (const auto &old : before) for (const auto &next : wanted) {
             if (old.token != next.token) continue;
-            overlap = true;
-            if (old.uris == next.uris) editAnchor = old.token;
+            if (old.uris == next.uris) {
+                overlap = true;
+                editAnchor = old.token;
+            }
         }
     }
     Edits(std::move(io)).apply(before, wanted, editAnchor);
@@ -220,7 +222,8 @@ void QueueRoom::Impl::reconcileWindow() {
             std::to_string(audible->index) + " action=" + (overlap ? "slide" : "rebuild") +
             " history=" + std::to_string(history) + " lms_commands=0 kind=" +
             (navigationFrom == audible->index ? "seek" : navigationFrom + 1 == audible->index ? "next" :
-             navigationFrom == audible->index + 1 ? "previous" : "jump"));
+             navigationFrom == audible->index + 1 ? "previous" : "jump") +
+            " edits=" + std::to_string(queueEdits - navigationEdits));
         if (reused) logQueue("window retained target audio reused lms_commands=0");
         lmsNavigation = false;
         navigationItem.reset();

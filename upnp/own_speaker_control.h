@@ -22,7 +22,8 @@ public:
                                std::shared_ptr<HttpServer> server = {});
     ~OwnSpeakerControl() override;
     void shutdownEvents();
-    void queueEvents(GenaHandler);
+    // Returning false acknowledges an ignored self-edit before shared state.
+    void queueEvents(GenaHandler, bool ownsPosition = true);
     void enableGroupVolume() { groupVolume = true; }
     uint64_t volumeRevision() const { return volumeEvents.load(); }
     SoapResult volumeAction(const std::string& action, const SoapArguments& args, bool group) {
@@ -66,6 +67,7 @@ private:
     std::atomic<bool> groupVolume{false};
     std::atomic<uint64_t> volumeEvents{0};
     GenaHandler queueObserver;
+    bool queueOwnsPosition = true;
     std::mutex queueObserverMutex;
     std::shared_ptr<HttpServer> eventServer;
     std::unique_ptr<Subscriptions> subscriptions;

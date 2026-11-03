@@ -101,6 +101,43 @@ bridge LMS selections. Physical speaker behavior remains an owner check.
 App history selection/tapping a played row and app Previous are deferred,
 as are stage 2 intent settling and parent-relative app seek.
 
+## APPCONTROL-08 self-edit feedback
+
+Playback identity comes exclusively from the exact owned CurrentTrackURI. The
+previous implementation already looked up that URI, but a delayed queue-edit
+GENA could supersede a fresh position poll through SpeakerChanges' per-field
+event timestamps. Its old URI then looked like another natural boundary.
+CurrentTrack renumbering and NumberOfTracks changes are edit evidence, not
+playback evidence. Register the expected post-edit URI, ordinal, count and
+transport before SOAP; matched PLAYING/TRANSITIONING echoes neither update the
+position cache nor schedule another observation. Apply the fence before the
+shared speaker-state cache and retain it across relay/stream handoffs, including
+release edits, so a late queue URI cannot look like a foreign-source takeover.
+Observer presence and position ownership are separate: the stream path keeps
+its normal polling and position clock while retaining only the event fence.
+Preserve subscription SEQ
+ordering, real different-URI app Next and pause. A confirmed explicit Seek
+invalidates old position event precedence. The marker list is bounded to 64;
+retain markers for duplicate late echoes until displaced by newer edits. No
+time-based navigation blackout is used.
+
+History trimming pauses during navigation so the pending target owns the whole
+window plan. Only unchanged URI blocks establish retained overlap. Replacing an
+unproduced lazy target alone therefore counts as a rebuild; it still publishes
+current plus all three eligible upcoming parents. History requires retained PCM.
+The six-parent plan uses at most 12 add/remove calls for single-segment parents
+(six removals plus six insertions); tested Next/Previous are bounded to four,
+seek to two. Continuations require one insertion per segment. The lms-nav line
+reports actual edit count. No self edit seeks/restarts an unchanged audible URI.
+
+The fake speaker emits delayed GENA for AddURIToQueue, RemoveTrackRangeFromQueue
+and SetAVTransportURI and renumbers the current row by its URI. Tests assert
+convergence after draining echoes, correct kinds, no occurrence oscillation,
+zero bridge LMS navigation commands, a direct click from index zero to three,
+and a no-overlap jump with three following tracks. The app lazy Next guard uses
+the same echoing fake and retains its exactly-one selection. Physical Sonos
+acceptance remains an owner check; app history selection and stage 2 stay deferred.
+
 ## Earlier checkpoints (historical)
 
 ## Decisions

@@ -45,6 +45,28 @@ class Coordinator(ThreadingHTTPServer):
     def __init__(self, address=('127.0.0.1', 0), handler=None):
         super().__init__(address, handler or Handler)
         self.closing = False
+        self.echo_edits = True
+        self.event_sequence = 0
+        self.event_lock = threading.Lock()
+        self.edit_events = []
+        self.echo_queue = queue.Queue()
+        self.echo_stop = threading.Event()
+        def deliver_edits():
+            while not self.echo_stop.is_set():
+                try:fields = self.echo_queue.get(timeout=.05)
+                except queue.Empty:continue
+                # Real event delivery can lag SOAP and the following seek.
+                if self.echo_stop.wait(.08):break
+                try:
+                    if fields['TransportState'] == 'PLAYING':
+                        self.notify_transport(dict(fields, TransportState='TRANSITIONING'))
+                    self.notify_transport({k:fields[k] for k in ('NumberOfTracks', 'CurrentTrack')})
+                    self.notify_transport(fields)
+                except Exception as error:
+                    self.errors.append('queue edit GENA: '+repr(error))
+                    return
+        self.echo_worker = threading.Thread(target=deliver_edits)
+        self.echo_worker.start()
         self.lock = threading.RLock()
         self.original = [{'uri': 'http://foreign.invalid/original.flac'}]
         self.items = copy.deepcopy(self.original)
@@ -66,9 +88,44 @@ class Coordinator(ThreadingHTTPServer):
 
     def close(self):
         if getattr(self,'device_audio',None):self.device_audio.close()
+        self.echo_stop.set(); self.echo_worker.join(5)
+        assert not self.echo_worker.is_alive()
         self.closing = True
         self.shutdown(); self.server_close(); self.worker.join()
         assert not self.errors, self.errors
+
+    def notify_transport(self, fields=None):
+        # Serialize SEQ and delivery across SOAP replies and explicit app actions.
+        if fields is None:
+            with self.lock:
+                fields = dict(NumberOfTracks=str(len(self.items)),
+                              CurrentTrack=self.position['Track'],
+                              CurrentTrackURI=self.position['TrackURI'],
+                              RelativeTimePosition=self.position['RelTime'],
+                              AVTransportURI=self.uri, TransportState=self.transport_state)
+        with self.event_lock:
+            callback = getattr(self, 'callback', '')
+            if not callback or self.closing:return
+            self.event_sequence += 1
+            change = '<Event><InstanceID val="0">'+''.join(
+                '<'+k+' val='+quoteattr(str(v))+'/>' for k,v in fields.items())+'</InstanceID></Event>'
+            body = '<e:propertyset xmlns:e="urn:schemas-upnp-org:event-1-0"><e:property><LastChange>'+escape(change)+'</LastChange></e:property></e:propertyset>'
+            u = urlsplit(callback)
+            c = http.client.HTTPConnection(u.netloc, timeout=3)
+            try:
+                c.request('NOTIFY', u.path, body, headers={'NT':'upnp:event', 'NTS':'upnp:propchange',
+                          'SID':'uuid:binary', 'SEQ':str(self.event_sequence)})
+                r = c.getresponse();r.read();assert r.status == 200
+            finally:c.close()
+
+    def renumber_current(self):
+        uri = self.position['TrackURI']
+        if not uri:return
+        for index,item in enumerate(self.items):
+            if item['uri'] == uri:
+                self.position['Track'] = str(index+1)
+                return
+        self.position = dict(Track='0', TrackURI='', RelTime='00:00:00')
 
     def add_foreign(self, uri='http://foreign.invalid/added-during-play.flac'):
         with self.lock:
@@ -120,6 +177,14 @@ class Handler(BaseHTTPRequestHandler):
                 s.requests.append((action, args, service, time.monotonic()))
                 result, fault = self.action(service, action, args)
                 s.busy -= 1
+            if not fault and s.echo_edits and (action in ('AddURIToQueue', 'RemoveTrackRangeFromQueue') or
+                    action in ('SetAVTransportURI', 'Play') and s.uri.startswith('x-rincon-queue:')):
+                with s.lock:
+                    fields = dict(NumberOfTracks=str(len(s.items)), CurrentTrack=s.position['Track'],
+                                  CurrentTrackURI=s.position['TrackURI'], RelativeTimePosition=s.position['RelTime'],
+                                  AVTransportURI=s.uri, TransportState=s.transport_state)
+                    if action != 'Play':s.edit_events.append((action, dict(fields)))
+                s.echo_queue.put(fields)
             if fault:
                 self.send(f'<s:Envelope xmlns:s="{SOAP}"><s:Body><s:Fault><detail><UPnPError>'
                           f'<errorCode>{fault}</errorCode><errorDescription>fixture rejection</errorDescription>'
@@ -205,6 +270,7 @@ class Handler(BaseHTTPRequestHandler):
             assert s.verified_save
             first, count = int(a['StartingIndex'])-1, int(a['NumberOfTracks'])
             del s.items[first:first+count]; s.update += 1
+            s.renumber_current()
             return {'NewUpdateID': s.update}, None
         if action == 'AddMultipleURIsToQueue': return {}, '402'
         if action == 'AddURIToQueue':
@@ -241,12 +307,13 @@ class Handler(BaseHTTPRequestHandler):
             assert resource.attrib['bitsPerSample'] == '24' and resource.attrib['nrAudioChannels'] == '2'
             insertion=before-1 if before else len(s.items)
             s.items.insert(insertion,dict(uri=uri, metadata=fields, resource=resource.attrib)); s.update += 1
+            s.renumber_current()
             return dict(NumTracksAdded=1, FirstTrackNumberEnqueued=insertion+1, NewQueueLength=len(s.items), NewUpdateID=s.update), None
         if action == 'SetAVTransportURI':
             if a.get('CurrentURIMetaData'):
                 ET.fromstring(a['CurrentURIMetaData']) # strict XML 1.0, including nested DIDL
             assert a['CurrentURI'] == 'x-rincon-queue:RINCON_TEST#0'
-            s.uri = a['CurrentURI']; return {}, None
+            s.uri = a['CurrentURI']; s.renumber_current(); return {}, None
         if action == 'Seek':
             if a['Unit'] == 'TRACK_NR':
                 track = int(a['Target'])

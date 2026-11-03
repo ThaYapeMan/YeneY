@@ -195,6 +195,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
                     const auto index = sourceIndices.find(owner);
                     if (index != sourceIndices.end()) navigationFrom = index->second;
                 }
+                navigationEdits = queueEdits;
                 lmsNavigation = true;
                 remoteNaturalSuccessor = false;
                 finitePause = false;
@@ -479,7 +480,7 @@ void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
     speakerCommand("stop", member ? "group-member" : reason == "track-fault-limit" ? reason : "room-fault");
 }
 void QueueRoom::Impl::trimHistory() {
-    if (!started || faulted || externalReleased || sourceAway || !current) return;
+    if (!started || faulted || externalReleased || sourceAway || !current || lmsNavigation) return;
     using Edits = queue_audio::WindowEdits;
     std::vector<Edits::Parent> parents;
     uint64_t audible = 0;

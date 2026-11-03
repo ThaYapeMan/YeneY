@@ -47,17 +47,15 @@ std::optional<yeney::FlacSourceInfo> QueueRoom::Impl::sourceInfo(uint64_t occurr
     return fetched;
 }
 void QueueRoom::Impl::relayEvents(bool enabled) {
-    if (!enabled) {
-        speaker->queueEvents({});
-        return;
-    }
-    speaker->queueEvents([dirty = eventDirty, changes = speakerChanges](const upnp::GenaEvent &event) {
+    // Keep the fence across relay/stream handoffs: a delayed queue edit must
+    // not look like a foreign-source takeover to the continuous stream path.
+    speaker->queueEvents([dirty = eventDirty, changes = speakerChanges, enabled](const upnp::GenaEvent &event) {
         if (event.service == upnp::Service::AVTransport) {
-            changes->event(event);
-            *dirty = true;
+            if (!changes->event(event)) return false;
+            if (enabled) *dirty = true;
         }
         return true;
-    });
+    }, enabled);
 }
 void QueueRoom::Impl::received(const yeney::Command &c) {
     if (c.letter == 's') {

@@ -227,7 +227,7 @@ sonos-status.o: speaker_uri.h stream_session.h
 
 audio_mode.o yeney.o sbstreamer.o streamer-test: audio_mode.h
 
-speaker-state-test: tests/speaker_state_test.cpp $(wildcard upnp/*.h) upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
+speaker-state-test: queue_speaker_changes.h tests/speaker_state_test.cpp $(wildcard upnp/*.h) upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
 	g++ -g -O2 -Wall -Wextra -I. -o $@ tests/speaker_state_test.cpp upnp/xml.cpp upnp/discovery.cpp upnp/http.cpp
 
 yeney.o sbstreamer.o streamer-test resume-state-test: upnp/timing.h
@@ -510,3 +510,6 @@ $(OBJS) room-status-test streamer-test range-test oct12-boundary-test: queue_uri
 stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test: queue_uri_log.h
 
 upnp/own_speaker_control.o speaker-state-test own-control-test timing-probe-http-test: queue_uri_log.h
+
+# Queue event filtering and stream polling share this control interface.
+$(OBJS): upnp/own_speaker_control.h

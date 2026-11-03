@@ -1097,3 +1097,13 @@ rebuild. A distant jump without retained overlap may log exactly one
 `window rebuild reason=out-of-range lms_commands=0` and show fewer history rows
 when earlier audio has never been produced. App history selection and app
 Previous remain later-stage work.
+
+For APPCONTROL-08, repeat user LMS Next, user LMS Previous and a direct track
+click mid-track on an album with at least three following tracks. Each must
+settle to two retained history rows + current + three upcoming where available,
+with no refill storm, bouncing current row, PLAYING/TRANSITIONING loop or
+repeated fetch of the same playing URI. Check `kind=next|previous|jump`, a small
+bounded `edits=` count and then no further add/remove lines. A no-overlap click
+may have fewer history rows but must have current + three upcoming and exactly
+one rebuild line. App Next must still advance LMS exactly once by lazy activation;
+app Previous/history-row selection remains deferred.

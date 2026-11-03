@@ -84,6 +84,7 @@ struct QueueRoom::Impl {
     bool lmsNavigation = false;
     bool navigationSelecting = false;
     unsigned navigationFrom = 0;
+    uint64_t queueEdits = 0, navigationEdits = 0;
     std::optional<unsigned> publishedWindowIndex;
     uint64_t navigationFirst = 0;
     uint64_t navigationToken = 0;
