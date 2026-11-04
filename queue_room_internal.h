@@ -57,6 +57,7 @@ struct QueueRoom::Impl {
     queue_audio::QueueWindow window;
     queue_audio::QueueWindow::Policy publishedWindowPolicy;
     bool windowDirty = false;
+    bool refreshUpcoming = false;
     std::chrono::steady_clock::time_point nextWindowPoll{};
     std::map<std::string, yeney::FlacSourceInfo> flacCounts;
     std::chrono::steady_clock::time_point handoffAt{};

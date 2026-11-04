@@ -111,10 +111,20 @@ def run(g):
             if i==3:
                 # Let the native plugin save a bookmark from real STAT time,
                 # then select its generated 'continue' menu entry.
-                seed_starts=len(packets('STMs'));seed_decoded=len(packets('STMd'))
+                seed_starts=len(packets('STMs'))
                 cli('podcasts playlist play item_id:'+ident+'.3',mac)
                 wait(lambda:len(packets('STMs'))>seed_starts,5,'bookmark audible start')
-                wait(lambda:'queue item-end' in (base/'bridge.log').read_text(),15,'bookmark source spooled')
+                # A prior episode's item-end is not readiness for this seed.
+                # MP3 end resolution can itself wait for audible progress;
+                # require the actual frame we are about to report instead.
+                seed_url=urlsplit(items()[0]['uri'])
+                seed_conn=http.client.HTTPConnection(seed_url.netloc,timeout=15)
+                try:
+                    offset=44+100*44100*6
+                    seed_conn.request('GET',seed_url.path,headers={'Range':f'bytes={offset}-{offset+5}'})
+                    seed_response=seed_conn.getresponse()
+                    assert seed_response.status==206 and len(seed_response.read())==6
+                finally:seed_conn.close()
                 wait(lambda:0<=float(cli('time ?',mac)[-1])<2,5,'bookmark starts at zero')
                 wait(lambda:status().get('title')=='Episode 3' and status().get('state')=='PLAYING',5,'bookmark source')
                 with sonos.lock:sonos.position['RelTime']='00:01:40'

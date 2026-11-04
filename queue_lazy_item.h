@@ -61,6 +61,10 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         return cancelled;
     }
+    bool waiting() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return !cancelled && !produced && !readers.empty();
+    }
     unsigned commandCount() {
         std::lock_guard<std::mutex> lock(mutex);
         return activationClaimed ? 1 : 0;

@@ -126,6 +126,13 @@ void QueueRoom::Impl::selectPath() {
             const auto target = lazyTarget.load();
             const auto index = navigationSelecting ? playlist.index : target >= 0 && playlist.index == unsigned(target) ? unsigned(target) :
                 playlist.index + (selectedNewPlay ? 0 : 1);
+            if (navigationSelecting && target >= 0 && playlist.mode != "stop" &&
+                playlist.index == unsigned(target)) {
+                // Confirm the lazy selection at its paired start, once. A
+                // later Back must not be swallowed while publication waits.
+                lmsNavigation = navigationSelecting = false;
+                lazyTarget = -1;
+            }
             if (index < playlist.entries.size()) {
                 track = playlist.entries[index];
                 selectedIndex = int(index);

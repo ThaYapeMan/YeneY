@@ -3,6 +3,7 @@
 import http.client
 import re
 import time
+import threading
 from urllib.parse import urlsplit
 
 
@@ -25,6 +26,72 @@ def run(context):
             return body
         finally:
             conn.close()
+
+    # Exercise Back before natural decode-ahead has filled retained parents.
+    cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
+    wait(lambda: len(items()) == 4, 15, 'early Previous initial window')
+    select_item(0)
+    # Keep a PCM GET waiting across the controller's selection. Its queued
+    # activation must use the controller's producer without an LMS echo.
+    entered, release = threading.Event(), threading.Event()
+    def hold_status(wire):
+        if b' status ' in wire and not entered.is_set():
+            entered.set()
+            assert release.wait(3)
+        return None
+    proxy.request_hook = hold_status
+    wait(entered.is_set, 5, 'worker status before early Next')
+    lazy = items()[1]
+    controller_before = len(proxy.records)
+    cli('playlist index +1', mac)
+    conn = http.client.HTTPConnection(urlsplit(lazy['uri']).netloc, timeout=5)
+    conn.request('GET', urlsplit(lazy['uri']).path)
+    time.sleep(.1)
+    release.set()
+    proxy.request_hook = None
+    response = conn.getresponse()
+    assert response.status == 200 and response.read(44)[:4] == b'RIFF'
+    wait(lambda: 'kind=next' in (base / 'bridge.log').read_text(), 15, 'early Next')
+    wait(lambda: 'window lazy target producer adopted lms_commands=0' in (base / 'bridge.log').read_text(),
+         5, 'controller producer adopted by waiting reader')
+    mark = len((base / 'bridge.log').read_text())
+    edit_mark = len(sonos.edit_events)
+    old_uri = sonos.position['TrackURI']
+    before = controller_before
+    start = time.monotonic()
+    cli('button jump_rew', mac)
+    wait(lambda: 'kind=previous' in (base / 'bridge.log').read_text()[mark:],
+         15, 'early Previous diagnostic')
+    time.sleep(1)
+    text = (base / 'bridge.log').read_text()[mark:]
+    assert 'from_index=1 to_index=0 action=slide history=0 lms_commands=0 kind=previous' in text, text
+    assert 'lazy abandoned' not in text, text
+    assert 'reason=playlist-change' not in text, text
+    assert sonos.position['TrackURI'] == items()[0]['uri']
+    conn.close()
+    allowed = {old_uri, items()[0]['uri']}
+    assert all(fields['CurrentTrackURI'] in allowed for _, fields in sonos.edit_events[edit_mark:]), sonos.edit_events[edit_mark:]
+    assert time.monotonic() - start < 3, 'Previous stalled'
+    assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
+    print('PASS early Previous: 1 to 0, slide, zero LMS commands, no lazy abandonment', flush=True)
+    with sonos.lock:
+        sonos.position['RelTime'] = '00:00:08'
+    wait(lambda: float(cli('time ?', mac)[-1]) >= 5, 5, 'late Previous clock')
+    mark = len((base / 'bridge.log').read_text())
+    before = len(proxy.records)
+    old_uri = sonos.position['TrackURI']
+    edit_mark = len(sonos.edit_events)
+    cli('button jump_rew', mac)
+    wait(lambda: 'kind=previous' in (base / 'bridge.log').read_text()[mark:], 15, 'late Previous restart')
+    text = (base / 'bridge.log').read_text()[mark:]
+    assert 'from_index=0 to_index=0 action=slide history=0 lms_commands=0 kind=previous' in text, text
+    assert 'lazy abandoned' not in text and 'reason=playlist-change' not in text, text
+    assert sonos.position['TrackURI'] == items()[0]['uri']
+    assert all(fields['CurrentTrackURI'] in {old_uri, items()[0]['uri']} for _, fields in sonos.edit_events[edit_mark:])
+    assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
+    print('PASS late Previous: 0 to 0 restart, slide, zero LMS commands, no wrong-row activation', flush=True)
+    cli('stop', mac)
+    wait(lambda: not items(), 10, 'early Previous release')
 
     cli('playlistcontrol cmd:load track_id:' + ids[3], mac)
     wait(lambda: len(items()) == 1, 15, 'reference target')
@@ -101,6 +168,8 @@ def run(context):
         removals = len(sonos.actions('RemoveAllTracksFromQueue'))
         edits_before = len(sonos.actions('AddURIToQueue')) + len(sonos.actions('RemoveTrackRangeFromQueue'))
         starts = len(packets('STMs'))
+        edit_mark = len(sonos.edit_events)
+        old_uri = sonos.position['TrackURI']
         cli(command, mac)
         wait(lambda: 'window lms-nav ' in (base / 'bridge.log').read_text()[log_start:],
              15, 'navigation diagnostic')
@@ -131,6 +200,10 @@ def run(context):
         assert len(set(audible)) <= 1, ('audible oscillation', audible)
         assert 'window rebuild' not in text and 'ownership released' not in text, text
         assert 'queue LMS mutation ' not in text, text
+        if kind == 'previous':
+            assert 'reason=playlist-change' not in text and 'lazy abandoned' not in text, text
+            allowed = {old_uri, sonos.position['TrackURI']}
+            assert all(fields['CurrentTrackURI'] in allowed for _, fields in sonos.edit_events[edit_mark:]), sonos.edit_events[edit_mark:]
         assert len(sonos.actions('RemoveAllTracksFromQueue')) == removals
         mutations = [r['request'] for r in proxy.records[before:]
                      if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]

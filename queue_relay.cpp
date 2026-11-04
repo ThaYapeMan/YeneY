@@ -58,6 +58,7 @@ void QueueRoom::Impl::releaseWindowParent(uint64_t token, uint64_t before) {
             queue.releaseParent(source.first);
 }
 void QueueRoom::Impl::release(bool stop) {
+    refreshUpcoming = false;
     lmsNavigation = false;
     navigationDeadline = {};
     navigationItem.reset();
@@ -175,12 +176,6 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
             logQueue("resume echo changed item/time: honour LMS selection");
         }
         return;
-    }
-    if (c == 'q' && lazyTarget >= 0) {
-        // Only the matching selection echo retains ownership. An explicit LMS
-        // stop or different selection must still perform its normal release.
-        const auto snapshot = reader.read(host, mac);
-        if (snapshot.mode != "stop" && snapshot.index == unsigned(lazyTarget.load())) return;
     }
     if (c == 'q') {
         if (!navigationTimeout && started && !externalReleased && !sourceAway) {
