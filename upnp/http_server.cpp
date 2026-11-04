@@ -14,6 +14,7 @@
 #include <thread>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include "tcp_backlog.h"
 #include <netinet/tcp.h>
 #include <unistd.h>
 
@@ -97,6 +98,7 @@ struct Request : StreamRequest {
     Method method() const override { return verb == "GET" ? Method::Get : verb == "HEAD" ? Method::Head : Method::Other; }
     std::string parameter(const std::string& key) const override { auto i=params.find(key); return i == params.end() ? "" : i->second; }
     RequestHeaders headers() const override { return fields; }
+    int64_t connectionBacklog() const override { return io.backlog ? io.backlog() : -1; }
     uint64_t connectionSentBytes() const override { return io.sentBytes ? io.sentBytes() : UINT64_MAX; }
     std::string connectionDiagnostics() const override { return io.diagnostics ? io.diagnostics() : StreamRequest::connectionDiagnostics(); }
     bool send(const char* data, size_t n) override { return io.send(data,n); }
@@ -113,6 +115,7 @@ struct Socket {
     const int fd;
     std::atomic<uint64_t> sentBytes{0};
     std::atomic<int> ended{0}; // 1 FIN, 2 RST/EPIPE, 3 local close
+    int64_t backlog() const { return tcpBacklog(fd); }
     std::string diagnostics() const {
         tcp_info info{}; socklen_t size = sizeof(info);
         std::string result = "tcp=unavailable";
@@ -233,7 +236,7 @@ struct HttpServer::Impl {
         HttpRequestIO io{
             [client](const char* p,size_t n) { return client->send(p,n); },
             [client] { return client->closed(); }, [this] { return stopping.load(); },
-            [client](unsigned ms) { client->timeout(ms); }, [client] { client->disconnect(); }, [client] { return client->diagnostics(); }, [client] { return client->sentBytes.load(); }};
+            [client](unsigned ms) { client->timeout(ms); }, [client] { client->disconnect(); }, [client] { return client->diagnostics(); }, [client] { return client->sentBytes.load(); }, [client] { return client->backlog(); }};
         auto request = httpRequestFromHeaders(wire, std::move(io));
         if (error || !request) {
             const auto reply = response(error ? error : wire.compare(0, 7, "NOTIFY ") == 0 ? 412 : 400) + "\r\n"; client->send(reply.data(),reply.size()); return;

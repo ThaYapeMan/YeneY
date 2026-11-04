@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "wav_writer.h"
+#include "consumption_diagnostic.h"
 #include "queue_item_store.h"
 #include "upnp/stream_server.h"
 #include <algorithm>
@@ -181,6 +182,7 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         item = std::move(produced);
         diagnostic.item = item;
     }
+    bridge::ConsumptionDiagnostic consumption(request, item->room(), "queue");
     auto reader = item->reader(range.first);
     uint64_t left = range.last - range.first + 1;
     auto deadline = std::chrono::steady_clock::now() + wait;

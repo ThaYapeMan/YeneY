@@ -1107,3 +1107,45 @@ bounded `edits=` count and then no further add/remove lines. A no-overlap click
 may have fewer history rows but must have current + three upcoming and exactly
 one rebuild line. App Next must still advance LMS exactly once by lazy activation;
 app Previous/history-row selection remains deferred.
+
+## TIMING-02: Study consumption and producer capture
+
+After pulling the committed bridge and submodules on the deployment target, run
+`make && sudo make install`. Play one steady local 44.1 kHz FLAC track on Study
+for at least 60 seconds, with no pause, seek, Next, volume or transport changes.
+Capture at least 70 seconds (including startup) and send the complete output:
+
+```sh
+journalctl -u yeney@Study.service --since '2 minutes ago' --no-pager -o cat | grep -E 'yeney: queue (consume|anchor) '
+```
+
+Use the room's configured unit if it has a different name. Direct foreground
+runs produce the same lines on stdout; no systemd dependency is required.
+`room_hex` is the hex-encoded room identity, `mode` is queue or stream, and
+`native_ms` is CLOCK_MONOTONIC/steady-clock milliseconds. Each active HTTP body
+reader samples independently at 1 Hz, including during backpressure. Use a
+single uninterrupted GET; reconnects reset the socket counters. HEAD and rejected
+probes do not start a diagnostic. Concurrent GETs are separate socket observations,
+so do not mix their series. The numeric `connection` field distinguishes them.
+
+`served` is the full connection socket write counter (HTTP headers included),
+`backlog` is Linux TIOCOUTQ/SIOCOUTQ queued TCP bytes, including transmitted but
+unacknowledged bytes, and `audible = max(0, served - backlog)`. An unavailable
+ioctl or counter prints `unknown`; playback continues unchanged. The historical
+name `audible` here is a TCP-delivery proxy, **not speaker DAC position**: data
+already acknowledged may still be in Sonos's HTTP/decoder/audio buffers. For a
+steady queue WAV, compute the slope over 60 seconds, excluding startup/EOF:
+`(audible_end - audible_start) / ((native_ms_end - native_ms_start)/1000) /
+(44100*6)`. Constant HTTP/WAV headers cancel in this difference. Check for
+buffer-fill trends before attributing a measured slope to playback drift.
+Stream mode is compressed FLAC plus HTTP chunk framing, so its byte slope cannot
+be divided by nominal PCM bytes/second.
+
+`content_frame` is the core's TIMING-01 first-content sample for the latest
+offered producer block; unsupported/MP3 or mixed content prints `unknown`.
+`content_observed_ms` is when that callback ran. It may remain constant after
+decode-ahead finishes. The sample and socket position are observed together at
+`native_ms`; they are **not a mapping of that sample to those socket bytes**.
+Queue production can be tracks ahead of consumption. Send these logs together
+with the precise Sonos `positionMillis` observations so off-device analysis can
+separate producer progress, TCP delivery and the speaker's audible clock.

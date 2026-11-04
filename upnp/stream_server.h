@@ -40,6 +40,7 @@ public:
         }
         return {};
     }
+    virtual int64_t connectionBacklog() const { return -1; }
     virtual uint64_t connectionSentBytes() const { return UINT64_MAX; }
     virtual std::string connectionDiagnostics() const { return "tcp=unavailable end=unknown"; }
     virtual bool send(const char* data, size_t size) = 0;

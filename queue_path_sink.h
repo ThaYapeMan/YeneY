@@ -1,3 +1,4 @@
+#include "consumption_diagnostic.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include "core_queue_sink.h"
@@ -63,6 +64,7 @@ public:
     }
     bool decodeAhead() const override { return relayPath; }
     bool speakerDriven() const override { return relayPath; }
+    void contentPosition(uint64_t frame, bool known) override { bridge::consumptionContent().set(frame, known); }
     bool paced() const override { return false; }
     void trackDescriptor(const yeney::TrackDescriptor &d) override { target().trackDescriptor(d); }
     void resolvedItemBoundary(const yeney::ItemBoundary &b) override { target().resolvedItemBoundary(b); }

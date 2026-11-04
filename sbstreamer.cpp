@@ -1,3 +1,4 @@
+#include "consumption_diagnostic.h"
 #include "source_ownership.h"
 // sbstreamer.cpp -- HTTP request broker that serves the FLAC stream to Sonos
 //
@@ -419,6 +420,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
             "Accept-Ranges: bytes\r\nContent-Range: bytes " + std::to_string(offset) + "-"
             + std::to_string(rangeEnd - 1) + "/*\r\nContent-Length: " + std::to_string(rangeEnd - offset)
             + "\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n";
+        ConsumptionDiagnostic consumption(*handle, playerName().trueName, "stream");
         bool sent = handle->send(headers.data(), headers.size());
         while (sent && offset < rangeEnd && !peerClosed() && !handle->aborted() && !IsAborted()
                && !canonical->cancelled() && !canonical->responseEnded() && !canonical->producerRetired()
@@ -574,6 +576,7 @@ void SBStreamer::streamSqueezeBox(upnp::StreamRequest* handle, int stream, unsig
         printf("stream %d: serving current generation with fresh FLAC header\n", stream);
         diagnostics.encoder([enc] { return enc->encodedAudioMs(); });
         const auto responseStarted = std::chrono::steady_clock::now();
+        ConsumptionDiagnostic consumption(*handle, playerName().trueName, "stream");
         size_t sent = 0;
         bool sendFailed = false;
         auto send = [&](const char* data, size_t size) {

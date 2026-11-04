@@ -1,3 +1,4 @@
+#include "consumption_diagnostic.h"
 #pragma once
 #include "third_party/yeney-core/core/player.h"
 #include "pcm_pack.h"
@@ -64,6 +65,7 @@ public:
     void power(bool) override {}
     // Remote Sonos has no local pacer schedule. Keep the core's optional
     // playTiming callback unset; encoder/HTTP handoff time is not audible time.
+    void contentPosition(uint64_t frame, bool known) override { bridge::consumptionContent().set(frame, known); }
     bool paced() const override { return false; }
 };
 void runCoreClient(const char* server, const uint8_t* mac, const char* name);
