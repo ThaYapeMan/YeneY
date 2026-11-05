@@ -111,6 +111,9 @@ def stale_join():
     try:
         h.state(1,5);h.until(lambda:len(h.packets('STMs'))==1)
         h.until(lambda:len(h.items())==2 and h.prepared(2))
+        # Natural join evidence precedes the deliberately stale position RPC.
+        h.state(1, 23)
+        h.until(lambda: h.elapsed() >= 18000) # STAT may be relative to the initial five-second position.
         joined=[]
         def join():
             joined.append(time.monotonic())

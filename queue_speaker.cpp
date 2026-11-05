@@ -132,6 +132,37 @@ void QueueRoom::Impl::observe() {
     const bool finalItem = previousItem != items.end() && previousItem == std::prev(items.end());
     bool cancelledCurrent = false;
     const auto checked = it != items.end() ? it : previousItem;
+    if (current && it != items.end() && it->stream != current && transport == "PLAYING") {
+        const auto owner = it->owner ? it->owner : it->stream;
+        const auto identity = sourceTokens.find(owner);
+        const auto slot = identity == sourceTokens.end() ? std::optional<queue_audio::QueueWindow::Slot>{} : window.find(identity->second);
+        const auto previousOwner = previousItem == items.end() ? 0 :
+            previousItem->owner ? previousItem->owner : previousItem->stream;
+        const auto previousIndex = sourceIndices.find(previousOwner);
+        const bool naturalBoundary = previousItem != items.end() && previousItem->item &&
+            previousIndex != sourceIndices.end() && slot && slot->index == previousIndex->second + 1 &&
+            previousItem->frames <= (lastElapsed + 3) * previousItem->item->descriptor().rate;
+        if (slot && !naturalBoundary && lazyTarget.load() < 0) {
+            // Read LMS before mutating: natural decode-ahead and controller
+            // navigation may already have selected this exact occurrence.
+            queue_audio::PlaylistSnapshot snapshot;
+            try {
+                snapshot = reader.read(host, mac);
+            } catch (const std::exception &) {
+                logQueue("speaker navigation snapshot unavailable reason=cli-read");
+                return; // Keep the boundary pending until its index can be checked.
+            }
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!commands.empty()) return;
+            if (snapshot.index != slot->index) {
+                speakerNavFirst[slot->token] = queue.latestOccurrence() + 1;
+                lazyTarget = int(slot->index); // Pair our producer without a renderer seek.
+                roomLmsCommand(host, mac, "playlist index " + std::to_string(slot->index),
+                               "speaker-nav", logQueue);
+                speakerNavCommands[slot->token] = 1;
+            }
+        }
+    }
     if (checked != items.end() && !checked->item) return;
     if (checked != items.end()) {
         try {

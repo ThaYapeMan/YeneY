@@ -265,9 +265,13 @@ def run(context):
     assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
     assert sonos.edit_events and 'self-edit echo fenced' in (base / 'bridge.log').read_text()
     print(f'PASS real LMS direct non-adjacent jump: one rebuild, current plus three upcoming, zero LMS commands; echo edits={edits} bound=12', flush=True)
+    retained_target = items()[0]
+    cached = fetch(retained_target) # Complete the history parent before app Next cancels production.
     before = len(proxy.records)
+    lazy_mark = len((base / 'bridge.log').read_text())
     target = items()[1]
-    select_item(1) # Sonos app Next: play the unbound next row and fetch its PCM.
+    select_item(1) # Speaker evidence must select even before the lazy PCM GET.
+    wait(lambda: int(cli('playlist index ?', mac)[-1]) == 4, 5, 'app Next before GET')
     body = fetch(target)
     wait(lambda: int(cli('playlist index ?', mac)[-1]) == 4, 5, 'app Next LMS index')
     time.sleep(1)
@@ -276,5 +280,34 @@ def run(context):
     assert mutations == [mac + ' playlist index 4'], mutations
     assert body[:4] == b'RIFF'
     print('PASS real LMS app Next guard: echoing speaker, lazy activation, exactly one playlist index command', flush=True)
+    wait(lambda: 'to_index=4 action=slide history=1 lms_commands=1 kind=next' in
+         (base / 'bridge.log').read_text()[lazy_mark:], 5, 'app Next diagnostic')
+    time.sleep(1)
+    mark = len((base / 'bridge.log').read_text())
+    before = len(proxy.records)
+    assert next(item for item in items() if item['metadata']['title'] == 'Title & 3')['uri'] == retained_target['uri']
+    select_item(next(i for i, item in enumerate(items()) if item['uri'] == retained_target['uri']))
+    wait(lambda: int(cli('playlist index ?', mac)[-1]) == 3, 5, 'retained app Back LMS follows')
+    wait(lambda: 'lms_commands=1 kind=previous' in (base / 'bridge.log').read_text()[mark:],
+         10, 'retained app Back diagnostic')
+    time.sleep(1.5)
+    text = (base / 'bridge.log').read_text()[mark:]
+    assert text.count('window lms-nav ') == 1, text
+    assert sonos.position['TrackURI'] == retained_target['uri']
+    assert fetch(retained_target) == cached
+    mutations = [r['request'] for r in proxy.records[before:]
+                 if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
+    assert mutations == [mac + ' playlist index 3'], mutations
+    edits = len(sonos.edit_events)
+    before = len(proxy.records)
+    with sonos.lock:
+        sonos.position['RelTime'] = '00:00:08'
+    time.sleep(.5)
+    select_item(next(i for i, item in enumerate(items()) if item['uri'] == retained_target['uri']))
+    time.sleep(1.5)
+    assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
+    assert len(sonos.edit_events) == edits
+    print('PASS speaker retained Back: one command, LMS follows, diagnostic count=1, cached WAV identical, no echo loop; same-index restart: zero commands or churn', flush=True)
+
     cli('stop', mac)
     wait(lambda: not items(), 10, 'final navigation release')

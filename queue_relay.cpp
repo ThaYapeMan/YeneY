@@ -52,6 +52,7 @@ upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
     return io;
 }
 void QueueRoom::Impl::releaseWindowParent(uint64_t token, uint64_t before) {
+    if (before == UINT64_MAX) speakerNavFirst.erase(token);
     std::lock_guard<std::mutex> lock(sourceMutex);
     for (const auto &source : sourceTokens)
         if (source.second == token && source.first < before && source.first < UINT64_MAX / 2)
@@ -83,6 +84,8 @@ void QueueRoom::Impl::release(bool stop) {
     for (const auto &lazy : lazyItems) lazy.second->cancel();
     lazyItems.clear();
     lazyTarget = -1; activatingToken = 0;
+    speakerNavCommands.clear();
+    speakerNavFirst.clear();
     items.clear();
     releasing = true;
     ownership.release(!sourceAway,
@@ -266,6 +269,11 @@ void QueueRoom::Impl::append() {
         if (!record.parent) {
             std::lock_guard<std::mutex> lock(sourceMutex);
             const auto token = sourceTokens.find(owner);
+            if (token != sourceTokens.end()) {
+                const auto first = speakerNavFirst.find(token->second);
+                if (first != speakerNavFirst.end() && owner < first->second)
+                    continue; // Our selection cancels decode-ahead; only its paired producer may bind.
+            }
             if (token != sourceTokens.end() && !window.find(token->second)) {
                 queue.releaseParent(owner);
                 continue; // An LMS edit removed this producer before publication.
@@ -274,6 +282,8 @@ void QueueRoom::Impl::append() {
         if (std::any_of(items.begin(), items.end(),
                         [&](const auto &i) { return i.stream == record.source.occurrence || i.owner == record.source.occurrence; }))
             continue;
+        if (lmsNavigation && owner < navigationFirst)
+            continue; // A superseded producer cannot enlarge the controller's navigation window.
         if (record.source.rate > queue.maxSampleRate())
             throw TrackFault("queue-rate-unsupported rate=" + std::to_string(record.source.rate) +
                                      " cap=" + std::to_string(queue.maxSampleRate()));
@@ -308,6 +318,7 @@ void QueueRoom::Impl::append() {
                         // a retained upcoming parent. Bind its new producer
                         // clock to the existing URI instead of appending it.
                         if (!cached->owner) cached->owner = cached->stream;
+                        if (current == cached->stream) current = record.source.occurrence;
                         cached->stream = record.source.occurrence;
                         windowDirty = true;
                         continue;
@@ -402,6 +413,10 @@ void QueueRoom::Impl::append() {
             windowDirty = true;
             nextWindowPoll = {};
             return;
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            if (!commands.empty()) return; // A controller move supersedes this prepared append.
         }
         try {
             result = actions.add(metadata.url, didl,

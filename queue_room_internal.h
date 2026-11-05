@@ -95,6 +95,8 @@ struct QueueRoom::Impl {
     std::atomic<int> lazyTarget{-1};
     uint64_t activatingToken = 0, lazySerial = 0;
     void activateLazy(uint64_t token);
+    std::map<uint64_t, unsigned> speakerNavCommands;
+    std::map<uint64_t, uint64_t> speakerNavFirst;
 
     std::map<uint64_t, bool> remote;
     std::mutex mutex, sourceMutex;

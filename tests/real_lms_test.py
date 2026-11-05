@@ -525,7 +525,12 @@ try:
         for index in range(4):
             wait(lambda:len(items())>index,10,'native prepared successor')
             selected_item=items()[index]
-            if index:select_item(index)
+            if index:
+                # The sample-exact decimation replay models a natural boundary.
+                with sonos.lock:
+                    sonos.position['RelTime'] = '00:00:03'
+                wait(lambda: float(cli('time ?', mac)[-1]) >= 3, 3, 'native preceding end position')
+                select_item(index)
             wait(lambda:int(cli('playlist index ?',mac)[-1])==index,3,'native LMS identity')
             resource=selected_item['resource']
             target=rate if rate<=48000 else 44100 if rate==88200 else 48000

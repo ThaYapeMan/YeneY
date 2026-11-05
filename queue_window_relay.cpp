@@ -314,8 +314,12 @@ void QueueRoom::Impl::reconcileWindow() {
         }
         logQueue("window lms-nav from_index=" + std::to_string(*publishedWindowIndex) +
             " to_index=" + std::to_string(audible->index) + " action=slide history=" +
-            std::to_string(history) + " lms_commands=0 kind=natural");
+            std::to_string(history) + " lms_commands=" + std::to_string(speakerNavCommands[audible->token]) + " kind=" +
+            (speakerNavCommands[audible->token] ?
+                (*publishedWindowIndex + 1 == audible->index ? "next" :
+                 *publishedWindowIndex == audible->index + 1 ? "previous" : "jump") : "natural"));
     }
+    speakerNavCommands.erase(audible->token);
     publishedWindowIndex = audible->index;
     playlist = std::move(snapshot);
     publishedWindowPolicy = window.policy();
@@ -343,7 +347,10 @@ void QueueRoom::Impl::activateLazy(uint64_t token) {
     activatingToken = token;
     lazyTarget = int(slot->index);
     try {
+        const auto snapshot = reader.read(host, mac);
+        if (snapshot.index == slot->index) return; // Speaker poll or LMS already selected it.
         roomLmsCommand(host, mac, "playlist index " + std::to_string(slot->index), "lazy-pcm-get", logQueue);
+        speakerNavCommands[token] = 1;
         logQueue("lazy activated lms_index=" + std::to_string(slot->index) + " lms_commands=1");
     } catch (...) {
         found->second->cancel(); lazyTarget = -1; activatingToken = 0;

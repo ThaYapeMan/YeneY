@@ -15,6 +15,11 @@ def coordinator():
     try:
         for index in range(1,5):
             h.until(lambda:h.prepared(index))
+            if index > 1:
+                # This replay models a natural join, so supply its preceding
+                # end position rather than an app jump at the start of a song.
+                h.state(index - 1, 23)
+                h.until(lambda: h.elapsed() >= 23000)
             h.state(index)
             h.until(lambda:len(h.packets('STMs'))==index)
             assert h.model.playing==index
