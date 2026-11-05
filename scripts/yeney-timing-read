@@ -75,7 +75,7 @@ def main():
     try:
         # ACCESS_READ and rb: neither object can be changed by this tool.
         with open(os.path.join(args.directory, 'yeney-timing-' + mac), 'rb') as timing_file, \
-                open(os.path.join(args.directory, 'squeezelite-' + mac), 'rb') as audio_file, \
+                open(os.path.join(args.directory, 'yeney-' + mac), 'rb') as audio_file, \
                 mmap.mmap(timing_file.fileno(), SIZE, access=mmap.ACCESS_READ) as timing, \
                 mmap.mmap(audio_file.fileno(), 32888, access=mmap.ACCESS_READ) as audio:
             while True:

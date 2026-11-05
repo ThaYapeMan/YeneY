@@ -37,7 +37,7 @@ public:
         std::array<uint8_t, 6> address;
         std::copy(mac, mac + 6, address.begin());
         const auto name = yeney::ShmV1Sink::segmentName(address);
-        if (!diagnostics().configure(name.substr(std::string("/squeezelite-").size())))
+        if (!diagnostics().configure(name.substr(std::string(yeney::ShmV1Sink::kSegmentPrefix).size())))
             throw std::runtime_error("timing publisher already owned or unavailable");
         try {
             sink = std::make_unique<yeney::ShmV1Sink>(address, maximum);

@@ -13,6 +13,9 @@ import time
 import json
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'third_party/yeney-core/tests'))
+from shm_name import SEGMENT_PREFIX
+
 TOOL = ROOT / 'scripts/yeney-timing-read'
 loader = importlib.machinery.SourceFileLoader('timing_reader', str(TOOL))
 spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -65,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-timing-reader-') as directory:
     struct.pack_into('<I', audio, 32856, 2)
     struct.pack_into('<QQ', audio, 32860, 123, 49000)
     tp = Path(directory) / ('yeney-timing-'+mac)
-    ap = Path(directory) / ('squeezelite-'+mac)
+    ap = Path(directory) / (SEGMENT_PREFIX.lstrip('/')+mac)
     tp.write_bytes(timing); ap.write_bytes(audio)
     result = json.loads(subprocess.check_output([str(TOOL), mac.upper(), '--once', '--directory', directory]))
     assert result['anchor_abs_frame'] == 1000 and result['shm_generation'] == 123
