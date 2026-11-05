@@ -217,7 +217,12 @@ install()
 perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
 for i,rate in enumerate((44100,48000)*4):
-    path=base/f'input-{i}.wav';path.write_bytes(wav(rate,24,noise=True))
+    path=base/f'input-{i}.wav'
+    source=bytearray(wav(rate,24,noise=True))
+    if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':
+        # Distinct PCM makes a same-rate wrong-track binding observable.
+        np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
+    path.write_bytes(source)
     subprocess.run(['flac','-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
                     '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
 for i,rate in ((4,44100),(5,48000)):
@@ -305,6 +310,7 @@ try:
     sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None]+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
     tap=Tap()
     env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(base))
+    if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':env['YENEY_LMS_ICON']=''
     if volume_only:env['YENEY_LMS_VOLUME']='speaker'
     bridge=subprocess.Popen([os.environ.get('YENEY_ACCEPTANCE_BINARY',str(ROOT/'yeney')),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
                             stdout=bridge_log,stderr=subprocess.STDOUT,env=env,start_new_session=True)
@@ -405,6 +411,10 @@ try:
         assert all('reason=speaker-' in line for line in text.splitlines() if 'queue LMS mutation ' in line),text[-8000:]
     if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':
         from podcast_real_lms import run
+        run(globals())
+        raise SystemExit(0)
+    if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':
+        from navigation_invariants_real_lms import run
         run(globals())
         raise SystemExit(0)
     if os.environ.get('YENEY_REAL_LMS_NAV_ONLY')=='1':

@@ -26,7 +26,6 @@ void QueueRoom::Impl::externalStop(const std::string &reason) {
     speakerCommand("stop", reason);
 }
 void QueueRoom::Impl::observe() {
-    if (lmsNavigation) return; // Old speaker evidence cannot echo a new LMS selection.
     const auto live = speaker->speaker();
     if (live.coordinator != room.name && (!stoppedPlay || started || state == "PLAYING" || state == "PAUSED") && !externalReleased) {
         takeoverSource = "other-group member";
@@ -142,26 +141,7 @@ void QueueRoom::Impl::observe() {
         const bool naturalBoundary = previousItem != items.end() && previousItem->item &&
             previousIndex != sourceIndices.end() && slot && slot->index == previousIndex->second + 1 &&
             previousItem->frames <= (lastElapsed + 3) * previousItem->item->descriptor().rate;
-        if (slot && !naturalBoundary && lazyTarget.load() < 0) {
-            // Read LMS before mutating: natural decode-ahead and controller
-            // navigation may already have selected this exact occurrence.
-            queue_audio::PlaylistSnapshot snapshot;
-            try {
-                snapshot = reader.read(host, mac);
-            } catch (const std::exception &) {
-                logQueue("speaker navigation snapshot unavailable reason=cli-read");
-                return; // Keep the boundary pending until its index can be checked.
-            }
-            std::lock_guard<std::mutex> lock(mutex);
-            if (!commands.empty()) return;
-            if (snapshot.index != slot->index) {
-                speakerNavFirst[slot->token] = queue.latestOccurrence() + 1;
-                lazyTarget = int(slot->index); // Pair our producer without a renderer seek.
-                roomLmsCommand(host, mac, "playlist index " + std::to_string(slot->index),
-                               "speaker-nav", logQueue);
-                speakerNavCommands[slot->token] = 1;
-            }
-        }
+        if (slot && !naturalBoundary) arbitrateSelection(slot->token, "speaker-nav");
     }
     if (checked != items.end() && !checked->item) return;
     if (checked != items.end()) {
@@ -265,6 +245,26 @@ void QueueRoom::Impl::observe() {
     const auto previous = current;
     const auto old = state;
     current = it->stream;
+    {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        const auto owner = it->owner ? it->owner : it->stream;
+        const auto index = sourceIndices.find(owner);
+        const auto token = sourceTokens.find(owner);
+        if (index != sourceIndices.end() && token != sourceTokens.end()) {
+            const auto selection = selections.find(index->second);
+            if (selection != selections.end() && selection->second.token == token->second) {
+                selection->second.observed = current;
+                if (selection->second.phase == Selection::Published) {
+                    const auto confirmed = selection->second.first;
+                    for (auto old = selections.begin(); old != selections.end();) {
+                        if (old->second.phase == Selection::Published && old->second.first <= confirmed)
+                            old = selections.erase(old);
+                        else ++old;
+                    }
+                }
+            }
+        }
+    }
     if (current != previous) windowDirty = true; // Refill lookahead on the audible boundary itself.
     state = playback == yeney::PlaybackState::Playing  ? "PLAYING"
             : playback == yeney::PlaybackState::Paused ? "PAUSED"

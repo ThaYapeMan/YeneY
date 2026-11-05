@@ -92,8 +92,19 @@ struct QueueRoom::Impl {
     std::optional<Entry> navigationItem;
     std::chrono::steady_clock::time_point navigationDeadline{};
     std::map<uint64_t, std::shared_ptr<queue_audio::LazyItem>> lazyItems;
-    std::atomic<int> lazyTarget{-1};
-    uint64_t activatingToken = 0, lazySerial = 0;
+    // Worker-owned selections are independent for each LMS index.
+    struct Selection {
+        enum Phase { Queued, Producing, Published } phase;
+        uint64_t token, first;
+        std::optional<uint64_t> observed{};
+    };
+    std::map<unsigned, Selection> selections;
+    std::deque<unsigned> selectionOrder;
+    void advanceSelections();
+    void selectionPublished(unsigned index);
+    uint64_t lazySerial = 0;
+    void arbitrateSelection(uint64_t token, const std::string &reason);
+    bool acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot);
     void activateLazy(uint64_t token);
     std::map<uint64_t, unsigned> speakerNavCommands;
     std::map<uint64_t, uint64_t> speakerNavFirst;

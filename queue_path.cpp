@@ -121,17 +121,28 @@ void QueueRoom::Impl::selectPath() {
         queue_audio::PlaylistEntry track;
         selectedIndex = -1;
         try {
-            playlist = reader.read(host, mac);
+            auto snapshot = reader.read(host, mac);
+            if (!acceptSnapshot(snapshot)) return;
+            playlist = std::move(snapshot);
             window.reconcile(playlist);
-            const auto target = lazyTarget.load();
-            const auto index = navigationSelecting ? playlist.index : target >= 0 && playlist.index == unsigned(target) ? unsigned(target) :
+            const auto selection = selections.find(playlist.index);
+            const auto pairing = selection != selections.end() && selection->second.phase == Selection::Producing;
+            const auto index = navigationSelecting || pairing ? playlist.index :
                 playlist.index + (selectedNewPlay ? 0 : 1);
-            if (navigationSelecting && target >= 0 && playlist.mode != "stop" &&
-                playlist.index == unsigned(target)) {
-                // Confirm the lazy selection at its paired start, once. A
-                // later Back must not be swallowed while publication waits.
-                lmsNavigation = navigationSelecting = false;
-                lazyTarget = -1;
+            if (navigationSelecting && pairing && playlist.mode != "stop" &&
+                speakerNavCommands[selection->second.token]) {
+                // A fresh producer can bind a lazy route or a complete retained
+                // parent. Partial history must use the navigation replacement.
+                std::lock_guard<std::mutex> sourceLock(sourceMutex);
+                const auto cached = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
+                    const auto identity = sourceTokens.find(entry.owner ? entry.owner : entry.stream);
+                    return identity != sourceTokens.end() && identity->second == selection->second.token;
+                });
+                if (cached != items.end() && (!cached->item ||
+                    (!cached->originMs && cached->item->descriptor().kind == queue_audio::PromiseKind::Exact &&
+                     cached->item->finished() && cached->item->producedFrames() == cached->frames))) {
+                    lmsNavigation = navigationSelecting = false;
+                }
             }
             if (index < playlist.entries.size()) {
                 track = playlist.entries[index];

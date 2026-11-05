@@ -83,7 +83,8 @@ void QueueRoom::Impl::release(bool stop) {
     for (auto token : tokens) releaseWindowParent(token);
     for (const auto &lazy : lazyItems) lazy.second->cancel();
     lazyItems.clear();
-    lazyTarget = -1; activatingToken = 0;
+    selections.clear();
+    selectionOrder.clear();
     speakerNavCommands.clear();
     speakerNavFirst.clear();
     items.clear();
@@ -187,11 +188,15 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
             // read verifies the target before any speaker edit.
             {
                 std::lock_guard<std::mutex> lock(sourceMutex);
-                navigationFrom = playlist.index;
+                navigationFrom = publishedWindowIndex.value_or(playlist.index);
                 for (const auto &entry : items) if (entry.stream == current) {
                     const auto owner = entry.owner ? entry.owner : entry.stream;
                     const auto index = sourceIndices.find(owner);
-                    if (index != sourceIndices.end()) navigationFrom = index->second;
+                    if (index != sourceIndices.end()) {
+                        const auto selection = selections.find(index->second);
+                        if (selection == selections.end() || selection->second.phase != Selection::Producing)
+                            navigationFrom = index->second;
+                    }
                 }
                 navigationEdits = queueEdits;
                 lmsNavigation = true;
@@ -304,7 +309,7 @@ void QueueRoom::Impl::append() {
             const auto token = sourceTokens.find(owner);
             if (token != sourceTokens.end()) {
                 const auto lazy = lazyItems.find(token->second);
-                if (!lmsNavigation || owner != navigationFirst) {
+                if (!lmsNavigation || owner < navigationFirst || token->second != navigationToken) {
                     auto cached = std::find_if(items.begin(), items.end(), [&](const auto &i) {
                         const auto identity = sourceTokens.find(i.owner ? i.owner : i.stream);
                         return i.item && !i.segmentOffset && identity != sourceTokens.end() &&
@@ -320,6 +325,7 @@ void QueueRoom::Impl::append() {
                         if (!cached->owner) cached->owner = cached->stream;
                         if (current == cached->stream) current = record.source.occurrence;
                         cached->stream = record.source.occurrence;
+                        selectionPublished(sourceIndices.at(owner));
                         windowDirty = true;
                         continue;
                     }
@@ -330,15 +336,15 @@ void QueueRoom::Impl::append() {
                 if (!lmsNavigation && lazy != lazyItems.end() && entry != items.end()) {
                     if (!lazy->second->publish(record.item)) {
                         queue.releaseParent(owner);
-                        if (activatingToken == token->second) { activatingToken = 0; lazyTarget = -1; }
+                        selections.erase(sourceIndices.at(owner));
                         continue;
                     }
                     entry->stream = record.source.occurrence;
                     entry->item = record.item;
                     entry->frames = (*length - 44) / 6;
                     logQueue("lazy bound lms_index=" + std::to_string(sourceIndices[owner]) +
-                        " lms_commands=" + std::to_string(activatingToken == token->second ? 1 : 0));
-                    if (activatingToken == token->second) { activatingToken = 0; lazyTarget = -1; }
+                        " lms_commands=" + std::to_string(speakerNavCommands[token->second]));
+                    selectionPublished(sourceIndices.at(owner));
                     windowDirty = true;
                     continue;
                 }
@@ -407,12 +413,19 @@ void QueueRoom::Impl::append() {
                                     " occurrence=" + std::to_string(record.source.occurrence));
         upnp::SoapResult result;
         const auto didl = upnp::queueDidl(metadata);
-        if (lmsNavigation && owner == navigationFirst && !record.parent) {
-            navigationItem = Entry{record.source.occurrence, metadata.url, record.item, track.url,
-                                  metadata.frames, metadata.title, 0, 0, didl, track.startOffsetMs};
-            windowDirty = true;
-            nextWindowPoll = {};
-            return;
+        if (lmsNavigation && owner >= navigationFirst && !record.parent) {
+            std::lock_guard<std::mutex> lock(sourceMutex);
+            const auto identity = sourceTokens.find(owner);
+            if (identity != sourceTokens.end() && identity->second == navigationToken) {
+                // Admission can race the CLI selection. The generation is a
+                // lower bound; the occurrence token identifies its producer.
+                navigationFirst = owner;
+                navigationItem = Entry{record.source.occurrence, metadata.url, record.item, track.url,
+                                      metadata.frames, metadata.title, 0, 0, didl, track.startOffsetMs};
+                windowDirty = true;
+                nextWindowPoll = {};
+                return;
+            }
         }
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -570,24 +583,42 @@ void QueueRoom::Impl::run() {
                 } else
                     command(c.first, c.second);
             }
-            if (activatingToken && lazyItems.at(activatingToken)->abandoned()) {
-                logQueue("lazy abandoned reason=reader-left lms_commands=1");
-                activatingToken = 0;
-                lazyTarget = -1;
-            }
             selectPath();
             if (navigationDeadline != std::chrono::steady_clock::time_point{} &&
                 std::chrono::steady_clock::now() >= navigationDeadline) {
                 navigationDeadline = {};
-                try {
-                    const auto snapshot = reader.read(host, mac);
-                    if (snapshot.entries.empty()) {
-                        logQueue("window rebuild reason=clear lms_commands=0");
-                        logQueue("window lms-nav from_index=" + std::to_string(navigationFrom) +
-                            " to_index=0 action=rebuild history=0 lms_commands=0 kind=clear");
-                    }
-                } catch (const std::exception &) { logQueue("window snapshot unavailable reason=cli-read"); }
-                command('Z', navigationFirst); // No paired start: honour the stop.
+                if (selecting || selectionDeferred.load() || std::any_of(selections.begin(), selections.end(),
+                    [](const auto &selection) { return selection.second.phase != Selection::Published; })) {
+                    navigationDeadline = std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(queue_audio::QueueWindow::settleMs);
+                    try {
+                        const auto snapshot = reader.read(host, mac);
+                        if (snapshot.mode == "stop") {
+                            const auto fresh = reader.read(host, mac);
+                            if (fresh.mode == "stop") {
+                                command('Z', navigationFirst); // Confirmed user stop cancels owned requests.
+                                if (snapshot.entries.empty() && fresh.entries.empty())
+                                    logQueue("window rebuild reason=clear lms_commands=0");
+                            }
+                        }
+                    } catch (const std::exception &) { logQueue("window snapshot unavailable reason=cli-read"); }
+                } else {
+                    // A standalone q is explicit LMS stop authority. Status can
+                    // lag it, but an empty status alone is never clear authority.
+                    try {
+                        const auto snapshot = reader.read(host, mac);
+                        if (snapshot.entries.empty()) {
+                            const auto fresh = reader.read(host, mac);
+                            if (fresh.entries.empty()) {
+                                lmsNavigation = navigationSelecting = false;
+                                logQueue("window rebuild reason=clear lms_commands=0");
+                                logQueue("window lms-nav from_index=" + std::to_string(navigationFrom) +
+                                    " to_index=0 action=rebuild history=0 lms_commands=0 kind=clear");
+                            } else logQueue("window snapshot rejected reason=unconfirmed-clear");
+                        }
+                    } catch (const std::exception &) { logQueue("window snapshot unavailable reason=cli-read"); }
+                    command('Z', navigationFirst);
+                }
             }
             if (deferredStop != std::chrono::steady_clock::time_point{} &&
                 std::chrono::steady_clock::now() >= deferredStop) {
@@ -599,6 +630,7 @@ void QueueRoom::Impl::run() {
             }
             observe();
             append();
+            advanceSelections();
             trimHistory();
             reconcileWindow();
         } catch (const queue_audio::ItemCancelled &) {

@@ -182,6 +182,9 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_LAZY_ONLY=1 python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_NAV_ONLY=1 python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F1 python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F2 python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F3 python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_VOLUME_ONLY=1 python3 tests/real_lms_test.py
 	python3 third_party/yeney-core/tests/decimator_quality.py --sox "$${YENEY_REAL_LMS_HOME:-$${YENEY_TEST_CACHE}/real-lms-9.1.1}/Bin/x86_64-linux/sox"
 	$(MAKE) -C third_party/yeney-core test
@@ -522,3 +525,9 @@ $(OBJS) wav_writer.o streamer-test range-test: consumption_diagnostic.h
 core_sonos.o queue_room.o: queue_path_sink.h
 
 upnp/http_server.o: upnp/tcp_backlog.h
+
+.PHONY: navigation-soak
+navigation-soak: yeney
+	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=SOAK YENEY_NAV_SEED=1729 python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=SOAK YENEY_NAV_SEED=271828 python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=SOAK YENEY_NAV_SEED=8675309 python3 tests/real_lms_test.py

@@ -204,3 +204,18 @@ Send the `queue podcast metadata step=` journal/stdout line with the next
 report. It names feed/episode matching, lookup timeout or CLI failure, cache hit
 without podcast fields, or ambiguous split and candidate names. Include title,
 feed menu name and settings; omit source URLs, tokens and descriptions.
+
+## Navigation invariants
+
+- I1: Every live Sonos PCM request has an owned producer selection. The room
+  worker's serialized arbiter keys selections by LMS index; lazy activation
+  and speaker navigation share it. Bind an already selected index, join its
+  existing selection, or own exactly one selection command. Drain live WAV
+  declarations in arrival order before advancing LMS's single producer.
+  A selection for another index cannot silently discard a request.
+- I2: Empty or short snapshots of the known playlist during navigation, restart or window edits are
+  stale evidence. Reject them. Clearing requires a fresh empty read
+  and no navigation or edit in flight; genuine user clear still stops.
+- I3: Failed pairing with retained audio replaces that parent with its fresh
+  producer through the fenced window editor. Seek partials cannot supply a
+  frame-zero restart. A pairing mismatch must not stop the room or drop HTTP.

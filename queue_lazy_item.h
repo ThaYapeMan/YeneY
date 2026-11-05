@@ -17,6 +17,7 @@ class LazyItem {
     std::mutex mutex;
     std::condition_variable changed;
     bool requested = false, cancelled = false, activationClaimed = false;
+    unsigned issuedCommands = 0;
     std::vector<upnp::StreamRequest *> readers;
 public:
     LazyItem(std::shared_ptr<Item> declared, std::function<void()> enqueue, bool deferred = false)
@@ -67,7 +68,11 @@ public:
     }
     unsigned commandCount() {
         std::lock_guard<std::mutex> lock(mutex);
-        return activationClaimed ? 1 : 0;
+        return issuedCommands;
+    }
+    void commandIssued() {
+        std::lock_guard<std::mutex> lock(mutex);
+        ++issuedCommands;
     }
     void cancel() {
         std::lock_guard<std::mutex> lock(mutex);
