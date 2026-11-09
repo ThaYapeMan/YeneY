@@ -86,6 +86,19 @@ class Coordinator(ThreadingHTTPServer):
         self.worker = threading.Thread(target=self.serve_forever)
         self.worker.start()
 
+    @property
+    def position(self):
+        return self._position
+
+    @position.setter
+    def position(self, value):
+        if not hasattr(self, 'position_history'):
+            self.position_history = []
+        previous = getattr(self, '_position', {}).get('TrackURI', '')
+        if value['TrackURI'] != previous:
+            self.position_history.append((time.monotonic(), value['TrackURI']))
+        self._position = value
+
     def close(self):
         if getattr(self,'device_audio',None):self.device_audio.close()
         self.echo_stop.set(); self.echo_worker.join(5)

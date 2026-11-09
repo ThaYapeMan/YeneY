@@ -87,6 +87,7 @@ void QueueRoom::Impl::release(bool stop) {
     selectionOrder.clear();
     speakerNavCommands.clear();
     speakerNavFirst.clear();
+    replacementReasons.clear();
     items.clear();
     releasing = true;
     ownership.release(!sourceAway,
@@ -309,7 +310,10 @@ void QueueRoom::Impl::append() {
             const auto token = sourceTokens.find(owner);
             if (token != sourceTokens.end()) {
                 const auto lazy = lazyItems.find(token->second);
-                if (!lmsNavigation || owner < navigationFirst || token->second != navigationToken) {
+                const auto selection = selections.find(sourceIndices.at(owner));
+                const auto speakerSelection = selection != selections.end() && selection->second.token == token->second &&
+                    selection->second.phase == Selection::Producing && speakerNavCommands[token->second];
+                if (!lmsNavigation || owner < navigationFirst || token->second != navigationToken || speakerSelection) {
                     auto cached = std::find_if(items.begin(), items.end(), [&](const auto &i) {
                         const auto identity = sourceTokens.find(i.owner ? i.owner : i.stream);
                         return i.item && !i.segmentOffset && identity != sourceTokens.end() &&
@@ -317,11 +321,17 @@ void QueueRoom::Impl::append() {
                     });
                     if (cached != items.end() && record.source.occurrence < cached->stream)
                         continue; // A newer producer already owns this retained URI's clock.
-                    if (cached != items.end() && cached->item->descriptor().kind == queue_audio::PromiseKind::Exact && !cached->originMs &&
-                        cached->frames == (*length - 44) / 6 && cached->item->producedFrames() == cached->frames) {
+                    if (cached != items.end() && cached->item == record.item && !cached->originMs) {
                         // After LMS Previous, natural decode-ahead may revisit
                         // a retained upcoming parent. Bind its new producer
                         // clock to the existing URI instead of appending it.
+                        if (lmsNavigation && token->second == navigationToken && speakerSelection) {
+                            lmsNavigation = navigationSelecting = false;
+                            navigationDeadline = {};
+                            navigationItem.reset();
+                            logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                                " decision=paired lms_commands=1");
+                        }
                         if (!cached->owner) cached->owner = cached->stream;
                         if (current == cached->stream) current = record.source.occurrence;
                         cached->stream = record.source.occurrence;
@@ -342,6 +352,18 @@ void QueueRoom::Impl::append() {
                     entry->stream = record.source.occurrence;
                     entry->item = record.item;
                     entry->frames = (*length - 44) / 6;
+                    entry->originMs = record.originMs;
+                    if (speakerSelection) {
+                        const auto reason = replacementReasons.find(token->second);
+                        if (reason != replacementReasons.end()) {
+                            logQueue("window target re-produced lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                                " origin_ms=" + std::to_string(record.originMs) + " lms_commands=1 reason=" + reason->second);
+                            logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                                " decision=re-produced reason=" + reason->second + " lms_commands=1");
+                            replacementReasons.erase(reason);
+                        } else logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                            " decision=paired lms_commands=1");
+                    }
                     logQueue("lazy bound lms_index=" + std::to_string(sourceIndices[owner]) +
                         " lms_commands=" + std::to_string(speakerNavCommands[token->second]));
                     selectionPublished(sourceIndices.at(owner));
@@ -421,7 +443,7 @@ void QueueRoom::Impl::append() {
                 // lower bound; the occurrence token identifies its producer.
                 navigationFirst = owner;
                 navigationItem = Entry{record.source.occurrence, metadata.url, record.item, track.url,
-                                      metadata.frames, metadata.title, 0, 0, didl, track.startOffsetMs};
+                                      metadata.frames, metadata.title, 0, 0, didl, record.originMs};
                 windowDirty = true;
                 nextWindowPoll = {};
                 return;

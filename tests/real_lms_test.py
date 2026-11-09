@@ -41,6 +41,10 @@ class Tap:
     def __init__(self):
         self.listener=socket.socket();self.listener.bind(('127.0.0.1',0));self.listener.listen(2);self.listener.settimeout(.1)
         self.port=self.listener.getsockname()[1];self.closed=False;self.sockets=[];self.records=[];self.errors=[]
+        self.http_gate = None
+        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and os.environ.get('YENEY_NAV_CASE') == 'A2':
+            from navigation_http_gate import NavigationHTTPGate
+            self.http_gate = NavigationHTTPGate()
         self.worker=threading.Thread(target=self.run);self.worker.start()
     def run(self):
         try:
@@ -55,7 +59,8 @@ class Tap:
                     for source in ready:
                         data=source.recv(65536)
                         if not data:ended=True;break
-                        target=peer if source is client else client;target.sendall(data)
+                        target=peer if source is client else client
+                        if source is client or self.http_gate is None:target.sendall(data)
                         buffer=buffers[source];buffer.extend(data)
                         while len(buffer)>=(8 if source is client else 2):
                             header=8 if source is client else 2
@@ -67,6 +72,12 @@ class Tap:
                             record=dict(direction='player' if source is client else 'server',op=op,when=time.monotonic(),body=body.hex())
                             if op=='STAT':record['event']=body[:4].decode()
                             if op=='strm':record['command']=chr(body[0])
+                            if source is peer and self.http_gate is not None:
+                                if op == 'strm' and body[:1] == b's':
+                                    assert struct.unpack('!H', body[18:20])[0] == 9000
+                                    packet = packet[:24] + struct.pack('!H', self.http_gate.port) + packet[26:]
+                                    record['http_gate_port'] = self.http_gate.port
+                                target.sendall(packet)
                             self.records.append(record)
                     if ended:break
                 client.close();peer.close()
@@ -85,6 +96,7 @@ class Tap:
         self.closed=True;self.worker.join(4);self.listener.close()
         for s in self.sockets:s.close()
         assert not self.worker.is_alive(), 'SlimProto proxy did not stop'
+        if self.http_gate is not None:self.http_gate.close()
 
 class CLIProxy(socketserver.ThreadingTCPServer):
     allow_reuse_address=True

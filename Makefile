@@ -526,8 +526,10 @@ core_sonos.o queue_room.o: queue_path_sink.h
 
 upnp/http_server.o: upnp/tcp_backlog.h
 
-.PHONY: navigation-soak
+.PHONY: navigation-soak navigation-targeted
 navigation-soak: yeney
-	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=SOAK YENEY_NAV_SEED=1729 python3 tests/real_lms_test.py
-	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=SOAK YENEY_NAV_SEED=271828 python3 tests/real_lms_test.py
-	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=SOAK YENEY_NAV_SEED=8675309 python3 tests/real_lms_test.py
+	python3 tests/navigation_suite.py --soak
+navigation-targeted: yeney
+	python3 tests/navigation_suite.py
+
+test-run: navigation-targeted navigation-soak

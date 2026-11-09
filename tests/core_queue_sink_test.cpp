@@ -476,6 +476,55 @@ int main() {
         std::cout << "PASS immutable completed queue asset: LMS producer flush preserves exact WAV bytes and "
                      "length\n";
     }
+    for (unsigned produced : {40u, 100u}) {
+        CoreQueueSink sink("Pairing", c, 1);
+        sink.windowRetention(2, 3);
+        std::vector<yeney::Frame> pcm;
+        for (int n = 0; n < 100; ++n) pcm.push_back({n * 65536, -n * 65536});
+        sink.sourceIdentity(1, 7, "file://same-track", 0);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 100, 0, 0});
+        sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        assert(sink.write(pcm.data(), produced, false) == produced);
+        if (produced == 100) sink.resolvedItemBoundary({1, 0, 100, 0, "no-transition"});
+        sink.waitIdle();
+        const auto original = sink.snapshot().front().item;
+        auto waiting = std::async(std::launch::async, [original] {
+            char bytes[600];
+            auto reader = original->reader(44);
+            size_t n = 0;
+            while (n < sizeof(bytes)) n += reader.read(bytes + n, sizeof(bytes) - n);
+            return std::vector<char>(bytes, bytes + sizeof(bytes));
+        });
+        sink.retainInterruptedOnNextFlush();
+        sink.flush();
+        sink.sourceIdentity(2, 7, "file://same-track", 1250);
+        sink.coreEvent("strm", 2, 0);
+        sink.trackDescriptor({2, 8000, 100, 0, 0});
+        sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        assert(sink.write(pcm.data(), 100, false) == 100);
+        sink.resolvedItemBoundary({2, 0, 100, 0, "no-transition"});
+        sink.waitIdle();
+        const auto rows = sink.snapshot();
+        assert(rows[1].item == original && rows[1].pairedFrom == 1 && rows[1].actual == 100);
+        assert(rows[1].originMs == 0 && rows[1].incomplete.empty());
+        assert(original->finished() && original->producedFrames() == 100);
+        const auto bytes = waiting.get();
+        for (int n = 0; n < 100; ++n) {
+            assert(uint8_t(bytes[n * 6 + 1]) == unsigned(n));
+            assert(uint8_t(bytes[n * 6 + 4]) == unsigned(-n & 255));
+        }
+        sink.retainInterruptedOnNextFlush();
+        sink.flush();
+        sink.sourceIdentity(3, 7, "file://different-track", 0);
+        sink.coreEvent("strm", 3, 0);
+        sink.trackDescriptor({3, 8000, 100, 0, 0});
+        sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        assert(sink.write(pcm.data(), 100, false) == 100);
+        sink.waitIdle();
+        assert(sink.snapshot()[2].item != original);
+    }
+    puts("PASS producer pairing: complete and unfinished immutable WAV, waiting reader, exact prefix continuation, source mismatch rejected");
     for (bool navigation : {false, true}) {
         CoreQueueSink sink(navigation ? "NavigationFlush" : "OrdinaryFlush", c, 1);
         sink.windowRetention(2, 3);

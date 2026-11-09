@@ -15,6 +15,9 @@ struct QueueRecord {
     yeney::TrackDescriptor source;
     std::chrono::steady_clock::time_point strmAt{};
     uint64_t expectedIndex = 0;
+    uint64_t sourceToken = 0, pairedFrom = 0;
+    std::string sourceUrl;
+    unsigned originMs = 0;
     uint64_t parent = 0, segmentOffset = 0;
     bool estimated = false, productionComplete = false;
     double duration = 0;
@@ -90,6 +93,7 @@ public:
     bool paced() const override { return false; }
     void estimate(uint64_t occurrence, double duration, unsigned originMs);
     void trackDescriptor(const yeney::TrackDescriptor &) override;
+    void sourceIdentity(uint64_t id, uint64_t token, const std::string &url, unsigned originMs);
     void coreEvent(const std::string &, uint64_t, uint64_t) override;
     void resolvedItemBoundary(const yeney::ItemBoundary &) override;
     void trackBoundary(uint64_t, const yeney::Format &, bool) override;

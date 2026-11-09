@@ -78,9 +78,11 @@ LMS integration**:
 | Choose YeneY if you… | Choose LMS-uPnP if you… |
 |---|---|
 | want the best sound on Sonos: 24-bit, bit-perfect at 44.1/48 kHz, top-quality hi-res conversion | have speakers from other brands as well |
-| want correct titles and artwork per track, and fast starts | want Next/Previous and seeking in the Sonos app today |
-| control playback from LMS (Material Skin, the web interface, iPeng) and want Sonos-app pause and stop to reach LMS | group Sonos rooms a lot |
-| only have Sonos speakers | prefer a long-proven solution |
+| want correct titles and artwork per track, and fast starts | group Sonos rooms a lot |
+| want the Sonos app to control LMS — Next, Previous, seek, pause and stop all reach LMS — with your queue visible in the app | prefer a long-proven solution |
+| control playback from LMS (Material Skin, the web interface, iPeng) | |
+| want sample-accurate timing data for music-reactive lighting (LampaStream) | |
+| only have Sonos speakers | |
 
 **Why YeneY exists.** LMS-uPnP is a general bridge: it serves many kinds of
 renderers well, and Sonos is one of them. YeneY is made only for Sonos and LMS, and

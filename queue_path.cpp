@@ -131,18 +131,12 @@ void QueueRoom::Impl::selectPath() {
                 playlist.index + (selectedNewPlay ? 0 : 1);
             if (navigationSelecting && pairing && playlist.mode != "stop" &&
                 speakerNavCommands[selection->second.token]) {
-                // A fresh producer can bind a lazy route or a complete retained
-                // parent. Partial history must use the navigation replacement.
                 std::lock_guard<std::mutex> sourceLock(sourceMutex);
-                const auto cached = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
+                const auto pending = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
                     const auto identity = sourceTokens.find(entry.owner ? entry.owner : entry.stream);
-                    return identity != sourceTokens.end() && identity->second == selection->second.token;
+                    return !entry.item && identity != sourceTokens.end() && identity->second == selection->second.token;
                 });
-                if (cached != items.end() && (!cached->item ||
-                    (!cached->originMs && cached->item->descriptor().kind == queue_audio::PromiseKind::Exact &&
-                     cached->item->finished() && cached->item->producedFrames() == cached->frames))) {
-                    lmsNavigation = navigationSelecting = false;
-                }
+                if (pending != items.end()) lmsNavigation = navigationSelecting = false;
             }
             if (index < playlist.entries.size()) {
                 track = playlist.entries[index];

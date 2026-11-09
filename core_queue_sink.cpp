@@ -203,6 +203,17 @@ void CoreQueueSink::estimate(uint64_t id, double duration, unsigned originMs) {
     auto &r = records[id];
     r.estimated = true;r.duration = duration;r.sourceOriginMs = originMs;
 }
+void CoreQueueSink::sourceIdentity(uint64_t id, uint64_t token, const std::string &url, unsigned originMs) {
+    // Identity belongs to this producer's queued admission. Publishing it
+    // synchronously could let an older pending flush mark the new run flushed.
+    enqueue([=] {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto &record = records[id];
+        record.sourceToken = token;
+        record.sourceUrl = url;
+        record.originMs = originMs;
+    });
+}
 void CoreQueueSink::trackDescriptor(const yeney::TrackDescriptor &d) {
     enqueue([=] {
         uint64_t previous = 0;
@@ -257,7 +268,37 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             descriptor.promisedFrames = declaredRemoteFrames(remaining, f.rate);
             descriptor.kind = PromiseKind::UpperBound;
         }
-        auto item = store.create(descriptor);
+        std::shared_ptr<Item> item;
+        uint64_t pairedFrom = 0;
+        if (!estimated.estimated && estimated.sourceToken &&
+            (!estimated.originMs || estimated.source.sourceFrames)) {
+            std::lock_guard<std::mutex> lock(mutex);
+            for (const auto &entry : records) {
+                const auto &candidate = entry.second;
+                if (entry.first == id || candidate.parent || !candidate.item || candidate.originMs ||
+                    candidate.sourceToken != estimated.sourceToken || candidate.sourceUrl != estimated.sourceUrl ||
+                    candidate.source.rate != estimated.source.rate ||
+                    candidate.source.sourceFrames != estimated.source.sourceFrames ||
+                    candidate.item->descriptor().kind != PromiseKind::Exact ||
+                    candidate.incomplete == "outside queue window" || !candidate.fault.empty()) continue;
+                try {
+                    const auto length = candidate.item->contentLength();
+                    if (!length) continue;
+                    if (candidate.item->finished() && candidate.item->producedFrames() != (*length - 44) / 6) continue;
+                    item = candidate.item;
+                    pairedFrom = entry.first;
+                    break;
+                } catch (const std::exception &) { continue; }
+            }
+        }
+        if (!item) item = store.create(descriptor);
+        if (pairedFrom) {
+            std::lock_guard<std::mutex> lock(mutex);
+            records[id].pairedFrom = pairedFrom;
+            records[id].originMs = 0; // Matching source frame counts disprove a stale status seek offset.
+            records[id].promised = item->descriptor().promisedFrames;
+            records[id].publication = "paired";
+        }
         if (estimated.estimated) {
             std::lock_guard<std::mutex> lock(mutex);
             records[id].promised = descriptor.promisedFrames;
@@ -354,12 +395,14 @@ void CoreQueueSink::append(const std::vector<yeney::Frame> &pcm, bool processed)
     }
     if (!r.item)
         throw std::runtime_error("PCM without item");
-    auto produced = r.item->producedFrames();
+    const auto produced = r.item->producedFrames();
+    const auto cursor = r.pairedFrom ? r.actual : produced;
     size_t n = pcm.size();
     if (r.promised)
-        n = std::min<uint64_t>(n, *r.promised - produced);
-    if (n)
-        r.item->append(pcm.data(), n, processed);
+        n = std::min<uint64_t>(n, *r.promised - cursor);
+    const auto skip = r.pairedFrom && produced > cursor ? std::min<uint64_t>(n, produced - cursor) : 0;
+    if (n > skip)
+        r.item->append(pcm.data() + skip, n - skip, processed);
     if (n < pcm.size()) {
         // Promise wins; retain the residual at its original rate as a continuation.
         const auto token = std::to_string(active) + "-tail";
@@ -847,6 +890,7 @@ void CoreQueueSink::resume() {
 void CoreQueueSink::stop() { pause(); }
 void CoreQueueSink::flush() {
     const bool retainInterrupted = retainInterruptedFlush.exchange(false);
+    const auto through = latestProducer.load();
     {
         std::lock_guard<std::mutex> lock(mutex);
         audibleSignals.clear();
@@ -859,22 +903,34 @@ void CoreQueueSink::flush() {
         prefixPending = false;
         mismatchSince = -1;
     }
-    enqueue([this, retainInterrupted] {
+    enqueue([this, retainInterrupted, through] {
         std::vector<std::shared_ptr<Item>> items;
         {
             std::lock_guard<std::mutex> lock(mutex);
-            for (auto &p : records)
+            for (auto &p : records) {
+                const auto owner = p.second.parent ? p.second.parent :
+                    p.first >= UINT64_MAX / 2 ? UINT64_MAX - p.first : p.first;
+                // Boundary/estimate callbacks may publish future facts before
+                // this job runs. A flush only owns producers admitted by q.
+                if (owner > through) continue;
                 if ((p.second.item || !p.second.estimated) && p.second.end < 0 && p.second.incomplete.empty())
                     p.second.incomplete = "flushed";
-            for (auto &p : records)
-                if (p.second.item)
-                    items.push_back(p.second.item);
+                if (p.second.item) items.push_back(p.second.item);
+            }
             active = 0;
             freshRender = true;
             nextIndex = 0;
             descriptorOrder.clear();
         }
         for (auto &i : items) {
+            if (retainInterrupted && retainedHistory) {
+                std::lock_guard<std::mutex> lock(mutex);
+                const auto reusable = std::any_of(records.begin(), records.end(), [&](const auto &entry) {
+                    return entry.second.item == i && entry.second.sourceToken && !entry.second.originMs &&
+                        entry.second.fault.empty() && entry.second.incomplete == "flushed";
+                });
+                if (reusable) continue; // A new same-source producer can continue this immutable WAV.
+            }
             try {
                 const auto length = i->contentLength();
                 if (i->finished() || (length && i->producedFrames() == (*length - 44) / 6))

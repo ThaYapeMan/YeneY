@@ -94,33 +94,42 @@ void QueueRoom::Impl::reconcileWindow() {
         return;
     }
     bool reused = false, bound = false, deferredUpcoming = false;
+    bool selectedTarget = false;
     std::vector<Entry> retired;
     std::vector<std::shared_ptr<queue_audio::LazyItem>> retiredLazy;
     if (lmsNavigation) {
         auto &target = entries[navigationToken];
-        // A complete retained target serves the speaker from its existing URI.
+        // Pair the sink's verified same-source item at its existing URI.
         // Seek runs have a different declaration and need a new URI.
         const auto lazy = lazyItems.find(navigationToken);
         if (target.size() == 1 && !target.front().item && lazy != lazyItems.end() &&
-            lazy->second->waiting() && lazy->second->publish(navigationItem->item)) {
+            (lazy->second->waiting() || speakerNavCommands[navigationToken] || replacementReasons.count(navigationToken)) && lazy->second->publish(navigationItem->item)) {
             // The controller supplied this producer. Keep a waiting PCM GET on
             // its existing route instead of cancelling and selecting it again.
             target.front().stream = navigationItem->stream;
             target.front().item = navigationItem->item;
             target.front().frames = navigationItem->frames;
             target.front().originMs = navigationItem->originMs;
-            owned.erase(navigationItem->uri);
+            if (navigationItem->uri != target.front().uri) owned.erase(navigationItem->uri);
             selections.erase(audible->index);
             bound = true;
+            if (const auto reason = replacementReasons.find(navigationToken); reason != replacementReasons.end()) {
+                logQueue("window target re-produced lms_index=" + std::to_string(audible->index) +
+                    " origin_ms=" + std::to_string(navigationItem->originMs) +
+                    " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]) + " reason=" + reason->second);
+            }
         } else if (target.size() == 1 && target.front().item &&
-            target.front().item->descriptor().kind == queue_audio::PromiseKind::Exact &&
-            target.front().item->producedFrames() == target.front().frames &&
-            !target.front().originMs && target.front().frames == navigationItem->frames && snapshot.timeMs < 500) {
+            target.front().item == navigationItem->item && !target.front().originMs &&
+            !navigationItem->originMs && target.front().sourceUrl == navigationItem->sourceUrl) {
             if (!target.front().owner) target.front().owner = target.front().stream;
             target.front().stream = navigationItem->stream;
-            owned.erase(navigationItem->uri);
+            if (navigationItem->uri != target.front().uri) owned.erase(navigationItem->uri);
             reused = true;
         } else {
+            const auto reason = target.empty() ? "incomplete" :
+                target.front().originMs || navigationItem->originMs ? "seek-partial" :
+                target.front().sourceUrl != navigationItem->sourceUrl ? "source-mismatch" : "incomplete";
+            replacementReasons[navigationToken] = reason;
             retired.insert(retired.end(), target.begin(), target.end());
             if (const auto lazy = lazyItems.find(navigationToken); lazy != lazyItems.end()) {
                 retiredLazy.push_back(lazy->second);
@@ -129,12 +138,35 @@ void QueueRoom::Impl::reconcileWindow() {
             target = {*navigationItem};
             logQueue("window target re-produced lms_index=" + std::to_string(audible->index) +
                 " origin_ms=" + std::to_string(navigationItem->originMs) +
-                " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]));
+                " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]) + " reason=" + reason);
+        }
+    }
+    const auto superseded = lmsNavigation && std::any_of(selectionOrder.begin(), selectionOrder.end(),
+        [this](unsigned index) {
+            const auto selection = selections.find(index);
+            return selection != selections.end() && selection->second.token != navigationToken;
+        });
+    if (lmsNavigation) {
+        const auto outgoing = std::find_if(items.begin(), items.end(), [this](const auto &entry) {
+            return entry.stream == current;
+        });
+        const auto &target = entries.at(navigationToken).front();
+        const auto ready = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
+            return entry.uri == target.uri;
+        });
+        if (!superseded && outgoing != items.end() && outgoing->originMs && ready != items.end() &&
+            outgoing->uri != target.uri) {
+            // Move once to the declared target before retiring the outgoing
+            // seek suffix. History must already be safe when this move commits.
+            actions.seekTrack(unsigned(ready - items.begin()) + 1);
+            selectedTarget = true;
+            current = target.stream;
+            anchor = navigationToken;
         }
     }
     for (const auto &slot : window.around(audible->index)) {
         auto found = entries.find(slot.token);
-        if ((lmsNavigation || refreshUpcoming) && slot.index > audible->index && found != entries.end() &&
+        if (slot.index != audible->index && found != entries.end() &&
             !found->second.empty() && found->second.front().item &&
             (found->second.front().originMs || (found->second.front().item->finished() &&
              found->second.front().item->producedFrames() < found->second.front().frames))) {
@@ -147,15 +179,17 @@ void QueueRoom::Impl::reconcileWindow() {
                 deferredUpcoming = true;
             } else {
                 if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end()) retiredLazy.push_back(lazy->second);
+                replacementReasons[slot.token] = found->second.front().originMs ? "seek-partial" : "incomplete";
                 retired.insert(retired.end(), found->second.begin(), found->second.end());
                 entries.erase(found);
                 found = entries.end();
             }
         }
-        if (slot.index < audible->index && found != entries.end() &&
-            (found->second.empty() || !found->second.front().item)) continue;
+        if (lmsNavigation && !speakerNavCommands[navigationToken] && slot.index < audible->index &&
+            found != entries.end() && !found->second.empty() && !found->second.front().item &&
+            !replacementReasons.count(slot.token)) continue;
         if (found == entries.end()) {
-            if (slot.index <= audible->index) continue; // History selection is a later stage.
+            if (slot.index <= audible->index && !replacementReasons.count(slot.token)) continue; // History selection is a later stage.
             const auto lazy = std::make_shared<queue_audio::LazyItem>(nullptr, [this, token = slot.token] {
                 std::lock_guard<std::mutex> lock(mutex);
                 if (closing) return;
@@ -248,12 +282,6 @@ void QueueRoom::Impl::reconcileWindow() {
                  " shuffle=" + std::to_string(snapshot.shuffle) + " repeat=" + std::to_string(snapshot.repeat));
     };
     std::optional<uint64_t> editAnchor = anchor;
-    const auto superseded = lmsNavigation && std::any_of(selectionOrder.begin(), selectionOrder.end(),
-        [this](unsigned index) {
-            const auto selection = selections.find(index);
-            return selection != selections.end() && selection->second.token != navigationToken;
-        });
-    bool selectedTarget = false;
     bool overlap = false;
     try {
         if (lmsNavigation && anchor == navigationToken && !superseded) {
@@ -385,8 +413,15 @@ void QueueRoom::Impl::reconcileWindow() {
             (navigationFrom == audible->index ? (snapshot.timeMs < 500 ? "previous" : "seek") : navigationFrom + 1 == audible->index ? "next" :
              navigationFrom == audible->index + 1 ? "previous" : "jump") +
             " edits=" + std::to_string(queueEdits - navigationEdits));
+        if (const auto reason = replacementReasons.find(navigationToken); reason != replacementReasons.end())
+            logQueue("window pairing lms_index=" + std::to_string(audible->index) +
+                " decision=re-produced reason=" + reason->second +
+                " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]));
+        else if (reused || bound) logQueue("window pairing lms_index=" + std::to_string(audible->index) +
+            " decision=paired lms_commands=" + std::to_string(speakerNavCommands[navigationToken]));
         if (reused) logQueue("window retained target audio reused lms_commands=0");
         if (bound) logQueue("window lazy target producer adopted lms_commands=0");
+        replacementReasons.erase(navigationToken);
         selections.erase(audible->index);
         lmsNavigation = false;
         navigationItem.reset();

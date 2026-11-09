@@ -216,6 +216,11 @@ feed menu name and settings; omit source URLs, tokens and descriptions.
 - I2: Empty or short snapshots of the known playlist during navigation, restart or window edits are
   stale evidence. Reject them. Clearing requires a fresh empty read
   and no navigation or edit in flight; genuine user clear still stops.
-- I3: Failed pairing with retained audio replaces that parent with its fresh
-  producer through the fenced window editor. Seek partials cannot supply a
-  frame-zero restart. A pairing mismatch must not stop the room or drop HTTP.
+- I3: A valid frame-zero target from the same source is always paired, including
+  unfinished decode-ahead and previous selections of the same index. The fresh
+  producer continues the existing immutable WAV and binds its clock to that URI.
+  Re-production is only for audio that cannot serve the request (seek partial,
+  source mismatch or unusable incomplete audio), and is produced before the
+  single speaker switch. Seek-partial history uses a deferred frame-zero route;
+  it never serves its old seek position on Back. Pairing failure must not stop
+  the room or drop HTTP. Each navigation logs paired or re-produced with a reason.
