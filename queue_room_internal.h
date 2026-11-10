@@ -97,6 +97,7 @@ struct QueueRoom::Impl {
         enum Phase { Queued, Producing, Published } phase;
         uint64_t token, first;
         std::optional<uint64_t> observed{};
+        std::optional<uint64_t> rewindMs{};
     };
     std::map<unsigned, Selection> selections;
     std::deque<unsigned> selectionOrder;
@@ -140,6 +141,7 @@ struct QueueRoom::Impl {
     std::string expectedState = "STOPPED";
     std::chrono::steady_clock::time_point ownUntil{};
     uint64_t lastElapsed = 0;
+    std::chrono::steady_clock::time_point lastPositionAt{};
     // The only outgoing CLI mutation path: called solely from speaker evidence.
     void speakerCommand(const std::string &command, const std::string &reason);
     void externalStop(const std::string &reason);

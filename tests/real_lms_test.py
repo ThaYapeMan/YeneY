@@ -42,9 +42,9 @@ class Tap:
         self.listener=socket.socket();self.listener.bind(('127.0.0.1',0));self.listener.listen(2);self.listener.settimeout(.1)
         self.port=self.listener.getsockname()[1];self.closed=False;self.sockets=[];self.records=[];self.errors=[]
         self.http_gate = None
-        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and os.environ.get('YENEY_NAV_CASE') == 'A2':
+        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and os.environ.get('YENEY_NAV_CASE') in ('A2', 'S2', 'S3', 'B1', 'B2', 'F3'):
             from navigation_http_gate import NavigationHTTPGate
-            self.http_gate = NavigationHTTPGate()
+            self.http_gate = NavigationHTTPGate(hold_request=2 if os.environ.get('YENEY_NAV_CASE') == 'A2' else 1)
         self.worker=threading.Thread(target=self.run);self.worker.start()
     def run(self):
         try:
@@ -230,7 +230,7 @@ perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
 for i,rate in enumerate((44100,48000)*4):
     path=base/f'input-{i}.wav'
-    source=bytearray(wav(rate,24,noise=True))
+    source=bytearray(wav(rate,90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24,noise=True))
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
         np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)

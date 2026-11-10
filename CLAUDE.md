@@ -113,7 +113,15 @@ segment insertions but retain their parent's history slot.
 Stage 1c is complete: LMS Next/Previous/jump/seek starts keep the owned queue
 and reconcile overlapping parents with fresh Browse/UpdateID fences. User Next
 retains the outgoing current and prior history parent, trimming beyond two.
-Retained complete targets reuse their audio; seek replaces only its declaration.
+Retained complete targets reuse their audio. LMS seek keeps a row whose immutable
+WAV covers the landed frame, with one REL_TIME Seek and zero window edits. The
+fresh producer attaches at content_frame, verifies its overlap and appends only
+the missing suffix. A partial is allowed only through the logged fallback for an
+unknown landed frame or unavailable prefix. An app rewind below LMS's producer
+start offset issues one reason-checked `time` command (`speaker-rewind`) through
+the index-keyed serialized outbox. Its restarted producer attaches to the same
+WAV; an already positioned renderer receives no second Seek. App positions at or
+above that offset, including all changes with offset zero, use STAT alone.
 Unproduced lazy rows never count as history. An out-of-range jump with no
 retained overlap, clear or loss of the current through reorder permits a rebuild,
 logged as `window rebuild reason=out-of-range|clear|reorder lms_commands=0`.
@@ -224,3 +232,13 @@ feed menu name and settings; omit source URLs, tokens and descriptions.
   single speaker switch. Seek-partial history uses a deferred frame-zero route;
   it never serves its old seek position on Back. Pairing failure must not stop
   the room or drop HTTP. Each navigation logs paired or re-produced with a reason.
+
+- I4: A seek never replaces a queue row whose immutable WAV holds the seek point.
+  The renderer seeks inside that WAV; the new LMS producer attaches at its true
+  landed frame (content_frame), never at origin_ms. A partial item is produced
+  only when the landed frame is unknown or the produced prefix does not reach
+  it, and the reason is logged.
+- I5: LMS keeps a seek start offset that STAT cannot rewind below. An
+  app-originated position below that offset issues exactly one reason-checked
+  `time` command; LMS's restarted producer attaches in-item and the renderer
+  is not seeked again. Every other app position change is zero-command.

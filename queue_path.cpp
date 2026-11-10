@@ -188,7 +188,11 @@ void QueueRoom::Impl::selectPath() {
         selectedLocal = !remotePlaybackSource(track.id, track.remote, track.url) || track.finiteRemote();
         // Retain the status clock for diagnostics only. Remote promises never
         // subtract this possibly previous-run value.
-        if (selectedNewPlay) track.startOffsetMs = playlist.timeMs;
+        const auto selection = selectedIndex < 0 ? selections.end() : selections.find(unsigned(selectedIndex));
+        if (selection != selections.end() && selection->second.phase == Selection::Producing &&
+            selection->second.rewindMs)
+            track.startOffsetMs = uint32_t(*selection->second.rewindMs);
+        else if (selectedNewPlay) track.startOffsetMs = playlist.timeMs;
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
             selectedTrack = track;

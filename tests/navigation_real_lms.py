@@ -185,7 +185,7 @@ def run(context):
         wait(lambda: len(packets('STMs')) > starts, 5, 'navigation audible start')
         time.sleep(1.5) # drain delayed edit GENA and several ordinary polls
         edits = len(sonos.actions('AddURIToQueue')) + len(sonos.actions('RemoveTrackRangeFromQueue')) - edits_before
-        bound = 4 if command.endswith(('+1', '-1')) else 2 if command.startswith('time ') else 12
+        bound = 4 if command.endswith(('+1', '-1')) else 0 if command.startswith('time ') else 12
         assert edits <= bound, ('unbounded navigation edits', edits, bound)
         stable = len(sonos.requests)
         time.sleep(.6)
@@ -200,6 +200,8 @@ def run(context):
         assert len(set(audible)) <= 1, ('audible oscillation', audible)
         assert 'window rebuild' not in text and 'ownership released' not in text, text
         assert 'queue LMS mutation ' not in text, text
+        if kind == 'seek':
+            assert sonos.position['TrackURI'] == old_uri and 'decision=in-item' in text, text
         if kind == 'previous':
             assert 'reason=playlist-change' not in text and 'lazy abandoned' not in text, text
             allowed = {old_uri, sonos.position['TrackURI']}
@@ -237,9 +239,9 @@ def run(context):
     assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
     print('PASS real LMS natural advance after Previous: retained upcoming URI reused with fresh producer clock, no duplicate parent or LMS command', flush=True)
     navigate('time 12', 3, [f'Title & {i}' for i in range(1, 7)], 2)
-    print('PASS real LMS seek current item: surgical replacement, no window rebuild, zero LMS commands', flush=True)
+    print('PASS real LMS seek current item: retained URI, zero row edits, no window rebuild, zero LMS commands', flush=True)
     navigate('playlist index 0', 0, [f'Title & {i}' for i in range(4)], 0)
-    print('PASS real LMS nearby jump: absent target bridges through retained neighbours; seek suffix replaced by full upcoming declaration; zero LMS commands', flush=True)
+    print('PASS real LMS nearby jump: absent target bridges through retained neighbours; full seek WAV retained as upcoming declaration; zero LMS commands', flush=True)
     before = len(proxy.records)
     log_start = len((base / 'bridge.log').read_text())
     cli('playlist index 7', mac)

@@ -42,6 +42,18 @@ selection. Before removing a newly selected row, stop the plan and rebase from
 owned Browse state. Retired lazy routes are cancelled only after commit.
 The exact echo fence, URL shape, WAV promises and HTTP constants are unchanged.
 
+## Seek invariants
+
+I4: A seek never replaces a queue row whose immutable WAV holds the seek point.
+  The renderer seeks inside that WAV; the new LMS producer attaches at its true
+  landed frame (content_frame), never at origin_ms. A partial item is produced
+  only when the landed frame is unknown or the produced prefix does not reach
+  it, and the reason is logged.
+I5: LMS keeps a seek start offset that STAT cannot rewind below. An
+  app-originated position below that offset issues exactly one reason-checked
+  `time` command; LMS's restarted producer attaches in-item and the renderer
+  is not seeked again. Every other app position change is zero-command.
+
 ## Decisions
 
 1. Investigate parent c1359d4 before production edits. F1 dropped a different
@@ -98,3 +110,55 @@ The exact echo fence, URL shape, WAV promises and HTTP constants are unchanged.
     speaker selection. Check the arbiter's token and Producing phase, rather than
     a historical command-count entry, before taking that path. F1 asserts that
     GET-only preparation sends no renderer Seek.
+
+13. SEEK-01b admits a pending boundary after contentPosition, then pairs a known
+    landed frame only when the immutable prefix covers it. Producer coordinates
+    skip the stored prefix, compare up to 4096 overlap frames and append the
+    missing suffix. Range requests keep the original promise and byte identity.
+14. A speaker rewind below the live producer offset owns one `time` command in
+    the same index-keyed outbox as speaker navigation. The selection retains its
+    target through producer admission; existing superseded-selection and echo
+    fencing suppress a redundant renderer Seek within the 500 ms tolerance.
+    Non-rewinding app changes update STAT without a command. Backward speaker
+    elapsed remains necessary for zero-offset app Back and rewinds above offset.
+15. Starvation follows available immutable WAV audio, not only the restarted
+    producer cursor. A forward app seek into retained PCM must not emit STMo
+    while its paired producer catches up. Keep decoded-frame accounting bounded
+    by submitted PCM; outputEmpty separately checks actual cached audio ahead of
+    the reported speaker frame. Real exhaustion and cancellation still surface.
+16. The seek path checks the arbiter's active selection phase and token, not a
+    historical speaker command count. Seed 1729 step 101 starts an LMS seek just
+    after a paired app Back, before the older slide diagnostic clears that count.
+    Its stale count cannot turn the new seek into a TRACK_NR restart.
+17. Each soak seed starts with seven contract steps: LMS seek 12, app 18,
+    app 13 (above-offset rewind), app 5, app 0, app 18, app 0. The remaining
+    193 steps are seeded random operations. Seed 271828's first random workload
+    passed its behavior checks but had no above-positive-offset STAT case; keep
+    the coverage assertion and guarantee that coverage rather than dropping it.
+    Rewind echoes use the indexed command target as their authoritative offset;
+    a transient LMS status can include the previous run's STAT elapsed.
+18. Retiring an older producer releases its immutable WAV only after the last
+    usable producer alias leaves the window. Seed 8675309 step 193 paired a new
+    producer with an unfinished natural prefix, then retiring the earlier record
+    cancelled its new audible HTTP response. Keep that shared asset alive; the
+    waiting-reader unit also verifies release after its last owner is retired.
+19. Compare parent-absolute positions. A partial/continued WAV's RelTime starts
+    at its row origin; add origin_ms and the continuation frame offset before
+    comparing with LMS's saved offset. The native podcast continue regression
+    has origin 100 s and row position 8 s: it is at 108 s, so it must not send
+    time 8. Exact full local WAVs keep origin zero and the R4 tests unchanged.
+20. The forced-fallback B1/B2/F3 setup waits for Next's window commit and the
+    deferred frame-zero history URI before issuing Back. The renderer announces
+    its next URI before the fenced history replacement finishes; testing Back
+    against a half-finished setup can observe the old row between remove/add.
+    Keep all Back audio, command, switch and renderer-Seek assertions unchanged.
+21. A complete cached GET can return while LMS opens natural decode-ahead.
+    Synchronize fully-produced LMS-seek setup on a settled stream-opening
+    handshake with decoded audio after reading the complete WAV. Retained
+    producer aliases need not receive a fresh item-end, and occurrence numbers
+    are not consecutive after random navigation. Require the latest opening
+    to have audio and remain stable for 200 ms. One seed issued q only 4 ms after the
+    natural s, received a wrong FLAC frame and BAD_HEADER from that opening
+    connection. Use the existing admission handshake, without suppressing faults,
+    relaxing assertions or changing the pinned core. S2/S3 still exercise seeks
+    during ongoing production through the controlled download gate.

@@ -6,7 +6,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class NavigationHTTPGate:
-    def __init__(self):
+    def __init__(self, hold_request=2):
         self.held = threading.Event()
         self.release = threading.Event()
         self.lock = threading.Lock()
@@ -25,7 +25,7 @@ class NavigationHTTPGate:
                 with gate.lock:
                     gate.requests += 1
                     number = gate.requests
-                if number >= 3:
+                if number > hold_request:
                     gate.release.set()
                 upstream = http.client.HTTPConnection('127.0.0.1', 9000, timeout=10)
                 try:
@@ -40,7 +40,7 @@ class NavigationHTTPGate:
                     first = response.read(gate.prefix_limit)
                     self.wfile.write(first)
                     self.wfile.flush()
-                    if number == 2:
+                    if number == hold_request:
                         gate.prefix_bytes = len(first)
                         gate.held.set()
                         if not gate.release.wait(20):

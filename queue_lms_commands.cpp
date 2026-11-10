@@ -9,7 +9,11 @@ void roomLmsCommand(const std::string &host, const std::string &mac,
         volume.find_first_not_of("0123456789") == std::string::npos && std::stoi(volume) <= 100;
     const auto index = command.rfind("playlist index ", 0) == 0 ? command.substr(15) : std::string{};
     const bool validIndex = !index.empty() && index.size() <= 5 && index.find_first_not_of("0123456789") == std::string::npos;
+    const auto time = command.rfind("time ", 0) == 0 ? command.substr(5) : std::string{};
+    const bool validTime = !time.empty() && time.size() <= 10 &&
+        time.find_first_not_of("0123456789") == std::string::npos;
     const bool allowed =
+        (reason == "speaker-rewind" && validTime) ||
         ((reason == "lazy-pcm-get" || reason == "speaker-nav") && validIndex) ||
         (reason == "speaker-volume" && (validVolume || command == "mixer muting 0" || command == "mixer muting 1")) ||
         (command == "stop" && (reason == "speaker-stop" || reason == "speaker-source-change" ||

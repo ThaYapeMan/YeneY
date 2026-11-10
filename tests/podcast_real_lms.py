@@ -199,6 +199,7 @@ def run(g):
             # wav fixture is 16-bit; relay expands to 24 bits independently.
             expected=b''.join(b'\0'+body[n:n+2] for n in range(44,len(body),2))
             if i==3:
+                assert 'reason=speaker-rewind' not in (base/'bridge.log').read_text()[mark:], 'finite remote positions include the saved producer origin'
                 assert 99.8*44100*6 <= len(joined) <= 100.2*44100*6,(i,len(joined))
                 ranges=[r for r in source_ranges[range_mark:] if r[0]==3 and r[1]>0 and r[2]==len(media_items[3])-1]
                 assert ranges,source_ranges[range_mark:]

@@ -93,6 +93,68 @@ void QueueRoom::Impl::reconcileWindow() {
         windowDirty = false;
         return;
     }
+    const auto selected = selections.find(audible->index);
+    const bool speakerSelection = selected != selections.end() &&
+        selected->second.token == navigationToken && selected->second.phase == Selection::Producing &&
+        !selected->second.rewindMs;
+    if (lmsNavigation && navigationFrom == audible->index && !speakerSelection) {
+        const auto records = queue.snapshot();
+        const auto producer = std::find_if(records.begin(), records.end(), [this](const auto &r) {
+            return r.source.occurrence == navigationItem->stream;
+        });
+        auto &target = entries[navigationToken];
+        if (producer != records.end() && producer->seekPositionMs) {
+            const auto selection = selections.find(audible->index);
+            const bool rewind = selection != selections.end() && selection->second.rewindMs;
+            const auto seekMs = rewind ? uint32_t(*selection->second.rewindMs) : producer->seekPositionMs;
+            if (producer->pairedFrom && producer->landedFrame && target.size() == 1 &&
+                target.front().item == producer->item && !target.front().originMs) {
+                auto retained = std::find_if(items.begin(), items.end(), [&](const auto &e) {
+                    return e.uri == target.front().uri;
+                });
+                if (retained == items.end()) throw std::logic_error("seek target missing");
+                logQueue("window seek lms_index=" + std::to_string(audible->index) +
+                    " position_ms=" + std::to_string(seekMs) +
+                    " decision=in-item landed_frame=" + std::to_string(*producer->landedFrame) +
+                    " produced_frames=" + std::to_string(producer->item->producedFrames()) + " lms_commands=0");
+                if (!retained->owner) retained->owner = retained->stream;
+                retained->stream = navigationItem->stream;
+                current = retained->stream;
+                if (navigationItem->uri != retained->uri) owned.erase(navigationItem->uri);
+                queue.reanchorSpeaker(current, 0, seekMs);
+                const auto position = actions.position().response;
+                unsigned h = 0, m = 0, s = 0;
+                const bool atTarget = position.value("TrackURI") == retained->uri &&
+                    sscanf(position.value("RelTime").c_str(), "%u:%u:%u", &h, &m, &s) == 3 &&
+                    std::abs(int64_t((h * 3600 + m * 60 + s) * 1000) - int64_t(seekMs)) <= 500;
+                const bool superseded = std::any_of(selectionOrder.begin(), selectionOrder.end(),
+                    [this](unsigned index) { return selections.count(index) && selections.at(index).token != navigationToken; });
+                if (!superseded && !(rewind && atTarget)) actions.seekTime(seekMs);
+                lastElapsed = seekMs / 1000;
+                speakerChanges->selected();
+                fastPoll();
+                unsigned history = 0;
+                for (const auto &slot : window.around(audible->index))
+                    if (slot.index < audible->index && entries.count(slot.token)) ++history;
+                logQueue("window lms-nav from_index=" + std::to_string(navigationFrom) +
+                    " to_index=" + std::to_string(audible->index) +
+                    " action=slide history=" + std::to_string(history) + " lms_commands=0 kind=seek edits=0");
+                selections.erase(audible->index);
+                speakerNavCommands.erase(navigationToken);
+                replacementReasons.erase(navigationToken);
+                lmsNavigation = navigationSelecting = false;
+                navigationItem.reset();
+                playlist = std::move(snapshot);
+                publishedWindowPolicy = window.policy();
+                windowDirty = false;
+                publish();
+                return;
+            }
+            logQueue("window seek lms_index=" + std::to_string(audible->index) +
+                " position_ms=" + std::to_string(seekMs) +
+                " decision=fallback reason=" + producer->seekReason + " lms_commands=0");
+        }
+    }
     bool reused = false, bound = false, deferredUpcoming = false;
     bool selectedTarget = false;
     std::vector<Entry> retired;
@@ -393,7 +455,15 @@ void QueueRoom::Impl::reconcileWindow() {
         if (target == items.end()) throw std::logic_error("navigation target missing");
         if (!superseded) {
             current = target->stream;
-            if (!selectedTarget) actions.seekTrack(unsigned(target - items.begin()) + 1);
+            const auto selection = selections.find(audible->index);
+            const auto position = actions.position().response;
+            unsigned h = 0, m = 0, s = 0;
+            const bool rewindAtTarget = selection != selections.end() && selection->second.rewindMs &&
+                position.value("TrackURI") == target->uri &&
+                sscanf(position.value("RelTime").c_str(), "%u:%u:%u", &h, &m, &s) == 3 &&
+                std::abs(int64_t((h * 3600 + m * 60 + s) * 1000) - int64_t(*selection->second.rewindMs)) <= 500;
+            if (!selectedTarget && !rewindAtTarget) actions.seekTrack(unsigned(target - items.begin()) + 1);
+            lastElapsed = rewindAtTarget ? *selection->second.rewindMs / 1000 : 0;
             expectedState = "PLAYING";
             actions.play();
             waitingForPlay = true;
@@ -423,7 +493,7 @@ void QueueRoom::Impl::reconcileWindow() {
         if (bound) logQueue("window lazy target producer adopted lms_commands=0");
         replacementReasons.erase(navigationToken);
         selections.erase(audible->index);
-        lmsNavigation = false;
+        lmsNavigation = navigationSelecting = false;
         navigationItem.reset();
     } else if (publishedWindowIndex && *publishedWindowIndex != audible->index) {
         unsigned history = 0;
@@ -556,6 +626,12 @@ void QueueRoom::Impl::advanceSelections() {
         selection->second.phase = Selection::Producing;
         selection->second.first = queue.latestOccurrence() + 1;
         speakerNavFirst[selection->second.token] = selection->second.first;
+        if (selection->second.rewindMs) {
+            roomLmsCommand(host, mac, "time " + std::to_string(*selection->second.rewindMs / 1000),
+                           "speaker-rewind", logQueue);
+            logQueue("selection issued lms_index=" + std::to_string(index) + " reason=speaker-rewind lms_commands=1");
+            return;
+        }
         roomLmsCommand(host, mac, "playlist index " + std::to_string(index),
                        lazyItems.count(selection->second.token) && lazyItems.at(selection->second.token)->waiting() ?
                            "lazy-pcm-get" : "speaker-nav", logQueue);

@@ -154,6 +154,37 @@ void QueueRoom::Impl::observe() {
     unsigned ph = 0, pm = 0, ps = 0;
     const bool positionValid = sscanf(position.at("RelativeTimePosition").c_str(), "%u:%u:%u", &ph, &pm, &ps) == 3;
     const uint64_t reportedElapsed = positionValid ? uint64_t(ph * 3600 + pm * 60 + ps) : 0;
+    const auto playbackAdvance = lastPositionAt == std::chrono::steady_clock::time_point{} ? 0 :
+        std::chrono::duration_cast<std::chrono::seconds>(now - lastPositionAt).count();
+    if (positionValid && it != items.end() && it == previousItem &&
+        transport == "PLAYING" && !lmsNavigation && !navigationSelecting &&
+        (reportedElapsed < lastElapsed || reportedElapsed > lastElapsed + 2 + uint64_t(playbackAdvance))) {
+        const auto owner = it->owner ? it->owner : it->stream;
+        const auto index = sourceIndices.find(owner);
+        const auto token = sourceTokens.find(owner);
+        const auto records = queue.snapshot();
+        const auto producer = std::find_if(records.begin(), records.end(), [&](const auto &r) {
+            return r.source.occurrence == it->stream;
+        });
+        if (index != sourceIndices.end() && token != sourceTokens.end() && producer != records.end()) {
+            const auto offset = producer->seekPositionMs;
+            // A finite remote WAV starts at its saved source origin even
+            // though its informational duration still describes the full item.
+            const auto originMs = producer->estimated ? producer->sourceOriginMs : producer->originMs;
+            const auto positionMs = uint64_t(originMs) +
+                it->segmentOffset * 1000 / it->item->descriptor().rate + reportedElapsed * 1000;
+            const bool rewind = positionMs < offset;
+            logQueue("speaker-seek lms_index=" + std::to_string(index->second) +
+                " position_ms=" + std::to_string(positionMs) + " lms_offset_ms=" + std::to_string(offset) +
+                " decision=" + (rewind ? "time-command" : "stat") + " lms_commands=" + (rewind ? "1" : "0"));
+            if (rewind) {
+                selections[index->second] = Selection{Selection::Queued, token->second, 0, {}, positionMs};
+                selectionOrder.push_back(index->second);
+                advanceSelections();
+            }
+        }
+    }
+    if (positionValid) lastPositionAt = now;
     const auto endEvidence = it == previousItem ? std::max(lastElapsed, reportedElapsed) : lastElapsed;
     uint64_t realEnd = finalItem ? previousItem->frames : 0;
     if (finalItem && !cancelledCurrent && previousItem->item->descriptor().kind == queue_audio::PromiseKind::UpperBound &&

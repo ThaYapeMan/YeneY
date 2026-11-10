@@ -16,8 +16,10 @@ struct QueueRecord {
     std::chrono::steady_clock::time_point strmAt{};
     uint64_t expectedIndex = 0;
     uint64_t sourceToken = 0, pairedFrom = 0;
+    std::optional<uint64_t> landedFrame;
+    std::string seekReason;
     std::string sourceUrl;
-    unsigned originMs = 0;
+    unsigned originMs = 0, seekPositionMs = 0;
     uint64_t parent = 0, segmentOffset = 0;
     bool estimated = false, productionComplete = false;
     double duration = 0;
@@ -65,12 +67,14 @@ class CoreQueueSink : public yeney::Sink {
     std::optional<uint32_t> speakerElapsed;
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
     uint64_t continuationSerial = UINT64_MAX / 2, producingSegment = 0;
+    uint64_t speakerItemFrame = 0;
     uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
     unsigned retainedHistory = 0, retainedUpcoming = 1;
     std::vector<std::shared_ptr<Item>> publishedItems;
     bool prefixPending = false, freshRender = false, cachedReanchor = false;
     std::atomic_bool refetchRequested{false}, startRequested{false}, cachedStartRequested{false};
     std::atomic<uint64_t> latestProducer{0};
+    std::optional<uint64_t> nextContent;
     uint32_t rate = 48000;
     std::string workerFault;
     std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
@@ -97,6 +101,7 @@ public:
     void coreEvent(const std::string &, uint64_t, uint64_t) override;
     void resolvedItemBoundary(const yeney::ItemBoundary &) override;
     void trackBoundary(uint64_t, const yeney::Format &, bool) override;
+    void contentPosition(uint64_t frame, bool known) override { nextContent = known ? std::optional<uint64_t>(frame) : std::nullopt; }
     size_t write(const yeney::Frame *p, size_t n) override { return write(p, n, false); }
     size_t write(const yeney::Frame *, size_t, bool) override;
     // Explicit audible control, used only by a device controller or the dry-run
@@ -123,7 +128,7 @@ public:
     }
     bool takeQueueCachedStart() override { return cachedStartRequested.exchange(false); }
     bool takeQueueRefetch() override { return refetchRequested.exchange(false); }
-    void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs);
+    void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs, uint32_t seekPositionMs);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
     bool speakerDriven() const override;
     std::optional<yeney::EncodedSpool> encodedSpool(uint64_t) override;
@@ -141,6 +146,7 @@ public:
     std::optional<uint64_t> committedItemFrames(uint64_t) const override;
     bool awaitingPublication(uint64_t) const override;
     uint64_t audibleFrames() const override;
+    bool outputEmpty(uint64_t submitted) const override;
     uint64_t audibleOccurrence() const;
     void waitIdle();
     // Configure before playback. Parent budgets do not count continuations.

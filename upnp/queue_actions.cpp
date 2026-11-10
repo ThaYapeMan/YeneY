@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_actions.h"
 #include <stdexcept>
+#include <cstdio>
 namespace upnp {
 SoapResult QueueActions::add(const std::string &uri, const std::string &metadata, unsigned before) {
     return call("AddURIToQueue", {{"InstanceID", "0"},
@@ -35,6 +36,12 @@ SoapResult QueueActions::seekTrack(unsigned number) {
     if (!number)
         throw std::invalid_argument("queue tracks are 1-based");
     return call("Seek", {{"InstanceID", "0"}, {"Unit", "TRACK_NR"}, {"Target", std::to_string(number)}});
+}
+SoapResult QueueActions::seekTime(unsigned milliseconds) {
+    const auto seconds = milliseconds / 1000;
+    char time[32];
+    std::snprintf(time, sizeof time, "%02u:%02u:%02u", seconds / 3600, seconds / 60 % 60, seconds % 60);
+    return call("Seek", {{"InstanceID", "0"}, {"Unit", "REL_TIME"}, {"Target", time}});
 }
 SoapResult QueueActions::play() { return call("Play", {{"InstanceID", "0"}, {"Speed", "1"}}); }
 SoapResult QueueActions::pause() { return call("Pause", {{"InstanceID", "0"}}); }

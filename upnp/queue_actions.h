@@ -15,6 +15,7 @@ public:
     SoapResult save(const std::string &title);
     SoapResult selectQueue(const std::string &udn);
     SoapResult seekTrack(unsigned number);
+    SoapResult seekTime(unsigned milliseconds);
     SoapResult play();
     SoapResult pause();
     SoapResult stop();

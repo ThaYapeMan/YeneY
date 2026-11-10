@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "core_queue_sink.h"
+#include "pcm_pack.h"
 #include "queue_declaration.h"
 #include <algorithm>
 #include <cmath>
@@ -137,6 +138,12 @@ void CoreQueueSink::releaseParent(uint64_t owner) {
                 p.second.incomplete = "outside queue window";
                 if (p.second.item) released.push_back(p.second.item);
             }
+            released.erase(std::remove_if(released.begin(), released.end(), [&](const auto &item) {
+                return std::any_of(records.begin(), records.end(), [&](const auto &record) {
+                    return record.second.item == item && record.second.incomplete != "outside queue window" &&
+                        record.second.fault.empty();
+                });
+            }), released.end());
         }
         for (auto &item : released) item->releaseAudio();
         protectItems();
@@ -236,6 +243,7 @@ void CoreQueueSink::trackDescriptor(const yeney::TrackDescriptor &d) {
 void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) {
     // These are producer coordinates, never audible notifications.
     rate = f.rate;
+    const auto landed = nextContent;
     enqueue([=] {
         uint64_t id;
         {
@@ -246,6 +254,8 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             descriptorOrder.pop_front();
             active = id;
             records[id].first = frame;
+            records[id].landedFrame = landed;
+            records[id].seekPositionMs = records[id].originMs;
         }
         QueueRecord tail;
         {
@@ -269,16 +279,22 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             descriptor.kind = PromiseKind::UpperBound;
         }
         std::shared_ptr<Item> item;
-        uint64_t pairedFrom = 0;
+        uint64_t pairedFrom = 0, pairedStart = 0;
+        bool pairedZero = false;
+        std::string seekReason = landed ? "prefix-unavailable" : "landed-frame-unknown";
         if (!estimated.estimated && estimated.sourceToken &&
-            (!estimated.originMs || estimated.source.sourceFrames)) {
+            (!estimated.originMs || landed || estimated.source.sourceFrames)) {
             std::lock_guard<std::mutex> lock(mutex);
             for (const auto &entry : records) {
                 const auto &candidate = entry.second;
+                const bool frameZero = !estimated.originMs ||
+                    (estimated.source.sourceFrames && candidate.source.sourceFrames == estimated.source.sourceFrames &&
+                     (!landed || !*landed));
                 if (entry.first == id || candidate.parent || !candidate.item || candidate.originMs ||
                     candidate.sourceToken != estimated.sourceToken || candidate.sourceUrl != estimated.sourceUrl ||
                     candidate.source.rate != estimated.source.rate ||
-                    candidate.source.sourceFrames != estimated.source.sourceFrames ||
+                    (frameZero && candidate.source.sourceFrames != estimated.source.sourceFrames) ||
+                    (!frameZero && (!landed || candidate.item->producedFrames() < *landed)) ||
                     candidate.item->descriptor().kind != PromiseKind::Exact ||
                     candidate.incomplete == "outside queue window" || !candidate.fault.empty()) continue;
                 try {
@@ -287,15 +303,24 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
                     if (candidate.item->finished() && candidate.item->producedFrames() != (*length - 44) / 6) continue;
                     item = candidate.item;
                     pairedFrom = entry.first;
+                    pairedZero = frameZero;
+                    pairedStart = frameZero ? 0 : *landed;
                     break;
                 } catch (const std::exception &) { continue; }
             }
         }
         if (!item) item = store.create(descriptor);
+        if (estimated.originMs) {
+            std::lock_guard<std::mutex> lock(mutex);
+            records[id].seekReason = pairedFrom ? "" : seekReason;
+        }
         if (pairedFrom) {
             std::lock_guard<std::mutex> lock(mutex);
             records[id].pairedFrom = pairedFrom;
-            records[id].originMs = 0; // Matching source frame counts disprove a stale status seek offset.
+            records[id].actual = pairedStart;
+            if (pairedZero) records[id].seekPositionMs = 0;
+            records[id].originMs = 0;
+            records[id].sourceOriginMs = 0;
             records[id].promised = item->descriptor().promisedFrames;
             records[id].publication = "paired";
         }
@@ -401,6 +426,23 @@ void CoreQueueSink::append(const std::vector<yeney::Frame> &pcm, bool processed)
     if (r.promised)
         n = std::min<uint64_t>(n, *r.promised - cursor);
     const auto skip = r.pairedFrom && produced > cursor ? std::min<uint64_t>(n, produced - cursor) : 0;
+    if (r.pairedFrom && r.landedFrame && cursor >= *r.landedFrame && cursor - *r.landedFrame < 4096 && skip) {
+        const auto count = std::min<uint64_t>(skip, 4096 - (cursor - *r.landedFrame));
+        auto reader = r.item->reader(44 + cursor * 6);
+        std::vector<char> stored(count * 6), expected(count * 6);
+        size_t got = 0;
+        while (got < stored.size()) {
+            const auto received = reader.read(stored.data() + got, stored.size() - got);
+            if (!received) throw std::runtime_error("paired verification short read");
+            got += received;
+        }
+        PcmDither unused;
+        for (size_t i = 0; i < count; ++i) {
+            packSonosSample(expected.data() + i * 6, pcm[i].left, 3, processed, unused);
+            packSonosSample(expected.data() + i * 6 + 3, pcm[i].right, 3, processed, unused);
+        }
+        if (stored != expected) throw std::runtime_error("paired landed PCM mismatch");
+    }
     if (n > skip)
         r.item->append(pcm.data() + skip, n - skip, processed);
     if (n < pcm.size()) {
@@ -648,10 +690,11 @@ void CoreQueueSink::onQueueCommand(std::function<bool(char, uint32_t)> handler) 
 bool CoreQueueSink::queueCommand(char command, uint32_t value) {
     return commandHandler && commandHandler(command, value);
 }
-void CoreQueueSink::reanchorSpeaker(uint64_t id, uint32_t origin) {
+void CoreQueueSink::reanchorSpeaker(uint64_t id, uint32_t origin, uint32_t position) {
     std::lock_guard<std::mutex> lock(mutex);
     speakerElapsed.reset();
     records.at(id).sourceOriginMs = origin;
+    records.at(id).seekPositionMs = position;
 }
 void CoreQueueSink::useSpeakerClock() {
     std::lock_guard<std::mutex> lock(mutex);
@@ -737,7 +780,10 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
         prefixPending = true;
     }
     frame = std::min(frame, r.promised.value_or(produced));
-    audibleFrame = std::max(audibleFrame, std::min(r.first + frame, submitted));
+    speakerItemFrame = frame;
+    const auto producerFrame = r.pairedFrom && r.seekPositionMs && r.landedFrame ?
+        (frame > *r.landedFrame ? frame - *r.landedFrame : 0) : frame;
+    audibleFrame = std::max(audibleFrame, std::min(r.first + producerFrame, submitted));
     if (frame >= r.prefixFrames) {
         if (prefixPending) {
             prefixPending = false;
@@ -762,7 +808,7 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
             id < UINT64_MAX / 2 ? frame - r.prefixFrames : audibleFrame - records.at(audibleSource).first;
         const auto elapsed = uint32_t(
             std::min<uint64_t>(UINT32_MAX, uint64_t(r.estimated ? 0 : r.sourceOriginMs) + sourceFrames * 1000 / r.source.rate));
-        speakerElapsed = r.estimated ? elapsed : std::max(speakerElapsed.value_or(0), elapsed);
+        speakerElapsed = elapsed;
     } else if (audibleSource) {
         const auto &old = records.at(audibleSource);
         speakerElapsed =
@@ -861,7 +907,8 @@ std::optional<uint64_t> CoreQueueSink::committedItemFrames(uint64_t id) const {
             if (p.first == id || p.second.parent == id) total += p.second.actual;
         return total;
     }
-    return *it->second.promised - it->second.prefixFrames;
+    const auto &r = it->second;
+    return *r.promised - r.prefixFrames - (r.pairedFrom && r.seekPositionMs ? r.landedFrame.value_or(0) : 0);
 }
 bool CoreQueueSink::takeAudibleStart(yeney::AudibleStart &s) {
     std::lock_guard<std::mutex> lock(mutex);
@@ -878,6 +925,21 @@ uint64_t CoreQueueSink::audibleOccurrence() const {
 uint64_t CoreQueueSink::audibleFrames() const {
     std::lock_guard<std::mutex> lock(mutex);
     return audibleFrame;
+}
+bool CoreQueueSink::outputEmpty(uint64_t frame) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto audible = records.find(audibleId);
+    if (speakerClock && audible != records.end() && audible->second.item) {
+        try {
+            // A paired producer may trail an app seek while its immutable WAV
+            // already holds the audible audio. Producer exhaustion is not starvation.
+            if (audible->second.item->contentLength() &&
+                audible->second.item->producedFrames() > speakerItemFrame) return false;
+        } catch (const std::exception &) {
+            // The room worker owns item cancellation and storage-fault handling.
+        }
+    }
+    return audibleFrame >= frame;
 }
 void CoreQueueSink::pause() {
     std::lock_guard<std::mutex> lock(mutex);

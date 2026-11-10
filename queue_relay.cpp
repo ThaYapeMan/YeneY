@@ -97,6 +97,7 @@ void QueueRoom::Impl::release(bool stop) {
     waitingForPlay = false;
     current = 0;
     lastElapsed = 0;
+    lastPositionAt = {};
     state = "STOPPED";
     publish();
 }

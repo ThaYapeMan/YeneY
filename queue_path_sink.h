@@ -10,6 +10,7 @@ class QueuePathSink : public yeney::Sink {
     queue_audio::CoreQueueSink &relay;
     CoreSonosSink stream;
     std::atomic_bool relayPath{true}, ready{false}, reset{false}, waiting{false}, boundary{false};
+    std::function<void()> pendingBoundary;
     bool nextRelay = true;
     std::atomic_bool successor{false};
     yeney::Command start{'s', 0, false};
@@ -64,7 +65,15 @@ public:
     }
     bool decodeAhead() const override { return relayPath; }
     bool speakerDriven() const override { return relayPath; }
-    void contentPosition(uint64_t frame, bool known) override { bridge::consumptionContent().set(frame, known); }
+    void contentPosition(uint64_t frame, bool known) override {
+        bridge::consumptionContent().set(frame, known);
+        target().contentPosition(frame, known);
+        if (pendingBoundary) {
+            auto boundary = std::move(pendingBoundary);
+            pendingBoundary = {};
+            boundary();
+        }
+    }
     bool paced() const override { return false; }
     void trackDescriptor(const yeney::TrackDescriptor &d) override { target().trackDescriptor(d); }
     void resolvedItemBoundary(const yeney::ItemBoundary &b) override { target().resolvedItemBoundary(b); }
@@ -74,14 +83,16 @@ public:
         target().coreEvent(e, id, frame);
     }
     void trackBoundary(uint64_t f, const yeney::Format &v, bool gapless) override {
-        target().trackBoundary(f, v, gapless);
+        // Core supplies the landed coordinate immediately before the first write.
+        // Delay admission until that coordinate accompanies the boundary.
+        pendingBoundary = [this, f, v, gapless] { target().trackBoundary(f, v, gapless); };
     }
     size_t write(const yeney::Frame *p, size_t n) override { return target().write(p, n); }
     size_t write(const yeney::Frame *p, size_t n, bool dsp) override { return target().write(p, n, dsp); }
     void pause() override { target().pause(); }
     void resume() override { target().resume(); }
     void stop() override { target().stop(); }
-    void flush() override { target().flush(); }
+    void flush() override { pendingBoundary = {}; target().flush(); }
     void volume(uint32_t l, uint32_t r) override { target().volume(l, r); }
     void power(bool p) override { target().power(p); }
     uint64_t audibleFrames() const override { return target().audibleFrames(); }

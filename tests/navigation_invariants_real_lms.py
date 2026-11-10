@@ -50,11 +50,134 @@ def run(c):
         return next(i for i in items() if i['metadata']['title'] == f'Title & {index}')
     def audible(index):
         select(items().index(row(index)))
+    def natural_ready():
+        settled = None
+        def decoder_ready():
+            nonlocal settled
+            text = log()
+            opening = text.rfind('core: queue command strm s')
+            if ' first audio' not in text[opening:]:
+                settled = None
+                return False
+            if settled is None or settled[0] != opening:
+                settled = (opening, time.monotonic())
+            return time.monotonic() - settled[1] >= .2
+        wait(decoder_ready, 10, 'stream opening settled before controller seek')
     cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
     wait(lambda: len(items()) == 4, 15, 'eight-item initial window')
     select(0)
     mark = len(log())
-    if case in ('A1', 'A2', 'A3'):
+    if case.startswith('S') and case != 'SOAK':
+        if case in ('S2', 'S3'):
+            fetch(row(0), True)
+            wait(c['tap'].http_gate.held.is_set, 5, 'natural producer held')
+            time.sleep(.5)
+            source = (base / 'input-0.wav').read_bytes()[44:]
+            reference_pcm = b''.join(b'\0' + source[n:n+2] for n in range(0, len(source), 2))
+            reference = None
+        else:
+            reference = fetch(row(0))
+            natural_ready()
+        target = row(0)
+        uri, duration = target['uri'], target['resource']['duration']
+        mark, before = len(log()), len(proxy.records)
+        seek_count = len(sonos.actions('Seek'))
+        position = 1 if case == 'S2' else 60 if case == 'S4c' else 12
+        edits = (len(sonos.actions('AddURIToQueue')), len(sonos.actions('RemoveTrackRangeFromQueue')))
+        if case != 'S4d': cli(f'time {position}', mac)
+        if case != 'S4d': wait(lambda: 'kind=seek' in log()[mark:], 10, 'LMS seek reconciled')
+        time.sleep(.5)
+        text = log()[mark:]
+        if case == 'S3':
+            assert sonos.position['TrackURI'] != uri
+            assert len(sonos.actions('Seek')) == seek_count + 1
+            assert not sonos.actions('Stop')
+            assert fetch(row(0))[44:] in reference_pcm
+            print('S3 fallback behavior: single switch, one renderer Seek, PCM suffix, no stop/drop', flush=True)
+            assert 'decision=fallback reason=prefix-unavailable' in text, text
+            print(text, flush=True)
+            print('PASS S3 fallback prefix-unavailable: single switch, no stop/drop (baseline red only on new diagnostic)', flush=True)
+            return
+        assert sonos.position['TrackURI'] == uri, ('seek replaced audible URI', uri, sonos.position)
+        assert edits == (len(sonos.actions('AddURIToQueue')), len(sonos.actions('RemoveTrackRangeFromQueue')))
+        assert row(0)['resource']['duration'] == duration
+        assert 're-produced' not in text and 'window replace' not in text, text
+        seeks = sonos.actions('Seek')[seek_count:]
+        assert len(seeks) == (0 if case == 'S4d' else 1) and all(s[1]['Unit'] == 'REL_TIME' and s[1]['Target'] == f'00:{position//60:02}:{position%60:02}' for s in seeks), seeks
+        if case != 'S4d': wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= 2, 5, 'speaker RelTime equals LMS time')
+        body = fetch(row(0))
+        assert (body == reference if reference is not None else body[44:] == reference_pcm), 'immutable full WAV changed'
+        offset = position * 44100 * 6 + 44
+        conn = http.client.HTTPConnection(urlsplit(uri).netloc, timeout=8)
+        try:
+            conn.request('GET', urlsplit(uri).path, headers={'Range': f'bytes={offset}-'})
+            response = conn.getresponse()
+            ranged = response.read()
+            assert response.status == 206
+            assert response.getheader('Content-Range') == f'bytes {offset}-{len(body)-1}/{len(body)}'
+            assert int(response.getheader('Content-Length')) == len(body)-offset
+            assert ranged == body[offset:], 'Range PCM differs across seek attach'
+        finally:
+            conn.close()
+        assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
+        if case in ('S4', 'S4b', 'S4c', 'S4d'):
+            positions = [30, 0] if case == 'S4d' else [60 if case == 'S4b' else 5 if case == 'S4c' else 0]
+            for app_position in positions:
+                app_mark, app_before = len(log()), len(proxy.records)
+                app_seeks = len(sonos.actions('Seek'))
+                with sonos.lock:
+                    sonos.position['RelTime'] = f'{app_position//3600:02}:{app_position//60%60:02}:{app_position%60:02}'
+                assert fetch(row(0), True) == body[:44+4096], 'app PCM request dropped or changed'
+                expected = 1 if case in ('S4', 'S4c') else 0
+                if not expected:
+                    wait(lambda: abs(float(cli('time ?', mac)[-1]) - app_position) <= 1.25, 8, 'STAT-only app clock')
+                    print(f'{case} STAT-only clock reaches {app_position} seconds', flush=True)
+                wait(lambda: 'queue speaker-seek ' in log()[app_mark:], 6, 'app position classified')
+                wait(lambda: abs(float(cli('time ?', mac)[-1]) - app_position) <= 1.25, 8, 'app position follows LMS clock')
+                time.sleep(1.2)
+                assert abs(float(cli('time ?', mac)[-1]) - app_position) <= 1.25
+                commands = [r['request'] for r in proxy.records[app_before:] if
+                            re.search(r' (time|playlist index) [^?]', r['request'])]
+                assert len(commands) == expected, commands
+                if expected:
+                    assert f'reason=speaker-rewind command=time {app_position}' in log()[app_mark:]
+                    assert 'decision=paired' in log()[app_mark:] or 'decision=in-item' in log()[app_mark:]
+                else:
+                    assert 'decision=stat' in log()[app_mark:]
+                assert len(sonos.actions('Seek')) == app_seeks, sonos.actions('Seek')[app_seeks:]
+                assert sonos.position['TrackURI'] == uri
+                assert edits == (len(sonos.actions('AddURIToQueue')), len(sonos.actions('RemoveTrackRangeFromQueue')))
+                assert fetch(row(0)) == body
+                assert not sonos.actions('Stop')
+                stat = next(r for r in reversed(c['tap'].records) if r['op'] == 'STAT')
+                print(case + ' clock evidence: speaker_rel_time=' + sonos.position['RelTime'] +
+                      ' lms_time=' + cli('time ?', mac)[-1] + ' STAT=' + stat['body'], flush=True)
+                print(log()[app_mark:], flush=True)
+        if case == 'S5':
+            nav_before = len(proxy.records)
+            audible(1)
+            wait(lambda: bridge_at(1), 10, 'app Next')
+            time.sleep(1)
+            back_mark, back_seeks = len(log()), len(sonos.actions('Seek'))
+            audible(0)
+            wait(lambda: bridge_at(0) and 'decision=paired' in log()[back_mark:], 10, 'Back paired frame-zero parent')
+            assert len(sonos.actions('Seek')) == back_seeks
+            assert sonos.position['TrackURI'] == uri and fetch(row(0)) == reference
+            wait(lambda: float(cli('time ?', mac)[-1]) <= 2, 5, 'Back starts at zero')
+            nav_commands = [r['request'] for r in proxy.records[nav_before:] if re.search(r' (time|playlist index) [^?]', r['request'])]
+            assert nav_commands == [mac + ' playlist index 1', mac + ' playlist index 0'], nav_commands
+            assert 're-produced' not in log()[back_mark:]
+        print(text, flush=True)
+        result = {
+            'S4': 'LMS 12s then app Back: one time 0 reason=speaker-rewind, frame-zero paired, zero renderer Seek, stable URI/WAV, clock within tolerance, no stop/drop',
+            'S4b': 'LMS 12s then app 60s: zero commands, decision=stat, stable URI/WAV, clock within tolerance',
+            'S4c': 'LMS 60s then app 5s: one time 5 reason=speaker-rewind, landed-frame in-item attach, zero renderer Seek, stable URI/WAV, clock within tolerance',
+            'S4d': 'offset zero app 30s then Back: zero commands throughout, zero renderer Seek, stable URI/WAV, clock within tolerance',
+            'S5': 'LMS seek then app Next/Back: frame-zero paired, zero reproduction, one command per navigation, zero renderer Seek on Back, stable WAV',
+        }.get(case, 'in-item LMS seek: stable URI/duration, one REL_TIME, zero reproduction, clock and WAV/Range identity')
+        print(f'PASS {case} {result}', flush=True)
+    elif case in ('A1', 'A2', 'A3'):
+
         reference0 = fetch(row(0))
         def ready(index):
             u = urlsplit(row(index)['uri'])
@@ -76,6 +199,7 @@ def run(c):
         else:
             reference = None
         if case == 'A3':
+            nav_before = len(proxy.records)
             audible(1)
             wait(lambda: bridge_at(1), 10, 'Next before retained Back')
             time.sleep(1)
@@ -254,10 +378,14 @@ def run(c):
         print('PASS F2 genuine confirmed clear rebuilds and stops', flush=True)
 
     elif case in ('F3', 'B1', 'B2'):
-        reference = fetch(row(0))
+        prefix = fetch(row(0), True)
+        wait(c['tap'].http_gate.held.is_set, 5, 'fallback producer held before seek point')
+        source = (base / 'input-0.wav').read_bytes()[44:]
+        reference = prefix[:44] + b''.join(b'\0' + source[n:n+2] for n in range(0, len(source), 2))
         time.sleep(.5)
         cli('time 12', mac)
         wait(lambda: 'kind=seek' in log()[mark:], 15, 'track-zero seek')
+        assert 'decision=fallback reason=prefix-unavailable' in log()[mark:], log()[mark:]
         partial = row(0)['uri']
         # Finish the partial so it really is retained history. Let natural
         # preparation declare its successor before the controller move, so
@@ -266,8 +394,13 @@ def run(c):
         fetch(row(0))
         wait(lambda: re.search(r'core: queue FLAC occurrence=\d+ exact remaining=\d+ first sample=0',
                                log()[prepare_mark:]), 8, 'natural successor declaration before F3 setup move')
+        fetch(row(1))
+        next_mark = len(log())
         cli('playlist index 1', mac)
         wait(lambda: any(i['metadata']['title'] == 'Title & 1' and i['uri'] == sonos.position['TrackURI'] for i in items()), 15, 'navigate away from seek')
+        wait(lambda: 'to_index=1 action=slide' in log()[next_mark:] and
+             any(i['metadata']['title'] == 'Title & 0' and i['uri'] != partial for i in items()),
+             8, 'Next window committed with deferred frame-zero history')
         before = len(proxy.records)
         mark = len(log())
         seeks = len(sonos.actions('Seek'))
@@ -321,6 +454,8 @@ def run(c):
         expected, index, steps, pause_cycles = 0, 0, 0, 0
         natural_at = [40, 90, 140]
         seek_partials = set()
+        lms_offset = 0
+        app_rewinds, app_stats, app_zero, app_above = 0, 0, 0, 0
         expected_uri = None
         pairing_uri = None
         action_mark = len(log())
@@ -329,7 +464,7 @@ def run(c):
             writes = [r['request'] for r in proxy.records[before:]
                       if ' status ' not in r['request'] and not r['request'].endswith(' ?')
                       and r['request'] != 'listen 1']
-            assert all(' playlist index ' in wire for wire in writes), writes
+            assert all(' playlist index ' in wire or re.search(r' time [0-9]+$', wire) for wire in writes), writes
             return writes
         def settle(target, offset=False, grace=.4):
             initial_uri = sonos.position['TrackURI']
@@ -365,6 +500,10 @@ def run(c):
             assert 'rebuild reason=clear' not in text and 'relay fault=' not in text, (seed, steps, text[-6000:])
             assert sonos.transport_state == 'PLAYING' and len(sonos.actions('Stop')) == stops
             assert len(mutations()) == expected, (seed, steps, mutations(), expected)
+        # Every seed proves the whole offset rule before its randomized workload.
+        contract = [('seek', 12), ('app-position', 18), ('app-position', 13),
+                    ('app-position', 5), ('app-position', 0),
+                    ('app-position', 18), ('app-position', 0)]
         while steps < 200:
             expected_uri = None
             pairing_uri = None
@@ -386,6 +525,12 @@ def run(c):
                         return reply.status == 200
                     finally:
                         conn.close()
+                status_path = base / ('stream-pacing-' + b'Study'.hex() + '.json')
+                producer = json.loads(status_path.read_text())['playback']['occurrence']
+                wait(lambda: f'core: queue item-end occurrence={producer} ' in log(), 10,
+                     'current natural producer completed, including paired prefix')
+                wait(lambda: re.search(r'core: queue FLAC occurrence=' + str(producer + 1) + r' .* first sample=0', log()),
+                     10, 'fresh natural successor coordinate')
                 wait(prepared, 10, 'natural next producer ready without activating GET')
                 wait(lambda: float(cli('time ?', mac)[-1]) >= 20, 5, 'outgoing natural clock observed before boundary')
                 expected_uri = row(target)['uri']
@@ -393,10 +538,12 @@ def run(c):
                 audible(target)
                 steps += 1
                 index = target
+                lms_offset = 0
                 settle(index)
                 print(f'SOAK seed={seed} step={steps} op=natural index={index} commands={len(mutations())} expected={expected}', flush=True)
                 continue
-            operation = rng.choice(('get', 'poll', 'lms-next', 'lms-back', 'jump', 'seek', 'pause', 'burst'))
+            scripted = contract[steps] if steps < len(contract) else None
+            operation = scripted[0] if scripted else rng.choice(('get', 'poll', 'lms-next', 'lms-back', 'jump', 'seek', 'app-position', 'pause', 'burst'))
             available = [int(i['metadata']['title'].split()[-1]) for i in items()]
             if operation == 'burst' and (200-steps < 2 or len([n for n in available if n > index]) < 2):
                 operation = 'poll'
@@ -412,14 +559,53 @@ def run(c):
                 # Pause cycles are additional to the 200 navigation steps.
                 # Resume retains the current seek offset, if any.
                 settle(index, True)
-            elif operation == 'seek':
-                seek_mark = len(log())
-                cli('time 6', mac)
-                wait(lambda: 'kind=seek' in log()[seek_mark:], 10, 'soak seek')
-                time.sleep(.4)
+            elif operation == 'app-position':
+                fetch(row(index))
+                previous_position = sum(int(n) * weight for n, weight in zip(sonos.position['RelTime'].split(':'), (3600, 60, 1)))
+                position = scripted[1] if scripted else rng.choice([n for n in (0, 2, 18) if abs(n-previous_position) > 2])
+                app_uri = sonos.position['TrackURI']
+                app_mark, app_before = len(log()), len(mutations())
+                app_seeks = len(sonos.actions('Seek'))
+                rewind = position * 1000 < lms_offset
+                app_rewinds += int(rewind)
+                app_stats += int(not rewind)
+                app_zero += int(lms_offset == 0)
+                app_above += int(not rewind and lms_offset > 0)
+                with sonos.lock:
+                    sonos.position['RelTime'] = f'00:00:{position:02}'
+                wait(lambda: 'queue speaker-seek ' in log()[app_mark:], 6, 'soak app position classified')
+                wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= 1.25, 8, 'soak app clock')
+                time.sleep(.6)
+                expected += int(rewind)
+                assert len(mutations()) - app_before == int(rewind), (seed, steps, log()[app_mark:])
+                assert ('decision=time-command' if rewind else 'decision=stat') in log()[app_mark:]
+                assert len(sonos.actions('Seek')) == app_seeks, (seed, steps, sonos.actions('Seek')[app_seeks:])
+                assert sonos.position['TrackURI'] == app_uri
+                if rewind: lms_offset = position * 1000
                 steps += 1
                 settle(index, True)
-                seek_partials.add(row(index)['uri'])
+            elif operation == 'seek':
+                # Finish the immutable prefix before the random covered seek.
+                fetch(row(index))
+                natural_ready()
+                seek_uri = sonos.position['TrackURI']
+                position = scripted[1] if scripted else rng.randrange(3, 18)
+                seek_mark = len(log())
+                cli(f'time {position}', mac)
+                lms_offset = position * 1000
+                wait(lambda: 'kind=seek' in log()[seek_mark:], 10, 'soak seek')
+                time.sleep(.4)
+                assert sonos.position['RelTime'] == f'00:00:{position:02}', (seed, steps, position, sonos.position)
+                wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= 1.25, 8, 'soak LMS seek clock')
+                steps += 1
+                settle(index, True)
+                seek_text = log()[seek_mark:]
+                assert sonos.position['TrackURI'] == seek_uri, ('covered seek replaced URI', seed, steps)
+                assert 'seek-partial' not in seek_text, (seed, steps, seek_text)
+                for line in seek_text.splitlines():
+                    if 'queue window seek ' in line:
+                        assert 'decision=' in line, line
+                        if 'decision=fallback' in line: assert 'reason=' in line, line
             elif operation == 'burst' and len([n for n in available if n > index]) >= 2:
                 upcoming = [n for n in available if n > index]
                 count = min(rng.randint(2, 4), 200-steps)
@@ -438,6 +624,7 @@ def run(c):
                     expected += 1
                     steps += 1
                     index = target
+                    lms_offset = 0
                     settle(index, grace=0)
                 elapsed = last_arrival - burst_start
                 print(f'BURST seed={seed} moves={len(targets)} elapsed_ms={elapsed*1000:.0f}', flush=True)
@@ -465,9 +652,11 @@ def run(c):
                          for line in log()[nav_mark:].splitlines()), 10, 'controller navigation settled')
                 steps += 1
                 index = target
+                lms_offset = 0
                 settle(index)
             print(f'SOAK seed={seed} step={steps} op={operation} index={index} commands={len(mutations())} expected={expected}', flush=True)
-        print(f'PASS SOAK seed={seed} steps=200 commands={len(mutations())} speaker_moves={expected} abandoned=0 clears=0 stops=0 byte_identity=yes audible_swaps=0 reasoned_reproduction=yes valid_target_reproduction=0 pause_cycles={pause_cycles}', flush=True)
+        assert app_rewinds and app_stats and app_zero and app_above, (seed, app_rewinds, app_stats, app_zero, app_above)
+        print(f'PASS SOAK app_rewinds={app_rewinds} app_stats={app_stats} app_offset_zero={app_zero} app_above_positive_offset={app_above} app_position_command_counts=yes app_position_clock=yes covered_seek_uri=yes seed={seed} steps=200 commands={len(mutations())} speaker_commands={expected} abandoned=0 clears=0 stops=0 byte_identity=yes audible_swaps=0 reasoned_reproduction=yes valid_target_reproduction=0 pause_cycles={pause_cycles}', flush=True)
     else:
         raise AssertionError(case)
     cli('stop', mac)

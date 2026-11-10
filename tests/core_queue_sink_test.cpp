@@ -368,18 +368,19 @@ int main() {
         assert(sink.audibleFrames() == 0 && sink.audibleElapsedMs(1) == 0);
         assert(!sink.audibleElapsedMs(2)); // elapsed belongs to this occurrence only
         sink.speakerPosition(1, 960, yeney::PlaybackState::Playing);
-        assert(sink.audibleElapsedMs(1) == 20);
+        assert(sink.audibleElapsedMs(1) == 20 && !sink.outputEmpty(960));
         sink.speakerPosition(1, 480, yeney::PlaybackState::Paused);
-        assert(sink.audibleElapsedMs(1) == 20);
+        // App RelTime can rewind while decoded-frame accounting stays monotonic.
+        assert(sink.audibleElapsedMs(1) == 10 && sink.audibleFrames() == 960);
         sink.speakerPosition(1, 1000000, yeney::PlaybackState::Playing);
-        assert(sink.audibleFrames() == 1000 && sink.audibleElapsedMs(1) == 20);
+        assert(sink.audibleFrames() == 1000 && sink.audibleElapsedMs(1) == 20 && sink.outputEmpty(1000));
         assert(!sink.takeAudibleStart(start));
         sink.flush();
         sink.waitIdle();
         yeney::AudibleState state;
         assert(!sink.takeAudibleState(state) && !sink.audibleElapsedMs(1));
         std::cout << "PASS speaker sink: confirmed zero keeps internal zero, source frames required, no "
-                     "duplicate starts, occurrence-local monotonic capped elapsed, flush fences state\n";
+                     "duplicate starts, occurrence-local rewindable capped elapsed, monotonic frames, flush fences state\n";
     }
     {
         CoreQueueSink sink("CancelledDescriptor", c, 1);
@@ -502,12 +503,16 @@ int main() {
         sink.coreEvent("strm", 2, 0);
         sink.trackDescriptor({2, 8000, 100, 0, 0});
         sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        sink.waitIdle();
+        sink.releaseParent(1);
+        sink.waitIdle();
+        assert(original->contentLength() == 644); // The fresh producer still owns this audio.
         assert(sink.write(pcm.data(), 100, false) == 100);
         sink.resolvedItemBoundary({2, 0, 100, 0, "no-transition"});
         sink.waitIdle();
         const auto rows = sink.snapshot();
         assert(rows[1].item == original && rows[1].pairedFrom == 1 && rows[1].actual == 100);
-        assert(rows[1].originMs == 0 && rows[1].incomplete.empty());
+        assert(rows[1].originMs == 0 && rows[1].seekPositionMs == 0 && rows[1].incomplete.empty());
         assert(original->finished() && original->producedFrames() == 100);
         const auto bytes = waiting.get();
         for (int n = 0; n < 100; ++n) {
@@ -523,8 +528,13 @@ int main() {
         assert(sink.write(pcm.data(), 100, false) == 100);
         sink.waitIdle();
         assert(sink.snapshot()[2].item != original);
+        sink.releaseParent(2);
+        sink.waitIdle();
+        bool released = false;
+        try { (void)original->contentLength(); } catch (const ItemCancelled &) { released = true; }
+        assert(released); // Retiring the last alias really releases its storage.
     }
-    puts("PASS producer pairing: complete and unfinished immutable WAV, waiting reader, exact prefix continuation, source mismatch rejected");
+    puts("PASS producer pairing: complete and unfinished immutable WAV, waiting reader, exact prefix continuation, source mismatch rejected, shared retirement keeps live readers and frees last owner");
     for (bool navigation : {false, true}) {
         CoreQueueSink sink(navigation ? "NavigationFlush" : "OrdinaryFlush", c, 1);
         sink.windowRetention(2, 3);
