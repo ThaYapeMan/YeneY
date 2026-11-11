@@ -242,3 +242,14 @@ feed menu name and settings; omit source URLs, tokens and descriptions.
   app-originated position below that offset issues exactly one reason-checked
   `time` command; LMS's restarted producer attaches in-item and the renderer
   is not seeked again. Every other app position change is zero-command.
+
+## Decisions — SEEK-01c (2026-11-11)
+
+Stopped under the task's core-landing exception. Native ALAC from the private
+M4A seek response reports source frame 0, but its first 4096 frames exactly
+match original source frame 1822720. ReplayGain is 39424 on both productions.
+The 96→48 bridge path falls back with `landed-frame-unknown`; no claim of
+private-media in-item acceptance or worker exception safety is made. Core and
+pin remain `9fba26f`. See [byte evidence and source-type observations](docs/research/seek-01c-landed-frame.md).
+R1, I6 enforcement and the expanded gates remain pending after this explicit
+stop condition; this commit is not a device fix.
