@@ -29,9 +29,13 @@ CoreQueueSink::~CoreQueueSink() {
 void CoreQueueSink::enqueue(std::function<void()> run, double seconds) {
     std::lock_guard<std::mutex> lock(mutex);
     if (closing || !workerFault.empty())
-        throw std::runtime_error("queue worker unavailable: " + workerFault);
-    if (jobs.size() >= 8192)
-        throw std::runtime_error("queue control job limit");
+        return;
+    if (jobs.size() >= 8192) {
+        records[active].fault = "queue control job limit";
+        records[active].storageFault = true;
+        std::printf("yeney: pairing decision=re-produced reason=control-job-limit\n");
+        return;
+    }
     staged += seconds;
     jobs.push_back({seconds, std::move(run)});
     changed.notify_all();
@@ -53,16 +57,35 @@ void CoreQueueSink::work() {
         } catch (const ItemCancelled &) {
             // A queued job may still reference an item retired by LMS flush.
             // Drop that job; cancellation must not poison the next producer.
+        } catch (const LengthFault &e) {
+            std::lock_guard<std::mutex> lock(mutex);
+            records[active].fault = e.what();
+            std::printf("yeney: pairing decision=re-produced reason=source-length-fault\n");
+        } catch (const std::runtime_error &e) {
+            std::lock_guard<std::mutex> lock(mutex);
+            records[active].fault = e.what();
+            records[active].storageFault = true;
+            std::printf("yeney: pairing decision=re-produced reason=storage-failure\n");
         } catch (const std::exception &e) {
             std::lock_guard<std::mutex> lock(mutex);
             workerFault = e.what();
-            const bool storage = dynamic_cast<const LengthFault *>(&e) == nullptr;
+            std::printf("yeney: queue worker fault=%s\n", workerFault.c_str());
+            jobs.clear();
+            staged = job.seconds;
+            closing = true;
             for (auto &p : records)
                 if (p.second.item) {
                     p.second.fault = e.what();
-                    p.second.storageFault = p.second.storageFault || storage;
+                    p.second.storageFault = true;
                     p.second.item->cancel(e.what());
                 }
+        } catch (...) {
+            std::lock_guard<std::mutex> lock(mutex);
+            workerFault = "unknown exception";
+            std::printf("yeney: queue worker fault=%s\n", workerFault.c_str());
+            jobs.clear();
+            staged = job.seconds;
+            closing = true;
         }
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -72,11 +95,13 @@ void CoreQueueSink::work() {
         }
     }
 }
+std::string CoreQueueSink::workerError() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    return workerFault;
+}
 void CoreQueueSink::waitIdle() {
     std::unique_lock<std::mutex> lock(mutex);
     changed.wait(lock, [&] { return jobs.empty() && !busy; });
-    if (!workerFault.empty())
-        throw std::runtime_error(workerFault);
 }
 std::vector<QueueRecord> CoreQueueSink::snapshot() const {
     std::lock_guard<std::mutex> lock(mutex);
@@ -210,7 +235,7 @@ void CoreQueueSink::estimate(uint64_t id, double duration, unsigned originMs) {
     auto &r = records[id];
     r.estimated = true;r.duration = duration;r.sourceOriginMs = originMs;
 }
-void CoreQueueSink::sourceIdentity(uint64_t id, uint64_t token, const std::string &url, unsigned originMs) {
+void CoreQueueSink::sourceIdentity(uint64_t id, uint64_t token, const std::string &url, unsigned originMs, uint32_t gain) {
     // Identity belongs to this producer's queued admission. Publishing it
     // synchronously could let an older pending flush mark the new run flushed.
     enqueue([=] {
@@ -219,6 +244,7 @@ void CoreQueueSink::sourceIdentity(uint64_t id, uint64_t token, const std::strin
         record.sourceToken = token;
         record.sourceUrl = url;
         record.originMs = originMs;
+        record.gain = gain;
     });
 }
 void CoreQueueSink::trackDescriptor(const yeney::TrackDescriptor &d) {
@@ -244,17 +270,26 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
     // These are producer coordinates, never audible notifications.
     rate = f.rate;
     const auto landed = nextContent;
+    const auto producer = latestProducer.load();
     enqueue([=] {
         uint64_t id;
         {
             std::lock_guard<std::mutex> lock(mutex);
-            if (descriptorOrder.empty())
-                throw std::runtime_error("boundary without descriptor");
+            if (descriptorOrder.empty()) {
+                std::printf("yeney: pairing decision=re-produced reason=boundary-without-descriptor\n");
+                id = producer;
+                if (!id) return;
+                auto &record = records[id];
+                record.source.occurrence = id;
+                record.source.rate = f.rate;
+                descriptorOrder.push_back(id);
+            }
             id = descriptorOrder.front();
             descriptorOrder.pop_front();
             active = id;
             records[id].first = frame;
             records[id].landedFrame = landed;
+            records[id].wavOrigin = landed.value_or(0);
             records[id].seekPositionMs = records[id].originMs;
         }
         QueueRecord tail;
@@ -294,7 +329,8 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
                     candidate.sourceToken != estimated.sourceToken || candidate.sourceUrl != estimated.sourceUrl ||
                     candidate.source.rate != estimated.source.rate ||
                     (frameZero && candidate.source.sourceFrames != estimated.source.sourceFrames) ||
-                    (!frameZero && (!landed || candidate.item->producedFrames() < *landed)) ||
+                    (!frameZero && (!landed || *landed < candidate.wavOrigin ||
+                        candidate.item->producedFrames() < *landed - candidate.wavOrigin + 4096)) ||
                     candidate.item->descriptor().kind != PromiseKind::Exact ||
                     candidate.incomplete == "outside queue window" || !candidate.fault.empty()) continue;
                 try {
@@ -304,7 +340,8 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
                     item = candidate.item;
                     pairedFrom = entry.first;
                     pairedZero = frameZero;
-                    pairedStart = frameZero ? 0 : *landed;
+                    pairedStart = frameZero ? 0 : *landed - candidate.wavOrigin;
+                    records[id].wavOrigin = candidate.wavOrigin;
                     break;
                 } catch (const std::exception &) { continue; }
             }
@@ -318,6 +355,8 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             std::lock_guard<std::mutex> lock(mutex);
             records[id].pairedFrom = pairedFrom;
             records[id].actual = pairedStart;
+            records[id].attachOffset = pairedStart;
+            records[id].verificationFrames = pairedZero ? std::min<uint64_t>(4096, item->producedFrames()) : 4096;
             if (pairedZero) records[id].seekPositionMs = 0;
             records[id].originMs = 0;
             records[id].sourceOriginMs = 0;
@@ -372,6 +411,9 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
         {
             std::lock_guard<std::mutex> lock(mutex);
             records[id].item = item;
+            std::printf("yeney: queue production occurrence=%llu content_frame=%s wav_origin=%llu\n",
+                (unsigned long long)id, landed ? std::to_string(*landed).c_str() : "unknown",
+                (unsigned long long)records[id].wavOrigin);
         }
         freshRender = false;
         std::optional<yeney::TrackDescriptor> successor;
@@ -412,36 +454,92 @@ void CoreQueueSink::append(const std::vector<yeney::Frame> &pcm, bool processed)
     QueueRecord r;
     {
         std::lock_guard<std::mutex> lock(mutex);
-        r = records.at(active);
+        if (!active || !records.count(active)) active = latestProducer.load();
+        if (!active) return; // No LMS producer owns this PCM.
+        r = records[active];
+    }
+    if (!r.item) {
+        std::printf("yeney: pairing decision=re-produced reason=pcm-without-item\n");
+        r.source.occurrence = active;
+        if (!r.source.rate) r.source.rate = rate;
+        Descriptor descriptor{std::to_string(active) + "-reproduced", r.source.rate, std::nullopt, 0};
+        if (r.estimated) {
+            descriptor.promisedFrames = declaredRemoteFrames(r.duration, r.source.rate);
+            descriptor.kind = PromiseKind::UpperBound;
+            r.promised = descriptor.promisedFrames;
+        }
+        r.item = store.create(descriptor);
+        r.seekReason = "pcm-without-item";
+        r.publication = r.estimated ? "upper-bound" : "pending";
+        std::lock_guard<std::mutex> lock(mutex);
+        records[active] = r;
+        if (r.estimated) producingSegment = active;
     }
     if (r.estimated) {
         appendEstimated(pcm, processed);
         return;
     }
-    if (!r.item)
-        throw std::runtime_error("PCM without item");
     const auto produced = r.item->producedFrames();
     const auto cursor = r.pairedFrom ? r.actual : produced;
     size_t n = pcm.size();
     if (r.promised)
         n = std::min<uint64_t>(n, *r.promised - cursor);
     const auto skip = r.pairedFrom && produced > cursor ? std::min<uint64_t>(n, produced - cursor) : 0;
-    if (r.pairedFrom && r.landedFrame && cursor >= *r.landedFrame && cursor - *r.landedFrame < 4096 && skip) {
-        const auto count = std::min<uint64_t>(skip, 4096 - (cursor - *r.landedFrame));
-        auto reader = r.item->reader(44 + cursor * 6);
+    if (r.pairedFrom && cursor - r.attachOffset < r.verificationFrames && skip) {
+        const auto count = std::min<uint64_t>(skip, r.verificationFrames - (cursor - r.attachOffset));
         std::vector<char> stored(count * 6), expected(count * 6);
         size_t got = 0;
-        while (got < stored.size()) {
-            const auto received = reader.read(stored.data() + got, stored.size() - got);
-            if (!received) throw std::runtime_error("paired verification short read");
-            got += received;
+        try {
+            auto reader = r.item->reader(44 + cursor * 6);
+            while (got < stored.size()) {
+                const auto received = reader.read(stored.data() + got, stored.size() - got);
+                if (!received) break;
+                got += received;
+            }
+        } catch (const std::runtime_error &) {
+            // Missing, retired, timed-out or unreadable verification bytes
+            // are unavailable evidence, not a reason to cancel the retained WAV.
         }
         PcmDither unused;
         for (size_t i = 0; i < count; ++i) {
             packSonosSample(expected.data() + i * 6, pcm[i].left, 3, processed, unused);
             packSonosSample(expected.data() + i * 6 + 3, pcm[i].right, 3, processed, unused);
         }
-        if (stored != expected) throw std::runtime_error("paired landed PCM mismatch");
+        r.verificationPcm.insert(r.verificationPcm.end(), pcm.begin(), pcm.begin() + n);
+        if (got != stored.size() || stored != expected) {
+            const auto mismatch = std::mismatch(stored.begin(), stored.end(), expected.begin());
+            const auto reason = got != stored.size() ? "verification-short-read" : "landed-pcm-mismatch";
+            uint32_t retainedGain;
+            { std::lock_guard<std::mutex> lock(mutex); retainedGain = records.at(r.pairedFrom).gain; }
+            std::printf("yeney: queue window seek occurrence=%llu decision=fallback reason=%s first_differing_frame=%llu landed_frame=%llu wav_origin=%llu retained_gain=%u producer_gain=%u\n",
+                (unsigned long long)active, reason,
+                (unsigned long long)(cursor + (got != stored.size() ? got : size_t(mismatch.first - stored.begin())) / 6),
+                (unsigned long long)r.landedFrame.value_or(0), (unsigned long long)r.wavOrigin,
+                retainedGain, r.gain);
+            // The outgoing immutable item remains owned by its existing route.
+            // Publish this producer separately; the controller retires that route
+            // only after its single speaker switch.
+            auto replacement = store.create({std::to_string(active) + "-fallback", r.source.rate, std::nullopt, 0});
+            replacement->append(r.verificationPcm.data(), r.verificationPcm.size(), processed);
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                auto &next = records.at(active);
+                next.item = replacement;
+                next.pairedFrom = 0;
+                next.actual = r.verificationPcm.size();
+                next.originMs = next.sourceOriginMs = next.seekPositionMs;
+                next.wavOrigin = next.landedFrame.value_or(0);
+                next.promised.reset();
+                next.publication = "pending";
+                next.seekReason = reason;
+                next.verificationPcm.clear();
+            }
+            commit(active, r.source);
+            return;
+        }
+        std::lock_guard<std::mutex> lock(mutex);
+        if (cursor + n - r.attachOffset >= r.verificationFrames) r.verificationPcm.clear();
+        records.at(active).verificationPcm = std::move(r.verificationPcm);
     }
     if (n > skip)
         r.item->append(pcm.data() + skip, n - skip, processed);
@@ -496,15 +594,21 @@ void CoreQueueSink::publishEstimated(uint64_t id, bool force) {
     const auto produced=r.item->producedFrames();
     const bool resolved=parent.finalFrame && *parent.finalFrame>r.first;
     const double resolvedLead=double(r.segmentOffset)/r.source.rate-double(parent.finalElapsedMs.value_or(0))/1000;
-    const bool exact=resolved && (resolvedLead>=10 || lead>=10);
+    bool exact=resolved && (resolvedLead>=10 || lead>=10);
     if(!exact && !force && lead>10)return;
     // A resolved end includes submitted PCM still awaiting the storage worker.
     const auto acceptedOverflow=resolved?*parent.finalFrame-r.first:
         submittedThrough>r.first?submittedThrough-r.first:0;
     const auto overflowProduced=std::max(produced,acceptedOverflow);
-    const auto promised=exact?*parent.finalFrame-r.first:
+    auto promised=exact?*parent.finalFrame-r.first:
         std::min(continuationLimit,overflowProduced+*parent.promised);
-    if(!promised || promised<produced)throw std::runtime_error("continuation exceeds room/WAV bound");
+    if(!promised || promised<produced) {
+        std::printf("yeney: pairing decision=re-produced reason=continuation-bound\n");
+        // This continuation has not been published yet. Preserve its real
+        // PCM under an upper bound, then let normal overflow create a successor.
+        promised = std::max<uint64_t>(1, produced);
+        exact = false;
+    }
     const auto kind=exact?PromiseKind::Exact:PromiseKind::UpperBound;
     auto item=store.publish(r.item,promised,kind);
     const auto decision=r.continuationDecision=="bound-exceeded"?r.continuationDecision:
@@ -782,7 +886,7 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
     frame = std::min(frame, r.promised.value_or(produced));
     speakerItemFrame = frame;
     const auto producerFrame = r.pairedFrom && r.seekPositionMs && r.landedFrame ?
-        (frame > *r.landedFrame ? frame - *r.landedFrame : 0) : frame;
+        (frame > r.attachOffset ? frame - r.attachOffset : 0) : frame;
     audibleFrame = std::max(audibleFrame, std::min(r.first + producerFrame, submitted));
     if (frame >= r.prefixFrames) {
         if (prefixPending) {
@@ -908,7 +1012,7 @@ std::optional<uint64_t> CoreQueueSink::committedItemFrames(uint64_t id) const {
         return total;
     }
     const auto &r = it->second;
-    return *r.promised - r.prefixFrames - (r.pairedFrom && r.seekPositionMs ? r.landedFrame.value_or(0) : 0);
+    return *r.promised - r.prefixFrames - (r.pairedFrom && r.seekPositionMs ? r.attachOffset : 0);
 }
 bool CoreQueueSink::takeAudibleStart(yeney::AudibleStart &s) {
     std::lock_guard<std::mutex> lock(mutex);

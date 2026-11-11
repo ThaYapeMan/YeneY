@@ -107,3 +107,5 @@ field-cold-test
 /queue-declaration-test
 
 /consumption-diagnostic-test
+
+/seek-worker-test

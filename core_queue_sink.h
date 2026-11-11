@@ -17,6 +17,9 @@ struct QueueRecord {
     uint64_t expectedIndex = 0;
     uint64_t sourceToken = 0, pairedFrom = 0;
     std::optional<uint64_t> landedFrame;
+    uint32_t gain = 0;
+    uint64_t wavOrigin = 0, attachOffset = 0, verificationFrames = 0;
+    std::vector<yeney::Frame> verificationPcm;
     std::string seekReason;
     std::string sourceUrl;
     unsigned originMs = 0, seekPositionMs = 0;
@@ -97,7 +100,7 @@ public:
     bool paced() const override { return false; }
     void estimate(uint64_t occurrence, double duration, unsigned originMs);
     void trackDescriptor(const yeney::TrackDescriptor &) override;
-    void sourceIdentity(uint64_t id, uint64_t token, const std::string &url, unsigned originMs);
+    void sourceIdentity(uint64_t id, uint64_t token, const std::string &url, unsigned originMs, uint32_t gain = 0);
     void coreEvent(const std::string &, uint64_t, uint64_t) override;
     void resolvedItemBoundary(const yeney::ItemBoundary &) override;
     void trackBoundary(uint64_t, const yeney::Format &, bool) override;
@@ -149,6 +152,7 @@ public:
     bool outputEmpty(uint64_t submitted) const override;
     uint64_t audibleOccurrence() const;
     void waitIdle();
+    std::string workerError() const;
     // Configure before playback. Parent budgets do not count continuations.
     void windowRetention(unsigned history, unsigned upcoming);
     void protectWindow(std::vector<std::shared_ptr<Item>>);

@@ -323,7 +323,7 @@ int main() {
             fault = true;
         }
         auto row = sink.snapshot().front();
-        assert(fault && !row.storageFault && row.fault.find("length fault") != std::string::npos);
+        assert(!fault && !row.storageFault && row.fault.find("length fault") != std::string::npos);
         std::cout
             << "PASS source length fault: source-short beyond policy is not mislabeled as a storage fault\n";
     }
@@ -559,5 +559,66 @@ int main() {
         assert(failed != navigation);
     }
     puts("PASS navigation flush retention: interrupted prefix survives LMS navigation; ordinary flush cancellation unchanged");
+    for (bool corrupt : {false, true}) {
+        CoreQueueSink sink("TrimAttach", c, 1);
+        sink.windowRetention(2, 3);
+        std::vector<yeney::Frame> pcm;
+        for (int n = 0; n < 5000; ++n) pcm.push_back({(n + 113) * 65536, -(n + 113) * 65536});
+        sink.sourceIdentity(1, 77, "file://trim-alac", 0);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 5000, 0, 0});
+        sink.contentPosition(113, true);
+        sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        assert(sink.write(pcm.data(), pcm.size(), true) == pcm.size());
+        sink.resolvedItemBoundary({1, 0, 5000, 0, "no-transition"});
+        sink.waitIdle();
+        auto original = sink.snapshot().front().item;
+        auto read = [](const auto &item) {
+            std::vector<char> bytes(*item->contentLength());
+            auto reader = item->reader(0);
+            size_t at = 0;
+            while (at < bytes.size()) { auto n = reader.read(bytes.data() + at, bytes.size() - at); assert(n); at += n; }
+            return bytes;
+        };
+        auto before = read(original);
+        sink.retainInterruptedOnNextFlush();
+        sink.flush();
+        sink.sourceIdentity(2, 77, "file://trim-alac", 63);
+        sink.coreEvent("strm", 2, 0);
+        sink.trackDescriptor({2, 8000, 4500, 0, 0});
+        sink.contentPosition(613, true);
+        sink.trackBoundary(5000, {8000, 24, 2, false}, false);
+        sink.waitIdle();
+        assert(sink.snapshot()[1].item == original);
+        if (corrupt) pcm[623].left ^= 65536;
+        assert(sink.write(pcm.data() + 500, 4500, true) == 4500);
+        sink.resolvedItemBoundary({2, 0, 9500, 0, "no-transition"});
+        sink.waitIdle();
+        const auto row = sink.snapshot()[1];
+        assert(sink.workerError().empty());
+        assert(read(original) == before);
+        if (corrupt) {
+            assert(row.item != original && !row.pairedFrom && row.seekReason == "landed-pcm-mismatch");
+            assert(row.item->producedFrames() == 4500);
+            puts("PASS D1 component: injected overlap mismatch falls back; retained HTTP WAV unchanged; worker alive");
+        } else {
+            assert(row.item == original && row.pairedFrom == 1 && row.attachOffset == 500 && row.wavOrigin == 113);
+            puts("PASS D4 component: trim origin=113 landed=613 attach_offset=500; exact overlap; immutable WAV");
+        }
+    }
+    for (bool boundary : {false, true}) {
+        CoreQueueSink sink("MissingDescriptor", c, 1);
+        sink.sourceIdentity(1, 7, "file://missing-descriptor", 0);
+        sink.coreEvent("strm", 1, 0);
+        if (boundary) sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        std::vector<yeney::Frame> pcm(100, {65536, -65536});
+        assert(sink.write(pcm.data(), pcm.size(), false) == pcm.size());
+        sink.resolvedItemBoundary({1, 0, 100, 0, "no-transition"});
+        sink.waitIdle();
+        const auto row = sink.snapshot()[0];
+        assert(sink.workerError().empty() && row.item && row.actual == 100);
+        assert(row.item->finished() && row.item->producedFrames() == 100);
+        puts("PASS missing descriptor/boundary: independent sealed production, no lost PCM, worker alive");
+    }
     std::filesystem::remove_all(root);
 }

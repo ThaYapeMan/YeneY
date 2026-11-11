@@ -271,6 +271,8 @@ void QueueRoom::Impl::append() {
             continue; // LMS cancelled this render, not a speaker rejection.
         if (!record.fault.empty())
             { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
+        if (record.pairedFrom && record.actual - record.attachOffset < record.verificationFrames)
+            continue; // Verify the complete overlap before exposing an attach.
         if (!record.item || !record.incomplete.empty())
             continue;
         if (!record.parent) {
@@ -650,6 +652,10 @@ void QueueRoom::Impl::run() {
                 resumeFlush = false;
                 queue.flush();
                 command('Z', deferredNext); // Resume echo expired without a start.
+            }
+            if (const auto error = queue.workerError(); !error.empty()) {
+                roomFault("queue-worker: " + error);
+                continue;
             }
             observe();
             append();

@@ -115,3 +115,15 @@ test` or consumer `require_v1` success is claimed. Resolve the core landing
 contract in a separately authorized round, then resume the bridge work and its
 full acceptance requirements. The task explicitly forbids changing that core
 or its pin in this round. No deployment or owner endpoint access took place.
+
+## Closing follow-up — CORE-ALAC-SEEK-01 and SEEK-01d
+
+Core `a9ab672f147fe23650ec2a7b18ef1a96bd61fe36` fixes the ALAC landing
+contract: native unconverted output reports the original source coordinate;
+unprovable or converted output reports unknown. Known zero is never a default.
+Its from-start trimmed production begins at source frame 113, while an interior
+seek retains its original coordinate. SEEK-01d pins this core and subtracts the
+retained WAV origin at attach. It also converts overlap mismatch into a logged
+fallback and gates publication on exact verification. Generated ALAC/ReplayGain
+cases now cover this path independently of the owner's private media. The
+SEEK-01d report records the actual acceptance status of each gate.

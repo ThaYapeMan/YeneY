@@ -9,6 +9,10 @@ class NavigationHTTPGate:
     def __init__(self, hold_request=2):
         self.held = threading.Event()
         self.release = threading.Event()
+        self.corrupt_next = threading.Event()
+        self.corruptions = 0
+        self.retained_verified = threading.Event()
+        self.on_corruption = lambda: None
         self.lock = threading.Lock()
         self.requests = 0
         self.prefix_bytes = 0
@@ -38,6 +42,15 @@ class NavigationHTTPGate:
                     self.send_header('Connection', 'close')
                     self.end_headers()
                     first = response.read(gate.prefix_limit)
+                    if gate.corrupt_next.is_set():
+                        gate.corrupt_next.clear()
+                        first = bytearray(first)
+                        payload = first.index(b'mdat') + 4
+                        # Generated escape ALAC: bit 55 is the first sample's
+                        # sign bit, after the uncompressed CPE header.
+                        first[payload + 6] ^= 1
+                        gate.corruptions += 1
+                        gate.on_corruption()
                     self.wfile.write(first)
                     self.wfile.flush()
                     if number == hold_request:

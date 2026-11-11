@@ -70,6 +70,24 @@ callback cannot undo that level. The real LMS volume test exercises this.
 
 ## Sonos queue window
 
+The retained WAV's frame zero corresponds to the known content position of its
+from-start production. For a trimmed ALAC file this can be source frame 113.
+An interior attach uses `landed - wavOrigin`. The renderer and retained WAV use
+WAV-relative coordinates; content positions remain original source coordinates.
+Verify the full 4096-frame overlap before exposing an interior attach. Keep exact
+PCM comparison, including ReplayGain. A mismatch creates a fresh producer item;
+it does not mutate or cancel the retained WAV. Diagnostics include the first
+differing WAV frame, landed source frame, WAV origin, and both wire gains.
+
+| Source | LMS seek decision |
+| --- | --- |
+| Native unconverted ALAC, FLAC, PCM with known landing and available prefix | in-item |
+| Converted hi-res to 48 kHz | fallback: landed-frame-unknown |
+| AAC / MP3 with unprovable landing | fallback: landed-frame-unknown |
+| Exact overlap mismatch | fallback: landed-pcm-mismatch |
+| Unavailable verification bytes | fallback: verification-short-read |
+| Prefix does not cover the landing and full overlap | fallback: prefix-unavailable |
+
 Queue URLs are path only: `/yeney/q/<session>/<epoch>/<revision>/<item>.wav`, including lazy and continuation items. Session path segments are masked in logs/status. The old query route is removed because assets and sessions are process-local and cannot survive restart.
 
 The window model has two history parents, the current parent and three upcoming
@@ -243,6 +261,12 @@ feed menu name and settings; omit source URLs, tokens and descriptions.
   `time` command; LMS's restarted producer attaches in-item and the renderer
   is not seeked again. Every other app position change is zero-command.
 
+- I6: The queue worker never terminates the process on data. Pairing, attach and
+  verification failures are logged decisions that take the fallback path with
+  one speaker switch; the HTTP reader of the retained item is retired by that
+  switch, not cancelled by the failure. A genuine worker fault releases the
+  room and stops it; it never aborts the process.
+
 ## Decisions — SEEK-01c (2026-11-11)
 
 Stopped under the task's core-landing exception. Native ALAC from the private
@@ -253,3 +277,29 @@ private-media in-item acceptance or worker exception safety is made. Core and
 pin remain `9fba26f`. See [byte evidence and source-type observations](docs/research/seek-01c-landed-frame.md).
 R1, I6 enforcement and the expanded gates remain pending after this explicit
 stop condition; this commit is not a device fix.
+
+## Decisions — SEEK-01d (2026-11-11)
+
+Pin core a9ab672 without modifying it. Native ALAC tests explicitly configure
+LMS native ALAC output; otherwise LMS can silently transcode ALAC to FLAC.
+Keep the disposable tracks tagged as ALAC and provide native alcx/mp4 profiles;
+assert every ALAC-variant wire start uses codec l. Load these own configuration
+files through a configuration-only extension in the disposable instance cache;
+LMS does not load them from prefsdir. Use the production 256 MiB quota for the
+61-second ALAC windows. Generic MP4 classification
+after decode-ahead otherwise selects a slow FLAC seek transcode.
+Use disposable database ReplayGain (-4.4 dB, peak 1) and player mode 1.
+Generated fixtures remain public and deterministic; private tracks are symlinked
+and read in place. Run the loopback gates serially because they share ports.
+A source length fault is recorded on its item and no longer rethrown by waitIdle.
+Programming faults stop the storage worker and are observed by the room worker,
+which releases the room through its existing roomFault path.
+
+Rate-converted origins were already unknown on the baseline. Preserve observed
+passing conversion baselines as regression evidence; do not manufacture a red
+solely to satisfy a before/after label.
+
+The ALAC soak checks known frame zero through the codec-independent
+`queue production` diagnostic and advances its fake clock to one second before
+the actual track end. This preserves the original 23-second stimulus for the
+24-second WAV/FLAC tracks and supports the required 61-second ALAC fixtures.

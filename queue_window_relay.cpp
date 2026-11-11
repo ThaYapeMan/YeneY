@@ -116,6 +116,8 @@ void QueueRoom::Impl::reconcileWindow() {
                 logQueue("window seek lms_index=" + std::to_string(audible->index) +
                     " position_ms=" + std::to_string(seekMs) +
                     " decision=in-item landed_frame=" + std::to_string(*producer->landedFrame) +
+                    " wav_origin=" + std::to_string(producer->wavOrigin) +
+                    " attach_offset=" + std::to_string(producer->attachOffset) +
                     " produced_frames=" + std::to_string(producer->item->producedFrames()) + " lms_commands=0");
                 if (!retained->owner) retained->owner = retained->stream;
                 retained->stream = navigationItem->stream;

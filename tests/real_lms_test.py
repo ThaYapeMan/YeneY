@@ -42,9 +42,11 @@ class Tap:
         self.listener=socket.socket();self.listener.bind(('127.0.0.1',0));self.listener.listen(2);self.listener.settimeout(.1)
         self.port=self.listener.getsockname()[1];self.closed=False;self.sockets=[];self.records=[];self.errors=[]
         self.http_gate = None
-        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and os.environ.get('YENEY_NAV_CASE') in ('A2', 'S2', 'S3', 'B1', 'B2', 'F3'):
+        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and os.environ.get('YENEY_NAV_CASE') in ('A2', 'S2', 'S3', 'B1', 'B2', 'F3', 'D1'):
             from navigation_http_gate import NavigationHTTPGate
-            self.http_gate = NavigationHTTPGate(hold_request=2 if os.environ.get('YENEY_NAV_CASE') == 'A2' else 1)
+            self.http_gate = NavigationHTTPGate(hold_request=0 if os.environ.get('YENEY_NAV_CASE') == 'D1' else 2 if os.environ.get('YENEY_NAV_CASE') == 'A2' else 1)
+            if os.environ.get('YENEY_NAV_MEDIA') and os.environ.get('YENEY_NAV_CASE') == 'S2':
+                self.http_gate.prefix_limit = 2 * 1024 * 1024
         self.worker=threading.Thread(target=self.run);self.worker.start()
     def run(self):
         try:
@@ -228,15 +230,31 @@ print('REAL LMS transcript directory: '+str(base),flush=True)
 install()
 perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
-for i,rate in enumerate((44100,48000)*4):
+nav_media = os.environ.get('YENEY_NAV_MEDIA', '')
+for i,rate in enumerate((44100,)*8 if nav_media else (44100,48000)*4):
     path=base/f'input-{i}.wav'
-    source=bytearray(wav(rate,90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24,noise=True))
+    source=bytearray(wav(rate,61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24,noise=True))
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
         np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
     path.write_bytes(source)
     subprocess.run(['flac','-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
                     '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
+if nav_media:
+    from alac_seek_fixtures import encode
+    for i in range(8):
+        if i == 0 and nav_media.startswith('private-'):
+            name = '01 Mira.m4a' if nav_media == 'private-mira' else '04 I Put A Spell On You.m4a'
+            original = Path(os.environ['YENEY_LENGTH_FIXTURE_DIR']) / name
+            assert original.is_file(), original
+            (base/f'library/nav-{i}.m4a').symlink_to(original)
+        else:
+            source = base/f'input-{i}.wav'
+            if i == 0 and nav_media == 'converted':
+                source = base/'converted-96000.wav'
+                source.write_bytes(hires_wave(hires_pcm(96000, 61), 96000))
+            encode(source, base/f'library/nav-{i}.m4a', i, trim=nav_media == 'trim',
+                   bits=24 if i == 0 and nav_media == 'converted' else 16)
 for i,rate in ((4,44100),(5,48000)):
     cookie,packets=alac_parts(alac(24))
     cookie=cookie[:20]+struct.pack('!I',rate)
@@ -284,6 +302,19 @@ for rate in (44100,88200,96000):
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
 if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':
     (base/'prefs/plugin/state.prefs').write_text('---\nPodcast: enabled\n_version: 1\n')
+if nav_media:
+    # This variant contains only ALAC M4A files. Keep URL-suffix lookups from
+    # replacing the scanned codec with generic MP4 during a later seek.
+    native_config = base/'cache/InstalledPlugins/Plugins/SeekAlac'
+    native_config.mkdir(parents=True)
+    (native_config/'install.xml').write_text('<extension><id>yeney-seek-alac-fixtures</id><name>ALAC seek fixtures</name><version>1.0</version><defaultState>enabled</defaultState><targetApplication><id>Lyrion Music Server</id><minVersion>9.1.1</minVersion><maxVersion>*</maxVersion></targetApplication></extension>')
+    (native_config/'custom-types.conf').write_text('alc m4a,mp4,m4b audio/x-m4a-lossless audio\n')
+    (native_config/'custom-convert.conf').write_text('proxy alcx alc\nproxy mp4 alc\nalcx alc * *\n\t-\nmp4 alc * *\n\t-\n')
+    with (base/'prefs/server.prefs').open('a') as prefs:
+        prefs.write('prioritizeNative: 1\ndisabledformats:\n')
+        for source in ('alc', 'alcx', 'mp4'):
+            for output in ('flc', 'pcm', 'mp3', 'aac'):
+                prefs.write(f'  - {source}-{output}-*-*\n')
 lms=bridge=tap=sonos=remote=proxy=None
 name_only=os.environ.get('YENEY_REAL_LMS_NAME_ONLY')=='1'
 volume_only=os.environ.get('YENEY_REAL_LMS_VOLUME_ONLY')=='1'
@@ -294,6 +325,7 @@ try:
              '--logdir',str(base/'log'),'--httpport','9000','--httpaddr','127.0.0.1','--cliport','19090',
              '--cliaddr','127.0.0.1','--playeraddr','127.0.0.1','--streamaddr','127.0.0.1',
              '--advertiseaddr','127.0.0.1','--norestart']
+    if nav_media: command += ['--debug=player.source=DEBUG']
     if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':command += ['--debug=formats.xml=DEBUG','--debug=plugin.podcast=DEBUG']
     lms=subprocess.Popen(command,stdout=lms_log,stderr=subprocess.STDOUT,start_new_session=True,env=perl_env)
     def available():
@@ -316,12 +348,14 @@ try:
     window_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in tuple(f'{i}.flac' for i in range(8))]
     alac_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('4.m4a','5.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
+    if nav_media:
+        window_ids = [next(t['id'] for t in tracks if t.get('url','').endswith(f'/nav-{i}.m4a')) for i in range(8)]
     assert len(window_ids)==8,tracks
     sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True;sonos.consume_stream=True
     sonos.volume=20;sonos.muted=0
-    sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None]+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
+    sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None,'Audiophile Recordings volume 3','The Absence']+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
     tap=Tap()
-    env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='64',STATE_DIRECTORY=str(base))
+    env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='256' if nav_media else '64',STATE_DIRECTORY=str(base))
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':env['YENEY_LMS_ICON']=''
     if volume_only:env['YENEY_LMS_VOLUME']='speaker'
     bridge=subprocess.Popen([os.environ.get('YENEY_ACCEPTANCE_BINARY',str(ROOT/'yeney')),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
@@ -333,6 +367,23 @@ try:
     mac=':'.join(f'{v:02x}' for v in bytes.fromhex(hello['body'])[2:8])
     wait(lambda:cli('connected ?',mac)[-1]=='1',10,'player connected')
     assert b'Model=yeney,' in bytes.fromhex(hello['body']) and b'HasDigitalOut=' not in bytes.fromhex(hello['body'])
+    if nav_media:
+        import sqlite3
+        updated = 0
+        for database in base.rglob('*.db'):
+            with sqlite3.connect(database) as db:
+                if db.execute("select name from sqlite_master where name='tracks'").fetchone():
+                    for track_id in window_ids:
+                        updated += db.execute("update tracks set replay_gain=-4.4, replay_peak=1, content_type='alc' where id=?", (track_id,)).rowcount
+                    if nav_media.startswith('private-'):
+                        db.execute('update tracks set title=? where id=?', ('Title & 0', window_ids[0]))
+        assert updated == 8, updated
+        print('ALAC disabled formats: ' + repr(cli('pref disabledformats ?')), flush=True)
+        cli('pref prioritizeNative 1')
+        cli('playerpref replayGainMode 1', mac)
+        cli('playerpref transitionType 0', mac)
+        source_kind = 'private-read-in-place 24/96000' if nav_media.startswith('private-') else 'generated 24/96000 duration=61' if nav_media == 'converted' else 'generated 16/44100 duration=61'
+        print(f'ALAC variant={nav_media} ReplayGain mode=1 track_gain=-4.4 source={source_kind}', flush=True)
     audio_page=urlopen('http://127.0.0.1:9000/settings/player/audio.html?player='+mac,timeout=10).read().decode()
     (base/'player-audio-settings.txt').write_text(audio_page)
     assert 'pref_digitalVolumeControl' not in audio_page, 'native volume preference unexpectedly offered'
@@ -700,7 +751,18 @@ finally:
     if remote:cleanup(remote.close)
     for source in extra_remotes:cleanup(source.close)
     cleanup(lambda:stop(lms));bridge_log.close();lms_log.close()
+    if nav_media:
+        def native_alac_wire():
+            starts = [r for r in tap.records if r.get('op') == 'strm' and r.get('command') == 's']
+            assert starts and all(bytes.fromhex(r['body'])[2] == ord('l') for r in starts), 'ALAC variant silently transcoded on the wire'
+            print('PASS ALAC wire: every strm s uses native codec l', flush=True)
+        cleanup(native_alac_wire)
+        (base/'server-prefs.txt').write_text((base/'prefs/server.prefs').read_text())
     (base/'owner-cli.json').write_text(json.dumps(OWNER_CLI,indent=2))
     active_error=sys.exc_info()[1]
+    if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1':
+        for line in (base/'bridge.log').read_text().splitlines():
+            if any(key in line for key in ('queue window seek ', 'worker fault=', 'relay fault=', 'terminate', 'what():')):
+                print('EVIDENCE ' + line, flush=True)
     if failures and (active_error is None or isinstance(active_error,SystemExit) and active_error.code in (None,0)):
         raise failures[0]

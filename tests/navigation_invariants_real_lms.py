@@ -36,6 +36,15 @@ def run(c):
             return body
         finally:
             conn.close()
+    def natural_pcm(index):
+        source = (base / f'input-{index}.wav').read_bytes()[44:]
+        if os.environ.get('YENEY_NAV_MEDIA'):
+            import numpy as np
+            values = np.frombuffer(source, dtype='<i2').astype(np.int64) * 39424
+            result = (values >> 8).astype('<i4').view(np.uint8).reshape(-1, 4)[:, :3].tobytes()
+            if os.environ.get('YENEY_NAV_MEDIA') == 'trim': result = result[113*6:-219*6]
+            return result
+        return b''.join(b'\0' + source[n:n+2] for n in range(0, len(source), 2))
     def declared(item):
         url = urlsplit(item['uri'])
         conn = http.client.HTTPConnection(url.netloc, timeout=3)
@@ -67,13 +76,25 @@ def run(c):
     wait(lambda: len(items()) == 4, 15, 'eight-item initial window')
     select(0)
     mark = len(log())
-    if case.startswith('S') and case != 'SOAK':
+    if case == 'D6':
+        fetch(row(0), True)
+        natural_ready()
+        Path(os.environ['YENEY_TEST_WORKER_TRIGGER']).touch()
+        cli('time 12', mac)
+        wait(lambda: 'queue worker fault=injected programming error' in log(), 10, 'worker boundary diagnostic')
+        wait(lambda: not items(), 10, 'fault releases owned queue')
+        assert c['bridge'].poll() is None, 'programming fault terminated bridge'
+        assert sonos.crossfade and sonos.verified_save
+        assert 'terminate' not in log()
+        assert cli('version ?')[-1].startswith('9.1.1')
+        print('PASS D6 programming exception inside worker: room released, process alive, LMS available; independent worker isolation covered by seek-worker-test', flush=True)
+        return
+    if case.startswith('S') and case != 'SOAK' or case == 'D1':
         if case in ('S2', 'S3'):
             fetch(row(0), True)
             wait(c['tap'].http_gate.held.is_set, 5, 'natural producer held')
             time.sleep(.5)
-            source = (base / 'input-0.wav').read_bytes()[44:]
-            reference_pcm = b''.join(b'\0' + source[n:n+2] for n in range(0, len(source), 2))
+            reference_pcm = natural_pcm(0)
             reference = None
         else:
             reference = fetch(row(0))
@@ -82,12 +103,50 @@ def run(c):
         uri, duration = target['uri'], target['resource']['duration']
         mark, before = len(log()), len(proxy.records)
         seek_count = len(sonos.actions('Seek'))
-        position = 1 if case == 'S2' else 60 if case == 'S4c' else 12
+        position = (5 if os.environ.get('YENEY_NAV_MEDIA') else 1) if case == 'S2' else 60 if case == 'S4c' else 12
         edits = (len(sonos.actions('AddURIToQueue')), len(sonos.actions('RemoveTrackRangeFromQueue')))
+        if case == 'D1':
+            retained = http.client.HTTPConnection(urlsplit(uri).netloc, timeout=8)
+            c['extra_remotes'].append(retained)
+            retained.request('GET', urlsplit(uri).path)
+            response = retained.getresponse()
+            header = response.read(44)
+            assert response.status == 200 and header == reference[:44]
+            gate = c['tap'].http_gate
+            def verify_retained_before_switch():
+                wait(lambda: 'decision=fallback reason=landed-pcm-mismatch' in log()[mark:], 5, 'mismatch decision before speaker switch')
+                assert sonos.position['TrackURI'] == uri
+                assert header + response.read() == reference, 'failure dropped or changed the retained HTTP reader'
+                retained.close()
+                gate.retained_verified.set()
+            gate.on_corruption = lambda: setattr(sonos, 'browse_hook', verify_retained_before_switch)
+            gate.corrupt_next.set()
         if case != 'S4d': cli(f'time {position}', mac)
         if case != 'S4d': wait(lambda: 'kind=seek' in log()[mark:], 10, 'LMS seek reconciled')
         time.sleep(.5)
         text = log()[mark:]
+        if case == 'D1':
+            assert c['tap'].http_gate.corruptions == 1
+            assert c['tap'].http_gate.retained_verified.is_set(), 'retained HTTP reader was not verified before the switch'
+            evidence = next(line for line in text.splitlines() if 'decision=fallback reason=landed-pcm-mismatch' in line)
+            assert all(field in evidence for field in ('first_differing_frame=', 'landed_frame=', 'wav_origin=', 'retained_gain=', 'producer_gain=')), evidence
+            assert len(sonos.actions('Seek')) == seek_count + 1 and sonos.position['TrackURI'] != uri
+            assert not sonos.actions('Stop') and c['bridge'].poll() is None
+            assert 'worker fault=' not in log() and 'relay fault=' not in log()
+            wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= .5, 5, 'mismatch fallback clock within 500 ms')
+            print(text, flush=True)
+            print('PASS D1 fake corrupts one ALAC frame: evidence, live HTTP reader byte-identical before one speaker switch, zero Stop, process alive, LMS clock within 500 ms', flush=True)
+            return
+        if os.environ.get('YENEY_NAV_MEDIA', '') in ('converted', 'private-mira', 'private-spell'):
+            assert 'decision=fallback reason=landed-frame-unknown' in text, text
+            assert sonos.position['TrackURI'] != uri
+            assert len(sonos.actions('Seek')) == seek_count + 1
+            assert not sonos.actions('Stop')
+            assert c['bridge'].poll() is None
+            wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= .5, 5, 'fallback LMS clock within 500 ms')
+            print(text, flush=True)
+            print('PASS D5 converted ALAC ReplayGain: unknown-frame fallback, one switch, no stop, process alive, clock within 500 ms', flush=True)
+            return
         if case == 'S3':
             assert sonos.position['TrackURI'] != uri
             assert len(sonos.actions('Seek')) == seek_count + 1
@@ -98,6 +157,12 @@ def run(c):
             print(text, flush=True)
             print('PASS S3 fallback prefix-unavailable: single switch, no stop/drop (baseline red only on new diagnostic)', flush=True)
             return
+        if case != 'S4d':
+            assert 'decision=in-item' in text, text
+            assert 'decision=fallback' not in text, text
+            if os.environ.get('YENEY_NAV_MEDIA') == 'trim':
+                evidence = re.search(r'landed_frame=(\d+) wav_origin=(\d+) attach_offset=(\d+)', text)
+                assert evidence and int(evidence[2]) == 113 and int(evidence[3]) == int(evidence[1]) - 113, text
         assert sonos.position['TrackURI'] == uri, ('seek replaced audible URI', uri, sonos.position)
         assert edits == (len(sonos.actions('AddURIToQueue')), len(sonos.actions('RemoveTrackRangeFromQueue')))
         assert row(0)['resource']['duration'] == duration
@@ -222,8 +287,7 @@ def run(c):
         if reference is not None:
             assert body == reference, 'paired audio differs from natural WAV'
         else:
-            source = (base / 'input-1.wav').read_bytes()[44:]
-            expected_pcm = b''.join(b'\0' + source[n:n+2] for n in range(0, len(source), 2))
+            expected_pcm = natural_pcm(1)
             assert body[44:] == expected_pcm, 'continued PCM differs from natural 16-to-24-bit production'
         commands = [r['request'] for r in proxy.records[before:]
                     if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
@@ -512,8 +576,10 @@ def run(c):
             if natural_at and steps >= natural_at[0] and index < 7:
                 natural_at.pop(0)
                 fetch(row(index))
+                duration = sum(float(part) * weight for part, weight in zip(row(index)['resource']['duration'].split(':'), (3600, 60, 1)))
+                near_end = max(0, int(duration) - 1)
                 with sonos.lock:
-                    sonos.position['RelTime'] = '00:00:23'
+                    sonos.position['RelTime'] = f'{near_end//3600:02}:{near_end//60%60:02}:{near_end%60:02}'
                 target = index + 1
                 def prepared():
                     url = urlsplit(row(target)['uri'])
@@ -529,7 +595,7 @@ def run(c):
                 producer = json.loads(status_path.read_text())['playback']['occurrence']
                 wait(lambda: f'core: queue item-end occurrence={producer} ' in log(), 10,
                      'current natural producer completed, including paired prefix')
-                wait(lambda: re.search(r'core: queue FLAC occurrence=' + str(producer + 1) + r' .* first sample=0', log()),
+                wait(lambda: re.search((r'queue production occurrence=' + str(producer + 1) + r' content_frame=0 ' if os.environ.get('YENEY_NAV_MEDIA') else r'core: queue FLAC occurrence=' + str(producer + 1) + r' .* first sample=0'), log()),
                      10, 'fresh natural successor coordinate')
                 wait(prepared, 10, 'natural next producer ready without activating GET')
                 wait(lambda: float(cli('time ?', mac)[-1]) >= 20, 5, 'outgoing natural clock observed before boundary')
@@ -656,7 +722,9 @@ def run(c):
                 settle(index)
             print(f'SOAK seed={seed} step={steps} op={operation} index={index} commands={len(mutations())} expected={expected}', flush=True)
         assert app_rewinds and app_stats and app_zero and app_above, (seed, app_rewinds, app_stats, app_zero, app_above)
-        print(f'PASS SOAK app_rewinds={app_rewinds} app_stats={app_stats} app_offset_zero={app_zero} app_above_positive_offset={app_above} app_position_command_counts=yes app_position_clock=yes covered_seek_uri=yes seed={seed} steps=200 commands={len(mutations())} speaker_commands={expected} abandoned=0 clears=0 stops=0 byte_identity=yes audible_swaps=0 reasoned_reproduction=yes valid_target_reproduction=0 pause_cycles={pause_cycles}', flush=True)
+        assert 'relay fault=' not in log() and 'worker fault=' not in log(), log()
+        assert c['bridge'].poll() is None, 'bridge exited during soak'
+        print(f'PASS SOAK zero_relay_faults=yes zero_worker_faults=yes zero_process_exits=yes app_rewinds={app_rewinds} app_stats={app_stats} app_offset_zero={app_zero} app_above_positive_offset={app_above} app_position_command_counts=yes app_position_clock=yes covered_seek_uri=yes seed={seed} steps=200 commands={len(mutations())} speaker_commands={expected} abandoned=0 clears=0 stops=0 byte_identity=yes audible_swaps=0 reasoned_reproduction=yes valid_target_reproduction=0 pause_cycles={pause_cycles}', flush=True)
     else:
         raise AssertionError(case)
     cli('stop', mac)

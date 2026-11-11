@@ -803,3 +803,10 @@ At the ten-second deadline, an unfinished producer gets its upper-bound fallback
 even if no overflow is available yet. If the real source ends inside the parent
 bound, the unused fallback closes at real EOF without padding, another LMS start
 or a jump in the episode clock. Further items require an exceeded fallback bound.
+
+LMS seeks within retained queue audio keep the same WAV and queue row for native,
+unconverted ALAC, FLAC and PCM when the core proves the landing and the retained
+prefix covers its exact overlap. Trimmed ALAC uses the original source origin
+when attaching. Converted hi-res audio and AAC/MP3 with unprovable landings use a
+single speaker switch with `landed-frame-unknown`; an exact PCM mismatch uses
+`landed-pcm-mismatch` and preserves the retained WAV until that switch.
