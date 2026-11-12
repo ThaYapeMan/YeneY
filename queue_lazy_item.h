@@ -13,6 +13,7 @@ namespace queue_audio {
 // an LMS command. The room callback must only enqueue work and return promptly.
 class LazyItem {
     std::shared_ptr<Item> declaration, produced;
+    std::optional<uint64_t> declaredLength;
     std::function<void()> activate;
     std::mutex mutex;
     std::condition_variable changed;
@@ -24,6 +25,7 @@ public:
         : declaration(std::move(declared)), activate(std::move(enqueue)) {
         if ((!deferred && (!declaration || !declaration->contentLength())) || !activate)
             throw std::invalid_argument("lazy item needs an immutable declaration and selector");
+        if (declaration) declaredLength = declaration->contentLength();
     }
     // The room worker must claim immediately before an LMS mutation. Enqueueing
     // from HTTP alone is not authority: the request may have left meanwhile.
@@ -42,21 +44,41 @@ public:
         return true;
     }
     bool publish(std::shared_ptr<Item> item) {
+        std::lock_guard<std::mutex> lock(mutex);
         if (!item || (declaration && (item->room() != declaration->room() ||
             item->descriptor().rate != declaration->descriptor().rate ||
             item->descriptor().kind != declaration->descriptor().kind ||
-            item->contentLength() != declaration->contentLength())))
+            item->contentLength() != declaredLength)))
             throw std::invalid_argument("lazy producer differs from declared WAV");
-        std::lock_guard<std::mutex> lock(mutex);
         if (cancelled) return false; // late producer cannot resurrect an abandoned window
         if (produced && produced != item) throw std::logic_error("lazy producer already bound");
+        if (!declaration) { declaredLength = item->contentLength(); declaration = item; }
         produced = std::move(item);
         changed.notify_all();
         return true;
     }
+    void reset() {
+        std::lock_guard<std::mutex> lock(mutex);
+        produced.reset();
+        requested = cancelled = activationClaimed = false;
+        issuedCommands = 0;
+        changed.notify_all();
+    }
+    void replace(std::shared_ptr<Item> item) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!item || (declaration && (item->room() != declaration->room() ||
+            item->descriptor().rate != declaration->descriptor().rate ||
+            item->descriptor().kind != declaration->descriptor().kind ||
+            item->contentLength() != declaredLength)))
+            throw std::invalid_argument("replacement differs from immutable WAV");
+        if (!declaration) { declaredLength = item->contentLength(); declaration = item; }
+        produced = std::move(item);
+        cancelled = false;
+        changed.notify_all();
+    }
     std::shared_ptr<Item> ready() {
         std::lock_guard<std::mutex> lock(mutex);
-        return cancelled ? nullptr : produced;
+        return cancelled || (produced && produced->evicted()) ? nullptr : produced;
     }
     bool abandoned() {
         std::lock_guard<std::mutex> lock(mutex);
@@ -83,6 +105,11 @@ public:
                                  std::chrono::milliseconds budget = std::chrono::seconds(15)) {
         const auto deadline = std::chrono::steady_clock::now() + budget;
         std::unique_lock<std::mutex> lock(mutex);
+        if (produced && produced->evicted()) {
+            produced.reset();
+            requested = cancelled = activationClaimed = false;
+            issuedCommands = 0;
+        }
         if (cancelled || request.aborted() || request.peerClosed()) return {};
         readers.push_back(&request);
         // Every exit, including an exception from enqueue, releases its claim.

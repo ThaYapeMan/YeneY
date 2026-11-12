@@ -57,6 +57,7 @@ struct QueueRoom::Impl {
     queue_audio::QueueWindow window;
     queue_audio::QueueWindow::Policy publishedWindowPolicy;
     bool windowDirty = false;
+    bool batchUnavailable = false;
     bool refreshUpcoming = false;
     std::chrono::steady_clock::time_point nextWindowPoll{};
     std::map<std::string, yeney::FlacSourceInfo> flacCounts;
@@ -108,6 +109,7 @@ struct QueueRoom::Impl {
     void arbitrateSelection(uint64_t token, const std::string &reason);
     bool acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot);
     void activateLazy(uint64_t token);
+    Entry makeRow(const queue_audio::QueueWindow::Slot &slot);
     std::map<uint64_t, std::string> replacementReasons;
     std::map<uint64_t, unsigned> speakerNavCommands;
     std::map<uint64_t, uint64_t> speakerNavFirst;

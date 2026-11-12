@@ -148,8 +148,9 @@ void CoreQueueSink::coreEvent(const std::string &event, uint64_t id, uint64_t) {
         }
     });
 }
-void CoreQueueSink::windowRetention(unsigned history, unsigned upcoming) {
+void CoreQueueSink::windowRetention(unsigned history, unsigned upcoming, bool cacheOnly) {
     std::lock_guard<std::mutex> lock(mutex);
+    cacheRetention = cacheOnly;
     retainedHistory = history;
     retainedUpcoming = upcoming;
 }
@@ -183,18 +184,26 @@ void CoreQueueSink::protectItems() {
         const auto audible = records.find(id);
         const auto owner = audible != records.end() && audible->second.parent ? audible->second.parent :
                            id > UINT64_MAX / 2 ? UINT64_MAX - id : id;
-        std::vector<uint64_t> before, after;
-        for (const auto &p : records) {
-            if (p.first >= UINT64_MAX / 2 || !p.second.item ||
-                (!p.second.incomplete.empty() && p.second.incomplete != "flushed")) continue;
-            (p.first <= owner ? before : after).push_back(p.first);
-        }
-        if (before.size() > retainedHistory + 1) before.erase(before.begin(), before.end() - retainedHistory - 1);
-        if (after.size() > retainedUpcoming) after.resize(retainedUpcoming);
-        before.insert(before.end(), after.begin(), after.end());
-        for (const auto &p : records) {
-            const auto parent = p.second.parent ? p.second.parent : p.first;
-            if (std::find(before.begin(), before.end(), parent) != before.end()) retained.push_back(p.second.item);
+        if (cacheRetention) {
+            // The room's playlist order defines current + next three. Stream
+            // occurrence order can differ after Back and must not pin history.
+            const auto producing = records.find(active);
+            if (producing != records.end()) retained.push_back(producing->second.item);
+        } else {
+            std::vector<uint64_t> before, after;
+            for (const auto &p : records) {
+                if (p.first >= UINT64_MAX / 2 || !p.second.item ||
+                    (!p.second.incomplete.empty() && p.second.incomplete != "flushed")) continue;
+                (p.first <= owner ? before : after).push_back(p.first);
+            }
+            const auto history = retainedHistory;
+            if (before.size() > history + 1) before.erase(before.begin(), before.end() - history - 1);
+            if (after.size() > retainedUpcoming) after.resize(retainedUpcoming);
+            before.insert(before.end(), after.begin(), after.end());
+            for (const auto &p : records) {
+                const auto parent = p.second.parent ? p.second.parent : p.first;
+                if (std::find(before.begin(), before.end(), parent) != before.end()) retained.push_back(p.second.item);
+            }
         }
         // Temporary outgoing tails remain protected until carried or published.
         const auto tail = records.find(id);
@@ -327,7 +336,7 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
                 const bool frameZero = !estimated.originMs ||
                     (estimated.source.sourceFrames && candidate.source.sourceFrames == estimated.source.sourceFrames &&
                      (!landed || !*landed));
-                if (entry.first == id || candidate.parent || !candidate.item || candidate.originMs ||
+                if (entry.first == id || candidate.parent || !candidate.item || candidate.item->evicted() || candidate.originMs ||
                     candidate.sourceToken != estimated.sourceToken || candidate.sourceUrl != estimated.sourceUrl ||
                     candidate.source.rate != estimated.source.rate ||
                     (frameZero && candidate.source.sourceFrames != estimated.source.sourceFrames) ||

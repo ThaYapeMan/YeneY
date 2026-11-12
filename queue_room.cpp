@@ -2,6 +2,7 @@ extern "C" void yeney_stream_track_changed() __attribute__((weak));
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
 #include "queue_uri_log.h"
+#include "queue_rows.h"
 namespace bridge {
 namespace queue_room_detail {
 std::atomic_bool roomStop{false};
@@ -25,7 +26,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
                       const uint8_t *rawMac, std::function<std::string()> url)
     : room(std::move(r)), host(std::move(h)), mac(std::move(m)), session(streamSessionToken()),
       streamUrl(std::move(url)), speaker(std::move(s)),
-      queue(room.name, queue_audio::Config::environment(), 60), paths(queue, rawMac),
+      queue(room.name, queue_audio::Config::environment(), 60), paths(queue, rawMac), window(queueRows(room.name)),
       route(room.name, session), coordinator(room, logQueue),
       actions([this](const auto &name, const auto &args) {
           if (name == "Stop" && !sourceAway) {
@@ -53,7 +54,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
           if (name == "Play" || name == "Pause" || name == "Stop" || name == "Seek" ||
               name == "SetAVTransportURI")
               ownUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-          if (name == "AddURIToQueue" || name == "RemoveTrackRangeFromQueue" ||
+          if (name == "AddURIToQueue" || name == "AddMultipleURIsToQueue" || name == "RemoveTrackRangeFromQueue" ||
               name == "SetAVTransportURI" || name == "Play") {
               const auto argument = [&args](const std::string &key) {
                   const auto found = std::find_if(args.begin(), args.end(), [&](const auto &a) { return a.first == key; });
@@ -70,10 +71,11 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
               auto ordinal = unsigned(std::stoul(position.value("Track")));
               auto count = unsigned(std::stoul(media.value("NrTracks")));
               auto uri = position.value("TrackURI");
-              if (name == "AddURIToQueue") {
+              if (name == "AddURIToQueue" || name == "AddMultipleURIsToQueue") {
                   const auto first = unsigned(std::stoul(argument("DesiredFirstTrackNumberEnqueued")));
-                  if (first && first <= ordinal) ++ordinal;
-                  ++count;
+                  const auto added = name == "AddURIToQueue" ? 1u : unsigned(std::stoul(argument("NumberOfURIs")));
+                  if (first && first <= ordinal) ordinal += added;
+                  count += added;
               } else if (name == "RemoveTrackRangeFromQueue") {
                   const auto first = unsigned(std::stoul(argument("StartingIndex")));
                   const auto removed = unsigned(std::stoul(argument("NumberOfTracks")));
@@ -85,9 +87,24 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
               speakerChanges->expectEdit(uri, ordinal, count,
                   name == "SetAVTransportURI" ? argument("CurrentURI") : media.value("CurrentURI"));
           }
+          if (name == "Seek") {
+              std::string unit, target;
+              for (const auto &arg : args) { if (arg.first == "Unit") unit = arg.second; if (arg.first == "Target") target = arg.second; }
+              if (unit == "TRACK_NR") {
+                  const auto ordinal = unsigned(std::stoul(target));
+                  if (ordinal && ordinal <= items.size()) {
+                      const auto &entry = items[ordinal - 1];
+                      const auto owner = entry.owner ? entry.owner : entry.stream;
+                      std::lock_guard<std::mutex> lock(sourceMutex);
+                      if (sourceTokens.count(owner) && sourceIndices.count(owner))
+                          speakerChanges->expectTrack(sourceIndices.at(owner), sourceTokens.at(owner), entry.uri,
+                              ordinal, unsigned(items.size()), "x-rincon-queue:" + room.uuid + "#0");
+                  }
+              }
+          }
           auto result =
               releasing ? coordinator.releaseTransport(name, args) : coordinator.transport(name, args);
-          if (result.ok && (name == "AddURIToQueue" || name == "RemoveTrackRangeFromQueue")) ++queueEdits;
+          if (result.ok && (name == "AddURIToQueue" || name == "AddMultipleURIsToQueue" || name == "RemoveTrackRangeFromQueue")) ++queueEdits;
           if (name == "Seek" && result.ok) speakerChanges->selected();
           if (name == "SetAVTransportURI" && result.ok) {
               sourceAway = false;
@@ -112,7 +129,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
     };
     logQueue("settings poll_ms=" + std::to_string(pollMs));
     queue.useSpeakerClock();
-    queue.windowRetention(queue_audio::QueueWindow::historyCount, queue_audio::QueueWindow::upcomingCount);
+    queue.windowRetention(queue_audio::QueueWindow::historyCount, queue_audio::QueueWindow::upcomingCount, true);
     setRoomStatus(&status);
     publish();
     queue.onQueueCommand([this](char c, uint32_t) {

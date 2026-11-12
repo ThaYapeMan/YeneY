@@ -106,7 +106,8 @@ void QueueRoom::Impl::selectPath() {
         return;
     if (!selectionKnown) {
         const auto rewind = selections.find(navigationFrom);
-        if (!(started && lmsNavigation && rewind != selections.end() &&
+        if (!(started && lmsNavigation && ownership.active()) &&
+            !(started && lmsNavigation && rewind != selections.end() &&
               rewind->second.token == navigationToken && rewind->second.rewindMs)) {
             const auto live = coordinator.currentRoom();
             if (live.coordinator != room.name) {
@@ -127,8 +128,21 @@ void QueueRoom::Impl::selectPath() {
         try {
             auto snapshot = reader.read(host, mac);
             if (!acceptSnapshot(snapshot)) return;
+            const bool generationChange = started && !playlist.entries.empty() &&
+                (snapshot.entries.size() != playlist.entries.size() ||
+                 !std::equal(snapshot.entries.begin(), snapshot.entries.end(), playlist.entries.begin(),
+                    [](const auto &a, const auto &b) { return a.id == b.id && a.url == b.url; }));
+            if (generationChange) {
+                const auto edits = queueEdits;
+                release(true);
+                firstStream = queue.latestOccurrence() + 1;
+                navigationSelecting = false;
+                selectedNewPlay = true;
+                logQueue("window rebuild reason=playlist-change edits=" + std::to_string(queueEdits - edits));
+            }
             playlist = std::move(snapshot);
             window.reconcile(playlist);
+            if (playlist.index >= window.cap()) logQueue("window rebuild reason=beyond-cap");
             const auto selection = selections.find(playlist.index);
             const auto pairing = selection != selections.end() && selection->second.phase == Selection::Producing;
             const auto index = navigationSelecting || pairing ? playlist.index :

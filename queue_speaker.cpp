@@ -54,6 +54,15 @@ void QueueRoom::Impl::observe() {
     }
     if (!started || faulted)
         return;
+    // Producer admission and live lazy requests take priority over routine
+    // SOAP polling. Writes still retain their topology/ownership fences.
+    if (lmsNavigation || std::any_of(selections.begin(), selections.end(), [](const auto &selection) {
+            return selection.second.phase != Selection::Published;
+        })) return;
+    const auto pending = [this] {
+        std::lock_guard<std::mutex> lock(mutex);
+        return !commands.empty();
+    };
     const auto now = std::chrono::steady_clock::now();
     const bool event = eventDirty->exchange(false);
     if (!event && now < nextPoll)
@@ -64,11 +73,13 @@ void QueueRoom::Impl::observe() {
     auto position = speakerChanges->poll(positionStarted,
         {{"CurrentTrack", p.value("Track")}, {"CurrentTrackURI", p.value("TrackURI")},
          {"RelativeTimePosition", p.value("RelTime")}});
+    if (pending()) return;
     const auto transportStarted = std::chrono::steady_clock::now();
     const auto info = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}}).response;
     const auto transportFields = speakerChanges->poll(transportStarted,
         {{"TransportState", info.value("CurrentTransportState")},
          {"TransportStatus", info.value("CurrentTransportStatus")}});
+    if (pending()) return;
     const auto mediaStarted = std::chrono::steady_clock::now();
     const auto media = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response;
     const auto mediaFields = speakerChanges->poll(mediaStarted,

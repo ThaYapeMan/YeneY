@@ -3,7 +3,15 @@
 namespace bridge {
 void QueueRoom::Impl::publish() {
     std::vector<std::shared_ptr<queue_audio::Item>> retained;
-    for (const auto &entry : items) if (entry.item) retained.push_back(entry.item);
+    auto playing = std::find_if(items.begin(), items.end(), [this](const auto &entry) { return entry.stream == current; });
+    if (playing != items.end()) {
+        uint64_t parent = 0; unsigned parents = 0;
+        for (auto row = playing; row != items.end(); ++row) {
+            const auto owner = row->owner ? row->owner : row->stream;
+            if (owner != parent) { parent = owner; if (++parents > 4) break; }
+            if (row->item) retained.push_back(row->item);
+        }
+    }
     queue.protectWindow(std::move(retained));
     ModeStatus v;
     v.requested = v.active = "queue";

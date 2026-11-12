@@ -164,6 +164,7 @@ struct ItemState {
     const Descriptor descriptor;
     const uint64_t serial;
     uint64_t produced = 0;
+    bool evicted = false;
     bool finished = false, protectedItem = false, interrupted = false;
     std::exception_ptr fault;
     std::deque<RamChunk> ram;
@@ -215,6 +216,7 @@ struct StoreState {
                 disk -= h.bytes;
             }
             oldest->history.clear();
+            oldest->evicted = true;
             oldest->fault =
                 std::make_exception_ptr(std::runtime_error("item history evicted; LMS re-render required"));
             changed.notify_all();
@@ -486,6 +488,10 @@ void Item::releaseAudio() {
         state->history.pop_back();
     }
     state->protectedItem = false;
+}
+bool Item::evicted() const {
+    std::lock_guard<std::mutex> lock(store->mutex);
+    return state->evicted;
 }
 Reader Item::reader(uint64_t pos) const { return Reader(store, state, pos); }
 Reader::Reader(std::shared_ptr<StoreState> s, std::shared_ptr<ItemState> i, uint64_t pos)

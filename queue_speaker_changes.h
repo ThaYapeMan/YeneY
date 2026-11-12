@@ -22,6 +22,8 @@ class SpeakerChanges {
     bool sequenced = false;
     struct EditEcho { std::string uri, ordinal, count, transport; };
     std::deque<EditEcho> edits;
+    struct TrackEcho { uint64_t token; EditEcho expected; };
+    std::map<unsigned, TrackEcho> tracks;
 
 public:
     std::string foreignTransport(const std::string &queueUri) {
@@ -80,6 +82,11 @@ public:
         edits.push_back({std::move(uri), std::to_string(ordinal), std::to_string(count), std::move(transport)});
         if (edits.size() > 64) edits.pop_front();
     }
+    void expectTrack(unsigned index, uint64_t token, std::string uri, unsigned ordinal,
+                     unsigned count, std::string transport) {
+        std::lock_guard<std::mutex> lock(mutex);
+        tracks[index] = {token, {std::move(uri), std::to_string(ordinal), std::to_string(count), std::move(transport)}};
+    }
     void transportSelected(const std::string &uri) {
         std::lock_guard<std::mutex> lock(mutex);
         report("command", {{"AVTransportURI", uri}});
@@ -131,6 +138,17 @@ public:
                 (field("TransportStatus").empty() || field("TransportStatus") == "OK")) {
                 std::printf("yeney: queue self-edit echo fenced tracks=%s ordinal=%s\n",
                             edit.count.c_str(), edit.ordinal.c_str());
+                return false;
+            }
+        }
+        for (const auto &track : tracks) {
+            const auto &expected = track.second.expected;
+            if (fields.count("CurrentTrack") && matches("CurrentTrack", expected.ordinal) &&
+                matches("CurrentTrackURI", expected.uri) && matches("NumberOfTracks", expected.count) &&
+                matches("AVTransportURI", expected.transport) &&
+                (field("TransportState").empty() || field("TransportState") == "PLAYING" || field("TransportState") == "TRANSITIONING")) {
+                std::printf("yeney: queue self-track echo fenced lms_index=%u token=%llu\n", track.first,
+                            (unsigned long long)track.second.token);
                 return false;
             }
         }

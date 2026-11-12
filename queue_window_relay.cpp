@@ -64,7 +64,12 @@ void QueueRoom::Impl::reconcileWindow() {
     }
     // An app burst may select another row while the preceding fresh producer
     // is being paired. Fence edits around the row actually selected now.
-    if (lmsNavigation) {
+    const auto navigationRow = entries.find(navigationToken);
+    const bool stableNavigationRow = lmsNavigation && navigationItem && !navigationItem->originMs &&
+        navigationRow != entries.end() && navigationRow->second.size() == 1 &&
+        !navigationRow->second.front().originMs &&
+        navigationRow->second.front().sourceUrl == navigationItem->sourceUrl;
+    if (lmsNavigation && !stableNavigationRow) {
         const auto stamp = std::chrono::steady_clock::now();
         const auto position = actions.position().response;
         const auto evidence = speakerChanges->poll(stamp,
@@ -169,7 +174,7 @@ void QueueRoom::Impl::reconcileWindow() {
         // Seek runs have a different declaration and need a new URI.
         const auto lazy = lazyItems.find(navigationToken);
         if (target.size() == 1 && !target.front().item && lazy != lazyItems.end() &&
-            (lazy->second->waiting() || speakerNavCommands[navigationToken] || replacementReasons.count(navigationToken)) && lazy->second->publish(navigationItem->item)) {
+            lazy->second->publish(navigationItem->item)) {
             // The controller supplied this producer. Keep a waiting PCM GET on
             // its existing route instead of cancelling and selecting it again.
             target.front().stream = navigationItem->stream;
@@ -193,15 +198,32 @@ void QueueRoom::Impl::reconcileWindow() {
             reused = true;
         } else {
             const auto reason = target.empty() ? "incomplete" :
+                target.front().item && target.front().item->evicted() ? "evicted" :
                 target.front().originMs || navigationItem->originMs ? "seek-partial" :
                 target.front().sourceUrl != navigationItem->sourceUrl ? "source-mismatch" : "incomplete";
             replacementReasons[navigationToken] = reason;
-            retired.insert(retired.end(), target.begin(), target.end());
-            if (const auto lazy = lazyItems.find(navigationToken); lazy != lazyItems.end()) {
-                retiredLazy.push_back(lazy->second);
-                lazyItems.erase(lazy);
+            if (navigationFrom == audible->index && navigationItem->originMs) {
+                retired.insert(retired.end(), target.begin(), target.end());
+                if (lazy != lazyItems.end()) retiredLazy.push_back(lazy->second);
+                auto replacement = *navigationItem;
+                const auto row = makeRow(*audible);
+                lazyItems.at(audible->token)->publish(replacement.item);
+                owned.erase(replacement.uri);
+                replacement.uri = row.uri;
+                replacement.didl = row.didl;
+                target = {replacement};
+            } else if (target.size() == 1 && lazy != lazyItems.end()) {
+                auto replacement = *navigationItem;
+                replacement.uri = target.front().uri;
+                replacement.didl = target.front().didl;
+                lazy->second->replace(replacement.item);
+                if (navigationItem->uri != replacement.uri) owned.erase(navigationItem->uri);
+                target = {replacement};
+                bound = true;
+            } else {
+                retired.insert(retired.end(), target.begin(), target.end());
+                target = {*navigationItem};
             }
-            target = {*navigationItem};
             logQueue("window target re-produced lms_index=" + std::to_string(audible->index) +
                 " origin_ms=" + std::to_string(navigationItem->originMs) +
                 " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]) + " reason=" + reason);
@@ -235,6 +257,7 @@ void QueueRoom::Impl::reconcileWindow() {
         if (slot.index != audible->index && found != entries.end() &&
             !found->second.empty() && found->second.front().item &&
             (found->second.front().originMs || (found->second.front().item->finished() &&
+             found->second.front().item->descriptor().kind == queue_audio::PromiseKind::Exact &&
              found->second.front().item->producedFrames() < found->second.front().frames))) {
             // A seek/interrupted suffix is valid history, but cannot supply a later
             // full play of that parent from the beginning.
@@ -244,54 +267,23 @@ void QueueRoom::Impl::reconcileWindow() {
                 // target before retiring that parent's interrupted suffix.
                 deferredUpcoming = true;
             } else {
-                if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end()) retiredLazy.push_back(lazy->second);
                 replacementReasons[slot.token] = found->second.front().originMs ? "seek-partial" : "incomplete";
-                retired.insert(retired.end(), found->second.begin(), found->second.end());
-                entries.erase(found);
-                found = entries.end();
+                if (found->second.front().originMs) {
+                    if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end()) retiredLazy.push_back(lazy->second);
+                    retired.insert(retired.end(), found->second.begin(), found->second.end());
+                    entries.erase(found);
+                    found = entries.end();
+                } else if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end() && found->second.size() == 1) {
+                    lazy->second->reset();
+                    auto &entry = found->second.front();
+                    entry.stream = UINT64_MAX - slot.token;
+                    entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
+                }
+
             }
         }
-        if (lmsNavigation && !speakerNavCommands[navigationToken] && slot.index < audible->index &&
-            found != entries.end() && !found->second.empty() && !found->second.front().item &&
-            !replacementReasons.count(slot.token)) continue;
         if (found == entries.end()) {
-            if (slot.index <= audible->index && !replacementReasons.count(slot.token)) continue; // History selection is a later stage.
-            const auto lazy = std::make_shared<queue_audio::LazyItem>(nullptr, [this, token = slot.token] {
-                std::lock_guard<std::mutex> lock(mutex);
-                if (closing) return;
-                commands.push_back({'L', token});
-                this->changed.notify_all();
-            }, true);
-            upnp::QueueMetadata metadata;
-            metadata.url = speaker->controllerUri() + route.publishDeferred(1, "lazy-" + std::to_string(slot.token) + "-" + std::to_string(++lazySerial),
-                [lazy, token = slot.token](upnp::StreamRequest &request) {
-                    const auto start = std::chrono::steady_clock::now();
-                    auto item = lazy->resolve(request, std::chrono::seconds(3));
-                    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
-                    std::printf("yeney: queue lazy %s token=%llu elapsed_ms=%lld lms_commands=%u\n",
-                        item ? "headers" : (ms >= 2990 ? "deadline" : "abandoned"),
-                        (unsigned long long)token, (long long)ms, lazy->commandCount());
-                    return item;
-                }, [lazy] { return lazy->ready(); });
-            metadata.session = session;
-            metadata.title = slot.track.title; metadata.artist = slot.track.artist; metadata.album = slot.track.album;
-            metadata.artwork = slot.track.artwork(host);
-            metadata.rate = 1; // Duration scale only; deferred DIDL omits sampleFrequency.
-            metadata.frames = uint64_t(slot.track.duration);
-            metadata.deferred = true;
-            upnp::sanitizeXmlFields({{"title", &metadata.title}, {"artist", &metadata.artist},
-                {"album", &metadata.album}, {"artwork", &metadata.artwork}});
-            // Placeholder identities descend from the top; core continuations grow
-            // upward from the midpoint. Never alias their first continuation IDs.
-            const auto id = UINT64_MAX - slot.token;
-            {
-                std::lock_guard<std::mutex> lock(sourceMutex);
-                sourceTokens[id] = slot.token;
-                sourceIndices[id] = slot.index;
-            }
-            lazyItems[slot.token] = lazy;
-            entries[slot.token].push_back({id, metadata.url, {}, slot.track.url, 0, metadata.title, 0, 0, upnp::queueDidl(metadata)});
-            owned.insert(metadata.url);
+            entries[slot.token].push_back(makeRow(slot));
             size_t ordinal = 1;
             for (const auto &parent : wanted) ordinal += parent.uris.size();
             logQueue("lazy declared ordinal=" + std::to_string(ordinal) + " lms_index=" + std::to_string(slot.index) +
@@ -337,6 +329,32 @@ void QueueRoom::Impl::reconcileWindow() {
         if (reply.response.value("NumTracksAdded") != "1")
             throw std::runtime_error("queue-window-enqueue-unconfirmed");
     };
+    io.insertMany = [this, &entries](const auto &tokens, auto update, auto ordinal) {
+        std::vector<std::pair<std::string, std::string>> rows;
+        for (auto token : tokens) {
+            const auto &entry = entries.at(token).front(); rows.emplace_back(entry.uri, entry.didl);
+        }
+        if (!batchUnavailable) {
+            try {
+                const auto reply = actions.addMultiple(rows, update, ordinal);
+                if (reply.response.value("NumTracksAdded") != std::to_string(rows.size()))
+                    throw std::runtime_error("queue batch enqueue unconfirmed");
+                logQueue("mirror batch accepted count=" + std::to_string(rows.size()));
+                return;
+            } catch (const std::exception &e) {
+                // A definitive SOAP fault permits fallback. An uncertain HTTP
+                // reply must never duplicate rows.
+                const std::string error = e.what();
+                if (error.find("fault=") == std::string::npos) throw;
+                batchUnavailable = true;
+                logQueue("mirror batch rejected; AddURIToQueue fallback");
+            }
+        }
+        for (const auto &row : rows) {
+            const auto reply = actions.add(row.first, row.second, ordinal++);
+            if (reply.response.value("NumTracksAdded") != "1") throw std::runtime_error("queue enqueue unconfirmed");
+        }
+    };
     io.log = [&snapshot, &before, this](const auto &message) {
         std::string indices;
         for (const auto &parent : before) {
@@ -347,6 +365,14 @@ void QueueRoom::Impl::reconcileWindow() {
                  (lmsNavigation || refreshUpcoming ? "lms-navigation" : "playlist-change") +
                  " shuffle=" + std::to_string(snapshot.shuffle) + " repeat=" + std::to_string(snapshot.repeat));
     };
+    std::vector<unsigned> partialReplacements;
+    unsigned replacedOrdinal = 1;
+    for (const auto &old : before) {
+        const auto next = std::find_if(wanted.begin(), wanted.end(), [&](const auto &p) { return p.token == old.token; });
+        if (next != wanted.end() && old.uris != next->uris && replacementReasons[old.token] == "seek-partial")
+            partialReplacements.push_back(replacedOrdinal);
+        replacedOrdinal += old.uris.size();
+    }
     std::optional<uint64_t> editAnchor = anchor;
     bool overlap = false;
     try {
@@ -387,7 +413,6 @@ void QueueRoom::Impl::reconcileWindow() {
                 expected.erase(expected.begin() + ordinal - 1 + target->uris.size(),
                                expected.begin() + ordinal - 1 + target->uris.size() + old->uris.size());
                 if (check().update == latest.update) throw std::runtime_error("queue window removal unconfirmed");
-                io.log("queue window replace ordinal=" + std::to_string(ordinal));
                 old->uris = target->uris;
             }
         }
@@ -403,7 +428,9 @@ void QueueRoom::Impl::reconcileWindow() {
         }
         const bool unchanged = before.size() == wanted.size() && std::equal(before.begin(), before.end(), wanted.begin(),
             [](const auto &a, const auto &b) { return a.token == b.token && a.uris == b.uris; });
-        if (!(rewindEcho && unchanged)) Edits(std::move(io)).apply(before, wanted, editAnchor);
+        if (!unchanged) Edits(std::move(io)).apply(before, wanted, editAnchor);
+        for (auto ordinal : partialReplacements)
+            logQueue("window replace ordinal=" + std::to_string(ordinal) + " reason=seek-partial edits=2");
     } catch (const SpeakerMovedDuringEdit &) {
         // Earlier edits may already have committed. Rebase the worker model
         // from the actual owned queue before accepting the new row selection.
@@ -462,17 +489,14 @@ void QueueRoom::Impl::reconcileWindow() {
         if (!superseded) {
             current = target->stream;
             const auto selection = selections.find(audible->index);
-            const auto position = actions.position().response;
-            unsigned h = 0, m = 0, s = 0;
-            const bool rewindAtTarget = selection != selections.end() && selection->second.rewindMs &&
-                position.value("TrackURI") == target->uri &&
-                sscanf(position.value("RelTime").c_str(), "%u:%u:%u", &h, &m, &s) == 3 &&
-                std::abs(int64_t((h * 3600 + m * 60 + s) * 1000) - int64_t(*selection->second.rewindMs)) <= 500;
+            // The index/token-keyed Selection owns a rewind echo. Its elapsed
+            // position can already have advanced and is not new seek authority.
+            const bool rewindAtTarget = rewindEcho;
             if (!selectedTarget && !rewindEcho && !rewindAtTarget) actions.seekTrack(unsigned(target - items.begin()) + 1);
             lastElapsed = rewindAtTarget ? *selection->second.rewindMs / 1000 : 0;
             expectedState = "PLAYING";
             if (!rewindEcho) {
-                actions.play();
+                if (state != "PLAYING") actions.play();
                 waitingForPlay = true;
                 playAt = std::chrono::steady_clock::now();
             }
@@ -664,4 +688,45 @@ void QueueRoom::Impl::activateLazy(uint64_t token) {
     if (found == lazyItems.end() || !window.find(token) || !found->second->claimActivation()) return;
     arbitrateSelection(token, "lazy-pcm-get");
 }
+
+QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::Slot &slot) {
+    const auto lazy = std::make_shared<queue_audio::LazyItem>(nullptr, [this, token = slot.token] {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (closing) return;
+        commands.push_back({'L', token});
+        this->changed.notify_all();
+    }, true);
+    upnp::QueueMetadata metadata;
+    metadata.url = speaker->controllerUri() + route.publishDeferred(1, "lazy-" + std::to_string(slot.token) + "-" + std::to_string(++lazySerial),
+        [lazy, token = slot.token](upnp::StreamRequest &request) {
+            const auto start = std::chrono::steady_clock::now();
+            auto item = lazy->resolve(request, std::chrono::seconds(3));
+            const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now()-start).count();
+            std::printf("yeney: queue lazy %s token=%llu elapsed_ms=%lld lms_commands=%u\n",
+                item ? "headers" : (ms >= 2990 ? "deadline" : "abandoned"),
+                (unsigned long long)token, (long long)ms, lazy->commandCount());
+            return item;
+        }, [lazy] { return lazy->ready(); });
+    metadata.session = session + "-" + std::to_string(slot.token);
+    metadata.title = slot.track.title; metadata.artist = slot.track.artist; metadata.album = slot.track.album;
+    metadata.artwork = slot.track.artwork(host);
+    metadata.rate = 1; // Duration scale only; deferred DIDL omits sampleFrequency.
+    metadata.frames = uint64_t(slot.track.duration);
+    metadata.deferred = true;
+    upnp::sanitizeXmlFields({{"title", &metadata.title}, {"artist", &metadata.artist},
+        {"album", &metadata.album}, {"artwork", &metadata.artwork}});
+    // Placeholder identities descend from the top; core continuations grow
+    // upward from the midpoint. Never alias their first continuation IDs.
+    const auto id = UINT64_MAX - slot.token;
+    {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        sourceTokens[id] = slot.token;
+        sourceIndices[id] = slot.index;
+    }
+    lazyItems[slot.token] = lazy;
+    Entry result{id, metadata.url, {}, slot.track.url, 0, metadata.title, 0, 0, upnp::queueDidl(metadata)};
+    owned.insert(metadata.url);
+    return result;
+}
+
 } // namespace bridge

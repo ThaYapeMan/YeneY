@@ -74,6 +74,7 @@ class CoreQueueSink : public yeney::Sink {
     uint64_t speakerItemFrame = 0;
     uint64_t lastEnded = 0, nextIndex = 0, audibleSource = 0;
     unsigned retainedHistory = 0, retainedUpcoming = 1;
+    bool cacheRetention = false;
     std::vector<std::shared_ptr<Item>> publishedItems;
     bool prefixPending = false, freshRender = false, cachedReanchor = false;
     std::atomic_bool refetchRequested{false}, startRequested{false}, cachedStartRequested{false};
@@ -159,7 +160,7 @@ public:
     void waitIdle();
     std::string workerError() const;
     // Configure before playback. Parent budgets do not count continuations.
-    void windowRetention(unsigned history, unsigned upcoming);
+    void windowRetention(unsigned history, unsigned upcoming, bool cacheOnly = false);
     void protectWindow(std::vector<std::shared_ptr<Item>>);
     void releaseParent(uint64_t occurrence);
     std::vector<QueueRecord> snapshot() const;

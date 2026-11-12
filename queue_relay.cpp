@@ -269,6 +269,8 @@ void QueueRoom::Impl::append() {
             continue;
         if (record.item && !record.incomplete.empty())
             continue; // LMS cancelled this render, not a speaker rejection.
+        if (record.item && record.item->evicted())
+            continue; // Cache loss is served by the row's new lazy producer.
         if (!record.fault.empty())
             { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
         if (record.pairedFrom && record.actual - record.attachOffset < record.verificationFrames)
@@ -402,8 +404,10 @@ void QueueRoom::Impl::append() {
             record.sourceToken == navigationToken &&
             selection != selections.end() && selection->second.token == navigationToken && selection->second.rewindMs &&
             std::any_of(items.begin(), items.end(), [&](const auto &entry) { return entry.item == record.item; });
+        const bool ownedNavigation = lmsNavigation && owner >= navigationFirst && !record.parent &&
+            record.sourceToken == navigationToken && ownership.active();
         upnp::QueueSnapshot before;
-        if (!retainedRewind) {
+        if (!retainedRewind && !ownedNavigation) {
             before = coordinator.browse();
             if (before.uris != expected) throw std::runtime_error("queue-changed-while-owned");
         }
@@ -431,6 +435,19 @@ void QueueRoom::Impl::append() {
         if (!changes.empty())
             logQueue("metadata sanitized mode=queue occurrence=" + std::to_string(record.source.occurrence) +
                      " " + changes);
+        if (!record.parent && !lmsNavigation) {
+            std::optional<queue_audio::QueueWindow::Slot> slot;
+            { std::lock_guard<std::mutex> lock(sourceMutex); slot = window.find(sourceTokens.at(owner)); }
+            if (slot) {
+                auto row = makeRow(*slot);
+                lazyItems.at(slot->token)->publish(record.item);
+                metadata.url = row.uri;
+                metadata.session = session + "-" + std::to_string(slot->token);
+                // The row's informational metadata describes the playlist item.
+                metadata.deferred = true;
+                metadata.size = 0;
+            }
+        }
         owned.insert(metadata.url); // include an enqueue whose reply is lost
         size_t insertion = items.size();
         if (record.parent) {
@@ -534,59 +551,22 @@ void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
     speakerCommand("stop", member ? "group-member" : reason == "track-fault-limit" ? reason : "room-fault");
 }
 void QueueRoom::Impl::trimHistory() {
-    if (!started || faulted || externalReleased || sourceAway || !current || lmsNavigation) return;
-    using Edits = queue_audio::WindowEdits;
-    std::vector<Edits::Parent> parents;
-    uint64_t audible = 0;
-    for (const auto &item : items) {
-        const auto parent = item.owner ? item.owner : item.stream;
-        if (parents.empty() || parents.back().token != parent) parents.push_back({parent, {}});
-        parents.back().uris.push_back(item.uri);
-        if (item.stream == current) audible = parent;
+    // Rows survive navigation; the item store evicts unprotected played audio.
+    if (!started || lmsNavigation) return;
+    for (auto &entry : items) {
+        if (!entry.item || !entry.item->evicted()) continue;
+        const auto owner = entry.owner ? entry.owner : entry.stream;
+        const auto identity = sourceTokens.find(owner);
+        if (identity == sourceTokens.end()) continue;
+        const auto token = identity->second;
+        const auto lazy = lazyItems.find(token);
+        if (lazy == lazyItems.end()) continue;
+        replacementReasons[token] = "evicted";
+        lazy->second->reset();
+        entry.stream = UINT64_MAX - token;
+        entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
+        logQueue("cache evicted lms_index=" + std::to_string(sourceIndices.at(owner)));
     }
-    const auto playing = std::find_if(parents.begin(), parents.end(),
-        [audible](const auto &p) { return p.token == audible; });
-    if (playing == parents.end()) return;
-    const auto history = size_t(playing - parents.begin());
-    if (history <= queue_audio::QueueWindow::historyCount) return;
-    const auto count = history - queue_audio::QueueWindow::historyCount;
-    std::vector<Edits::Parent> wanted(parents.begin() + count, parents.end());
-    Edits::IO io;
-    io.browse = [this] {
-        const auto snapshot = coordinator.browse();
-        return Edits::Snapshot{snapshot.update, snapshot.uris};
-    };
-    io.remove = [this](auto update, auto first, auto n) { actions.remove(update, first, n); };
-    io.insert = [](auto, auto, auto) { throw std::logic_error("history trim attempted insertion"); };
-    io.log = [this, &parents](const auto &message) {
-        std::string indices;
-        std::lock_guard<std::mutex> lock(sourceMutex);
-        for (const auto &parent : parents) {
-            const auto found = sourceIndices.find(parent.token);
-            indices += (indices.empty() ? "" : ",") +
-                (found == sourceIndices.end() ? std::string("unknown") : std::to_string(found->second));
-        }
-        logQueue(message + " lms_indices=" + indices + " reason=history-limit");
-    };
-    Edits(std::move(io)).apply(parents, wanted, audible);
-    for (size_t n = 0; n < count; ++n) {
-        const auto token = parents[n].token;
-        uint64_t identity = 0;
-        {
-            std::lock_guard<std::mutex> lock(sourceMutex);
-            const auto found = sourceTokens.find(token);
-            if (found != sourceTokens.end()) identity = found->second;
-        }
-        if (identity) releaseWindowParent(identity);
-        for (const auto &item : items)
-            if (item.owner == token && !item.segmentOffset) queue.releaseParent(item.stream);
-        for (const auto &uri : parents[n].uris) owned.erase(uri);
-        items.erase(std::remove_if(items.begin(), items.end(), [token](const auto &item) {
-            return (item.owner ? item.owner : item.stream) == token;
-        }), items.end());
-        queue.releaseParent(token);
-    }
-    publish();
 }
 void QueueRoom::Impl::run() {
     for (;;) {
@@ -663,6 +643,8 @@ void QueueRoom::Impl::run() {
                 roomFault("queue-worker: " + error);
                 continue;
             }
+            append();
+            advanceSelections();
             observe();
             append();
             advanceSelections();

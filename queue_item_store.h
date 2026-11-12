@@ -56,6 +56,7 @@ public:
     std::optional<uint64_t> contentLength() const;
     uint64_t producedFrames() const;
     bool finished() const;
+    bool evicted() const;
     void append(const yeney::Frame *, size_t count, bool processed);
     void finish(); // Exact requires count; UpperBound permits short EOF; pending seals
     void interrupt(); // Retain produced audio; unavailable suffix still fails.
