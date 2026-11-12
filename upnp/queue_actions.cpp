@@ -10,21 +10,6 @@ SoapResult QueueActions::add(const std::string &uri, const std::string &metadata
                                   {"DesiredFirstTrackNumberEnqueued", std::to_string(before)},
                                   {"EnqueueAsNext", "0"}});
 }
-SoapResult QueueActions::addMultiple(const std::vector<std::pair<std::string, std::string>> &items,
-                                     uint32_t update, unsigned before) {
-    if (items.empty() || items.size() > 16) throw std::invalid_argument("queue batch requires 1..16 rows");
-    std::string uris, metadata;
-    for (const auto &item : items) {
-        if (item.first.empty() || item.first.find_first_of(" \t\r\n") != std::string::npos)
-            throw std::invalid_argument("invalid batch URI");
-        if (!uris.empty()) { uris += ' '; metadata += ' '; }
-        uris += item.first; metadata += item.second;
-    }
-    return call("AddMultipleURIsToQueue", {{"InstanceID", "0"}, {"UpdateID", std::to_string(update)},
-        {"NumberOfURIs", std::to_string(items.size())}, {"EnqueuedURIs", uris},
-        {"EnqueuedURIsMetaData", metadata}, {"ContainerURI", ""}, {"ContainerMetaData", ""},
-        {"DesiredFirstTrackNumberEnqueued", std::to_string(before)}, {"EnqueueAsNext", "0"}});
-}
 SoapResult QueueActions::remove(uint32_t update, unsigned first, unsigned count) {
     if (!first || !count)
         throw std::invalid_argument("queue removal requires a nonempty 1-based range");

@@ -3,7 +3,6 @@
 #include "soap.h"
 #include <functional>
 #include <cstdint>
-#include <vector>
 namespace upnp {
 // Serialized coordinator-only action boundary. The caller supplies a transport
 // bound to its coordinator lease, never a member speaker.
@@ -12,7 +11,6 @@ public:
     using Call = std::function<SoapResult(const std::string &, const SoapArguments &)>;
     explicit QueueActions(Call call) : call(std::move(call)) {}
     SoapResult add(const std::string &uri, const std::string &metadata, unsigned before = 0);
-    SoapResult addMultiple(const std::vector<std::pair<std::string, std::string>> &, uint32_t update, unsigned before);
     SoapResult remove(uint32_t update, unsigned first, unsigned count);
     SoapResult save(const std::string &title);
     SoapResult selectQueue(const std::string &udn);

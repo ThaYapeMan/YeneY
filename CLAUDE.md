@@ -341,3 +341,14 @@ Interior attachment also requires the original retained WAV's known content
 origin. Follow the existing pairedFrom chain; a later frame-zero alias with a
 known producer landing cannot establish an unknown original WAV coordinate.
 Use landed-frame-unknown fallback when that coordinate cannot be proved.
+
+## Decisions — FULLQ-01 (2026-11-12)
+
+Stopped under the task's core-change exception with core and pin unchanged at
+`9d5aa42`. A static-row experiment passed twelve-row ordering and basic LMS
+navigation, but failed the existing B1 prefix-unavailable seek/history gate.
+Rebinding an immutable suffix URI to a full frame-zero WAV is not a valid
+zero-edit solution. Independent full-source/region production appears needed;
+sparse full-length work is explicitly deferred by this round. The preliminary
+model/build commits are reverted without rewriting history; the production
+window remains. See [the evidence and representation boundary](docs/research/fullq-01-stop.md).

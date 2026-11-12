@@ -38,24 +38,17 @@ int main() {
     model.reconcile(snapshot);
     assert(model.policy().revision == "18" && model.policy().shuffle == 1 && model.policy().repeat == 2);
     auto window = model.around(4);
-    assert(window.size() == 10 && window.front().index == 0 && window.back().index == 9);
-    assert(QueueWindow::atOrdinal(window, {}, 5).slot.index == 4);
+    assert(window.size() == 6 && window.front().index == 2 && window.back().index == 7);
+    assert(QueueWindow::atOrdinal(window, {}, 3).slot.index == 4);
     QueueWindow::Segments segments{{window[1].token, {{41,0},{42,441000}}}};
     auto continuation = QueueWindow::atOrdinal(window, segments, 3);
-    assert(continuation.slot.index == 1 && continuation.segmentIndex == 1);
+    assert(continuation.slot.index == 3 && continuation.segmentIndex == 1);
     assert(continuation.segment.occurrence == 42 && continuation.segment.offsetFrames == 441000);
-    assert(QueueWindow::atOrdinal(window, segments, 4).slot.index == 2);
+    assert(QueueWindow::atOrdinal(window, segments, 4).slot.index == 4);
     assert(QueueWindow::ordinalOf(window, segments, window[2].token) == 4);
     assert(QueueWindow::ordinalOf(window, segments, window[1].token, 1) == 3);
-    assert(window.size() == 10); // continuation does not consume a history slot
-    QueueWindow capped(3); capped.reconcile(snapshot);
-    assert(capped.around(0).size() == 3 && capped.around(2).size() == 3);
-    assert(capped.around(4).front().index == 2);
-    std::vector<Token> large(500); std::iota(large.begin(), large.end(), 1);
-    assert(QueueWindow::edits(large, large, 250).empty());
-    auto reversed = large; std::reverse(reversed.begin(), reversed.end());
-    checkPlan(large, reversed, 250);
-    auto current = window[4].token;
+    assert(window.size() == 6); // continuation does not consume a history slot
+    auto current = window[2].token;
     snapshot.entries.insert(snapshot.entries.begin(), snapshot.entries.back());
     snapshot.entries.erase(snapshot.entries.begin() + 3);
     std::swap(snapshot.entries[6], snapshot.entries[7]);

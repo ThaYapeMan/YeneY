@@ -18,7 +18,6 @@ public:
         // before is a one-based insertion ordinal, including an append at N+1.
         std::function<void(QueueWindow::Token, unsigned, unsigned)> insert;
         std::function<void(const std::string &)> log;
-        std::function<void(const std::vector<QueueWindow::Token> &, uint32_t, unsigned)> insertMany{};
     };
 private:
     IO io;
@@ -72,8 +71,7 @@ public:
         };
         // Even a no-op plan must confirm ownership of the whole URI vector.
         verify(io.browse());
-        for (size_t step = 0; step < plan.size(); ++step) {
-            const auto &edit = plan[step];
+        for (const auto &edit : plan) {
             unsigned ordinal = 1;
             for (unsigned n = 0; n + 1 < edit.ordinal; ++n) ordinal += current.at(n).uris.size();
             const auto before = io.browse();
@@ -93,27 +91,6 @@ public:
                 const auto found = std::find_if(wanted.begin(), wanted.end(),
                     [&](const auto &parent) { return parent.token == edit.token; });
                 if (found == wanted.end()) throw std::logic_error("window insertion missing");
-                if (io.insertMany && found->uris.size() == 1) {
-                    std::vector<Parent> batch{*found};
-                    while (batch.size() < 16 && step + batch.size() < plan.size()) {
-                        const auto &next = plan[step + batch.size()];
-                        if (next.kind != QueueWindow::Edit::Insert || next.ordinal != edit.ordinal + batch.size()) break;
-                        const auto row = std::find_if(wanted.begin(), wanted.end(), [&](const auto &p) { return p.token == next.token; });
-                        if (row == wanted.end() || row->uris.size() != 1) break;
-                        batch.push_back(*row);
-                    }
-                    std::vector<QueueWindow::Token> tokens;
-                    for (const auto &row : batch) tokens.push_back(row.token);
-                    io.insertMany(tokens, before.update, ordinal);
-                    for (size_t n = 0; n < batch.size(); ++n)
-                        expected.insert(expected.begin() + ordinal - 1 + n, batch[n].uris.front());
-                    const auto after = io.browse(); verify(after);
-                    if (after.update == before.update) throw std::runtime_error("queue batch insertion unconfirmed");
-                    current.insert(current.begin() + edit.ordinal - 1, batch.begin(), batch.end());
-                    step += batch.size() - 1;
-                    if (io.log) io.log("queue mirror insert ordinal=" + std::to_string(ordinal) + " count=" + std::to_string(batch.size()));
-                    continue;
-                }
                 auto update = before.update;
                 for (unsigned segment = 0; segment < found->uris.size(); ++segment) {
                     // AddURIToQueue has no UpdateID input. A fresh Browse and
