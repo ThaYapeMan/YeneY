@@ -70,6 +70,10 @@ test-run: export YENEY_TIMING_STALE_S = 60
 test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 	./seek-worker-test mismatch
 	./seek-worker-test trim
+	./seek-worker-test warmup
+	./seek-worker-test warmup-short
+	./seek-worker-test unknown
+	./seek-worker-test unknown-origin
 	./seek-worker-test worker
 	python3 tests/worker_fault_binary_test.py
 	./consumption-diagnostic-test

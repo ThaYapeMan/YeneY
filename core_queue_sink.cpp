@@ -270,6 +270,7 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
     // These are producer coordinates, never audible notifications.
     rate = f.rate;
     const auto landed = nextContent;
+    const auto warmup = nextWarmup;
     const auto producer = latestProducer.load();
     enqueue([=] {
         uint64_t id;
@@ -289,6 +290,7 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             active = id;
             records[id].first = frame;
             records[id].landedFrame = landed;
+            records[id].warmupFrames = warmup;
             records[id].wavOrigin = landed.value_or(0);
             records[id].seekPositionMs = records[id].originMs;
         }
@@ -330,9 +332,18 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
                     candidate.source.rate != estimated.source.rate ||
                     (frameZero && candidate.source.sourceFrames != estimated.source.sourceFrames) ||
                     (!frameZero && (!landed || *landed < candidate.wavOrigin ||
-                        candidate.item->producedFrames() < *landed - candidate.wavOrigin + 4096)) ||
+                        candidate.item->producedFrames() < *landed - candidate.wavOrigin + warmup + 4096)) ||
                     candidate.item->descriptor().kind != PromiseKind::Exact ||
                     candidate.incomplete == "outside queue window" || !candidate.fault.empty()) continue;
+                if (!frameZero) {
+                    auto origin = records.find(entry.first);
+                    while (origin != records.end() && origin->second.pairedFrom)
+                        origin = records.find(origin->second.pairedFrom);
+                    if (origin == records.end() || !origin->second.landedFrame) {
+                        seekReason = "landed-frame-unknown";
+                        continue;
+                    }
+                }
                 try {
                     const auto length = candidate.item->contentLength();
                     if (!length) continue;
@@ -340,7 +351,7 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
                     item = candidate.item;
                     pairedFrom = entry.first;
                     pairedZero = frameZero;
-                    pairedStart = frameZero ? 0 : *landed - candidate.wavOrigin;
+                    pairedStart = frameZero ? 0 : *landed - candidate.wavOrigin + warmup;
                     records[id].wavOrigin = candidate.wavOrigin;
                     break;
                 } catch (const std::exception &) { continue; }
@@ -356,6 +367,8 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             records[id].pairedFrom = pairedFrom;
             records[id].actual = pairedStart;
             records[id].attachOffset = pairedStart;
+            records[id].warmupRemaining = pairedZero ? 0 : warmup;
+            if (pairedZero) records[id].warmupFrames = 0;
             records[id].verificationFrames = pairedZero ? std::min<uint64_t>(4096, item->producedFrames()) : 4096;
             if (pairedZero) records[id].seekPositionMs = 0;
             records[id].originMs = 0;
@@ -450,7 +463,7 @@ size_t CoreQueueSink::write(const yeney::Frame *p, size_t n, bool processed) {
     changed.notify_all();
     return n;
 }
-void CoreQueueSink::append(const std::vector<yeney::Frame> &pcm, bool processed) {
+void CoreQueueSink::append(const std::vector<yeney::Frame> &input, bool processed) {
     QueueRecord r;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -458,6 +471,18 @@ void CoreQueueSink::append(const std::vector<yeney::Frame> &pcm, bool processed)
         if (!active) return; // No LMS producer owns this PCM.
         r = records[active];
     }
+    const auto settling = std::min<uint64_t>(r.warmupRemaining, input.size());
+    std::vector<yeney::Frame> settled;
+    if (settling) {
+        r.warmupRemaining -= settling;
+        r.verificationPcm.insert(r.verificationPcm.end(), input.begin(), input.begin() + settling);
+        std::lock_guard<std::mutex> lock(mutex);
+        records.at(active).warmupRemaining = r.warmupRemaining;
+        records.at(active).verificationPcm = r.verificationPcm;
+        if (settling == input.size()) return;
+        settled.assign(input.begin() + settling, input.end());
+    }
+    const auto &pcm = settling ? settled : input;
     if (!r.item) {
         std::printf("yeney: pairing decision=re-produced reason=pcm-without-item\n");
         r.source.occurrence = active;
@@ -886,7 +911,7 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
     frame = std::min(frame, r.promised.value_or(produced));
     speakerItemFrame = frame;
     const auto producerFrame = r.pairedFrom && r.seekPositionMs && r.landedFrame ?
-        (frame > r.attachOffset ? frame - r.attachOffset : 0) : frame;
+        (frame > r.attachOffset - r.warmupFrames ? frame - (r.attachOffset - r.warmupFrames) : 0) : frame;
     audibleFrame = std::max(audibleFrame, std::min(r.first + producerFrame, submitted));
     if (frame >= r.prefixFrames) {
         if (prefixPending) {
@@ -1012,7 +1037,7 @@ std::optional<uint64_t> CoreQueueSink::committedItemFrames(uint64_t id) const {
         return total;
     }
     const auto &r = it->second;
-    return *r.promised - r.prefixFrames - (r.pairedFrom && r.seekPositionMs ? r.attachOffset : 0);
+    return *r.promised - r.prefixFrames - (r.pairedFrom && r.seekPositionMs ? r.attachOffset - r.warmupFrames : 0);
 }
 bool CoreQueueSink::takeAudibleStart(yeney::AudibleStart &s) {
     std::lock_guard<std::mutex> lock(mutex);

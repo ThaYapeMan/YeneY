@@ -65,9 +65,10 @@ public:
     }
     bool decodeAhead() const override { return relayPath; }
     bool speakerDriven() const override { return relayPath; }
-    void contentPosition(uint64_t frame, bool known) override {
+    void contentPosition(uint64_t frame, bool known) override { contentPosition(frame, known, 0); }
+    void contentPosition(uint64_t frame, bool known, uint64_t warmup) override {
         bridge::consumptionContent().set(frame, known);
-        target().contentPosition(frame, known);
+        target().contentPosition(frame, known, warmup);
         if (pendingBoundary) {
             auto boundary = std::move(pendingBoundary);
             pendingBoundary = {};

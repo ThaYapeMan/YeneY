@@ -98,6 +98,7 @@ struct QueueRoom::Impl {
         uint64_t token, first;
         std::optional<uint64_t> observed{};
         std::optional<uint64_t> rewindMs{};
+        std::chrono::steady_clock::time_point issued{};
     };
     std::map<unsigned, Selection> selections;
     std::deque<unsigned> selectionOrder;

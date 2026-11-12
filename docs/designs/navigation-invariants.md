@@ -46,13 +46,17 @@ The exact echo fence, URL shape, WAV promises and HTTP constants are unchanged.
 
 I4: A seek never replaces a queue row whose immutable WAV holds the seek point.
   The renderer seeks inside that WAV; the new LMS producer attaches at its true
-  landed frame (content_frame), never at origin_ms. A partial item is produced
+  output landing plus the reported settling bound, never at origin_ms.
+  The producer discards that many first output frames and verifies 4096 frames
+  against the retained from-start WAV before appending a suffix. A partial item is produced
   only when the landed frame is unknown or the produced prefix does not reach
   it, and the reason is logged.
 I5: LMS keeps a seek start offset that STAT cannot rewind below. An
   app-originated position below that offset issues exactly one reason-checked
   `time` command; LMS's restarted producer attaches in-item and the renderer
-  is not seeked again. Every other app position change is zero-command.
+  is never seeked or played again for that echo. The matching index-keyed
+  Selection and speaker-rewind reason establish authority; position comparison
+  does not. Every other app position change is zero-command.
 
 ## Decisions
 
@@ -118,7 +122,8 @@ I5: LMS keeps a seek start offset that STAT cannot rewind below. An
 14. A speaker rewind below the live producer offset owns one `time` command in
     the same index-keyed outbox as speaker navigation. The selection retains its
     target through producer admission; existing superseded-selection and echo
-    fencing suppress a redundant renderer Seek within the 500 ms tolerance.
+    fencing identify the echo and suppress every renderer Seek and Play, even
+    when the playing renderer has advanced beyond the 500 ms tolerance.
     Non-rewinding app changes update STAT without a command. Backward speaker
     elapsed remains necessary for zero-offset app Back and rewinds above offset.
 15. Starvation follows available immutable WAV audio, not only the restarted
@@ -162,3 +167,25 @@ I5: LMS keeps a seek start offset that STAT cannot rewind below. An
     connection. Use the existing admission handshake, without suppressing faults,
     relaxing assertions or changing the pinned core. S2/S3 still exercise seeks
     during ongoing production through the controlled download gate.
+
+20. SEEK-02 uses output coordinates for converted landings only when the source
+    landing is divisible by the decimation factor. The FIR radius divided by
+    the factor, rounded up, bounds settling (128 at 48 kHz, 160 at 44.1 kHz).
+    Unknown/nonaligned landings retain the existing explicit fallback. Prefix
+    coverage includes the entire warm-up and the unchanged 4096-frame overlap.
+21. A rewind echo with the same retained row and URI skips admission topology,
+    admission Browse and no-op WindowEdits reads. A real edit still takes its
+    ordinary ownership and UpdateID fences. Producer STAT coordinates begin at
+    the landing, while overlap verification begins after settling; renderer
+    REL_TIME remains the requested WAV position.
+
+22. The real-time fake continues advancing during natural-boundary readiness
+    waits. Finish the current paired producer, move within the prefetch lead
+    (15 seconds remaining), and prepare the successor before moving to the
+    outgoing track's final second; then acknowledge its clock and
+    select the natural successor. Keep the existing deadlines and clock tolerance.
+
+23. A fresh known landing cannot prove an unknown retained WAV origin. Follow
+    pairedFrom to the original production before an interior attach; frame-zero
+    aliases never upgrade that original coordinate. Unknown origin uses the
+    existing landed-frame-unknown fallback, preserving immutable WAV promises.

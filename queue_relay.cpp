@@ -395,12 +395,18 @@ void QueueRoom::Impl::append() {
             logQueue("ownership acquired");
             publish();
         }
-        const auto before = coordinator.browse();
         std::vector<std::string> expected;
-        for (const auto &i : items)
-            expected.push_back(i.uri);
-        if (before.uris != expected)
-            throw std::runtime_error("queue-changed-while-owned");
+        for (const auto &i : items) expected.push_back(i.uri);
+        const auto selection = selections.find(navigationFrom);
+        const bool retainedRewind = lmsNavigation && owner >= navigationFirst && !record.parent &&
+            record.sourceToken == navigationToken &&
+            selection != selections.end() && selection->second.token == navigationToken && selection->second.rewindMs &&
+            std::any_of(items.begin(), items.end(), [&](const auto &entry) { return entry.item == record.item; });
+        upnp::QueueSnapshot before;
+        if (!retainedRewind) {
+            before = coordinator.browse();
+            if (before.uris != expected) throw std::runtime_error("queue-changed-while-owned");
+        }
         upnp::QueueMetadata metadata;
         // Fixed legacy route namespace, not a playback epoch. Stream
         // occurrence IDs are unique for the lifetime of this connection.

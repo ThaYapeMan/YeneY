@@ -9,10 +9,13 @@ started = time.monotonic()
 soak = '--soak' in sys.argv
 cases = [('SOAK', str(seed)) for seed in (1729, 271828, 8675309)] if soak else [
     (case, '') for case in ('S1', 'S2', 'S3', 'S4', 'S4b', 'S4c', 'S4d', 'S5', 'A1', 'A2', 'A3', 'B1', 'B2')]
-matrix = [(case, seed, 'alac' if soak and seed == '271828' else '') for case, seed in cases]
+matrix = [(case, seed, 'converted-flac-mixed' if soak and seed == '271828' else '') for case, seed in cases]
 if not soak:
     matrix += [(case, '', 'alac') for case in ('S1', 'S2', 'S5', 'A1', 'A2', 'A3')]
-    matrix += [('D1', '', 'alac'), ('S1', '', 'trim'), ('S1', '', 'converted')]
+    matrix += [('D1', '', 'alac'), ('S1', '', 'trim')]
+    matrix += [(case, '', media) for case in ('S1', 'S2', 'S4')
+               for media in ('converted', 'converted-alac-192000', 'converted-flac-96000', 'converted-flac-192000')]
+    matrix += [('S1', '', 'converted-flac-nonaligned-192000')]
     if os.environ.get('YENEY_LENGTH_FIXTURE_DIR'):
         matrix += [('S1', '', media) for media in ('private-mira', 'private-spell')]
     else:

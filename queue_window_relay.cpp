@@ -94,6 +94,8 @@ void QueueRoom::Impl::reconcileWindow() {
         return;
     }
     const auto selected = selections.find(audible->index);
+    const bool rewindEcho = lmsNavigation && selected != selections.end() &&
+        selected->second.token == navigationToken && selected->second.rewindMs.has_value();
     const bool speakerSelection = selected != selections.end() &&
         selected->second.token == navigationToken && selected->second.phase == Selection::Producing &&
         !selected->second.rewindMs;
@@ -105,7 +107,7 @@ void QueueRoom::Impl::reconcileWindow() {
         auto &target = entries[navigationToken];
         if (producer != records.end() && producer->seekPositionMs) {
             const auto selection = selections.find(audible->index);
-            const bool rewind = selection != selections.end() && selection->second.rewindMs;
+            const bool rewind = rewindEcho;
             const auto seekMs = rewind ? uint32_t(*selection->second.rewindMs) : producer->seekPositionMs;
             if (producer->pairedFrom && producer->landedFrame && target.size() == 1 &&
                 target.front().item == producer->item && !target.front().originMs) {
@@ -116,6 +118,7 @@ void QueueRoom::Impl::reconcileWindow() {
                 logQueue("window seek lms_index=" + std::to_string(audible->index) +
                     " position_ms=" + std::to_string(seekMs) +
                     " decision=in-item landed_frame=" + std::to_string(*producer->landedFrame) +
+                    " warmup=" + std::to_string(producer->warmupFrames) +
                     " wav_origin=" + std::to_string(producer->wavOrigin) +
                     " attach_offset=" + std::to_string(producer->attachOffset) +
                     " produced_frames=" + std::to_string(producer->item->producedFrames()) + " lms_commands=0");
@@ -124,14 +127,9 @@ void QueueRoom::Impl::reconcileWindow() {
                 current = retained->stream;
                 if (navigationItem->uri != retained->uri) owned.erase(navigationItem->uri);
                 queue.reanchorSpeaker(current, 0, seekMs);
-                const auto position = actions.position().response;
-                unsigned h = 0, m = 0, s = 0;
-                const bool atTarget = position.value("TrackURI") == retained->uri &&
-                    sscanf(position.value("RelTime").c_str(), "%u:%u:%u", &h, &m, &s) == 3 &&
-                    std::abs(int64_t((h * 3600 + m * 60 + s) * 1000) - int64_t(seekMs)) <= 500;
                 const bool superseded = std::any_of(selectionOrder.begin(), selectionOrder.end(),
                     [this](unsigned index) { return selections.count(index) && selections.at(index).token != navigationToken; });
-                if (!superseded && !(rewind && atTarget)) actions.seekTime(seekMs);
+                if (!superseded && !rewind) actions.seekTime(seekMs);
                 lastElapsed = seekMs / 1000;
                 speakerChanges->selected();
                 fastPoll();
@@ -141,6 +139,10 @@ void QueueRoom::Impl::reconcileWindow() {
                 logQueue("window lms-nav from_index=" + std::to_string(navigationFrom) +
                     " to_index=" + std::to_string(audible->index) +
                     " action=slide history=" + std::to_string(history) + " lms_commands=0 kind=seek edits=0");
+                if (rewindEcho) logQueue("window pairing lms_index=" + std::to_string(audible->index) +
+                    " decision=paired reason=speaker-rewind elapsed_ms=" + std::to_string(
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - selected->second.issued).count()) +
+                    " lms_commands=0");
                 selections.erase(audible->index);
                 speakerNavCommands.erase(navigationToken);
                 replacementReasons.erase(navigationToken);
@@ -218,7 +220,7 @@ void QueueRoom::Impl::reconcileWindow() {
         const auto ready = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
             return entry.uri == target.uri;
         });
-        if (!superseded && outgoing != items.end() && outgoing->originMs && ready != items.end() &&
+        if (!superseded && !rewindEcho && outgoing != items.end() && outgoing->originMs && ready != items.end() &&
             outgoing->uri != target.uri) {
             // Move once to the declared target before retiring the outgoing
             // seek suffix. History must already be safe when this move commits.
@@ -378,7 +380,7 @@ void QueueRoom::Impl::reconcileWindow() {
                     if (after.update == update) throw std::runtime_error("queue window insertion unconfirmed");
                     update = after.update;
                 }
-                actions.seekTrack(ordinal);
+                if (!rewindEcho) actions.seekTrack(ordinal);
                 selectedTarget = true;
                 const auto latest = check();
                 io.remove(latest.update, ordinal + target->uris.size(), old->uris.size());
@@ -399,7 +401,9 @@ void QueueRoom::Impl::reconcileWindow() {
                 }
             }
         }
-        Edits(std::move(io)).apply(before, wanted, editAnchor);
+        const bool unchanged = before.size() == wanted.size() && std::equal(before.begin(), before.end(), wanted.begin(),
+            [](const auto &a, const auto &b) { return a.token == b.token && a.uris == b.uris; });
+        if (!(rewindEcho && unchanged)) Edits(std::move(io)).apply(before, wanted, editAnchor);
     } catch (const SpeakerMovedDuringEdit &) {
         // Earlier edits may already have committed. Rebase the worker model
         // from the actual owned queue before accepting the new row selection.
@@ -464,12 +468,14 @@ void QueueRoom::Impl::reconcileWindow() {
                 position.value("TrackURI") == target->uri &&
                 sscanf(position.value("RelTime").c_str(), "%u:%u:%u", &h, &m, &s) == 3 &&
                 std::abs(int64_t((h * 3600 + m * 60 + s) * 1000) - int64_t(*selection->second.rewindMs)) <= 500;
-            if (!selectedTarget && !rewindAtTarget) actions.seekTrack(unsigned(target - items.begin()) + 1);
+            if (!selectedTarget && !rewindEcho && !rewindAtTarget) actions.seekTrack(unsigned(target - items.begin()) + 1);
             lastElapsed = rewindAtTarget ? *selection->second.rewindMs / 1000 : 0;
             expectedState = "PLAYING";
-            actions.play();
-            waitingForPlay = true;
-            playAt = std::chrono::steady_clock::now();
+            if (!rewindEcho) {
+                actions.play();
+                waitingForPlay = true;
+                playAt = std::chrono::steady_clock::now();
+            }
         }
         fastPoll();
         if (!overlap) logQueue("window rebuild reason=" + std::string(snapshot.shuffle != previous.shuffle ? "reorder" : "out-of-range") + " lms_commands=0");
@@ -493,6 +499,10 @@ void QueueRoom::Impl::reconcileWindow() {
             " decision=paired lms_commands=" + std::to_string(speakerNavCommands[navigationToken]));
         if (reused) logQueue("window retained target audio reused lms_commands=0");
         if (bound) logQueue("window lazy target producer adopted lms_commands=0");
+        if (rewindEcho) logQueue("window pairing lms_index=" + std::to_string(audible->index) +
+            " decision=paired reason=speaker-rewind elapsed_ms=" + std::to_string(
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - selected->second.issued).count()) +
+            " lms_commands=0");
         replacementReasons.erase(navigationToken);
         selections.erase(audible->index);
         lmsNavigation = navigationSelecting = false;
@@ -629,6 +639,7 @@ void QueueRoom::Impl::advanceSelections() {
         selection->second.first = queue.latestOccurrence() + 1;
         speakerNavFirst[selection->second.token] = selection->second.first;
         if (selection->second.rewindMs) {
+            selection->second.issued = std::chrono::steady_clock::now();
             roomLmsCommand(host, mac, "time " + std::to_string(*selection->second.rewindMs / 1000),
                            "speaker-rewind", logQueue);
             logQueue("selection issued lms_index=" + std::to_string(index) + " reason=speaker-rewind lms_commands=1");

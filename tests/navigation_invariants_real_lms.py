@@ -37,6 +37,16 @@ def run(c):
         finally:
             conn.close()
     def natural_pcm(index):
+        if index == 0 and os.environ.get('YENEY_NAV_MEDIA', '').startswith('converted'):
+            import numpy as np
+            import subprocess
+            source = next((base/'library').glob('nav-0.*'))
+            decoded = subprocess.check_output([str(Path(__file__).resolve().parents[1]/'third_party/yeney-core/mp4-position-test'),
+                                               'convert', 'full'], input=source.read_bytes())
+            values = np.frombuffer(decoded[32:], dtype='<i4').astype(np.int64)
+            values = (values * 39424) // 65536
+            values = np.where(values >= 0, (values+128)//256, -((-values+128)//256))
+            return values.astype('<i4').view(np.uint8).reshape(-1,4)[:,:3].tobytes()
         source = (base / f'input-{index}.wav').read_bytes()[44:]
         if os.environ.get('YENEY_NAV_MEDIA'):
             import numpy as np
@@ -121,6 +131,7 @@ def run(c):
                 gate.retained_verified.set()
             gate.on_corruption = lambda: setattr(sonos, 'browse_hook', verify_retained_before_switch)
             gate.corrupt_next.set()
+        seek_issued = time.monotonic()
         if case != 'S4d': cli(f'time {position}', mac)
         if case != 'S4d': wait(lambda: 'kind=seek' in log()[mark:], 10, 'LMS seek reconciled')
         time.sleep(.5)
@@ -137,15 +148,15 @@ def run(c):
             print(text, flush=True)
             print('PASS D1 fake corrupts one ALAC frame: evidence, live HTTP reader byte-identical before one speaker switch, zero Stop, process alive, LMS clock within 500 ms', flush=True)
             return
-        if os.environ.get('YENEY_NAV_MEDIA', '') in ('converted', 'private-mira', 'private-spell'):
+        if 'nonaligned' in os.environ.get('YENEY_NAV_MEDIA', ''):
+            landing = re.search(r'first sample=(\d+)', text)
+            assert landing and int(landing[1]) % 4, text
+            print('E6 nonmultiple landed_source=' + landing[1], flush=True)
             assert 'decision=fallback reason=landed-frame-unknown' in text, text
             assert sonos.position['TrackURI'] != uri
             assert len(sonos.actions('Seek')) == seek_count + 1
-            assert not sonos.actions('Stop')
-            assert c['bridge'].poll() is None
-            wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= .5, 5, 'fallback LMS clock within 500 ms')
-            print(text, flush=True)
-            print('PASS D5 converted ALAC ReplayGain: unknown-frame fallback, one switch, no stop, process alive, clock within 500 ms', flush=True)
+            assert not sonos.actions('Stop') and c['bridge'].poll() is None
+            print('PASS E6 nonmultiple FLAC block landing: unknown fallback, one switch, process alive', flush=True)
             return
         if case == 'S3':
             assert sonos.position['TrackURI'] != uri
@@ -161,7 +172,7 @@ def run(c):
             assert 'decision=in-item' in text, text
             assert 'decision=fallback' not in text, text
             if os.environ.get('YENEY_NAV_MEDIA') == 'trim':
-                evidence = re.search(r'landed_frame=(\d+) wav_origin=(\d+) attach_offset=(\d+)', text)
+                evidence = re.search(r'landed_frame=(\d+) warmup=\d+ wav_origin=(\d+) attach_offset=(\d+)', text)
                 assert evidence and int(evidence[2]) == 113 and int(evidence[3]) == int(evidence[1]) - 113, text
         assert sonos.position['TrackURI'] == uri, ('seek replaced audible URI', uri, sonos.position)
         assert edits == (len(sonos.actions('AddURIToQueue')), len(sonos.actions('RemoveTrackRangeFromQueue')))
@@ -170,9 +181,23 @@ def run(c):
         seeks = sonos.actions('Seek')[seek_count:]
         assert len(seeks) == (0 if case == 'S4d' else 1) and all(s[1]['Unit'] == 'REL_TIME' and s[1]['Target'] == f'00:{position//60:02}:{position%60:02}' for s in seeks), seeks
         if case != 'S4d': wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= 2, 5, 'speaker RelTime equals LMS time')
+        if os.environ.get('YENEY_NAV_MEDIA', '').startswith('converted') or os.environ.get('YENEY_NAV_MEDIA', '').startswith('private-'):
+            import struct
+            evidence = {}
+            def clock_equation():
+                packets = [r for r in c['tap'].records if r.get('event') == 'STMt' and r['when'] >= seek_issued]
+                if not packets: return False
+                stat = packets[-1]
+                elapsed = struct.unpack_from('!I', bytes.fromhex(stat['body']), 43)[0] / 1000
+                lms = float(cli('time ?', mac)[-1])
+                expected_time = position + elapsed + time.monotonic() - stat['when']
+                evidence.update(offset=position, stat_elapsed=elapsed, lms=lms, expected=expected_time)
+                return abs(lms - expected_time) <= .5
+            wait(clock_equation, 8, 'converted clock equation within 500 ms')
+            print('R-B3 clock equation ' + repr(evidence), flush=True)
         body = fetch(row(0))
         assert (body == reference if reference is not None else body[44:] == reference_pcm), 'immutable full WAV changed'
-        offset = position * 44100 * 6 + 44
+        offset = position * int.from_bytes(body[24:28], "little") * 6 + 44
         conn = http.client.HTTPConnection(urlsplit(uri).netloc, timeout=8)
         try:
             conn.request('GET', urlsplit(uri).path, headers={'Range': f'bytes={offset}-'})
@@ -190,17 +215,29 @@ def run(c):
             for app_position in positions:
                 app_mark, app_before = len(log()), len(proxy.records)
                 app_seeks = len(sonos.actions('Seek'))
+                app_plays = len(sonos.actions('Play'))
+                read_mark = len(sonos.audible_reads)
+                app_stamp = time.monotonic()
+                sonos.soap_delay = .6
                 with sonos.lock:
                     sonos.position['RelTime'] = f'{app_position//3600:02}:{app_position//60%60:02}:{app_position%60:02}'
+                sonos.read_audio(0)
                 assert fetch(row(0), True) == body[:44+4096], 'app PCM request dropped or changed'
                 expected = 1 if case in ('S4', 'S4c') else 0
                 if not expected:
                     wait(lambda: abs(float(cli('time ?', mac)[-1]) - app_position) <= 1.25, 8, 'STAT-only app clock')
                     print(f'{case} STAT-only clock reaches {app_position} seconds', flush=True)
                 wait(lambda: 'queue speaker-seek ' in log()[app_mark:], 6, 'app position classified')
-                wait(lambda: abs(float(cli('time ?', mac)[-1]) - app_position) <= 1.25, 8, 'app position follows LMS clock')
+                if expected:
+                    wait(lambda: 'decision=paired' in log()[app_mark:] or 'decision=in-item' in log()[app_mark:], 12, 'rewind paired')
+                    command = next(r for r in proxy.records[app_before:] if f' time {app_position}' in r['request'])
+                    paired_stamp = time.monotonic()
+                    chain = [r[0] for r in sonos.requests if command['when'] <= r[3] <= paired_stamp and r[0] in ('Browse', 'GetZoneGroupState')]
+                    print('E1 rewind SOAP chain=' + repr(chain), flush=True)
+                    print(f'E1 {case} time_command_to_paired_ms={(time.monotonic()-command["when"])*1000:.1f}', flush=True)
                 time.sleep(1.2)
-                assert abs(float(cli('time ?', mac)[-1]) - app_position) <= 1.25
+                speaker_seconds = sum(int(v)*w for v, w in zip(sonos.position['RelTime'].split(':'), (3600,60,1)))
+                assert abs(float(cli('time ?', mac)[-1]) - speaker_seconds) <= 1.25
                 commands = [r['request'] for r in proxy.records[app_before:] if
                             re.search(r' (time|playlist index) [^?]', r['request'])]
                 assert len(commands) == expected, commands
@@ -209,7 +246,19 @@ def run(c):
                     assert 'decision=paired' in log()[app_mark:] or 'decision=in-item' in log()[app_mark:]
                 else:
                     assert 'decision=stat' in log()[app_mark:]
+                print('E1 renderer_seeks=' + str(len(sonos.actions('Seek'))-app_seeks) + ' renderer_plays=' + str(len(sonos.actions('Play'))-app_plays) + ' audible_reads=' + repr(sonos.audible_reads[read_mark:]), flush=True)
                 assert len(sonos.actions('Seek')) == app_seeks, sonos.actions('Seek')[app_seeks:]
+                assert len(sonos.actions('Play')) == app_plays, sonos.actions('Play')[app_plays:]
+                if expected: assert not chain, chain
+                time.sleep(max(0, 10-(time.monotonic()-app_stamp)))
+                assert len([r for r in sonos.audible_reads[read_mark:] if r[1] == uri and r[2] == 0]) == 1, sonos.audible_reads[read_mark:]
+                def clock_follows():
+                    speaker_seconds = sum(int(v)*w for v, w in zip(sonos.position['RelTime'].split(':'), (3600,60,1)))
+                    return abs(float(cli('time ?', mac)[-1]) - speaker_seconds) <= 1.25
+                wait(clock_follows, 8, 'advancing rewind clock within existing tolerance')
+                assert len(sonos.actions('Seek')) == app_seeks, sonos.actions('Seek')[app_seeks:]
+                assert len(sonos.actions('Play')) == app_plays, sonos.actions('Play')[app_plays:]
+                sonos.soap_delay = 0
                 assert sonos.position['TrackURI'] == uri
                 assert edits == (len(sonos.actions('AddURIToQueue')), len(sonos.actions('RemoveTrackRangeFromQueue')))
                 assert fetch(row(0)) == body
@@ -578,8 +627,6 @@ def run(c):
                 fetch(row(index))
                 duration = sum(float(part) * weight for part, weight in zip(row(index)['resource']['duration'].split(':'), (3600, 60, 1)))
                 near_end = max(0, int(duration) - 1)
-                with sonos.lock:
-                    sonos.position['RelTime'] = f'{near_end//3600:02}:{near_end//60%60:02}:{near_end%60:02}'
                 target = index + 1
                 def prepared():
                     url = urlsplit(row(target)['uri'])
@@ -595,10 +642,15 @@ def run(c):
                 producer = json.loads(status_path.read_text())['playback']['occurrence']
                 wait(lambda: f'core: queue item-end occurrence={producer} ' in log(), 10,
                      'current natural producer completed, including paired prefix')
+                prefetch_position = max(0, int(duration) - 15)
+                with sonos.lock:
+                    sonos.position['RelTime'] = f'{prefetch_position//3600:02}:{prefetch_position//60%60:02}:{prefetch_position%60:02}'
                 wait(lambda: re.search((r'queue production occurrence=' + str(producer + 1) + r' content_frame=0 ' if os.environ.get('YENEY_NAV_MEDIA') else r'core: queue FLAC occurrence=' + str(producer + 1) + r' .* first sample=0'), log()),
                      10, 'fresh natural successor coordinate')
                 wait(prepared, 10, 'natural next producer ready without activating GET')
-                wait(lambda: float(cli('time ?', mac)[-1]) >= 20, 5, 'outgoing natural clock observed before boundary')
+                with sonos.lock:
+                    sonos.position['RelTime'] = f'{near_end//3600:02}:{near_end//60%60:02}:{near_end%60:02}'
+                wait(lambda: abs(float(cli('time ?', mac)[-1]) - near_end) <= 1.25, 5, 'outgoing final-second clock observed before boundary')
                 expected_uri = row(target)['uri']
                 pairing_uri = expected_uri if declared(row(target)) else None
                 audible(target)
@@ -632,6 +684,8 @@ def run(c):
                 app_uri = sonos.position['TrackURI']
                 app_mark, app_before = len(log()), len(mutations())
                 app_seeks = len(sonos.actions('Seek'))
+                app_plays = len(sonos.actions('Play'))
+                sonos.soap_delay = .6
                 rewind = position * 1000 < lms_offset
                 app_rewinds += int(rewind)
                 app_stats += int(not rewind)
@@ -645,8 +699,10 @@ def run(c):
                 expected += int(rewind)
                 assert len(mutations()) - app_before == int(rewind), (seed, steps, log()[app_mark:])
                 assert ('decision=time-command' if rewind else 'decision=stat') in log()[app_mark:]
+                assert len(sonos.actions('Play')) == app_plays, sonos.actions('Play')[app_plays:]
                 assert len(sonos.actions('Seek')) == app_seeks, (seed, steps, sonos.actions('Seek')[app_seeks:])
                 assert sonos.position['TrackURI'] == app_uri
+                sonos.soap_delay = 0
                 if rewind: lms_offset = position * 1000
                 steps += 1
                 settle(index, True)
@@ -668,6 +724,8 @@ def run(c):
                 seek_text = log()[seek_mark:]
                 assert sonos.position['TrackURI'] == seek_uri, ('covered seek replaced URI', seed, steps)
                 assert 'seek-partial' not in seek_text, (seed, steps, seek_text)
+                assert 'decision=fallback' not in seek_text, (seed, steps, seek_text)
+                assert 'decision=in-item' in seek_text, (seed, steps, seek_text)
                 for line in seek_text.splitlines():
                     if 'queue window seek ' in line:
                         assert 'decision=' in line, line

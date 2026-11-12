@@ -46,7 +46,7 @@ class Tap:
             from navigation_http_gate import NavigationHTTPGate
             self.http_gate = NavigationHTTPGate(hold_request=0 if os.environ.get('YENEY_NAV_CASE') == 'D1' else 2 if os.environ.get('YENEY_NAV_CASE') == 'A2' else 1)
             if os.environ.get('YENEY_NAV_MEDIA') and os.environ.get('YENEY_NAV_CASE') == 'S2':
-                self.http_gate.prefix_limit = 2 * 1024 * 1024
+                self.http_gate.prefix_limit = (8 if os.environ.get('YENEY_NAV_MEDIA', '').startswith('converted') else 2) * 1024 * 1024
         self.worker=threading.Thread(target=self.run);self.worker.start()
     def run(self):
         try:
@@ -250,11 +250,19 @@ if nav_media:
             (base/f'library/nav-{i}.m4a').symlink_to(original)
         else:
             source = base/f'input-{i}.wav'
-            if i == 0 and nav_media == 'converted':
-                source = base/'converted-96000.wav'
-                source.write_bytes(hires_wave(hires_pcm(96000, 61), 96000))
-            encode(source, base/f'library/nav-{i}.m4a', i, trim=nav_media == 'trim',
-                   bits=24 if i == 0 and nav_media == 'converted' else 16)
+            if (i == 0 or i == 1 and nav_media.endswith('mixed')) and nav_media.startswith('converted'):
+                source_rate = 192000 if nav_media.endswith('192000') or i == 1 else 96000
+                source = base/f'converted-{source_rate}.wav'
+                source.write_bytes(hires_wave(hires_pcm(source_rate, 61), source_rate))
+            if i == 0 and nav_media.startswith('converted-flac'):
+                subprocess.run(['flac','-s','-f','--force-raw-format','--endian=little','--sign=signed',
+                                '--channels=2','--bps=24',f'--sample-rate={source_rate}',
+                                '-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
+                                '-T','ALBUM=Album & fixture',*(['--blocksize=4609'] if 'nonaligned' in nav_media else []),
+                                '-o',str(base/f'library/nav-{i}.flac'),'-'],input=source.read_bytes()[44:],check=True)
+            else:
+                encode(source, base/f'library/nav-{i}.m4a', i, trim=nav_media == 'trim',
+                       bits=24 if (i == 0 or i == 1 and nav_media.endswith('mixed')) and nav_media.startswith('converted') else 16)
 for i,rate in ((4,44100),(5,48000)):
     cookie,packets=alac_parts(alac(24))
     cookie=cookie[:20]+struct.pack('!I',rate)
@@ -349,7 +357,7 @@ try:
     alac_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('4.m4a','5.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
     if nav_media:
-        window_ids = [next(t['id'] for t in tracks if t.get('url','').endswith(f'/nav-{i}.m4a')) for i in range(8)]
+        window_ids = [next(t['id'] for t in tracks if t.get('url','').endswith(f'/nav-{i}.flac' if i == 0 and nav_media.startswith('converted-flac') else f'/nav-{i}.m4a')) for i in range(8)]
     assert len(window_ids)==8,tracks
     sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True;sonos.consume_stream=True
     sonos.volume=20;sonos.muted=0
@@ -374,7 +382,7 @@ try:
             with sqlite3.connect(database) as db:
                 if db.execute("select name from sqlite_master where name='tracks'").fetchone():
                     for track_id in window_ids:
-                        updated += db.execute("update tracks set replay_gain=-4.4, replay_peak=1, content_type='alc' where id=?", (track_id,)).rowcount
+                        updated += db.execute("update tracks set replay_gain=-4.4, replay_peak=1, content_type=? where id=?", ('flc' if track_id == window_ids[0] and nav_media.startswith('converted-flac') else 'alc', track_id)).rowcount
                     if nav_media.startswith('private-'):
                         db.execute('update tracks set title=? where id=?', ('Title & 0', window_ids[0]))
         assert updated == 8, updated
@@ -382,7 +390,10 @@ try:
         cli('pref prioritizeNative 1')
         cli('playerpref replayGainMode 1', mac)
         cli('playerpref transitionType 0', mac)
-        source_kind = 'private-read-in-place 24/96000' if nav_media.startswith('private-') else 'generated 24/96000 duration=61' if nav_media == 'converted' else 'generated 16/44100 duration=61'
+        source_kind = ('private-read-in-place 24/96000' if nav_media.startswith('private-') else
+                       'generated 24/96000 FLAC + 24/192000 ALAC duration=61' if nav_media.endswith('mixed') else
+                       f'generated 24/{192000 if nav_media.endswith("192000") else 96000} duration=61' if nav_media.startswith('converted') else
+                       'generated 16/44100 duration=61')
         print(f'ALAC variant={nav_media} ReplayGain mode=1 track_gain=-4.4 source={source_kind}', flush=True)
     audio_page=urlopen('http://127.0.0.1:9000/settings/player/audio.html?player='+mac,timeout=10).read().decode()
     (base/'player-audio-settings.txt').write_text(audio_page)
@@ -639,7 +650,14 @@ try:
             assert 'exact remaining=' in (base/'bridge.log').read_text().split('queue command strm s')[-1]
         with sonos.lock: seek_uri=sonos.position['TrackURI']
         seek_resource=next(item for item in items() if item['uri']==seek_uri)['resource']
-        assert 1.8 <= (int(seek_resource['size'])-44)/6/target <= 2.2,seek_resource
+        assert seek_uri == selected_item['uri'], (seek_uri, selected_item)
+        assert seek_resource['duration'] == selected_item['resource']['duration']
+        u=urlsplit(seek_uri);connection=http.client.HTTPConnection(u.netloc,timeout=8)
+        connection.request('HEAD',u.path);response=connection.getresponse();response.read()
+        assert response.status==200 and int(response.getheader('Content-Length'))==44+len(collected[-1])
+        connection.close()
+        assert len(sonos.actions('AddURIToQueue')) == seek_adds
+        assert 'decision=in-item' in (base/'bridge.log').read_text(), (base/'bridge.log').read_text()[-4000:]
         print(f'PASS real LMS native {kind} album {rate} -> {target}: first publication {first_add-request["when"]:.3f} s before DSCO, exact WAV sizes, three PCM-continuous joins, matching LMS index; seek {time.monotonic()-seek_start:.3f} s',flush=True)
         cli('stop',mac)
     unknown_track=next(t for t in tracks if t['url'].endswith('unknown-96000.flac'))
@@ -754,8 +772,8 @@ finally:
     if nav_media:
         def native_alac_wire():
             starts = [r for r in tap.records if r.get('op') == 'strm' and r.get('command') == 's']
-            assert starts and all(bytes.fromhex(r['body'])[2] == ord('l') for r in starts), 'ALAC variant silently transcoded on the wire'
-            print('PASS ALAC wire: every strm s uses native codec l', flush=True)
+            assert starts and all(bytes.fromhex(r['body'])[2] in ([ord('l'), ord('f')] if nav_media.startswith('converted-flac') else [ord('l')]) for r in starts), 'ALAC variant silently transcoded on the wire'
+            print('PASS lossless wire: native codecs=' + repr(sorted({chr(bytes.fromhex(r['body'])[2]) for r in starts})), flush=True)
         cleanup(native_alac_wire)
         (base/'server-prefs.txt').write_text((base/'prefs/server.prefs').read_text())
     (base/'owner-cli.json').write_text(json.dumps(OWNER_CLI,indent=2))

@@ -105,15 +105,19 @@ void QueueRoom::Impl::selectPath() {
     if (!selecting || selectedRequest != selectionRequest)
         return;
     if (!selectionKnown) {
-        const auto live = coordinator.currentRoom();
-        if (live.coordinator != room.name) {
-            if (!roomStopped) {
-                std::printf("yeney: room is group member room=%s coordinator=%s; not playing\n",
-                            room.name.c_str(), live.coordinator.c_str());
-                roomFault("group-member", true);
+        const auto rewind = selections.find(navigationFrom);
+        if (!(started && lmsNavigation && rewind != selections.end() &&
+              rewind->second.token == navigationToken && rewind->second.rewindMs)) {
+            const auto live = coordinator.currentRoom();
+            if (live.coordinator != room.name) {
+                if (!roomStopped) {
+                    std::printf("yeney: room is group member room=%s coordinator=%s; not playing\n",
+                                room.name.c_str(), live.coordinator.c_str());
+                    roomFault("group-member", true);
+                }
+                selecting = false;
+                return;
             }
-            selecting = false;
-            return;
         }
         if (externalReleased && ownership.active()) release();
         roomStopped = false;

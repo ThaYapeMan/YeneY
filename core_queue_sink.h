@@ -19,6 +19,7 @@ struct QueueRecord {
     std::optional<uint64_t> landedFrame;
     uint32_t gain = 0;
     uint64_t wavOrigin = 0, attachOffset = 0, verificationFrames = 0;
+    uint64_t warmupFrames = 0, warmupRemaining = 0;
     std::vector<yeney::Frame> verificationPcm;
     std::string seekReason;
     std::string sourceUrl;
@@ -78,6 +79,7 @@ class CoreQueueSink : public yeney::Sink {
     std::atomic_bool refetchRequested{false}, startRequested{false}, cachedStartRequested{false};
     std::atomic<uint64_t> latestProducer{0};
     std::optional<uint64_t> nextContent;
+    uint64_t nextWarmup = 0;
     uint32_t rate = 48000;
     std::string workerFault;
     std::chrono::steady_clock::time_point epoch = std::chrono::steady_clock::now();
@@ -104,7 +106,10 @@ public:
     void coreEvent(const std::string &, uint64_t, uint64_t) override;
     void resolvedItemBoundary(const yeney::ItemBoundary &) override;
     void trackBoundary(uint64_t, const yeney::Format &, bool) override;
-    void contentPosition(uint64_t frame, bool known) override { nextContent = known ? std::optional<uint64_t>(frame) : std::nullopt; }
+    void contentPosition(uint64_t frame, bool known) override { nextContent = known ? std::optional<uint64_t>(frame) : std::nullopt; nextWarmup = 0; }
+    void contentPosition(uint64_t frame, bool known, uint64_t warmup) override {
+        contentPosition(frame, known); nextWarmup = warmup;
+    }
     size_t write(const yeney::Frame *p, size_t n) override { return write(p, n, false); }
     size_t write(const yeney::Frame *, size_t, bool) override;
     // Explicit audible control, used only by a device controller or the dry-run

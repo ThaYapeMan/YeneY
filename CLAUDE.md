@@ -72,8 +72,10 @@ callback cannot undo that level. The real LMS volume test exercises this.
 
 The retained WAV's frame zero corresponds to the known content position of its
 from-start production. For a trimmed ALAC file this can be source frame 113.
-An interior attach uses `landed - wavOrigin`. The renderer and retained WAV use
-WAV-relative coordinates; content positions remain original source coordinates.
+An interior attach uses `landed_out - wavOrigin + warmup_out`.
+Discard the converted producer's first `warmup_out` output frames, retaining the
+from-start WAV's settled samples, then verify all 4096 overlap frames. The renderer and retained WAV use
+WAV-relative coordinates; content positions use output coordinates for converted content.
 Verify the full 4096-frame overlap before exposing an interior attach. Keep exact
 PCM comparison, including ReplayGain. A mismatch creates a fresh producer item;
 it does not mutate or cancel the retained WAV. Diagnostics include the first
@@ -82,7 +84,8 @@ differing WAV frame, landed source frame, WAV origin, and both wire gains.
 | Source | LMS seek decision |
 | --- | --- |
 | Native unconverted ALAC, FLAC, PCM with known landing and available prefix | in-item |
-| Converted hi-res to 48 kHz | fallback: landed-frame-unknown |
+| Converted hi-res to 44.1/48 kHz, factor-aligned known landing and known retained WAV origin and prefix covering warm-up plus 4096 frames | in-item after warm-up |
+| Converted unknown/non-factor-aligned landing | fallback: landed-frame-unknown |
 | AAC / MP3 with unprovable landing | fallback: landed-frame-unknown |
 | Exact overlap mismatch | fallback: landed-pcm-mismatch |
 | Unavailable verification bytes | fallback: verification-short-read |
@@ -138,7 +141,9 @@ the missing suffix. A partial is allowed only through the logged fallback for an
 unknown landed frame or unavailable prefix. An app rewind below LMS's producer
 start offset issues one reason-checked `time` command (`speaker-rewind`) through
 the index-keyed serialized outbox. Its restarted producer attaches to the same
-WAV; an already positioned renderer receives no second Seek. App positions at or
+WAV; a speaker-rewind echo never seeks or plays the renderer, decided by
+selection identity rather than elapsed position. Unchanged rows skip redundant
+Browse and topology reads. App positions at or
 above that offset, including all changes with offset zero, use STAT alone.
 Unproduced lazy rows never count as history. An out-of-range jump with no
 retained overlap, clear or loss of the current through reorder permits a rebuild,
@@ -259,7 +264,10 @@ feed menu name and settings; omit source URLs, tokens and descriptions.
 - I5: LMS keeps a seek start offset that STAT cannot rewind below. An
   app-originated position below that offset issues exactly one reason-checked
   `time` command; LMS's restarted producer attaches in-item and the renderer
-  is not seeked again. Every other app position change is zero-command.
+  is never seeked or played again for that echo: decide by the same index-keyed
+  Selection and its speaker-rewind reason, regardless of elapsed position.
+  Every other app position change is zero-command. The 500 ms tolerance for
+  other seek reconciliation remains unchanged.
 
 - I6: The queue worker never terminates the process on data. Pairing, attach and
   verification failures are logged decisions that take the fallback path with
@@ -303,3 +311,33 @@ The ALAC soak checks known frame zero through the codec-independent
 `queue production` diagnostic and advances its fake clock to one second before
 the actual track end. This preserves the original 23-second stimulus for the
 24-second WAV/FLAC tracks and supports the required 61-second ALAC fixtures.
+
+## Decisions — SEEK-02 (2026-11-12)
+
+The content-position callback forwards output landing and FIR settling bound
+through QueuePathSink before its deferred boundary. Interior pairing requires
+`landed_out - wavOrigin + warmup_out + 4096` produced frames. Settling PCM is
+kept only until verification completes, so a mismatch fallback still has its
+complete original seek production. STAT and committed producer frame budgets
+subtract the landing offset before settling, not the later verification offset.
+The renderer still seeks to the requested WAV time.
+
+Rewind authority is the existing index-keyed Selection with matching occurrence
+token and rewind target. No persistent boolean guard is added. An unchanged
+verified retained row needs no topology read at producer admission, no admission
+Browse and no WindowEdits Browse chain; actual edits retain their fences.
+The fake advances from a monotonic clock while PLAYING for navigation gates,
+freezes while paused, and adds 600 ms per relevant SOAP response during rewinds.
+Public generated fixtures cover native 44.1 plus four conversion pairs in both
+codecs; private media is read in place. Owner devices are never contacted.
+
+With the advancing fake, natural-boundary stimuli wait for the current producer
+to finish, move within the normal prefetch lead, and prepare the next producer
+before moving to the last second.
+The fake keeps advancing throughout; the existing readiness deadlines remain
+unchanged. Moving first could carry it beyond EOF during the readiness wait.
+
+Interior attachment also requires the original retained WAV's known content
+origin. Follow the existing pairedFrom chain; a later frame-zero alias with a
+known producer landing cannot establish an unknown original WAV coordinate.
+Use landed-frame-unknown fallback when that coordinate cannot be proved.

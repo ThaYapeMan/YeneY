@@ -40,11 +40,31 @@ def didl(entries, saved=False):
             'xmlns:dc="http://purl.org/dc/elements/1.1/">'+body+'</DIDL-Lite>')
 
 
+class Position(dict):
+    """A playing renderer advances even while the bridge is executing SOAP."""
+    def __init__(self, owner, value):
+        self.owner = owner
+        self.stamp = time.monotonic()
+        super().__init__(value)
+
+    def __getitem__(self, key):
+        value = super().__getitem__(key)
+        if key == 'RelTime' and getattr(self.owner, 'realtime', False) and self.owner.transport_state == 'PLAYING':
+            seconds = sum(int(v)*w for v, w in zip(value.split(':'), (3600, 60, 1)))
+            seconds += int(time.monotonic() - self.stamp)
+            return f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
+        return value
+
+    def __setitem__(self, key, value):
+        if key == 'RelTime': self.stamp = time.monotonic()
+        super().__setitem__(key, value)
+
 class Coordinator(ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address=('127.0.0.1', 0), handler=None):
         super().__init__(address, handler or Handler)
         self.closing = False
+        self.realtime = os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1'
         self.echo_edits = True
         self.event_sequence = 0
         self.event_lock = threading.Lock()
@@ -80,11 +100,24 @@ class Coordinator(ThreadingHTTPServer):
         self.transport_state = 'STOPPED'
         self.play_mode = 'NORMAL'
         self.requests, self.errors, self.snapshots = [], [], {}
+        self.audible_reads = []
+        self.soap_delay = 0
         self.fail_save = self.hide_save = self.race_add = self.ignore_crossfade = self.race_page = False
         self.last_save, self.verified_save = None, False
         self.busy, self.max_busy, self.grouped = 0, 0, False
         self.worker = threading.Thread(target=self.serve_forever)
         self.worker.start()
+
+    @property
+    def transport_state(self):
+        return getattr(self, '_transport_state', 'STOPPED')
+
+    @transport_state.setter
+    def transport_state(self, value):
+        if hasattr(self, '_position'):
+            elapsed = self.position['RelTime']
+            self.position['RelTime'] = elapsed
+        self._transport_state = value
 
     @property
     def position(self):
@@ -97,7 +130,21 @@ class Coordinator(ThreadingHTTPServer):
         previous = getattr(self, '_position', {}).get('TrackURI', '')
         if value['TrackURI'] != previous:
             self.position_history.append((time.monotonic(), value['TrackURI']))
-        self._position = value
+        self._position = Position(self, value)
+
+    def read_audio(self, seconds=0):
+        uri = self.position['TrackURI']
+        offset = 0
+        if seconds:
+            item = next(i for i in self.items if i['uri'] == uri)
+            offset = 44 + seconds * int(item['resource']['sampleFrequency']) * 6
+        connection, response = request(uri, byte_range=f'bytes={offset}-' if offset else None)
+        try:
+            body = response.read(44 + 4096)
+            assert body
+            self.audible_reads.append((time.monotonic(), uri, offset))
+        finally:
+            connection.close()
 
     def close(self):
         if getattr(self,'device_audio',None):self.device_audio.close()
@@ -188,7 +235,10 @@ class Handler(BaseHTTPRequestHandler):
             assert self.headers['SOAPAction'] == '"'+urn+'#'+action+'"'
             with s.lock:
                 s.requests.append((action, args, service, time.monotonic()))
+                if action in ('Browse', 'GetZoneGroupState') and s.soap_delay: time.sleep(s.soap_delay)
                 result, fault = self.action(service, action, args)
+                if action == 'Seek' and s.soap_delay:
+                    s.read_audio(sum(int(v)*w for v,w in zip(args['Target'].split(':'),(3600,60,1))) if args['Unit'] == 'REL_TIME' else 0)
                 s.busy -= 1
             if not fault and s.echo_edits and (action in ('AddURIToQueue', 'RemoveTrackRangeFromQueue') or
                     action in ('SetAVTransportURI', 'Play') and s.uri.startswith('x-rincon-queue:')):
@@ -264,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}, None
         if action == 'GetMediaInfo': return {'CurrentURI': s.uri, 'NrTracks': str(len(s.items))}, None
         if action == 'GetTransportSettings': return {'PlayMode': s.play_mode}, None
-        if action == 'GetPositionInfo': return dict(s.position), None
+        if action == 'GetPositionInfo': return dict(s.position, RelTime=s.position['RelTime']), None
         if action == 'GetTransportInfo': return {'CurrentTransportState': s.transport_state}, None
         if action == 'GetCrossfadeMode': return {'CrossfadeMode': int(s.crossfade)}, None
         if action == 'SetCrossfadeMode':
