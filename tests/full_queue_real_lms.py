@@ -4,6 +4,7 @@ import http.client
 import json
 import os
 import time
+from pathlib import Path
 from urllib.parse import urlsplit
 
 
@@ -23,9 +24,10 @@ def run(c):
         try:
             conn.request('GET', u.path)
             reply = conn.getresponse()
+            header = reply.read(44)
             first = reply.read(1)
             stamp = time.monotonic()
-            body = first + reply.read(44 + 4096 - 1)
+            body = header + first + reply.read(4096 - 1)
             assert reply.status == 200 and body[:4] == b'RIFF'
             return stamp, body
         finally:
@@ -107,7 +109,7 @@ def run(c):
     spool = sum(p.stat().st_size for p in (c['base'] / 'queue').rglob('*') if p.is_file())
     quota = int(os.environ.get('YENEY_FULLQ_QUOTA_MIB', '64')) * 1024 * 1024
     assert spool <= quota, (spool, quota)
-    status = __import__('pathlib').Path(f'/proc/{c["bridge"].pid}/status').read_text()
+    status = Path(f'/proc/{c["bridge"].pid}/status').read_text()
     rss = next(line for line in status.splitlines() if line.startswith('VmRSS:'))
     print(f'MEASURE rows={count} spool_bytes={spool} quota_bytes={quota} {rss}', flush=True)
     if sonos.reject_batches:

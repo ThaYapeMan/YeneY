@@ -254,11 +254,21 @@ void QueueRoom::Impl::reconcileWindow() {
     }
     for (const auto &slot : window.around(audible->index)) {
         auto found = entries.find(slot.token);
+        bool unavailable = false, evicted = false;
+        if (found != entries.end() && !found->second.empty() && found->second.front().item) {
+            const auto &entry = found->second.front();
+            evicted = entry.item->evicted();
+            try {
+                unavailable = evicted || (entry.item->finished() &&
+                    entry.item->descriptor().kind == queue_audio::PromiseKind::Exact &&
+                    entry.item->producedFrames() < entry.frames);
+            } catch (const queue_audio::ItemCancelled &) {
+                unavailable = true;
+            }
+        }
         if (slot.index != audible->index && found != entries.end() &&
             !found->second.empty() && found->second.front().item &&
-            (found->second.front().originMs || (found->second.front().item->finished() &&
-             found->second.front().item->descriptor().kind == queue_audio::PromiseKind::Exact &&
-             found->second.front().item->producedFrames() < found->second.front().frames))) {
+            (found->second.front().originMs || unavailable)) {
             // A seek/interrupted suffix is valid history, but cannot supply a later
             // full play of that parent from the beginning.
             if (slot.token == anchor || std::any_of(found->second.begin(), found->second.end(),
@@ -267,7 +277,7 @@ void QueueRoom::Impl::reconcileWindow() {
                 // target before retiring that parent's interrupted suffix.
                 deferredUpcoming = true;
             } else {
-                replacementReasons[slot.token] = found->second.front().originMs ? "seek-partial" : "incomplete";
+                replacementReasons[slot.token] = found->second.front().originMs ? "seek-partial" : evicted ? "evicted" : "incomplete";
                 if (found->second.front().originMs) {
                     if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end()) retiredLazy.push_back(lazy->second);
                     retired.insert(retired.end(), found->second.begin(), found->second.end());

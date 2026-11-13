@@ -86,7 +86,8 @@ public:
             first = index > historyCount ? index - historyCount : 0;
             last = std::min<unsigned>(playlist.size(), index + upcomingCount + 1);
         }
-        while (first < index && !eligible(playlist[first].track)) ++first;
+        for (unsigned n = first; n < index; ++n)
+            if (!eligible(playlist[n].track)) first = n + 1;
         for (unsigned n = first; n < last; ++n) {
             if (!eligible(playlist[n].track)) { last = n; break; }
         }

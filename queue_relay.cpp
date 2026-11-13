@@ -438,6 +438,7 @@ void QueueRoom::Impl::append() {
         if (!changes.empty())
             logQueue("metadata sanitized mode=queue occurrence=" + std::to_string(record.source.occurrence) +
                      " " + changes);
+        std::optional<double> rowDuration;
         if (!record.parent && !lmsNavigation) {
             std::optional<queue_audio::QueueWindow::Slot> slot;
             { std::lock_guard<std::mutex> lock(sourceMutex); slot = window.find(sourceTokens.at(owner)); }
@@ -446,6 +447,8 @@ void QueueRoom::Impl::append() {
                 lazyItems.at(slot->token)->publish(record.item);
                 metadata.url = row.uri;
                 metadata.session = session + "-" + std::to_string(slot->token);
+                if (!record.estimated && std::isfinite(slot->track.duration) && slot->track.duration > 0)
+                    rowDuration = slot->track.duration;
                 // The row's informational metadata describes the playlist item.
                 metadata.deferred = true;
                 metadata.size = 0;
@@ -463,7 +466,9 @@ void QueueRoom::Impl::append() {
         if (record.parent) logQueue("continuation insertion attempted parent=" + std::to_string(record.parent) +
                                     " occurrence=" + std::to_string(record.source.occurrence));
         upnp::SoapResult result;
-        const auto didl = upnp::queueDidl(metadata);
+        auto announced = metadata;
+        if (rowDuration) { announced.rate = 1; announced.frames = uint64_t(*rowDuration); }
+        const auto didl = upnp::queueDidl(announced);
         if (lmsNavigation && owner >= navigationFirst && !record.parent) {
             std::lock_guard<std::mutex> lock(sourceMutex);
             const auto identity = sourceTokens.find(owner);

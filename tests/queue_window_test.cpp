@@ -65,6 +65,9 @@ int main() {
     snapshot.entries[5].duration = 0;
     model.reconcile(snapshot);
     assert(model.around(4).back().index == 4);
+    const auto afterContinuous = model.around(7);
+    assert(afterContinuous.front().index == 6 && afterContinuous.back().index == 9);
+    assert(std::any_of(afterContinuous.begin(), afterContinuous.end(), [](const auto &slot) { return slot.index == 7; }));
     snapshot.entries[5].duration = 100;
     snapshot.entries[5].liveEdge = 0;
     model.reconcile(snapshot);

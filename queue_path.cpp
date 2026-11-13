@@ -128,7 +128,7 @@ void QueueRoom::Impl::selectPath() {
         try {
             auto snapshot = reader.read(host, mac);
             if (!acceptSnapshot(snapshot)) return;
-            const bool generationChange = started && !playlist.entries.empty() &&
+            const bool generationChange = started && (selectedNewPlay || navigationSelecting) && !playlist.entries.empty() &&
                 (snapshot.entries.size() != playlist.entries.size() ||
                  !std::equal(snapshot.entries.begin(), snapshot.entries.end(), playlist.entries.begin(),
                     [](const auto &a, const auto &b) { return a.id == b.id && a.url == b.url; }));

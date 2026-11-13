@@ -412,6 +412,8 @@ def window_playlist_edits():
             h.until(lambda:len(h.packets('STMs'))>=index+1)
         h.until(lambda:len(h.items())==8)
         h.index=2
+        h.state(3,seconds=1)
+        h.until(lambda:h.prepared(4))
         before={i['metadata']['title']:dict(i) for i in h.items()}
         anchor=before[h.titles[2]]['uri']
         # Move a prepared parent before the audible item. The audible URI

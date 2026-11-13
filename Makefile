@@ -515,6 +515,7 @@ test-run: queue-window-test
 
 $(QUEUE_ROOM_OBJS): queue_route.h
 $(QUEUE_ROOM_OBJS): queue_window.h queue_window_edits.h
+queue_room.o: queue_rows.h
 
 queue-route-test: queue_lazy_item.h
 

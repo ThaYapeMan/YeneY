@@ -111,7 +111,7 @@ public:
                     if (after.update == before.update) throw std::runtime_error("queue batch insertion unconfirmed");
                     current.insert(current.begin() + edit.ordinal - 1, batch.begin(), batch.end());
                     step += batch.size() - 1;
-                    if (io.log) io.log("queue mirror insert ordinal=" + std::to_string(ordinal) + " count=" + std::to_string(batch.size()));
+                    if (io.log) io.log("queue window insert ordinal=" + std::to_string(ordinal) + " count=" + std::to_string(batch.size()));
                     continue;
                 }
                 auto update = before.update;

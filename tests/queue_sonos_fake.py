@@ -143,9 +143,10 @@ class Coordinator(ThreadingHTTPServer):
             offset = 44 + seconds * int(item['resource']['sampleFrequency']) * 6
         connection, response = request(uri, byte_range=f'bytes={offset}-' if offset else None)
         try:
+            header = response.read(44) if not offset else b''
             first = response.read(1)
             stamp = time.monotonic()
-            body = first + response.read(44 + 4096 - 1)
+            body = header + first + response.read(44 + 4096 - len(header) - 1)
             assert body
             self.audible_reads.append((stamp, uri, offset))
             self.audible_bodies.append(body)
