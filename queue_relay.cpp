@@ -281,7 +281,7 @@ void QueueRoom::Impl::append() {
         if (!record.item || !record.incomplete.empty())
             continue;
         if (!record.parent) {
-            std::lock_guard<std::mutex> lock(sourceMutex);
+            std::unique_lock<std::mutex> lock(sourceMutex);
             const auto token = sourceTokens.find(owner);
             if (token != sourceTokens.end()) {
                 const auto first = speakerNavFirst.find(token->second);
@@ -330,6 +330,7 @@ void QueueRoom::Impl::append() {
                     if (cached != items.end() && record.source.occurrence < cached->stream)
                         continue; // A newer producer already owns this retained URI's clock.
                     if (cached != items.end() && cached->item == record.item && !cached->originMs) {
+                        const bool clockChanged = cached->stream != record.source.occurrence;
                         // After LMS Previous, natural decode-ahead may revisit
                         // a retained upcoming parent. Bind its new producer
                         // clock to the existing URI instead of appending it.
@@ -345,6 +346,10 @@ void QueueRoom::Impl::append() {
                         cached->stream = record.source.occurrence;
                         selectionPublished(sourceIndices.at(owner));
                         windowDirty = true;
+                        if (clockChanged) {
+                            lock.unlock();
+                            publish();
+                        }
                         continue;
                     }
                 }
