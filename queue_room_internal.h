@@ -92,6 +92,7 @@ struct QueueRoom::Impl {
     uint64_t navigationToken = 0;
     std::optional<Entry> navigationItem;
     std::chrono::steady_clock::time_point navigationDeadline{};
+    std::chrono::steady_clock::time_point cancelledHeaderUntil{};
     std::map<uint64_t, std::shared_ptr<queue_audio::LazyItem>> lazyItems;
     // Worker-owned selections are independent for each LMS index.
     struct Selection {

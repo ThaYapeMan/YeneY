@@ -54,6 +54,10 @@ void QueueRoom::Impl::observe() {
     }
     if (!started || faulted)
         return;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (selecting && std::chrono::steady_clock::now() < cancelledHeaderUntil) return;
+    }
     // Producer admission and live lazy requests take priority over routine
     // SOAP polling. Writes still retain their topology/ownership fences.
     if (!selecting && (lmsNavigation || std::any_of(selections.begin(), selections.end(), [](const auto &selection) {

@@ -71,7 +71,25 @@ void QueueRoom::Impl::received(const yeney::Command &c) {
         }
     } else {
         if (c.letter == 'q') {
+            bool unopened = false;
+            const auto latest = queue.latestOccurrence();
+            if (paths.isRelay() && latest) {
+                const auto records = queue.snapshot();
+                const auto producer = std::find_if(records.begin(), records.end(), [latest](const auto &record) {
+                    return record.source.occurrence == latest;
+                });
+                unopened = producer == records.end() ||
+                    (!producer->item && producer->fault.empty() && producer->incomplete.empty());
+            }
             std::lock_guard<std::mutex> lock(mutex);
+            if (unopened) {
+                // Let LMS retire the cancelled HTTP request before opening
+                // its replacement on the same player stream endpoint.
+                cancelledHeaderUntil = std::chrono::steady_clock::now() +
+                    std::chrono::milliseconds(queue_audio::QueueWindow::settleMs);
+                logQueue("producer cancellation occurrence=" + std::to_string(latest) +
+                         " admission_delay_ms=" + std::to_string(queue_audio::QueueWindow::settleMs));
+            }
             ++selectionRequest;
             paths.cancelSelection();
             selectionDeferred = false;
@@ -104,6 +122,10 @@ void QueueRoom::Impl::beginSelection(uint64_t request) {
 void QueueRoom::Impl::selectPath() {
     if (!selecting || selectedRequest != selectionRequest)
         return;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (std::chrono::steady_clock::now() < cancelledHeaderUntil) return;
+    }
     if (!selectionKnown) {
         const auto rewind = selections.find(navigationFrom);
         if (!(started && lmsNavigation && ownership.active()) &&

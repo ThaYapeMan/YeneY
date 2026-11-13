@@ -616,6 +616,20 @@ def lms_flush_before_item():
         print('PASS LMS flush before item: cancelled decoder is not a renderer fault, replacement plays once, no CLI echo')
     finally:h.close()
 
+def lms_quit_before_item():
+    h=Binary(rates=(44100,),slow=True,initial_stop=True)
+    try:
+        h.until(lambda:len(h.packets('STMc'))==1)
+        h.lms.strm('q')
+        source=HTTP(h.bodies[0]);h.sources.append(source)
+        h.lms.strm('s',source,fmt='f',rate=44100)
+        h.until(lambda:len(h.packets('STMs'))==1)
+        assert not h.packets('STMn') and len(h.sonos.actions('Play'))==1
+        assert 'producer cancellation occurrence=1 admission_delay_ms=250' in (h.base/'bridge.log').read_text()
+        assert all(c.startswith('status ') for c in h.commands),h.commands
+        print('PASS LMS q before header: deferred replacement, one Play, no STMn or CLI mutation',flush=True)
+    finally:h.close()
+
 def cancelled_audible_stop():
     h=Binary(rates=(44100,),seconds=274,partial_source=True)
     try:
@@ -658,4 +672,4 @@ def soap_fault():
     finally:h.close()
 
 if __name__=='__main__':
-    relay_replay();window_history();window_playlist_edits();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item();cancelled_audible_stop();source_change_with_lms_stop()
+    relay_replay();window_history();window_playlist_edits();preparing_repeat();idle_start();soap_fault();rate_guard();speaker_faults();polling();external_actions();natural_empty_end();lms_flush_before_item();lms_quit_before_item();cancelled_audible_stop();source_change_with_lms_stop()
