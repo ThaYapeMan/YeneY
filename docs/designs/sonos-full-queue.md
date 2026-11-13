@@ -99,3 +99,43 @@ header. The final measurement helper timestamps the first PCM byte after the
 44-byte header and still verifies the target audio bytes.
 `make full-queue-acceptance` reproduces the stronger codec/scale and exception
 checks separately from the regression gate; it is currently failing.
+
+### Final strict measurements
+
+These observations use the final production binary (SHA256
+`48637fba04f85c0bba2b0cc5f68c862ff9a333e8f2556c0ade2a3872b82cf4f0`),
+600 ms on every SOAP call, and the first PCM byte after the WAV header.
+Exact PCM identity is checked separately from timing.
+
+| Source | Rows | First PCM (s) | Complete build (s) |
+|---|---:|---:|---:|
+| FLAC | 12 | 28.450 | 34.473 |
+| FLAC | 100 | 28.543 | 56.245 |
+| FLAC | 500 | 28.475 | 214.774 |
+| ALAC | 12 | 28.608 | 34.714 |
+| ALAC | 100 | 28.633 | 64.955 |
+| ALAC | 500 | 28.406 | 214.816 |
+| WAV | 12 | 29.579 | 35.603 |
+| WAV | 100 | 29.554 | 59.816 |
+| WAV | 500 | 29.558 | 209.763 |
+
+All nine strict timing cases fail acceptance. The FLAC 12-row run measured
+LMS moves from 1.362 to 2.514 seconds and app moves from 0.001 to 1.363 seconds.
+Q4 confirms deep app/LMS Back and exact reproduction after eviction under a
+24 MiB quota. Q6 confirms a generation rebuild and zero-edit navigation
+thereafter, but generation start takes 24.170 seconds. Q7 confirms one logged
+batch-rejection fallback and the same complete mirror. Q8 still records two
+row replacements, so the requested single-replacement lifecycle is not met.
+
+Confirmed serial AddURIToQueue, SetAVTransportURI and Play already require
+1.8 seconds with 600 ms on every call. The 1.5-second cold-start target cannot
+be reached with that serial transport contract, even before ownership fences.
+This is an unmet requirement, not an accepted relaxation of the target.
+
+The final full regression gate was terminated twice by SIGTERM, before an
+assertion failure in either interrupted run; no full exit-0 result is claimed.
+All three final soak seeds passed with zero ordinary navigation edits and zero
+seek-partial replacements. The focused navigation/remaining regression tail and
+the read-only require_v1 consumer check passed. Full details are in the
+FULLQ-01b report. No owner LMS or speaker was contacted, and no deployment
+occurred.
