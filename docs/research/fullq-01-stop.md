@@ -1,3 +1,7 @@
+> Resolved for round 1 by the FULLQ-01b owner decision: retain the existing
+> seek-partial row replacement and deferred frame-zero history route. The
+> evidence below describes the original stop, before that exception.
+
 # FULLQ-01: stopped at the partial-seek representation boundary
 
 The round is stopped under its explicit exception: core stays pinned at

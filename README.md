@@ -75,6 +75,11 @@ LMS integration**:
 
 ### Which one should I use?
 
+Queue mode shows the whole LMS playlist in the Sonos app up to the configured
+`YENEY_QUEUE_ROWS` cap (default 500), with any visible row tappable. LMS and app
+navigation preserve those rows; audio is produced lazily and retained within
+the room's cache quota. Round 1 retains the single-row seek-partial fallback.
+
 | Choose YeneY if you… | Choose LMS-uPnP if you… |
 |---|---|
 | want the best sound on Sonos: 24-bit, bit-perfect at 44.1/48 kHz, top-quality hi-res conversion | have speakers from other brands as well |

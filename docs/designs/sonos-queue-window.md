@@ -1,3 +1,6 @@
+> Superseded for round 1 by [the static queue mirror](sonos-full-queue.md).
+> Retained as the historical window design and behavioural background.
+
 # Sonos queue window implementation record
 
 YENEY-APPCONTROL-03 is incomplete. The room relay uses the fenced editor for

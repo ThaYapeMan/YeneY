@@ -68,7 +68,7 @@ server-side fade. Reverse control preserves the app's mute state and waits
 400 ms for a mute transition before setting its new level, so a late fade
 callback cannot undo that level. The real LMS volume test exercises this.
 
-## Sonos queue window
+## Sonos static queue mirror
 
 The retained WAV's frame zero corresponds to the known content position of its
 from-start production. For a trimmed ALAC file this can be source frame 113.
@@ -93,65 +93,44 @@ differing WAV frame, landed source frame, WAV origin, and both wire gains.
 
 Queue URLs are path only: `/yeney/q/<session>/<epoch>/<revision>/<item>.wav`, including lazy and continuation items. Session path segments are masked in logs/status. The old query route is removed because assets and sessions are process-local and cannot survive restart.
 
-The window model has two history parents, the current parent and three upcoming
-parents. Continuations share their parent's history slot. The production relay
-now retains two played parents and trims older parent blocks through
-`WindowEdits`, with fresh Browse/UpdateID fencing and the audible parent as
-anchor. It does not issue an LMS command when sliding history. The natural
-producer and its WAV declaration remain unchanged.
+The queue mirrors the finite LMS playlist in order, with ordinal i mapped to
+LMS index i-1, up to `YENEY_QUEUE_ROWS` (default 500). Configuration precedence
+is environment, `room.<name>.YENEY_QUEUE_ROWS`, global `YENEY_QUEUE_ROWS`, default.
+Every occurrence has a stable token and a lazy deferred full-length route.
+DIDL uses LMS metadata and duration; size and sampleFrequency are omitted until
+production. Continuous sources keep the stream path. Beyond the cap the legacy
+window path remains and logs `window rebuild reason=beyond-cap`.
 
-The sink protects retained history and all its continuation audio from quota
-eviction. Parents removed by the worker release RAM and compressed files
-immediately; existing readers fail rather than receiving invented audio. Default
-local/finite-remote quotas remain 256 MiB/8 GiB, with explicit quotas authoritative.
-Permanent `queue window remove ordinal=... count=... lms_indices=...
-reason=history-limit` stdout lines describe trims without source URLs or tokens.
+Build the mirror once per playlist generation. Enqueue the current item and
+start playback before adding the rest in batches of at most 16 using
+AddMultipleURIsToQueue. A definitive unsupported/invalid-action SOAP fault
+selects AddURIToQueue fallback and is logged once. Each batch is verified with
+Browse/UpdateID fencing. A generation change may rebuild the owned queue and
+logs its edit count.
 
-The room worker publishes absent upcoming parents through the fenced editor,
-using LMS duration as informational DIDL and omitting size and sampleFrequency.
-A deferred route waits up to three seconds for the natural sink declaration
-before sending any HTTP headers. HEAD, header-only and invalid range probes do
-not activate. A live PCM reader authorizes one reason-checked playlist index
-command through roomLmsCommand; natural preparation binds with zero commands.
-The worker confirms the requested LMS index before assigning its stream, keeps
-the owned window through the selection echo, and fences cancelled/late binding.
-Local source counts, decimation, M4A counts, transitions and carried prefixes
-remain owned by the natural sink. Finite remote items retain upper bounds;
-unknown source counts wait for sealed publication within the same deadline.
-The audible identity is the exact owned `CurrentTrackURI`; queue ordinals and
-NumberOfTracks never select a different occurrence. Before each queue add/remove,
-the worker records the expected URI/renumbered ordinal/queue length/transport.
-Matched GENA echoes (including delayed PLAYING/TRANSITIONING pairs) do not replace
-fresh poll evidence or schedule navigation. Fence before the shared transport
-cache, including release edits and relay/stream handoffs. An explicit confirmed seek clears old
-position-event precedence. History trimming waits for an LMS navigation to finish.
-A jump builds current plus three upcoming parents even without retained overlap;
-only unchanged URI blocks count as overlap, and a no-overlap rebuild logs once.
-Navigation diagnostics include the number of queue edits. For finite single-segment
-parents the plan is bounded by six removals plus six insertions; ordinary Next and
-Previous need at most four in the regression cases. Continuations add their own
-segment insertions but retain their parent's history slot.
-Stage 1c is complete: LMS Next/Previous/jump/seek starts keep the owned queue
-and reconcile overlapping parents with fresh Browse/UpdateID fences. User Next
-retains the outgoing current and prior history parent, trimming beyond two.
-Retained complete targets reuse their audio. LMS seek keeps a row whose immutable
-WAV covers the landed frame, with one REL_TIME Seek and zero window edits. The
-fresh producer attaches at content_frame, verifies its overlap and appends only
-the missing suffix. A partial is allowed only through the logged fallback for an
-unknown landed frame or unavailable prefix. An app rewind below LMS's producer
-start offset issues one reason-checked `time` command (`speaker-rewind`) through
-the index-keyed serialized outbox. Its restarted producer attaches to the same
-WAV; a speaker-rewind echo never seeks or plays the renderer, decided by
-selection identity rather than elapsed position. Unchanged rows skip redundant
-Browse and topology reads. App positions at or
-above that offset, including all changes with offset zero, use STAT alone.
-Unproduced lazy rows never count as history. An out-of-range jump with no
-retained overlap, clear or loss of the current through reorder permits a rebuild,
-logged as `window rebuild reason=out-of-range|clear|reorder lms_commands=0`.
-Navigation diagnostics include from/to indices, slide/rebuild and history count;
-no LMS command echoes these changes. History selection from the app and stage 2
-navigation remain unfinished. See
-`docs/designs/sonos-queue-window.md` for the owner-run deadline check.
+Ordinary LMS navigation uses one TRACK_NR Seek and Play only when needed;
+app navigation uses the existing index-keyed arbiter and one playlist index
+command. Self-originated TRACK_NR feedback is fenced with LMS index and
+occurrence token. In-item seeks, speaker rewinds and natural transitions retain
+the existing byte-verification and serialized outbox rules, I1-I6 below.
+Navigation preserves queue rows. Deferred PCM requests activate through the
+existing lazy/pairing path; HEAD and invalid/header-only probes do not select.
+
+Retention is an audio cache policy: keep current and next three produced
+parents protected, with the existing 256 MiB local / 8 GiB finite-remote quotas.
+Played audio may be evicted without removing a row. A later selection reproduces
+it through the lazy route with `decision=re-produced reason=evicted`; store
+eviction is distinct from a source fault. Continuations retain parent identity.
+
+Round 1 permits a seek fallback whose retained WAV cannot serve the landing to
+replace that row through the existing fenced add/remove path. Log each use as
+`window replace ordinal=N reason=seek-partial edits=2`. A partial cannot be
+rebound under its immutable URI to a frame-zero full WAV: before history can
+select it, publish a distinct deferred frame-zero history route. B1/B2/F3 retain
+their PCM, command and switch checks. Round 2 removes this temporary exception
+with sparse full-length items and defines beyond-cap policy. Later work adds
+playlist diffs and SaveQueue takeover/restore. See
+`docs/designs/sonos-full-queue.md` for measurements and acceptance status.
 
 ## Finite remote queue items
 
@@ -342,13 +321,29 @@ origin. Follow the existing pairedFrom chain; a later frame-zero alias with a
 known producer landing cannot establish an unknown original WAV coordinate.
 Use landed-frame-unknown fallback when that coordinate cannot be proved.
 
-## Decisions — FULLQ-01 (2026-11-12)
+## Decisions — FULLQ-01 resolved by FULLQ-01b (2026-11-12)
 
-Stopped under the task's core-change exception with core and pin unchanged at
-`9d5aa42`. A static-row experiment passed twelve-row ordering and basic LMS
-navigation, but failed the existing B1 prefix-unavailable seek/history gate.
-Rebinding an immutable suffix URI to a full frame-zero WAV is not a valid
-zero-edit solution. Independent full-source/region production appears needed;
-sparse full-length work is explicitly deferred by this round. The preliminary
-model/build commits are reverted without rewriting history; the production
-window remains. See [the evidence and representation boundary](docs/research/fullq-01-stop.md).
+The owner permits the existing single-row seek-partial replacement and deferred
+frame-zero history route for round 1. This resolves the representation stop
+recorded in [FULLQ-01](docs/research/fullq-01-stop.md). Restore the two reverted
+model/batch commits and saved experiment; preserve immutable WAV promises and
+B1/B2/F3. Core and pin stay `9d5aa42`. Sparse full-length items remain round 2.
+
+
+## Decisions — FULLQ-01b acceptance status
+
+Acceptance remains incomplete: strict 600 ms-per-SOAP deadlines fail, and the
+unchanged B1/B2 frame-zero history path currently needs two replacements of the
+same row over a partial-seek lifecycle, whereas Q8 asks for one. Do not describe
+this as a fully accepted device fix. See `docs/designs/sonos-full-queue.md`.
+
+Incoming finite starts carry an occurrence-token/producer-lower-bound admission
+ticket before entering the asynchronous core path. The serialized app-selection outbox
+waits for that same occurrence's codec declaration before its one index command;
+`latestOccurrence()` alone can still describe the preceding producer at this
+point. Keep topology/edit fences, immutable promises and byte checks intact.
+
+A controller move may retire an older app selection only when its retained WAV
+already supplies its complete promise (or a finished upper-bound resource).
+Keep incomplete declarations protected. Generation-rebuild edit counts are
+logged after both removal and row publication complete.
