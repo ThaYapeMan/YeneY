@@ -46,6 +46,12 @@ int main() {
             "</LastChange></property></propertyset>";
         assert(!changes.event(partial));
         assert(changes.poll(std::chrono::steady_clock::now(), {{"CurrentTrackURI", "next"}}).at("CurrentTrackURI") == "next");
+        changes.expectTrack(1, 42, "old", 2, 5, "queue", true);
+        changes.expectTrack(1, 43, "new", 2, 5, "queue", true);
+        changes.transportSelected("stream");
+        assert(!changes.event(event(6, "old", "STOPPED"))); // Initial seek before Play, delivered after handoff.
+        assert(changes.foreignTransport("stream").empty());
+        assert(changes.event(event(7, "old", "STOPPED"))); // A later app stop remains visible.
         std::cout << "PASS self-edit GENA fence: delayed old URI cannot supersede target poll; app Next/pause and SEQ retained\n";
     }
 

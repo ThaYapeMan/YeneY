@@ -98,7 +98,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
                       std::lock_guard<std::mutex> lock(sourceMutex);
                       if (sourceTokens.count(owner) && sourceIndices.count(owner))
                           speakerChanges->expectTrack(sourceIndices.at(owner), sourceTokens.at(owner), entry.uri,
-                              ordinal, unsigned(items.size()), "x-rincon-queue:" + room.uuid + "#0");
+                              ordinal, unsigned(items.size()), "x-rincon-queue:" + room.uuid + "#0", !started);
                   }
               }
           }

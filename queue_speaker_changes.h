@@ -22,8 +22,8 @@ class SpeakerChanges {
     bool sequenced = false;
     struct EditEcho { std::string uri, ordinal, count, transport; };
     std::deque<EditEcho> edits;
-    struct TrackEcho { uint64_t token; EditEcho expected; };
-    std::map<unsigned, TrackEcho> tracks;
+    struct TrackEcho { unsigned index; uint64_t token; EditEcho expected; bool stoppedPending = false; };
+    std::deque<TrackEcho> tracks;
 
 public:
     std::string foreignTransport(const std::string &queueUri) {
@@ -83,9 +83,10 @@ public:
         if (edits.size() > 64) edits.pop_front();
     }
     void expectTrack(unsigned index, uint64_t token, std::string uri, unsigned ordinal,
-                     unsigned count, std::string transport) {
+                     unsigned count, std::string transport, bool stopped = false) {
         std::lock_guard<std::mutex> lock(mutex);
-        tracks[index] = {token, {std::move(uri), std::to_string(ordinal), std::to_string(count), std::move(transport)}};
+        tracks.push_back({index, token, {std::move(uri), std::to_string(ordinal), std::to_string(count), std::move(transport)}, stopped});
+        if (tracks.size() > 64) tracks.pop_front();
     }
     void transportSelected(const std::string &uri) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -141,14 +142,17 @@ public:
                 return false;
             }
         }
-        for (const auto &track : tracks) {
-            const auto &expected = track.second.expected;
+        for (auto &track : tracks) {
+            const auto &expected = track.expected;
             if (fields.count("CurrentTrack") && matches("CurrentTrack", expected.ordinal) &&
                 matches("CurrentTrackURI", expected.uri) && matches("NumberOfTracks", expected.count) &&
                 matches("AVTransportURI", expected.transport) &&
-                (field("TransportState").empty() || field("TransportState") == "PLAYING" || field("TransportState") == "TRANSITIONING")) {
-                std::printf("yeney: queue self-track echo fenced lms_index=%u token=%llu\n", track.first,
-                            (unsigned long long)track.second.token);
+                (field("TransportStatus").empty() || field("TransportStatus") == "OK") &&
+                (field("TransportState").empty() || field("TransportState") == "PLAYING" || field("TransportState") == "TRANSITIONING" ||
+                 (track.stoppedPending && field("TransportState") == "STOPPED"))) {
+                if (field("TransportState") == "STOPPED") track.stoppedPending = false;
+                std::printf("yeney: queue self-track echo fenced lms_index=%u token=%llu\n", track.index,
+                            (unsigned long long)track.token);
                 return false;
             }
         }

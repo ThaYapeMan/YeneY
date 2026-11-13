@@ -139,6 +139,13 @@ class CLIProxy(socketserver.ThreadingTCPServer):
 
 class Remote:
     def __init__(self,body,kind="flac",endless=False,unknown_length=False):
+        if endless and kind=='mp3':
+            # Repeated file metadata must not cap an unbounded radio source.
+            for marker in (b'Xing',b'Info'):
+                at=body.find(marker,0,4096)
+                if at>=0:
+                    body=body[:at]+bytes(4)+body[at+4:]
+                    break
         class Handler(BaseHTTPRequestHandler):
             def log_message(self,*args):pass
             def do_HEAD(self):self.respond(False)
@@ -546,14 +553,14 @@ try:
                 with sonos.lock:sonos.position['RelTime']=f'00:00:{second:02}'
             select_item(index);wait(lambda:len(packets('STMs'))>=index+1)
             identity(index)
-            wait(lambda:len(items())==len(window_ids),3,'complete natural six-parent window')
+            wait(lambda:len(items())==len(window_ids),3,'complete natural static mirror')
             if index>=3:
                 assert len(items()) == len(window_ids)
                 assert 'reason=history-limit' not in (base/'bridge.log').read_text()
         if not controls_only:
             assert len(sonos.actions('Play'))==1 and len(items())==len(window_ids)
             assert (base/'bridge.log').read_text().count('ownership acquired')==1
-        if not controls_only: print('PASS real LMS 9.1.1 eight-entry album: eight local FLAC tracks, 44.1/48 kHz, seven audible joins, two history parents, matching LMS index, no CLI mutation/rearm/restart',flush=True)
+        if not controls_only: print('PASS real LMS 9.1.1 eight-entry album: eight local FLAC tracks, 44.1/48 kHz, seven audible joins, eight static rows, matching LMS index, no CLI mutation/rearm/restart',flush=True)
         for index in ((1,0) if controls_only else (2,3)):
             before=len(packets('STMs'));cli(f'playlist index {index}',mac)
             wait(lambda:len(packets('STMs'))>before,15,'LMS next/previous acknowledgement')
@@ -748,8 +755,10 @@ try:
     print('PASS real LMS remote native 96000 -> 48000 Hz, 24-bit, progressive path selection',flush=True)
     remote_start(mp3,'HTTP MP3')
     remote_start(endless,'endless HTTP MP3')
+    live_audio_before=len(sonos.stream_audio)
     time.sleep(4)
     assert sonos.transport_state=='PLAYING' and playback()['path']=='stream'
+    assert len(sonos.stream_audio)>live_audio_before,'endless source stopped producing audio'
     cli('stop',mac)
     stage([next(t['url'] for t in tracks if t['id']==ids[0]),unknown.url,
            next(t['url'] for t in tracks if t['id']==ids[1])])
