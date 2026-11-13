@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 from queue_binary_test import Binary
 
-WRITES={'SetAVTransportURI','AddURIToQueue','Play','Pause','Stop','Seek',
+WRITES={'SetAVTransportURI','AddURIToQueue','AddMultipleURIsToQueue','Play','Pause','Stop','Seek',
         'RemoveTrackRangeFromQueue','SetCrossfadeMode','SaveQueue','DestroyObject'}
 
 def coordinator():
@@ -26,7 +26,9 @@ def coordinator():
             if index==2:h.sonos.grouped=False
             if index==3:h.sonos.grouped=2
         assert len(h.sonos.actions('Play'))==1
-        assert len(h.sonos.actions('AddURIToQueue'))==4
+        assert len(h.items())==4
+        assert len(h.sonos.actions('AddURIToQueue')) + sum(
+            int(request[1]['NumberOfURIs']) for request in h.sonos.actions('AddMultipleURIsToQueue'))==4
         assert not h.packets('STMn') and 'stop' not in h.commands
         text=(h.base/'bridge.log').read_text()
         assert 'group-rate-undecided' not in text

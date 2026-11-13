@@ -7,12 +7,12 @@ std::string queueDidl(const QueueMetadata &m) {
     if (!m.rate || m.url.compare(0, 7, "http://") || m.session.empty() || (!m.deferred && m.size < 44) || m.bits != 24 ||
         m.channels != 2 || (!m.deferred && m.frames > (UINT32_MAX - 36ull) / 6) || (!m.deferred && m.size != 44 + 6 * m.frames))
         throw std::invalid_argument("invalid finite queue metadata");
-    auto seconds = m.frames / m.rate;
+    auto seconds = m.playlistDuration.value_or(m.frames / m.rate);
     char duration[64];
     snprintf(duration, sizeof(duration), "%llu:%02llu:%02llu", (unsigned long long)(seconds / 3600),
              (unsigned long long)(seconds / 60 % 60), (unsigned long long)(seconds % 60));
     std::string declaredDuration(duration);
-    if (m.preciseDuration && m.frames % m.rate) {
+    if (!m.playlistDuration && m.preciseDuration && m.frames % m.rate) {
         char fraction[32];
         snprintf(fraction, sizeof fraction, ".%09llu",
                  (unsigned long long)((m.frames % m.rate) * 1000000000ull / m.rate));

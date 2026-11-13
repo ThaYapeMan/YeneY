@@ -37,6 +37,13 @@ int main() {
             assert(res->attribute("sampleFrequency") == std::to_string(rate));
             assert(res->attribute("size") == std::to_string(m.size));
             assert(item->attribute("id") == "yeney:test");
+            auto playlist = m;
+            playlist.playlistDuration = 24;
+            assert(upnp::parseXml(upnp::queueDidl(playlist), root));
+            auto announced = root.child("item")->child("res");
+            assert(announced->attribute("duration") == "0:00:24");
+            assert(announced->attribute("size") == std::to_string(m.size));
+            assert(announced->attribute("sampleFrequency") == std::to_string(rate));
             auto precise=m;
             precise.frames+=rate/2;precise.size=44+precise.frames*6;precise.preciseDuration=true;
             assert(upnp::queueDidl(precise).find("duration=\"0:01:05.500000000\"")!=std::string::npos);

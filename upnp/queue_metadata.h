@@ -2,6 +2,7 @@
 #pragma once
 #include "soap.h"
 #include <cstdint>
+#include <optional>
 namespace upnp {
 struct QueueMetadata {
     std::string url, session, title, artist, album, artwork;
@@ -10,6 +11,7 @@ struct QueueMetadata {
     unsigned bits = 24, channels = 2;
     bool deferred = false;
     bool preciseDuration = false; // estimated items; preserve local DIDL wire
+    std::optional<uint64_t> playlistDuration;
 };
 // Finite music metadata keeps the plain LMS title and separate artist/album.
 // Always emit title/creator/artist/album, even empty: Sonos discards DIDL
