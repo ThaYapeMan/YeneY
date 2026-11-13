@@ -69,13 +69,15 @@ def run(c):
         return next(i for i in items() if i['metadata']['title'] == f'Title & {index}')
     def audible(index):
         select(items().index(row(index)))
-    def natural_ready():
+    def natural_ready(complete=False):
         settled = None
         def decoder_ready():
             nonlocal settled
             text = log()
             opening = text.rfind('core: queue command strm s')
-            if ' first audio' not in text[opening:]:
+            audio = re.findall(r'queue decode occurrence=(\d+) first audio', text[opening:])
+            if ' first audio' not in text[opening:] or (complete and
+                    (not audio or f'queue item-end occurrence={audio[-1]} ' not in text[opening:])):
                 settled = None
                 return False
             if settled is None or settled[0] != opening:
@@ -713,9 +715,10 @@ def run(c):
                 steps += 1
                 settle(index, True)
             elif operation == 'seek':
-                # Finish the immutable prefix before the random covered seek.
+                # Finish the cached prefix and its current producer before
+                # the random covered seek; cached audio can outlive a producer.
                 fetch(row(index))
-                natural_ready()
+                natural_ready(complete=True)
                 seek_uri = sonos.position['TrackURI']
                 position = scripted[1] if scripted else rng.randrange(3, 18)
                 seek_mark = len(log())
