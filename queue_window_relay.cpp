@@ -153,6 +153,7 @@ void QueueRoom::Impl::reconcileWindow() {
                 replacementReasons.erase(navigationToken);
                 lmsNavigation = navigationSelecting = false;
                 navigationItem.reset();
+                publishedWindowIndex = audible->index;
                 playlist = std::move(snapshot);
                 publishedWindowPolicy = window.policy();
                 windowDirty = false;
