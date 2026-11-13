@@ -1,6 +1,7 @@
 """Queue controller + real finite HTTP store against a loopback Sonos coordinator."""
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 import copy
+import re
 import os
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -101,6 +102,8 @@ class Coordinator(ThreadingHTTPServer):
         self.play_mode = 'NORMAL'
         self.requests, self.errors, self.snapshots = [], [], {}
         self.audible_reads = []
+        self.audible_bodies = []
+        self.item_ids = {}
         self.soap_delay = 0
         self.fail_save = self.hide_save = self.race_add = self.ignore_crossfade = self.race_page = False
         self.last_save, self.verified_save = None, False
@@ -140,9 +143,12 @@ class Coordinator(ThreadingHTTPServer):
             offset = 44 + seconds * int(item['resource']['sampleFrequency']) * 6
         connection, response = request(uri, byte_range=f'bytes={offset}-' if offset else None)
         try:
-            body = response.read(44 + 4096)
+            first = response.read(1)
+            stamp = time.monotonic()
+            body = first + response.read(44 + 4096 - 1)
             assert body
-            self.audible_reads.append((time.monotonic(), uri, offset))
+            self.audible_reads.append((stamp, uri, offset))
+            self.audible_bodies.append(body)
         finally:
             connection.close()
 
@@ -235,13 +241,14 @@ class Handler(BaseHTTPRequestHandler):
             assert self.headers['SOAPAction'] == '"'+urn+'#'+action+'"'
             with s.lock:
                 s.requests.append((action, args, service, time.monotonic()))
-                if action in ('Browse', 'GetZoneGroupState') and s.soap_delay: time.sleep(s.soap_delay)
+                if getattr(s, 'all_soap_delay', 0): time.sleep(s.all_soap_delay)
+                elif action in ('Browse', 'GetZoneGroupState') and s.soap_delay: time.sleep(s.soap_delay)
                 result, fault = self.action(service, action, args)
-                if action == 'Seek' and s.soap_delay:
-                    s.read_audio(sum(int(v)*w for v,w in zip(args['Target'].split(':'),(3600,60,1))) if args['Unit'] == 'REL_TIME' else 0)
+                if action == 'Seek' and s.soap_delay and not getattr(s, 'fullq_audio', False):
+                    s.read_audio(sum(int(v)*w for v,w in zip(args['Target'].split(':'),(3600,60,1))) if args.get('Unit') == 'REL_TIME' else 0)
                 s.busy -= 1
-            if not fault and s.echo_edits and (action in ('AddURIToQueue', 'RemoveTrackRangeFromQueue') or
-                    action in ('SetAVTransportURI', 'Play') and s.uri.startswith('x-rincon-queue:')):
+            if not fault and s.echo_edits and (action in ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue') or
+                    action in ('SetAVTransportURI', 'Play', 'Seek') and s.uri.startswith('x-rincon-queue:')):
                 with s.lock:
                     fields = dict(NumberOfTracks=str(len(s.items)), CurrentTrack=s.position['Track'],
                                   CurrentTrackURI=s.position['TrackURI'], RelativeTimePosition=s.position['RelTime'],
@@ -256,6 +263,8 @@ class Handler(BaseHTTPRequestHandler):
                 values = ''.join('<'+k+'>'+escape(str(v))+'</'+k+'>' for k, v in result.items())
                 self.send(f'<s:Envelope xmlns:s="{SOAP}"><s:Body><u:{action}Response xmlns:u="{urn}">'
                           f'{values}</u:{action}Response></s:Body></s:Envelope>')
+                if getattr(s, 'fullq_audio', False) and action in ('Seek', 'Play') and s.transport_state == 'PLAYING':
+                    s.read_audio()
         except (ET.ParseError, UnicodeError):
             with s.lock:
                 s.busy = max(0, s.busy-1)
@@ -269,7 +278,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def action(self, service, action, a):
         s = self.server
-        writes = {'SetAVTransportURI','AddURIToQueue','Play','Pause','Stop','Seek',
+        writes = {'SetAVTransportURI','AddURIToQueue','AddMultipleURIsToQueue','Play','Pause','Stop','Seek',
                   'RemoveTrackRangeFromQueue','SetCrossfadeMode','SaveQueue','DestroyObject'}
         if getattr(s, 'reject_writes', False) and action in writes: return {}, '712'
         if action == 'SetCrossfadeMode' and a['CrossfadeMode'] == '1' and getattr(s, 'restore_fault', ''):
@@ -335,7 +344,20 @@ class Handler(BaseHTTPRequestHandler):
             del s.items[first:first+count]; s.update += 1
             s.renumber_current()
             return {'NewUpdateID': s.update}, None
-        if action == 'AddMultipleURIsToQueue': return {}, '402'
+        if action == 'AddMultipleURIsToQueue':
+            if getattr(s, 'reject_batches', False): return {}, '402'
+            if int(a['UpdateID']) != s.update: return {}, '803'
+            uris = a['EnqueuedURIs'].split(' ')
+            metadata = re.findall(r'<DIDL-Lite\b.*?</DIDL-Lite>', a['EnqueuedURIsMetaData'], re.S)
+            assert len(uris) == len(metadata) == int(a['NumberOfURIs']) and 1 <= len(uris) <= 16
+            before = int(a['DesiredFirstTrackNumberEnqueued'])
+            first = before if before else len(s.items)+1
+            for offset, (uri, document) in enumerate(zip(uris, metadata)):
+                result, fault = self.action(service, 'AddURIToQueue', dict(InstanceID='0', EnqueuedURI=uri,
+                    EnqueuedURIMetaData=document, DesiredFirstTrackNumberEnqueued=str(first+offset), EnqueueAsNext='0'))
+                assert not fault
+            return dict(NumTracksAdded=len(uris), FirstTrackNumberEnqueued=first,
+                        NewQueueLength=len(s.items), NewUpdateID=s.update), None
         if action == 'AddURIToQueue':
             assert set(a) == {'InstanceID', 'EnqueuedURI', 'EnqueuedURIMetaData',
                               'DesiredFirstTrackNumberEnqueued', 'EnqueueAsNext'}
@@ -353,6 +375,7 @@ class Handler(BaseHTTPRequestHandler):
             assert metadata.tag == '{urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/}DIDL-Lite'
             assert len(metadata) == 1 and metadata[0].tag.rsplit('}', 1)[-1] == 'item'
             item = metadata[0]
+            s.item_ids[uri] = item.attrib['id']
             # All queue submissions, including remote-finite continuations, need
             # these elements even when disabled/unknown (Sonos discards otherwise).
             expected = ['{http://purl.org/dc/elements/1.1/}title',

@@ -29,7 +29,7 @@ def run(context):
 
     # Exercise Back before natural decode-ahead has filled retained parents.
     cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
-    wait(lambda: len(items()) == 4, 15, 'early Previous initial window')
+    wait(lambda: len(items()) == len(ids), 15, 'early Previous initial window')
     select_item(0)
     # Keep a PCM GET waiting across the controller's selection. Its queued
     # activation must use the controller's producer without an LMS echo.
@@ -101,7 +101,7 @@ def run(context):
     wait(lambda: not items(), 10, 'reference release')
     starts = len(packets('STMs'))
     cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
-    wait(lambda: len(items()) == 4, 15, 'initial window')
+    wait(lambda: len(items()) == len(ids), 15, 'initial window')
     select_item(0)
     wait(lambda: len(packets('STMs')) > starts)
     # A direct click before decode-ahead has produced the target must still
@@ -109,13 +109,13 @@ def run(context):
     mark = len((base / 'bridge.log').read_text())
     before = len(proxy.records)
     cli('playlist index 3', mac)
-    wait(lambda: titles() == [f'Title & {i}' for i in range(3, 7)], 15, 'direct click 0 to 3')
+    wait(lambda: titles() == [f'Title & {i}' for i in range(len(ids))], 15, 'direct click 0 to 3')
     time.sleep(1.5)
     text = (base / 'bridge.log').read_text()[mark:]
-    assert text.count('window rebuild reason=out-of-range lms_commands=0') == 1, text
-    assert 'to_index=3 action=rebuild history=0 lms_commands=0 kind=jump' in text, text
+    assert text.count('window rebuild reason=out-of-range lms_commands=0') == 0, text
+    assert 'to_index=3 action=slide history=3 lms_commands=0 kind=jump' in text, text
     assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
-    print('PASS real LMS direct track click 0 to 3: current plus three upcoming, one rebuild, zero LMS commands', flush=True)
+    print('PASS real LMS direct track click 0 to 3: static rows, zero edits, zero LMS commands', flush=True)
     from queue_sonos_fake import FiniteDeviceAudio
     model = FiniteDeviceAudio(sonos, progressive=True)
     sonos.device_audio = model
@@ -140,7 +140,7 @@ def run(context):
     wait(lambda: not items(), 10, 'direct click release')
     starts = len(packets('STMs'))
     cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
-    wait(lambda: len(items()) == 4, 15, 'restart natural window')
+    wait(lambda: len(items()) == len(ids), 15, 'restart natural window')
     select_item(0)
     wait(lambda: len(packets('STMs')) > starts)
     # Real natural preparation and speaker boundaries fill both history slots.
@@ -153,7 +153,7 @@ def run(context):
         edit_start = len(sonos.edit_events)
         select_item(index)
         wait(lambda: int(cli('playlist index ?', mac)[-1]) == index, 5, 'natural LMS index')
-        wait(lambda: len(items()) == index + 4, 5, 'natural history window')
+        wait(lambda: len(items()) == len(ids), 5, 'natural history window')
         time.sleep(.8)
         text = (base / 'bridge.log').read_text()[mark:]
         assert text.count('window lms-nav ') == 1 and 'kind=natural' in text, text
@@ -185,14 +185,14 @@ def run(context):
         wait(lambda: len(packets('STMs')) > starts, 5, 'navigation audible start')
         time.sleep(1.5) # drain delayed edit GENA and several ordinary polls
         edits = len(sonos.actions('AddURIToQueue')) + len(sonos.actions('RemoveTrackRangeFromQueue')) - edits_before
-        bound = 4 if command.endswith(('+1', '-1')) else 0 if command.startswith('time ') else 12
-        assert edits <= bound, ('unbounded navigation edits', edits, bound)
+        bound = 0
+        assert edits == bound, ('unbounded navigation edits', edits, bound)
         stable = len(sonos.requests)
         time.sleep(.6)
         assert not [r for r in sonos.requests[stable:] if r[0] in ('AddURIToQueue','RemoveTrackRangeFromQueue')]
 
         text = (base / 'bridge.log').read_text()[log_start:]
-        assert f'to_index={target} action=slide history={history} lms_commands=0' in text, text
+        assert f'to_index={target} action=slide history={target} lms_commands=0' in text, text
         kind = 'seek' if command.startswith('time ') else 'next' if command.endswith('+1') else 'previous' if command.endswith('-1') else 'jump'
         assert 'kind='+kind in text, text
         assert text.count('window lms-nav ') == 1, text
@@ -213,66 +213,66 @@ def run(context):
         print(f'PASS echo convergence kind={kind} edits={edits} bound={bound} stable_polls=yes no_occurrence_oscillation=yes', flush=True)
         return text
 
-    navigate('playlist index +1', 3, [f'Title & {i}' for i in range(1, 7)], 2)
-    assert fetch(items()[2]) == reference, 'user Next PCM differs from natural target'
+    navigate('playlist index +1', 3, [f'Title & {i}' for i in range(len(ids))], 2)
+    assert fetch(items()[3]) == reference, 'user Next PCM differs from natural target'
     for item in items()[:2]:
         uri, body = retained[item['metadata']['title']]
         assert item['uri'] == uri and fetch(item) == body
     print('PASS real LMS user Next mid-track: surgical slide, two retained history parents, byte-identical audio, zero LMS commands, no full flush', flush=True)
-    text = navigate('playlist index -1', 2, [f'Title & {i}' for i in range(1, 6)], 1)
+    text = navigate('playlist index -1', 2, [f'Title & {i}' for i in range(len(ids))], 1)
     assert 'retained target audio reused' in text, text
-    current = items()[1]
+    current = items()[2]
     assert current['uri'] == retained['Title & 2'][0] and fetch(current) == retained['Title & 2'][1]
     print('PASS real LMS user Previous mid-track: slide, correct retained history/upcoming, target audio reused, zero LMS commands', flush=True)
-    next_uri = items()[2]['uri']
+    next_uri = items()[3]['uri']
     starts = len(packets('STMs'))
     before = len(proxy.records)
     for second in range(1, 24):
         time.sleep(1)
         with sonos.lock:
             sonos.position['RelTime'] = f'00:00:{second:02}'
-    select_item(2)
+    select_item(3)
     wait(lambda: len(packets('STMs')) > starts and int(cli('playlist index ?', mac)[-1]) == 3,
          5, 'natural advance after Previous')
-    wait(lambda: titles() == [f'Title & {i}' for i in range(1, 7)], 5, 'post-Previous natural window')
-    assert items()[2]['uri'] == next_uri
+    wait(lambda: titles() == [f'Title & {i}' for i in range(len(ids))], 5, 'post-Previous natural window')
+    assert items()[3]['uri'] == next_uri
     assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
     print('PASS real LMS natural advance after Previous: retained upcoming URI reused with fresh producer clock, no duplicate parent or LMS command', flush=True)
-    navigate('time 12', 3, [f'Title & {i}' for i in range(1, 7)], 2)
+    navigate('time 12', 3, [f'Title & {i}' for i in range(len(ids))], 2)
     print('PASS real LMS seek current item: retained URI, zero row edits, no window rebuild, zero LMS commands', flush=True)
-    navigate('playlist index 0', 0, [f'Title & {i}' for i in range(4)], 0)
+    navigate('playlist index 0', 0, [f'Title & {i}' for i in range(len(ids))], 0)
     print('PASS real LMS nearby jump: absent target bridges through retained neighbours; full seek WAV retained as upcoming declaration; zero LMS commands', flush=True)
     before = len(proxy.records)
     log_start = len((base / 'bridge.log').read_text())
     cli('playlist index 7', mac)
-    wait(lambda: 'to_index=7 action=rebuild' in (base / 'bridge.log').read_text()[log_start:], 15, 'far navigation')
+    wait(lambda: 'to_index=7 action=slide' in (base / 'bridge.log').read_text()[log_start:], 15, 'far navigation')
     text = (base / 'bridge.log').read_text()[log_start:]
-    assert text.count('window rebuild reason=out-of-range lms_commands=0') == 1, text
+    assert text.count('window rebuild reason=out-of-range lms_commands=0') == 0, text
     assert 'queue LMS mutation ' not in text, text
-    assert titles() == ['Title & 7'], titles()
+    assert titles() == [f'Title & {i}' for i in range(len(ids))], titles()
     assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
-    print('PASS real LMS far jump: one out-of-range rebuild, no fabricated history, zero LMS commands', flush=True)
+    print('PASS real LMS far jump: static rows, zero edits, zero LMS commands', flush=True)
     # No retained overlap, with three following tracks still in the playlist.
     before = len(proxy.records)
     log_start = len((base / 'bridge.log').read_text())
     edits_before = len(sonos.actions('AddURIToQueue')) + len(sonos.actions('RemoveTrackRangeFromQueue'))
     cli('playlist index 3', mac)
-    wait(lambda: titles() == [f'Title & {i}' for i in range(3, 7)], 15, 'full no-overlap jump window')
+    wait(lambda: titles() == [f'Title & {i}' for i in range(len(ids))], 15, 'full no-overlap jump window')
     time.sleep(1.5)
     text = (base / 'bridge.log').read_text()[log_start:]
-    assert text.count('window rebuild reason=out-of-range lms_commands=0') == 1, text
+    assert text.count('window rebuild reason=out-of-range lms_commands=0') == 0, text
     assert text.count('window lms-nav ') == 1 and 'kind=jump' in text, text
     edits = len(sonos.actions('AddURIToQueue')) + len(sonos.actions('RemoveTrackRangeFromQueue')) - edits_before
-    assert edits <= 12, edits
+    assert edits == 0, edits
     assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
     assert sonos.edit_events and 'self-edit echo fenced' in (base / 'bridge.log').read_text()
-    print(f'PASS real LMS direct non-adjacent jump: one rebuild, current plus three upcoming, zero LMS commands; echo edits={edits} bound=12', flush=True)
-    retained_target = items()[0]
+    print(f'PASS real LMS direct non-adjacent jump: static rows, zero LMS commands; echo edits={edits} bound=0', flush=True)
+    retained_target = items()[3]
     cached = fetch(retained_target) # Complete the history parent before app Next cancels production.
     before = len(proxy.records)
     lazy_mark = len((base / 'bridge.log').read_text())
-    target = items()[1]
-    select_item(1) # Speaker evidence must select even before the lazy PCM GET.
+    target = items()[4]
+    select_item(4) # Speaker evidence must select even before the lazy PCM GET.
     wait(lambda: int(cli('playlist index ?', mac)[-1]) == 4, 5, 'app Next before GET')
     body = fetch(target)
     wait(lambda: int(cli('playlist index ?', mac)[-1]) == 4, 5, 'app Next LMS index')
@@ -282,7 +282,7 @@ def run(context):
     assert mutations == [mac + ' playlist index 4'], mutations
     assert body[:4] == b'RIFF'
     print('PASS real LMS app Next guard: echoing speaker, lazy activation, exactly one playlist index command', flush=True)
-    wait(lambda: 'to_index=4 action=slide history=1 lms_commands=1 kind=next' in
+    wait(lambda: 'to_index=4 action=slide history=4 lms_commands=1 kind=next' in
          (base / 'bridge.log').read_text()[lazy_mark:], 5, 'app Next diagnostic')
     time.sleep(1)
     mark = len((base / 'bridge.log').read_text())

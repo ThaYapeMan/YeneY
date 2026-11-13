@@ -83,7 +83,7 @@ def run(c):
             return time.monotonic() - settled[1] >= .2
         wait(decoder_ready, 10, 'stream opening settled before controller seek')
     cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
-    wait(lambda: len(items()) == 4, 15, 'eight-item initial window')
+    wait(lambda: len(items()) == len(ids), 15, 'eight-item initial window')
     select(0)
     mark = len(log())
     if case == 'D6':
@@ -383,7 +383,7 @@ def run(c):
             cli('stop', mac)
             wait(lambda: not items(), 10, 'targeted release')
             cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
-            wait(lambda: len(items()) == 4, 15, 'targeted fresh window')
+            wait(lambda: len(items()) == len(ids), 15, 'targeted fresh window')
             select(0)
             reference = fetch(row(0))
             before, local_mark = len(proxy.records), len(log())
@@ -421,10 +421,10 @@ def run(c):
         cli('stop', mac)
         wait(lambda: not items(), 10, 'lazy Back release')
         cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
-        wait(lambda: len(items()) == 4, 15, 'lazy Back window')
+        wait(lambda: len(items()) == len(ids), 15, 'lazy Back window')
         select(0)
         cli('playlist index 5', mac)
-        wait(lambda: bridge_at(5) and len(items()) == 3, 15, 'lazy Back starts at five')
+        wait(lambda: bridge_at(5) and len(items()) == len(ids), 15, 'lazy Back starts at five')
         audible(7)
         fetch(row(7), True)
         wait(lambda: bridge_at(7), 5, 'lazy Back outgoing seven')
@@ -457,7 +457,7 @@ def run(c):
         time.sleep(.8)
         proxy.request_hook = None
         print('F2 injected snapshot: ' + injected[0] + ' -> playlist_tracks:0 mode:play', flush=True)
-        assert len(items()) == 4 and sonos.transport_state == 'PLAYING', log()[mark:]
+        assert len(items()) == len(ids) and sonos.transport_state == 'PLAYING', log()[mark:]
         assert 'rebuild reason=clear' not in log()[mark:], log()[mark:]
         assert 'snapshot rejected' in log()[mark:], log()[mark:]
         print('PASS F2 transient empty restart snapshot rejected, window intact, playback continues', flush=True)
@@ -560,10 +560,11 @@ def run(c):
         cli('stop', mac)
         wait(lambda: not items(), 10, 'reference finished')
         cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
-        wait(lambda: len(items()) == 4, 15, 'soak initial window')
+        wait(lambda: len(items()) == len(ids), 15, 'soak initial window')
         select(0)
         time.sleep(.5)
         mark, before, stops = len(log()), len(proxy.records), len(sonos.actions('Stop'))
+        queue_mark = len(sonos.requests)
         expected, index, steps, pause_cycles = 0, 0, 0, 0
         natural_at = [40, 90, 140]
         seek_partials = set()
@@ -606,6 +607,11 @@ def run(c):
             else:
                 assert body == reference[target][:len(body)], ('PCM', seed, steps)
             text = log()[mark:]
+            assert len(items()) == min(len(ids), 500), ('static mirror row count', seed, steps)
+            replacements = text.count('reason=seek-partial edits=2')
+            edits = [r for r in sonos.requests[queue_mark:] if r[0] in
+                     ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue')]
+            assert len(edits) == replacements * 2, ('navigation edits outside partial exception', seed, steps, len(edits), replacements)
             for line in text.splitlines():
                 if 're-produced' in line:
                     assert re.search(r'reason=(seek-partial|source-mismatch|incomplete)( |$)', line), line
@@ -782,7 +788,8 @@ def run(c):
         assert app_rewinds and app_stats and app_zero and app_above, (seed, app_rewinds, app_stats, app_zero, app_above)
         assert 'relay fault=' not in log() and 'worker fault=' not in log(), log()
         assert c['bridge'].poll() is None, 'bridge exited during soak'
-        print(f'PASS SOAK zero_relay_faults=yes zero_worker_faults=yes zero_process_exits=yes app_rewinds={app_rewinds} app_stats={app_stats} app_offset_zero={app_zero} app_above_positive_offset={app_above} app_position_command_counts=yes app_position_clock=yes covered_seek_uri=yes seed={seed} steps=200 commands={len(mutations())} speaker_commands={expected} abandoned=0 clears=0 stops=0 byte_identity=yes audible_swaps=0 reasoned_reproduction=yes valid_target_reproduction=0 pause_cycles={pause_cycles}', flush=True)
+        replacements = log()[mark:].count('reason=seek-partial edits=2')
+        print(f'PASS SOAK static_rows={len(items())} seek_partial_replacements={replacements} zero_navigation_edits=yes zero_relay_faults=yes zero_worker_faults=yes zero_process_exits=yes app_rewinds={app_rewinds} app_stats={app_stats} app_offset_zero={app_zero} app_above_positive_offset={app_above} app_position_command_counts=yes app_position_clock=yes covered_seek_uri=yes seed={seed} steps=200 commands={len(mutations())} speaker_commands={expected} abandoned=0 clears=0 stops=0 byte_identity=yes audible_swaps=0 reasoned_reproduction=yes valid_target_reproduction=0 pause_cycles={pause_cycles}', flush=True)
     else:
         raise AssertionError(case)
     cli('stop', mac)

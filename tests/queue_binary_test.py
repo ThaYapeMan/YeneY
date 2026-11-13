@@ -380,13 +380,12 @@ def window_history():
             ordinal=next(n+1 for n,i in enumerate(h.items()) if i['metadata']['title']==title)
             h.state(ordinal)
             h.until(lambda:len(h.packets('STMs'))>=index+1)
-            if index>=3:
-                h.until(lambda:h.items()[0]['metadata']['title']==h.titles[index-2])
-            h.until(lambda:len(h.items())==min(index,2)+1+min(3,7-index))
+            h.until(lambda:h.items()[0]['metadata']['title']==h.titles[0])
+            h.until(lambda:len(h.items())==8)
             entries=h.items()
             position=next(n for n,i in enumerate(entries) if i['metadata']['title']==title)
-            assert position==min(index,2),entries
-            assert len(entries)<=6,entries
+            assert position==index,entries
+            assert len(entries)==8,entries
             for retained in entries[:position+1]:
                 url=urlsplit(retained['uri'])
                 connection=http.client.HTTPConnection(url.netloc,timeout=10)
@@ -396,12 +395,11 @@ def window_history():
                     assert response.status==200 and len(body)==44+44100*2*6
                     assert body[44:]==b'\0\xe8\x03\0\x18\xfc'*(44100*2)
                 finally:connection.close()
-            if index>=3:
-                log=(h.base/'bridge.log').read_text()
-                assert 'queue window remove ordinal=1 count=1 lms_indices=' in log,log
+            log=(h.base/'bridge.log').read_text()
+            assert 'reason=history-limit' not in log,log
         assert all(c.startswith('status ') for c in h.commands),h.commands
         assert len(h.sonos.actions('Play'))==1
-        print('PASS production history window: eight local parents, two retained history with exact WAV audio, fenced trims, one Play, zero LMS mutations',flush=True)
+        print('PASS production history window: eight local parents, static rows with exact WAV audio, zero history trims, one Play, zero LMS mutations',flush=True)
     finally:h.close()
 
 def window_playlist_edits():
@@ -412,14 +410,14 @@ def window_playlist_edits():
             ordinal=next(n+1 for n,i in enumerate(h.items()) if i['metadata']['title']==h.titles[index])
             h.state(ordinal)
             h.until(lambda:len(h.packets('STMs'))>=index+1)
-        h.until(lambda:len(h.items())==6)
+        h.until(lambda:len(h.items())==8)
         h.index=2
         before={i['metadata']['title']:dict(i) for i in h.items()}
         anchor=before[h.titles[2]]['uri']
         # Move a prepared parent before the audible item. The audible URI
         # survives; move is a fenced remove plus a verified insertion.
         h.order=[0,3,2,1,4,5,6,7];h.revision+=1
-        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (0,3,2,1,4,5)])
+        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (0,3,2,1,4,5,6,7)])
         after={i['metadata']['title']:i for i in h.items()}
         assert all(after[title]==item for title,item in before.items()),(before,after)
         assert h.sonos.position['TrackURI']==anchor
@@ -433,7 +431,7 @@ def window_playlist_edits():
         finally:connection.close()
         # Remove a retained history occurrence without disturbing playback.
         h.order=[3,2,1,4,5,6,7];h.index=1;h.revision+=1
-        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (3,2,1,4,5)])
+        h.until(lambda:[i['metadata']['title'] for i in h.items()]==[h.titles[n] for n in (3,2,1,4,5,6,7)])
         assert h.sonos.position['TrackURI']==anchor
         # A clear removes the audible identity and explicitly releases. The
         # worker must never answer a read-only LMS edit with a CLI mutation.

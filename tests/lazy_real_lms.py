@@ -77,7 +77,7 @@ def run(context):
         titles=[field[6:] for field in fields if field.startswith('title:')]
         index=int(next(field.split(':',1)[1] for field in fields if field.startswith('playlist_cur_index:')))
         published=[entry['metadata']['title'] for entry in items()]
-        return published==titles[max(0,index-2):index+4]
+        return published==titles[:500]
     wait(shuffled_window,10,'LMS shuffled play order')
     print('PASS real LMS shuffle: upcoming window follows authoritative LMS shuffled status order',flush=True)
     cli('playlist shuffle 0',mac)

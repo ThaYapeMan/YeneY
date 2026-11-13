@@ -546,3 +546,13 @@ seek-worker-test: tests/seek_worker_test.cpp tests/test_temp.h core_queue_sink.o
 	g++ -std=c++17 -g -O2 -Wall -Wextra -fno-access-control -I. -Itests -o $@ tests/seek_worker_test.cpp core_queue_sink.o libqueueitems.a -lFLAC -pthread
 
 test-run: seek-worker-test
+
+.PHONY: full-queue-acceptance
+full-queue-acceptance: yeney
+	@set -e; for codec in flac alac wav; do for rows in 12 100 500; do \
+	    YENEY_FULLQ=1 YENEY_FULLQ_CODEC=$$codec YENEY_FULLQ_ROWS=$$rows python3 tests/real_lms_test.py; \
+	done; done
+	YENEY_FULLQ=1 YENEY_FULLQ_GENERATION=1 python3 tests/real_lms_test.py
+	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py
+	YENEY_FULLQ=1 YENEY_FULLQ_REJECT_BATCHES=1 python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=B1 YENEY_FULLQ_Q8=1 python3 tests/real_lms_test.py

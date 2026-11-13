@@ -231,15 +231,34 @@ install()
 perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
 nav_media = os.environ.get('YENEY_NAV_MEDIA', '')
-for i,rate in enumerate((44100,)*8 if nav_media else (44100,48000)*4):
+fullq_codec = os.environ.get('YENEY_FULLQ_CODEC', 'flac') if os.environ.get('YENEY_FULLQ') == '1' else 'flac'
+assert fullq_codec in ('flac', 'alac', 'wav')
+fixture_count = 12 if os.environ.get('YENEY_FULLQ') == '1' else 8
+for i,rate in enumerate((44100,)*8 if nav_media else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
     source=bytearray(wav(rate,61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24,noise=True))
-    if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':
+    if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
         np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
     path.write_bytes(source)
     subprocess.run(['flac','-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
                     '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
+if fullq_codec in ('alac', 'wav'):
+    for i in range(fixture_count):
+        source = base / f'input-{i}.wav'
+        if fullq_codec == 'alac':
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(source), '-c:a', 'alac',
+                            '-metadata', f'title=Title & {i}', '-metadata', 'artist=Artist <one>',
+                            '-metadata', 'album=Album & fixture',
+                            str(base / f'library/fullq-{i}.m4a')], check=True)
+        else:
+            info = b'INFO'
+            for tag, value in ((b'INAM', f'Title & {i}'), (b'IART', 'Artist <one>'), (b'IPRD', 'Album & fixture')):
+                value = value.encode() + b'\0'
+                info += tag + struct.pack('<I', len(value)) + value + (b'\0' if len(value) % 2 else b'')
+            data = bytearray(source.read_bytes() + b'LIST' + struct.pack('<I', len(info)) + info)
+            data[4:8] = struct.pack('<I', len(data) - 8)
+            (base / f'library/fullq-{i}.wav').write_bytes(data)
 if nav_media:
     from alac_seek_fixtures import encode
     for i in range(8):
@@ -310,7 +329,7 @@ for rate in (44100,88200,96000):
 (base/'prefs/plugin/cli.prefs').write_text('---\ncliport: 19090\n_version: 1\n')
 if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':
     (base/'prefs/plugin/state.prefs').write_text('---\nPodcast: enabled\n_version: 1\n')
-if nav_media:
+if nav_media or fullq_codec == 'alac':
     # This variant contains only ALAC M4A files. Keep URL-suffix lookups from
     # replacing the scanned codec with generic MP4 during a later seek.
     native_config = base/'cache/InstalledPlugins/Plugins/SeekAlac'
@@ -353,17 +372,21 @@ try:
     tracks.sort(key=lambda t:t.get('url',''))
     (base/'library.json').write_text(json.dumps(tracks,indent=2))
     ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('0.flac','1.flac','2.flac','3.flac')]
-    window_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in tuple(f'{i}.flac' for i in range(8))]
+    window_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in tuple(f'{i}.flac' for i in range(fixture_count))]
     alac_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('4.m4a','5.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
     if nav_media:
         window_ids = [next(t['id'] for t in tracks if t.get('url','').endswith(f'/nav-{i}.flac' if i == 0 and nav_media.startswith('converted-flac') else f'/nav-{i}.m4a')) for i in range(8)]
-    assert len(window_ids)==8,tracks
+    if fullq_codec in ('alac', 'wav'):
+        extension = 'm4a' if fullq_codec == 'alac' else 'wav'
+        window_ids = [next(t['id'] for t in tracks if t.get('url', '').endswith(f'/fullq-{i}.{extension}'))
+                      for i in range(fixture_count)]
+    assert len(window_ids)==fixture_count,tracks
     sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True;sonos.consume_stream=True
     sonos.volume=20;sonos.muted=0
     sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None,'Audiophile Recordings volume 3','The Absence']+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
     tap=Tap()
-    env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB='256' if nav_media else '64',STATE_DIRECTORY=str(base))
+    env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB=os.environ.get('YENEY_FULLQ_QUOTA_MIB', '256' if nav_media else '64'),STATE_DIRECTORY=str(base))
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':env['YENEY_LMS_ICON']=''
     if volume_only:env['YENEY_LMS_VOLUME']='speaker'
     bridge=subprocess.Popen([os.environ.get('YENEY_ACCEPTANCE_BINARY',str(ROOT/'yeney')),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
@@ -487,9 +510,17 @@ try:
         from podcast_real_lms import run
         run(globals())
         raise SystemExit(0)
+    if os.environ.get('YENEY_FULLQ')=='1':
+        from full_queue_real_lms import run
+        run(locals())
+        raise SystemExit(0)
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':
         from navigation_invariants_real_lms import run
         run(globals())
+        if os.environ.get('YENEY_FULLQ_Q8') == '1':
+            replacements = (base/'bridge.log').read_text().count('reason=seek-partial edits=2')
+            print(f'Q8 seek_partial_replacements={replacements} expected=1', flush=True)
+            assert replacements == 1, ('Q8 single replacement', replacements)
         raise SystemExit(0)
     if os.environ.get('YENEY_REAL_LMS_NAV_ONLY')=='1':
         from navigation_real_lms import run
@@ -505,7 +536,7 @@ try:
         wait(lambda:len(items())>=1,15,'initial takeover')
         select_item(0);wait(lambda:len(packets('STMs'))>=1)
         identity(0)
-        wait(lambda:len(items())==4,3,'current and three upcoming parents')
+        wait(lambda:len(items())==len(window_ids),3,'complete playlist mirror')
         assert len(sonos.actions('Play'))==1,sonos.calls
         controls_only=os.environ.get('YENEY_REAL_LMS_CONTROLS_ONLY')=='1'
         for index in (() if controls_only else range(1,8)):
@@ -513,14 +544,14 @@ try:
             for second in range(1,24):
                 time.sleep(1)
                 with sonos.lock:sonos.position['RelTime']=f'00:00:{second:02}'
-            select_item(min(index,3));wait(lambda:len(packets('STMs'))>=index+1)
+            select_item(index);wait(lambda:len(packets('STMs'))>=index+1)
             identity(index)
-            wait(lambda:len(items())==min(index,2)+1+min(3,7-index),3,'complete natural six-parent window')
+            wait(lambda:len(items())==len(window_ids),3,'complete natural six-parent window')
             if index>=3:
-                wait(lambda:len(items())<=6,3,'two history parents plus current and upcoming')
-                wait(lambda:'reason=history-limit' in (base/'bridge.log').read_text(),3,'fenced history trim')
+                assert len(items()) == len(window_ids)
+                assert 'reason=history-limit' not in (base/'bridge.log').read_text()
         if not controls_only:
-            assert len(sonos.actions('Play'))==1 and len(sonos.actions('AddURIToQueue'))==8
+            assert len(sonos.actions('Play'))==1 and len(items())==len(window_ids)
             assert (base/'bridge.log').read_text().count('ownership acquired')==1
         if not controls_only: print('PASS real LMS 9.1.1 eight-entry album: eight local FLAC tracks, 44.1/48 kHz, seven audible joins, two history parents, matching LMS index, no CLI mutation/rearm/restart',flush=True)
         for index in ((1,0) if controls_only else (2,3)):
