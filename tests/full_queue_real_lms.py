@@ -156,7 +156,8 @@ def run(c):
         wait(lambda: any(r[0] >= start and r[1] not in old for r in sonos.audible_reads), 30, 'Q6 new generation byte')
         stamp = next(r[0] for r in sonos.audible_reads if r[0] >= start and r[1] not in old)
         wait(lambda: len(items()) == count and all(i['uri'] not in old for i in items()), 300, 'Q6 complete new mirror')
-        assert 'window rebuild reason=playlist-change edits=' in text()[logmark:]
+        wait(lambda: 'window rebuild reason=playlist-change edits=' in text()[logmark:],
+             10, 'Q6 confirmed generation model commit')
         assert [i['metadata']['title'] for i in items()] == [f'Title & {(count - 1 - n) % len(ids)}' for n in range(count)]
         pos = next(n for n, r in enumerate(sonos.audible_reads) if r[0] >= start and r[1] not in old)
         identity(count - 1, sonos.audible_bodies[pos])
