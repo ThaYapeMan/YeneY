@@ -79,12 +79,14 @@ def cleanup():
         finally:h.close()
 
 def gena_before_append():
-    h=Binary(rates=(44100,44100))
+    h=Binary(rates=(44100,44100),slow=True)
     try:
-        h.until(lambda:len(h.sonos.actions('Play'))==1)
         h.until(lambda:bool(getattr(h.sonos,'callback','')))
         before=[]
         def takeover():
+            if not h.sonos.actions('Play'):
+                h.sonos.browse_hook=takeover
+                return
             before.append(len(writes(h)))
             h.sonos.uri=SPOTIFY;h.sonos.reject_writes=True
             change='<Event><InstanceID val="0"><AVTransportURI val='+quoteattr(SPOTIFY)+'/></InstanceID></Event>'
@@ -95,6 +97,7 @@ def gena_before_append():
                 response=connection.getresponse();response.read();assert response.status==200
             finally:connection.close()
         h.sonos.browse_hook=takeover
+        h.until(lambda:len(h.sonos.actions('Play'))==1)
         h.state(1,5)
         h.until(lambda:h.commands.count('stop')==1)
         assert before and len(writes(h))==before[0],h.sonos.requests
