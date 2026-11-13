@@ -206,8 +206,7 @@ void QueueRoom::Impl::reconcileWindow() {
                 retired.insert(retired.end(), target.begin(), target.end());
                 if (lazy != lazyItems.end()) retiredLazy.push_back(lazy->second);
                 auto replacement = *navigationItem;
-                const auto row = makeRow(*audible);
-                lazyItems.at(audible->token)->publish(replacement.item);
+                const auto row = makeRow(*audible, replacement.item);
                 owned.erase(replacement.uri);
                 replacement.uri = row.uri;
                 replacement.didl = row.didl;
@@ -733,7 +732,8 @@ void QueueRoom::Impl::activateLazy(uint64_t token) {
     arbitrateSelection(token, "lazy-pcm-get");
 }
 
-QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::Slot &slot) {
+QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::Slot &slot,
+                                             const std::shared_ptr<queue_audio::Item> &produced) {
     const auto lazy = std::make_shared<queue_audio::LazyItem>(nullptr, [this, token = slot.token] {
         std::lock_guard<std::mutex> lock(mutex);
         if (closing) return;
@@ -757,6 +757,14 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
     metadata.rate = 1; // Duration scale only; deferred DIDL omits sampleFrequency.
     metadata.frames = uint64_t(slot.track.duration);
     metadata.deferred = true;
+    if (produced) {
+        metadata.size = produced->contentLength().value();
+        metadata.frames = (metadata.size - 44) / 6;
+        metadata.rate = produced->descriptor().rate;
+        metadata.deferred = false;
+        metadata.preciseDuration = produced->descriptor().kind == queue_audio::PromiseKind::UpperBound;
+        if (!lazy->publish(produced)) throw std::logic_error("partial row declaration rejected");
+    }
     upnp::sanitizeXmlFields({{"title", &metadata.title}, {"artist", &metadata.artist},
         {"album", &metadata.album}, {"artwork", &metadata.artwork}});
     // Placeholder identities descend from the top; core continuations grow

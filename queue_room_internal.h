@@ -110,7 +110,8 @@ struct QueueRoom::Impl {
     void arbitrateSelection(uint64_t token, const std::string &reason);
     bool acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot);
     void activateLazy(uint64_t token);
-    Entry makeRow(const queue_audio::QueueWindow::Slot &slot);
+    Entry makeRow(const queue_audio::QueueWindow::Slot &slot,
+                  const std::shared_ptr<queue_audio::Item> &produced = {});
     std::map<uint64_t, std::string> replacementReasons;
     std::map<uint64_t, unsigned> speakerNavCommands;
     std::map<uint64_t, uint64_t> speakerNavFirst;
