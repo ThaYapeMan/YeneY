@@ -281,7 +281,7 @@ void QueueRoom::Impl::append() {
         if (!record.item || !record.incomplete.empty())
             continue;
         if (!record.parent) {
-            std::unique_lock<std::mutex> lock(sourceMutex);
+            std::lock_guard<std::mutex> lock(sourceMutex);
             const auto token = sourceTokens.find(owner);
             if (token != sourceTokens.end()) {
                 const auto first = speakerNavFirst.find(token->second);
@@ -314,7 +314,7 @@ void QueueRoom::Impl::append() {
         if (!record.fault.empty())
             { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
         if (!record.parent) {
-            std::lock_guard<std::mutex> lock(sourceMutex);
+            std::unique_lock<std::mutex> lock(sourceMutex);
             const auto token = sourceTokens.find(owner);
             if (token != sourceTokens.end()) {
                 const auto lazy = lazyItems.find(token->second);
