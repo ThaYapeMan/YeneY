@@ -37,6 +37,8 @@ int main(int argc,char **argv) {
     assert(remotePlaybackSource("", "", "podcast://https://podcast.invalid/episode"));
     assert(remotePlaybackSource("", "", ""));
     queue_audio::PlaylistReader reader;
+    assert(reader.parse("waitingToPlay:1 playlist_tracks:0").waitingToPlay);
+    assert(!reader.parse("waitingToPlay:0 playlist_tracks:0").waitingToPlay);
     const auto parsed=reader.parse("playlist_cur_index:0 playlist_tracks:1 time:20 duration:90 playlist%20index:0 id:-1 url:podcast%3A%2F%2Fhttps%3A%2F%2Ftest.invalid%2Fepisode duration:60 live_edge:-1");
     auto track=parsed.entries.at(0);
     assert(parsed.duration==90 && parsed.timeMs==20000 && track.duration==60 && track.finiteRemote());

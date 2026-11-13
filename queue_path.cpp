@@ -150,6 +150,18 @@ void QueueRoom::Impl::selectPath() {
         try {
             auto snapshot = reader.read(host, mac);
             if (!acceptSnapshot(snapshot)) return;
+            if (selectedNewPlay && snapshot.waitingToPlay && snapshot.index < snapshot.entries.size()) {
+                const auto &entry = snapshot.entries[snapshot.index];
+                if (entry.url.compare(0, 10, "podcast://") == 0 && !entry.finiteRemote()) {
+                    const auto now = std::chrono::steady_clock::now();
+                    if (metadataWaitRequest != selectedRequest) {
+                        metadataWaitRequest = selectedRequest;
+                        metadataWaitUntil = now + std::chrono::seconds(1);
+                        logQueue("source metadata pending reason=podcast-startup");
+                    }
+                    if (now < metadataWaitUntil) return;
+                }
+            }
             const bool generationChange = started && (selectedNewPlay || navigationSelecting) && !playlist.entries.empty() &&
                 (snapshot.entries.size() != playlist.entries.size() ||
                  !std::equal(snapshot.entries.begin(), snapshot.entries.end(), playlist.entries.begin(),

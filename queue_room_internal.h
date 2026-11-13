@@ -48,6 +48,8 @@ struct QueueRoom::Impl {
     yeney::Command selectedCommand{'s', 0, false}, requestedCommand{'s', 0, false};
     std::atomic<uint64_t> selectionRequest{0};
     uint64_t selectedRequest = 0;
+    uint64_t metadataWaitRequest = 0;
+    std::chrono::steady_clock::time_point metadataWaitUntil{};
     queue_audio::PlaylistEntry selectedTrack;
     int selectedSourceIndex = -1;
     std::map<uint64_t, queue_audio::PlaylistEntry> sourceTracks;

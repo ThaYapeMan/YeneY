@@ -35,6 +35,7 @@ struct PlaylistSnapshot {
     std::vector<PlaylistEntry> entries;
     std::string revision;
     unsigned shuffle = 0, repeat = 0;
+    bool waitingToPlay = false;
 };
 // Read-only metadata snapshot. LMS alone determines stream order; the relay
 // has no occurrence matching, playlist edit inference or mirroring policy.
@@ -54,6 +55,8 @@ public:
             auto key = field.substr(0, colon), value = field.substr(colon + 1);
             if (key == "mode" && !entry)
                 out.mode = value;
+            else if (key == "waitingToPlay" && !entry)
+                out.waitingToPlay = value == "1";
             else if (key == "playlist_cur_index")
                 out.index = value == "-1" ? 0 : std::stoul(value);
             else if (key == "playlist_tracks")
