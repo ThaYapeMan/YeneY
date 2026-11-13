@@ -565,6 +565,22 @@ try:
             before=len(packets('STMs'));cli(f'playlist index {index}',mac)
             wait(lambda:len(packets('STMs'))>before,15,'LMS next/previous acknowledgement')
             identity(index)
+        # Static history can retain the entire target. Start a fresh, gated
+        # producer so this existing controls case still exercises a seek
+        # beyond its produced prefix rather than a covered in-item seek.
+        cli('stop',mac);wait(lambda:not items(),10,'controls prefix setup release')
+        from navigation_http_gate import NavigationHTTPGate
+        controls_gate=NavigationHTTPGate(hold_request=1)
+        tap.http_gate=controls_gate
+        cli('playlist clear',mac)
+        cli('playlistcontrol cmd:add track_id:'+','.join(window_ids),mac)
+        before=len(packets('STMs'))
+        control_index=0 if controls_only else 3
+        cli(f'playlist index {control_index}',mac);cli('play',mac)
+        wait(lambda:len(items())==len(window_ids),10,'controls fresh static mirror')
+        select_item(control_index)
+        wait(lambda:len(packets('STMs'))>before,10,'controls fresh producer audible')
+        wait(tap.http_gate.held.is_set,5,'controls producer held before seek point')
         cli('pause 1',mac);wait(lambda:sonos.transport_state=='PAUSED_PLAYBACK')
         time.sleep(10);cli('play',mac);wait(lambda:sonos.transport_state=='PLAYING')
         before=len(packets('STMs'))
@@ -592,6 +608,8 @@ try:
         wait(lambda:len(packets('STMs'))>before and len(sonos.actions('Play'))==plays+1,15,'stop/new play')
         identity(0 if controls_only else 3)
         print('PASS real LMS controls: next/previous, pause/resume, seek, playlist edit, stop/new play; one Play per start, no mutation echo',flush=True)
+        tap.http_gate = None
+        controls_gate.close()
         time.sleep(3.2)
         resume_plays=len(sonos.actions('Play'));resume_adds=len(sonos.actions('AddURIToQueue'))
         with sonos.lock:sonos.transport_state='PAUSED_PLAYBACK'
