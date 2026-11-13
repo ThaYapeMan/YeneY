@@ -551,6 +551,10 @@ void QueueRoom::Impl::reconcileWindow() {
     refreshUpcoming = deferredUpcoming;
     windowDirty = deferredUpcoming;
     if (deferredUpcoming) nextWindowPoll = {};
+    if (generationRebuildEdits && !deferredUpcoming) {
+        logQueue("window rebuild reason=playlist-change edits=" + std::to_string(queueEdits - *generationRebuildEdits));
+        generationRebuildEdits.reset();
+    }
     publish();
 }
 bool QueueRoom::Impl::acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot) {
@@ -643,6 +647,10 @@ void QueueRoom::Impl::selectionPublished(unsigned index) {
     fastPoll();
 }
 void QueueRoom::Impl::advanceSelections() {
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!commands.empty() || selecting || selectionDeferred.load()) return;
+    }
     // LMS has one producer. Drain each live declaration before selecting the
     // next index, so a rapid burst cannot cancel an earlier HTTP promise.
     for (auto selection = selections.begin(); selection != selections.end();) {
@@ -659,6 +667,32 @@ void QueueRoom::Impl::advanceSelections() {
         selectionOrder.pop_front();
         const auto selection = selections.find(index);
         if (selection == selections.end()) continue;
+        // A natural start for this same occurrence may arrive before LMS's
+        // playlist index advances. Parse its declaration before our one app
+        // selection cancels it; never restart a half-admitted codec header.
+        const auto latest = queue.latestOccurrence();
+        const auto records = queue.snapshot();
+        for (auto admission = producerAdmissions.begin(); admission != producerAdmissions.end();) {
+            const auto declaring = std::find_if(records.begin(), records.end(), [&](const auto &record) {
+                return record.source.occurrence >= admission->second && record.sourceToken == admission->first;
+            });
+            if (declaring == records.end() || (declaring->incomplete.empty() && declaring->fault.empty() &&
+                (!declaring->item || (declaring->pairedFrom &&
+                 declaring->actual - declaring->attachOffset < declaring->verificationFrames)))) {
+                selectionOrder.push_front(index);
+                return;
+            }
+            admission = producerAdmissions.erase(admission);
+        }
+        const auto producer = std::find_if(records.begin(), records.end(), [&](const auto &record) {
+            return record.source.occurrence == latest && record.sourceToken == selection->second.token &&
+                   record.incomplete.empty() && record.fault.empty();
+        });
+        if (producer != records.end() && (!producer->item ||
+            (producer->pairedFrom && producer->actual - producer->attachOffset < producer->verificationFrames))) {
+            selectionOrder.push_front(index);
+            return;
+        }
         selection->second.phase = Selection::Producing;
         selection->second.first = queue.latestOccurrence() + 1;
         speakerNavFirst[selection->second.token] = selection->second.first;

@@ -56,9 +56,9 @@ void QueueRoom::Impl::observe() {
         return;
     // Producer admission and live lazy requests take priority over routine
     // SOAP polling. Writes still retain their topology/ownership fences.
-    if (lmsNavigation || std::any_of(selections.begin(), selections.end(), [](const auto &selection) {
+    if (!selecting && (lmsNavigation || std::any_of(selections.begin(), selections.end(), [](const auto &selection) {
             return selection.second.phase != Selection::Published;
-        })) return;
+        }))) return;
     const auto pending = [this] {
         std::lock_guard<std::mutex> lock(mutex);
         return !commands.empty();

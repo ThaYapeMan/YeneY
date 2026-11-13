@@ -217,9 +217,7 @@ struct StoreState {
             }
             oldest->history.clear();
             oldest->evicted = true;
-            oldest->fault =
-                std::make_exception_ptr(std::runtime_error("item history evicted; LMS re-render required"));
-            changed.notify_all();
+            fail(*oldest, std::make_exception_ptr(std::runtime_error("item history evicted; LMS re-render required")));
         }
     }
     void spill(ItemState &item, std::unique_lock<std::mutex> &lock) {

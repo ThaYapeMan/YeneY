@@ -103,6 +103,7 @@ struct QueueRoom::Impl {
     };
     std::map<unsigned, Selection> selections;
     std::deque<unsigned> selectionOrder;
+    std::map<uint64_t, uint64_t> producerAdmissions;
     void advanceSelections();
     void selectionPublished(unsigned index);
     uint64_t lazySerial = 0;
@@ -124,6 +125,7 @@ struct QueueRoom::Impl {
     void roomFault(const std::string &reason, bool member = false);
     bool closing = false, started = false, faulted = false, releasing = false;
     uint64_t firstStream = 1, current = 0;
+    std::optional<uint64_t> generationRebuildEdits;
     queue_audio::PlaylistSnapshot playlist;
     queue_audio::PlaylistReader reader;
     std::string state = "STOPPED", fault, transportStatus;

@@ -138,7 +138,25 @@ void QueueRoom::Impl::selectPath() {
                 firstStream = queue.latestOccurrence() + 1;
                 navigationSelecting = false;
                 selectedNewPlay = true;
-                logQueue("window rebuild reason=playlist-change edits=" + std::to_string(queueEdits - edits));
+                generationRebuildEdits = edits;
+            }
+            if (lmsNavigation) {
+                for (auto pending = selections.begin(); pending != selections.end();) {
+                    bool supplied = false;
+                    if (pending->first != snapshot.index && pending->second.phase == Selection::Producing) {
+                        const auto lazy = lazyItems.find(pending->second.token);
+                        const auto item = lazy == lazyItems.end() ? nullptr : lazy->second->ready();
+                        if (item) {
+                            try {
+                                const auto length = item->contentLength();
+                                supplied = length && (item->descriptor().kind == queue_audio::PromiseKind::UpperBound ?
+                                    item->finished() : item->producedFrames() >= (*length - 44) / 6);
+                            } catch (const std::exception &) { /* Admission observes source faults separately. */ }
+                        }
+                    }
+                    if (supplied) pending = selections.erase(pending);
+                    else ++pending;
+                }
             }
             playlist = std::move(snapshot);
             window.reconcile(playlist);
@@ -253,8 +271,11 @@ void QueueRoom::Impl::selectPath() {
                                      ? "remote-finite" : "local-source") : "remote-source";
     logQueue("path=" + std::string(selectedLocal ? "relay" : "stream") + " reason=" + pathReason +
              " boundary=" + (selectedNewPlay ? "new-play" : "track-end"));
-    if (selectedLocal)
-        command('s', queue.latestOccurrence() + 1);
+    if (selectedLocal) {
+        const auto first = queue.latestOccurrence() + 1;
+        command('s', first);
+        if (selectedToken) producerAdmissions[selectedToken] = first;
+    }
     // Core resets only at a class boundary, without HELO or an LMS command.
     {
         std::lock_guard<std::mutex> lock(mutex);

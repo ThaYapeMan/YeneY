@@ -59,6 +59,7 @@ void QueueRoom::Impl::releaseWindowParent(uint64_t token, uint64_t before) {
             queue.releaseParent(source.first);
 }
 void QueueRoom::Impl::release(bool stop) {
+    generationRebuildEdits.reset();
     refreshUpcoming = false;
     lmsNavigation = false;
     navigationDeadline = {};
@@ -85,6 +86,7 @@ void QueueRoom::Impl::release(bool stop) {
     lazyItems.clear();
     selections.clear();
     selectionOrder.clear();
+    producerAdmissions.clear();
     speakerNavCommands.clear();
     speakerNavFirst.clear();
     replacementReasons.clear();
@@ -184,6 +186,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         return;
     }
     if (c == 'q') {
+        producerAdmissions.clear();
         if (!navigationTimeout && started && !externalReleased && !sourceAway) {
             // A controller navigation starts a fresh producer (q+s), unlike
             // decode-ahead's natural s. Wait for the paired start; its status
