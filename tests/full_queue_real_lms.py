@@ -1,5 +1,12 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Static playlist mirror acceptance against disposable LMS and renderer."""
+"""Static playlist mirror acceptance against disposable LMS and renderer.
+
+Latency profiles: device uses 30 ms SOAP, 400 ms transport transition and
+50 ms GENA echo. Origin: owner's 12 November 2026 Study device journal,
+7–45 ms consecutive SOAP spacing and 200–450 ms transitioning to playing.
+strict retains the optional 600 ms per SOAP stress model; inherited retains
+FULLQ_DELAY (600 ms default) and FULLQ_ALL_SOAP overrides from FULLQ-01b.
+"""
 import http.client
 import json
 import os
@@ -13,9 +20,27 @@ def run(c):
     ids = sorted(c['window_ids'], key=lambda i: int(next(t['url'].rsplit('/', 1)[-1].split('.')[0].rsplit('-', 1)[-1] for t in c['tracks'] if t['id'] == i)))
     count = int(os.environ.get('YENEY_FULLQ_ROWS', '12'))
     playlist = [ids[n % len(ids)] for n in range(count)]
+    profile = os.environ.get('YENEY_FULLQ_PROFILE', 'device')
+    assert profile in ('device', 'strict', 'inherited'), profile
     sonos.soap_delay = float(os.environ.get('YENEY_FULLQ_DELAY', '.6'))
     sonos.all_soap_delay = sonos.soap_delay if os.environ.get('YENEY_FULLQ_ALL_SOAP', '1') == '1' else 0
+    sonos.latency_profile(profile)
+    print('MEASURE latency_profile=' + profile, flush=True)
+    if os.environ.get('YENEY_FULLQ_CODEC') == 'alac':
+        source = (c['base'] / 'library/fullq-0.m4a').read_bytes()
+        print(f'MEASURE ALAC source_bytes={len(source)} moov_offset={source.find(b"moov")-4} mdat_offset={source.find(b"mdat")-4}', flush=True)
+    def source_timing(trigger, stamp):
+        starts = [r for r in c['tap'].records if r.get('op') == 'strm' and r.get('command') == 's' and trigger <= r['when'] <= stamp]
+        for record in starts:
+            body = bytes.fromhex(record['body'])
+            print(f'MEASURE source_start codec={chr(body[2])} threshold_KiB={body[7]} trigger_to_strm={record["when"]-trigger:.3f} strm_to_audible={stamp-record["when"]:.3f}', flush=True)
+
     sonos.fullq_audio = True
+    def calls_until(mark, stamp):
+        return [r for r in sonos.requests[mark:] if r[3] <= stamp]
+    def report_calls(operation, calls):
+        print('SOAP ' + operation + ' ' + json.dumps([r[0] + (' ' + r[1]['Unit'] if r[0] == 'Seek' else '') for r in calls]), flush=True)
+    album_mark = len(sonos.requests)
     sonos.reject_batches = os.environ.get('YENEY_FULLQ_REJECT_BATCHES') == '1'
     text = lambda: (c['base'] / 'bridge.log').read_text()
     def fetch(item):
@@ -56,6 +81,15 @@ def run(c):
     codecs = [chr(bytes.fromhex(r['body'])[2]) for r in c['tap'].records if r.get('op') == 'strm' and r.get('command') == 's']
     print('MEASURE source_codec=' + os.environ.get('YENEY_FULLQ_CODEC', 'flac') + ' wire_codecs=' + repr(codecs), flush=True)
     if os.environ.get('YENEY_FULLQ_CODEC') == 'alac': assert codecs and all(codec == 'l' for codec in codecs)
+    album_calls = calls_until(album_mark, stamp)
+    report_calls('album_start', album_calls)
+    cold_names = [r[0] for r in album_calls]
+    cold_ok = (cold_names.count('GetZoneGroupState') == 1 and
+               cold_names.count('SetCrossfadeMode') == 1 and
+               cold_names.count('GetCrossfadeMode') == 2)
+    print('C1 cold_start ' + ('PASS' if cold_ok else 'FAIL') + ' topology=' + str(cold_names.count('GetZoneGroupState')) + ' crossfade_get=' + str(cold_names.count('GetCrossfadeMode')) + ' crossfade_set=' + str(cold_names.count('SetCrossfadeMode')), flush=True)
+    assert cold_ok, cold_names
+    source_timing(started, stamp)
     album_latency = stamp - started
     lms_latencies, app_latencies = [], []
     print(f'MEASURE album_start audible_seconds={album_latency:.3f} rows={count}', flush=True)
@@ -82,10 +116,13 @@ def run(c):
         pos = next(n for n, r in enumerate(sonos.audible_reads) if r[1] == immutable[index] and r[0] >= start)
         stamp, body = sonos.audible_reads[pos][0], sonos.audible_bodies[pos]
         identity(index, body)
-        calls = sonos.requests[mark:]
-        assert not [r for r in calls if r[0] in ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue')], calls
-        assert len([r for r in calls if r[0] == 'Seek' and r[1]['Unit'] == 'TRACK_NR']) == 1, calls
+        calls = calls_until(mark, stamp)
+        report_calls(f'lms_index={index}', calls)
+        assert not [r for r in sonos.requests[mark:] if r[0] in ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue')], sonos.requests[mark:]
+        assert [r[0] for r in calls if r[0] not in ('GetPositionInfo', 'GetTransportInfo', 'GetMediaInfo')] == ['Seek'], calls
+        assert len([r for r in sonos.requests[mark:] if r[0] == 'Seek' and r[1]['Unit'] == 'TRACK_NR']) == 1, sonos.requests[mark:]
         wait(lambda: 'decision=paired' in text()[logmark:] or 'decision=re-produced' in text()[logmark:], 5, 'Q2 pairing decision')
+        source_timing(start, stamp)
         lms_latencies.append(stamp - start)
         print(f'PASS Q2 index={index} audible_seconds={stamp-start:.3f} zero_edits=yes PCM=identical', flush=True)
     for index in (1, 0, 6, 1):
@@ -98,6 +135,8 @@ def run(c):
         wait(lambda: int(cli('playlist index ?', mac)[-1]) == index, 10, 'Q3 LMS follows')
         wait(lambda: any(' playlist index ' in r['request'] and not r['request'].endswith(' ?')
                          for r in proxy.records[before:]), 10, 'Q3 selection command response recorded')
+        report_calls(f'app_index={index}', calls_until(mark, stamp))
+        assert not [r for r in sonos.requests[mark:] if not r[0].startswith('Get')], sonos.requests[mark:]
         writes = [r['request'] for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
         assert writes == [mac + ' playlist index ' + str(index)], writes
         assert not [r for r in sonos.requests[mark:] if r[0] in ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue')]
@@ -105,6 +144,20 @@ def run(c):
              15, 'Q3 producer pairing completed before the next stimulus')
         app_latencies.append(stamp - start)
         print(f'PASS Q3 index={index} audible_seconds={stamp-start:.3f} commands=1 zero_edits=yes PCM=identical', flush=True)
+    if os.environ.get('YENEY_FULLQ_PAUSED') == '1':
+        sonos.transport_state = 'PAUSED_PLAYBACK'
+        sonos.notify_transport()
+        wait(lambda: json.loads(status_path.read_text()).get('playback', {}).get('state') == 'PAUSED', 10, 'paused speaker observed by bridge')
+        mark = len(sonos.requests)
+        paused_start = time.monotonic()
+        cli('playlist index 2', mac)
+        wait(lambda: sonos.transport_state == 'PLAYING' and any(r[0] >= paused_start and r[1] == immutable[2] for r in sonos.audible_reads), 15, 'paused move audible')
+        paused_stamp = next(r[0] for r in sonos.audible_reads if r[0] >= paused_start and r[1] == immutable[2])
+        calls = calls_until(mark, paused_stamp)
+        report_calls('lms_paused_move', calls)
+        assert [r[0] for r in calls if not r[0].startswith('Get')] == ['Seek', 'Play'], calls
+        assert not [r for r in calls if r[0] == 'GetZoneGroupState'], calls
+        print('PASS C1 paused move: one Seek TRACK_NR plus Play', flush=True)
     assert [i['uri'] for i in items()] == immutable
     spool = sum(p.stat().st_size for p in (c['base'] / 'queue').rglob('*') if p.is_file())
     quota = int(os.environ.get('YENEY_FULLQ_QUOTA_MIB', '64')) * 1024 * 1024
@@ -120,7 +173,7 @@ def run(c):
         for index in range(12):
             logmark = len(text())
             cli('playlist index ' + str(index), mac)
-            wait(lambda: sonos.position['TrackURI'] == items()[index]['uri'], 20, 'Q4 pressure move')
+            wait(lambda: len(items()) == count and sonos.position['TrackURI'] == items()[index]['uri'], 20, 'Q4 pressure move')
             u = urlsplit(items()[index]['uri'])
             conn = http.client.HTTPConnection(u.netloc, timeout=20)
             try:
@@ -162,12 +215,15 @@ def run(c):
         pos = next(n for n, r in enumerate(sonos.audible_reads) if r[0] >= start and r[1] not in old)
         identity(count - 1, sonos.audible_bodies[pos])
         mark = len(sonos.requests)
+        navigation_started = time.monotonic()
         cli('playlist index 1', mac)
         wait(lambda: sonos.position['TrackURI'] == items()[1]['uri'], 20, 'Q6 navigation after rebuild')
+        wait(lambda: any(r[0] >= navigation_started and r[1] == items()[1]['uri'] for r in sonos.audible_reads), 15, 'Q6 navigation audible byte before teardown')
         assert not [r for r in sonos.requests[mark:] if r[0] in
                     ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue')]
         print(f'PASS Q6 generation rebuilt; audible_seconds={stamp-start:.3f}', flush=True)
 
-    assert max(lms_latencies) < 1.5, ('LMS audible latency target', lms_latencies)
+    print('MEASURE C2 ' + json.dumps(dict(codec=os.environ.get('YENEY_FULLQ_CODEC','flac'), rows=count, album=album_latency, lms=lms_latencies, app=app_latencies, build=build)), flush=True)
+    assert max(lms_latencies) < 1.0, ('LMS audible latency target', lms_latencies)
     assert max(app_latencies) < .7, ('app audible latency target', app_latencies)
     assert album_latency < 1.5, ('album start latency target', album_latency)

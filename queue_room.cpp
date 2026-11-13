@@ -29,6 +29,12 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
       queue(room.name, queue_audio::Config::environment(), 60), paths(queue, rawMac), window(queueRows(room.name)),
       route(room.name, session), coordinator(room, logQueue),
       actions([this](const auto &name, const auto &args) {
+          // The acquisition topology is reused, but GENA can revoke it before
+          // any write, including a write in the middle of a mirror batch.
+          if (name.compare(0, 3, "Get") && speaker->speaker().coordinator != room.name) {
+              coordinator.invalidateIdentity();
+              throw std::runtime_error("room-group-member");
+          }
           if (name == "Stop" && !sourceAway) {
               const auto uri = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
               if (uri != "x-rincon-queue:" + room.uuid + "#0") {

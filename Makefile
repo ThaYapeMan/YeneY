@@ -550,6 +550,7 @@ test-run: seek-worker-test
 
 .PHONY: full-queue-acceptance
 full-queue-acceptance: yeney
+	YENEY_FULLQ=1 YENEY_FULLQ_PAUSED=1 python3 tests/real_lms_test.py
 	@set -e; for codec in flac alac wav; do for rows in 12 100 500; do \
 	    YENEY_FULLQ=1 YENEY_FULLQ_CODEC=$$codec YENEY_FULLQ_ROWS=$$rows python3 tests/real_lms_test.py; \
 	done; done

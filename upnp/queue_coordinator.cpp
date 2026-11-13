@@ -152,9 +152,11 @@ Speaker QueueCoordinator::currentRoom() {
                                  [&](const auto &s) { return s.uuid == room.uuid; });
     if (selected == speakers.end() || selected->name != room.name || selected->ip != room.ip)
         throw std::runtime_error("queue-coordinator-identity-changed");
+    identityConfirmed = selected->coordinator == room.name;
     return *selected;
 }
 void QueueCoordinator::fence() {
+    if (reuseIdentity && identityConfirmed) return;
     const auto selected = currentRoom();
     if (selected.coordinator != room.name)
         throw std::runtime_error("room-group-member coordinator=" + selected.coordinator);
@@ -169,6 +171,7 @@ SoapResult QueueCoordinator::releaseTransport(const std::string &action, const S
     if (action != "Stop" && action != "RemoveTrackRangeFromQueue" && action != "SetCrossfadeMode" && action != "GetCrossfadeMode")
         throw std::logic_error("queue-invalid-release-action");
     if (action.compare(0, 3, "Get")) {
+        invalidateIdentity();
         fence();
         const auto uri = raw("AVTransport", "GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
         if (uri != "x-rincon-queue:" + room.uuid + "#0")

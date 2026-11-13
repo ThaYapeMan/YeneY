@@ -12,7 +12,13 @@ upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
     io.owned = [this](const auto &uri) { return owned.count(uri) != 0; };
     io.playlists = [this] { return coordinator.playlists(); };
     io.save = [this](const auto &title) { return actions.save(title).response.value("AssignedObjectID"); };
-    io.deletePlaylist = [this](const auto &id) { coordinator.destroyPlaylist(id); };
+    io.deletePlaylist = [this](const auto &id) {
+        if (speaker->speaker().coordinator != room.name) {
+            coordinator.invalidateIdentity();
+            throw std::runtime_error("room-group-member");
+        }
+        coordinator.destroyPlaylist(id);
+    };
     io.transport = [this] {
         return coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
     };
@@ -95,6 +101,7 @@ void QueueRoom::Impl::release(bool stop) {
     ownership.release(!sourceAway,
                       [cleanupOwned = std::move(cleanupOwned)](const auto &uri) { return cleanupOwned.count(uri) != 0; }, stop);
     releasing = false;
+    coordinator.invalidateIdentity();
     started = false;
     waitingForPlay = false;
     current = 0;
@@ -401,7 +408,7 @@ void QueueRoom::Impl::append() {
             char title[64];
             std::strftime(title, sizeof title, "Before YeneY %Y-%m-%d %H:%M", &tm);
             queueSelectedForAdmission = false;
-            ownership.acquire(title);
+            ownership.acquire(title, true);
             logQueue("ownership acquired");
             publish();
         }
@@ -529,6 +536,9 @@ void QueueRoom::Impl::append() {
             waitingForPlay = true;
             fastPoll();
             started = true;
+            // Retention is maintenance, after the renderer can begin fetching
+            // PCM. Finish it here so later navigation never inherits its RPCs.
+            ownership.pruneBackups();
         }
     }
 }

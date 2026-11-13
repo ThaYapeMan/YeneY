@@ -46,6 +46,23 @@ int main() {
     assert(!lease.active() && crossfade);
     assert(queue.uris.size() == 2 && queue.uris[0] == "foreign-new" &&
            queue.uris[1].find("session-other") != std::string::npos);
+    {
+        const auto remainingQueue = queue;
+        saved.push_back({"deferred-old", "Before YeneY older", 1});
+        const auto originalCount = saved.size();
+        upnp::QueueOwnership deferred(io, "deferred");
+        deferred.acquire("Before YeneY deferred", true);
+        assert(deferred.active() && saved.size() == originalCount + 1);
+        assert(queue.uris.empty() && !crossfade); // Backup and takeover still precede Play.
+        deferred.pruneBackups();
+        assert(saved.size() == 6); // Five owned backups plus unrelated favorite.
+        deferred.pruneBackups();
+        assert(saved.size() == 6);
+        deferred.release();
+        assert(crossfade);
+        queue = remainingQueue;
+        std::cout << "PASS deferred backup retention: verified takeover before Play, five backups after Play, idempotent prune\n";
+    }
     verify = false;
     upnp::QueueOwnership failing(io, "another");
     auto before = queue.uris;

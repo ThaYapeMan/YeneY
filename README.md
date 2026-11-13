@@ -78,7 +78,8 @@ LMS integration**:
 Queue mode shows the whole LMS playlist in the Sonos app up to the configured
 `YENEY_QUEUE_ROWS` cap (default 500), with any visible row tappable. LMS and app
 navigation preserve those rows; audio is produced lazily and retained within
-the room's cache quota. Round 1 retains the single-row seek-partial fallback.
+the room's cache quota. Round 1 retains the seek-partial fallback: a partial seek followed by Next
+swaps that row twice to preserve immutable audio resources.
 
 | Choose YeneY if you… | Choose LMS-uPnP if you… |
 |---|---|

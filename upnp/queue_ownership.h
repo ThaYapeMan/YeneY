@@ -36,11 +36,13 @@ class QueueOwnership {
     std::string session, backupTransport, backupId, backupTitle;
     std::vector<std::string> backupUris;
     bool held = false, restoring = false, savedCrossfade = false;
+    std::vector<SavedQueue> pendingRetention;
     bool owns(const std::string &) const;
 
 public:
     QueueOwnership(QueueOwnershipIO, std::string session);
-    void acquire(const std::string &backupTitle);
+    void acquire(const std::string &backupTitle, bool deferRetention = false);
+    void pruneBackups();
     void release(bool cleanup = true, std::function<bool(const std::string &)> cleanupOwns = {}, bool stop = false) noexcept;
     bool active() const { return held; }
 };

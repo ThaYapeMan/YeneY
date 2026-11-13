@@ -330,12 +330,33 @@ model/batch commits and saved experiment; preserve immutable WAV promises and
 B1/B2/F3. Core and pin stay `9d5aa42`. Sparse full-length items remain round 2.
 
 
-## Decisions — FULLQ-01b acceptance status
+## Decisions — FULLQ-01c acceptance status
 
-Acceptance remains incomplete: strict 600 ms-per-SOAP deadlines fail, and the
-unchanged B1/B2 frame-zero history path currently needs two replacements of the
-same row over a partial-seek lifecycle, whereas Q8 asks for one. Do not describe
-this as a fully accepted device fix. See `docs/designs/sonos-full-queue.md`.
+The acceptance fake uses the device profile: 30 ms SOAP, 400 ms transport
+transition and 50 ms GENA echo, calibrated from the owner's 12 November Study
+journal. The 600 ms profile is an optional stress test, not device acceptance.
+
+Static-mirror SOAP contract, measured from the trigger to first audible PCM:
+- LMS Next, Previous, jump and repeat wrap: one `Seek TRACK_NR`; add `Play`
+  only when playback is not already running. No Browse, topology read or edits.
+- App Next, Back and row tap: no SOAP writes; exactly one LMS `playlist index`.
+- In-item LMS seek: one `Seek REL_TIME`, no queue edits.
+- Cold ownership: one fresh topology read, reused within the owned sequence;
+  GENA group changes revoke permission before writes. Backup verification and
+  real-edit fences remain. Backup retention runs after Play, outside admission.
+
+Q8 is resolved: a partial seek followed by Next swaps the same row exactly
+twice, full → suffix → frame-zero history, each with
+`window replace … reason=seek-partial edits=2`. No other row replacements are
+allowed. This is the only navigation path with row edits until sparse items
+land. B1/B2/F3 and immutable WAV resources remain unchanged.
+
+FLAC passes the device timing matrix. Tail-moov ALAC and raw WAV still miss
+latency deadlines with core pin `9d5aa42`; the assertions remain enabled.
+Faststart ALAC removes the metadata-at-EOF delay without changing PCM. The
+device-profile Q4 quota case also reproduces a baseline pressure/navigation
+race; it remains outstanding without a mirror/outbox model change. See
+`docs/designs/sonos-full-queue.md` for measured numbers and final gate evidence.
 
 Incoming finite starts carry an occurrence-token/producer-lower-bound admission
 ticket before entering the asynchronous core path. The serialized app-selection outbox

@@ -131,6 +131,7 @@ def run(c):
                 gate.retained_verified.set()
             gate.on_corruption = lambda: setattr(sonos, 'browse_hook', verify_retained_before_switch)
             gate.corrupt_next.set()
+        soap_mark = len(sonos.requests)
         seek_issued = time.monotonic()
         if case != 'S4d': cli(f'time {position}', mac)
         if case != 'S4d': wait(lambda: 'kind=seek' in log()[mark:], 10, 'LMS seek reconciled')
@@ -178,6 +179,10 @@ def run(c):
         assert edits == (len(sonos.actions('AddURIToQueue')), len(sonos.actions('RemoveTrackRangeFromQueue')))
         assert row(0)['resource']['duration'] == duration
         assert 're-produced' not in text and 'window replace' not in text, text
+        if case == 'S1':
+            calls = sonos.requests[soap_mark:]
+            print('SOAP in_item_seek ' + json.dumps([r[0] + (' ' + r[1]['Unit'] if r[0] == 'Seek' else '') for r in calls]), flush=True)
+            assert [r[0] for r in calls if not r[0].startswith('Get')] == ['Seek'], calls
         seeks = sonos.actions('Seek')[seek_count:]
         assert len(seeks) == (0 if case == 'S4d' else 1) and all(s[1]['Unit'] == 'REL_TIME' and s[1]['Target'] == f'00:{position//60:02}:{position%60:02}' for s in seeks), seeks
         if case != 'S4d': wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= 2, 5, 'speaker RelTime equals LMS time')

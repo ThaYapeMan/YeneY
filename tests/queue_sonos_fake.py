@@ -77,7 +77,7 @@ class Coordinator(ThreadingHTTPServer):
                 try:fields = self.echo_queue.get(timeout=.05)
                 except queue.Empty:continue
                 # Real event delivery can lag SOAP and the following seek.
-                if self.echo_stop.wait(.08):break
+                if self.echo_stop.wait(getattr(self, 'echo_delay', .08)):break
                 try:
                     if fields['TransportState'] == 'PLAYING':
                         self.notify_transport(dict(fields, TransportState='TRANSITIONING'))
@@ -135,8 +135,23 @@ class Coordinator(ThreadingHTTPServer):
             self.position_history.append((time.monotonic(), value['TrackURI']))
         self._position = Position(self, value)
 
+    def latency_profile(self, profile):
+        """12 Nov Study journal: SOAP 7–45 ms; transport 200–450 ms.
+
+        Device acceptance uses 30/400/50 ms SOAP/transition/GENA. Strict is
+        the optional 600 ms SOAP stress model. Inherited leaves caller knobs
+        and the original 80 ms echo unchanged.
+        """
+        if profile == 'inherited':
+            return
+        assert profile in ('device', 'strict'), profile
+        self.soap_delay = self.all_soap_delay = .03 if profile == 'device' else .6
+        self.transition_delay = .4 if profile == 'device' else 0
+        self.echo_delay = .05 if profile == 'device' else .08
+
     def read_audio(self, seconds=0):
         uri = self.position['TrackURI']
+        time.sleep(getattr(self, 'transition_delay', 0))
         offset = 0
         if seconds:
             item = next(i for i in self.items if i['uri'] == uri)

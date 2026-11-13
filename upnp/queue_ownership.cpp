@@ -18,9 +18,10 @@ bool QueueOwnership::owns(const std::string &uri) const {
     const auto path = scheme == std::string::npos ? 0 : uri.find('/', scheme + 3);
     return path != std::string::npos && uri.compare(path, 10 + session.size(), "/yeney/q/" + session + "/") == 0;
 }
-void QueueOwnership::acquire(const std::string &title) {
+void QueueOwnership::acquire(const std::string &title, bool deferRetention) {
     if (held || restoring)
         throw std::logic_error("queue ownership already held");
+    pendingRetention.clear();
     auto queue = io.browse();
     const bool foreign =
         std::any_of(queue.uris.begin(), queue.uris.end(), [&](const auto &u) { return !owns(u); });
@@ -73,16 +74,8 @@ void QueueOwnership::acquire(const std::string &title) {
             auto left = sequence(a.id), right = sequence(b.id);
             return left != right ? left > right : a.id > b.id;
         });
-        for (size_t i = 5; i < saved.size(); ++i) {
-            const auto fresh = io.playlists();
-            const auto &victim = saved[i];
-            auto verified = std::find_if(fresh.begin(), fresh.end(), [&](const auto &p) {
-                return p.id == victim.id && p.title == victim.title && p.created == victim.created;
-            });
-            if (verified == fresh.end())
-                throw std::runtime_error("queue-backup-identity-changed");
-            io.deletePlaylist(victim.id);
-        }
+        pendingRetention.assign(saved.begin() + std::min(size_t(5), saved.size()), saved.end());
+        if (!deferRetention) pruneBackups();
         auto fresh = io.browse();
         if (fresh.update != queue.update || fresh.uris != queue.uris)
             throw std::runtime_error("queue-changed-during-backup");
@@ -96,6 +89,18 @@ void QueueOwnership::acquire(const std::string &title) {
     if (!queue.uris.empty())
         io.remove(queue.update, 1, queue.uris.size());
     held = true;
+}
+void QueueOwnership::pruneBackups() {
+    for (const auto &victim : pendingRetention) {
+        const auto fresh = io.playlists();
+        auto verified = std::find_if(fresh.begin(), fresh.end(), [&](const auto &p) {
+            return p.id == victim.id && p.title == victim.title && p.created == victim.created;
+        });
+        if (verified == fresh.end())
+            throw std::runtime_error("queue-backup-identity-changed");
+        io.deletePlaylist(victim.id);
+    }
+    pendingRetention.clear();
 }
 void QueueOwnership::release(bool cleanup, std::function<bool(const std::string &)> cleanupOwns, bool stop) noexcept {
     const bool removeOwned = held, restore = restoring, crossfade = savedCrossfade;

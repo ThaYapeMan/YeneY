@@ -13,6 +13,7 @@ void QueueRoom::Impl::externalStop(const std::string &reason) {
     resumeFlush = false;
     deferredStop = {};
 
+    coordinator.invalidateIdentity();
     externalReleased = true;
     stopAcknowledged = false;
     firstStream = queue.latestOccurrence() + 1;

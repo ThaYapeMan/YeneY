@@ -257,6 +257,7 @@ if fullq_codec in ('alac', 'wav'):
             subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(source), '-c:a', 'alac',
                             '-metadata', f'title=Title & {i}', '-metadata', 'artist=Artist <one>',
                             '-metadata', 'album=Album & fixture',
+                            *(['-movflags', '+faststart'] if os.environ.get('YENEY_FULLQ_FASTSTART') == '1' else []),
                             str(base / f'library/fullq-{i}.m4a')], check=True)
         else:
             info = b'INFO'
@@ -525,9 +526,11 @@ try:
         from navigation_invariants_real_lms import run
         run(globals())
         if os.environ.get('YENEY_FULLQ_Q8') == '1':
-            replacements = (base/'bridge.log').read_text().count('reason=seek-partial edits=2')
-            print(f'Q8 seek_partial_replacements={replacements} expected=1', flush=True)
-            assert replacements == 1, ('Q8 single replacement', replacements)
+            swaps = [line for line in (base/'bridge.log').read_text().splitlines() if 'window replace ' in line]
+            replacements = sum('reason=seek-partial edits=2' in line for line in swaps)
+            assert len(swaps) == replacements, ('Q8 unexpected replacements', swaps)
+            print(f'Q8 seek_partial_replacements={replacements} expected=2', flush=True)
+            assert replacements == 2, ('Q8 full to suffix to frame-zero history', replacements)
         raise SystemExit(0)
     if os.environ.get('YENEY_REAL_LMS_NAV_ONLY')=='1':
         from navigation_real_lms import run

@@ -16,6 +16,7 @@ class QueueCoordinator {
     std::map<std::string, Endpoint> services;
     std::function<void(const std::string &)> log;
     unsigned timeout;
+    bool identityConfirmed = false, reuseIdentity = false;
     void discover();
     SoapResult raw(const std::string &, const std::string &, const SoapArguments &);
     void fence();
@@ -26,8 +27,10 @@ public:
     SoapResult transport(const std::string &, const SoapArguments &);
     // Cleanup requires both live coordinator identity and our queue transport.
     SoapResult releaseTransport(const std::string &, const SoapArguments &);
-    // Fresh topology at each new play; transport writes also fence live identity.
+    // Refresh topology at ownership acquisition; reuse it within the owned sequence.
     Speaker currentRoom();
+    void reuseOwnershipIdentity() { reuseIdentity = true; }
+    void invalidateIdentity() { identityConfirmed = reuseIdentity = false; }
     QueueSnapshot browse();
     std::vector<SavedQueue> playlists();
     void destroyPlaylist(const std::string &id);

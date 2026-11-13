@@ -127,10 +127,8 @@ void QueueRoom::Impl::selectPath() {
         if (std::chrono::steady_clock::now() < cancelledHeaderUntil) return;
     }
     if (!selectionKnown) {
-        const auto rewind = selections.find(navigationFrom);
-        if (!(started && lmsNavigation && ownership.active()) &&
-            !(started && lmsNavigation && rewind != selections.end() &&
-              rewind->second.token == navigationToken && rewind->second.rewindMs)) {
+        if (externalReleased && ownership.active()) release();
+        if (!ownership.active()) {
             const auto live = coordinator.currentRoom();
             if (live.coordinator != room.name) {
                 if (!roomStopped) {
@@ -142,7 +140,7 @@ void QueueRoom::Impl::selectPath() {
                 return;
             }
         }
-        if (externalReleased && ownership.active()) release();
+        coordinator.reuseOwnershipIdentity();
         roomStopped = false;
 
         queue_audio::PlaylistEntry track;

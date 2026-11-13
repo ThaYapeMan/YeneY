@@ -67,21 +67,21 @@ The core pin remains `9d5aa42`; no core change is required or included.
 
 ### Acceptance limitations found in FULLQ-01b
 
-This implementation is not full acceptance of FULLQ-01b. The inherited fake's
+Historical FULLQ-01b status (superseded by the FULLQ-01c measurements below): The inherited fake's
 600 ms delay applies only to Browse and topology reads. Under that weaker model,
 12/100/500-row builds measured 16.572/28.089/131.352 seconds. Album first-byte
 latency remained about 14.05 seconds, and generation replacement about 8 seconds.
 Those album-start results miss the 1.5-second target. FULLQ now also supports a
 600 ms delay on every SOAP call; results from the two models must not be mixed.
 
-There is also a discrepancy between Q8's single replacement and the existing
+There was also a discrepancy between Q8's original single replacement and the existing
 B1/B2 history contract. The immutable original full resource, seek suffix and
 frame-zero history route require two row replacements over that lifecycle:
 full row to suffix, then suffix to deferred frame-zero history. Both affect only
 that row and both log `reason=seek-partial edits=2`. Omitting the second edit by
 rebinding the suffix URL would repeat the representation violation rejected in
-FULLQ-01. Passing B1/B2's PCM and switch assertions does not establish Q8's
-single-replacement requirement. See the report for final gate status.
+FULLQ-01. The owner corrected Q8 in FULLQ-01c: exactly two such replacements and no
+other replacements are required. B1/B2 PCM and switch assertions are retained.
 
 The final regression fixes also fence asynchronous producer admission by token
 and a producer lower bound, retire superseded app selections only when their
@@ -124,13 +124,14 @@ LMS moves from 1.362 to 2.514 seconds and app moves from 0.001 to 1.363 seconds.
 Q4 confirms deep app/LMS Back and exact reproduction after eviction under a
 24 MiB quota. Q6 confirms a generation rebuild and zero-edit navigation
 thereafter, but generation start takes 24.170 seconds. Q7 confirms one logged
-batch-rejection fallback and the same complete mirror. Q8 still records two
-row replacements, so the requested single-replacement lifecycle is not met.
+batch-rejection fallback and the same complete mirror. Q8 recorded two row replacements. FULLQ-01c corrects the owner requirement
+to accept exactly those two immutable-resource swaps.
 
 Confirmed serial AddURIToQueue, SetAVTransportURI and Play already require
 1.8 seconds with 600 ms on every call. The 1.5-second cold-start target cannot
 be reached with that serial transport contract, even before ownership fences.
-This is an unmet requirement, not an accepted relaxation of the target.
+FULLQ-01c classifies this 600 ms model as stress only; device acceptance uses
+30 ms SOAP responses. The actual device targets remain unchanged.
 
 The final full regression gate was terminated twice by SIGTERM, before an
 assertion failure in either interrupted run; no full exit-0 result is claimed.
@@ -139,3 +140,96 @@ seek-partial replacements. The focused navigation/remaining regression tail and
 the read-only require_v1 consumer check passed. Full details are in the
 FULLQ-01b report. No owner LMS or speaker was contacted, and no deployment
 occurred.
+
+## FULLQ-01c device calibration and results (13 November 2026)
+
+Acceptance uses `YENEY_FULLQ_PROFILE=device`: 30 ms per SOAP response, 400 ms
+from a transport move to fetching PCM, and 50 ms per GENA echo. The owner’s
+12 November Study journal showed consecutive SOAP spacing of 7–45 ms and
+200–450 ms TRANSITIONING→PLAYING. `strict` keeps 600 ms per SOAP as stress;
+`inherited` preserves `YENEY_FULLQ_DELAY` and `YENEY_FULLQ_ALL_SOAP` behavior.
+Profiles and their origin are documented in `tests/full_queue_real_lms.py`.
+
+Calls are captured at the fake SOAP handler and filtered by its first PCM-byte
+read timestamp. Latency is trigger to first PCM byte, with exact PCM identity
+checked. Polling reads remain in the reported lists. All tests use disposable
+loopback LMS and renderer endpoints.
+
+Per-operation SOAP contract: LMS Next/Previous/jump/repeat-wrap issues exactly
+one `Seek TRACK_NR`, plus `Play` only when not playing; no Browse, topology
+read, add or remove. App Next/Back/tap issues zero SOAP writes and one LMS
+`playlist index`. In-item seeks issue one `Seek REL_TIME`, zero edits.
+
+Ownership now reuses one acquisition topology read. Live GENA grouping and
+foreign transport observations still block writes; release uses fresh fences.
+Backup creation, verification, queue identity and every real-edit fence remain.
+Backup retention moves after Play, where it overlaps the transport transition,
+and completes before subsequent navigation. It can therefore appear in the
+cold call list before the first byte without delaying admission.
+
+The measured baseline has one Get/Set/Get crossfade sequence, not two Get/Set
+pairs. The first read saves the original setting; the last verifies the write.
+Both reads and the single write remain; removing verification would weaken
+admission safety. No duplicate crossfade pair was found to trim.
+
+Cold-start call lists for the 12-row FLAC case, in full:
+
+Before (`b52323e`):
+
+```text
+SOAP album_start ["GetZoneGroupState", "Browse", "GetMediaInfo", "GetZoneGroupState", "SaveQueue", "Browse", "Browse", "Browse", "GetZoneGroupState", "DestroyObject", "Browse", "Browse", "GetZoneGroupState", "DestroyObject", "Browse", "Browse", "GetZoneGroupState", "DestroyObject", "Browse", "GetMediaInfo", "GetPositionInfo", "GetMediaInfo", "GetZoneGroupState", "SetAVTransportURI", "GetMediaInfo", "GetCrossfadeMode", "GetZoneGroupState", "SetCrossfadeMode", "GetCrossfadeMode", "GetPositionInfo", "GetMediaInfo", "GetZoneGroupState", "RemoveTrackRangeFromQueue", "Browse", "GetPositionInfo", "GetMediaInfo", "GetZoneGroupState", "AddURIToQueue", "Browse", "GetZoneGroupState", "Seek TRACK_NR", "GetPositionInfo", "GetMediaInfo", "GetZoneGroupState", "Play", "GetPositionInfo", "GetTransportInfo", "GetMediaInfo", "Browse", "Browse", "GetPositionInfo", "GetMediaInfo", "GetZoneGroupState", "AddMultipleURIsToQueue", "Browse"]
+```
+
+After (`FULLQ-01c`):
+
+```text
+SOAP album_start ["GetZoneGroupState", "Browse", "GetMediaInfo", "SaveQueue", "Browse", "Browse", "GetMediaInfo", "GetPositionInfo", "GetMediaInfo", "SetAVTransportURI", "GetMediaInfo", "GetCrossfadeMode", "SetCrossfadeMode", "GetCrossfadeMode", "GetPositionInfo", "GetMediaInfo", "RemoveTrackRangeFromQueue", "Browse", "GetPositionInfo", "GetMediaInfo", "AddURIToQueue", "Browse", "Seek TRACK_NR", "GetPositionInfo", "GetMediaInfo", "Play", "Browse", "Browse", "DestroyObject", "Browse", "Browse", "DestroyObject", "Browse", "Browse", "DestroyObject", "GetPositionInfo", "GetTransportInfo", "GetMediaInfo", "Browse"]
+```
+
+Device latency matrix (seconds; ranges cover every tested move):
+
+| Codec | Rows | Start before → after | LMS before → after | App before → after | Build before → after |
+|---|---:|---:|---|---|---:|
+| FLAC | 12 | 2.035 → 1.387 | 0.592–0.639 → 0.584–0.596 | 0.401–0.429 → 0.400–0.407 | 2.079 → 1.614 |
+| FLAC | 100 | 2.055 → 1.397 | 0.603–0.835 → 0.591–0.804 | 0.401–0.403 → 0.400–0.501 | 3.192 → 2.604 |
+| FLAC | 500 | 2.022 → 1.413 | 0.662–0.690 → 0.623–0.652 | 0.401–0.515 → 0.401–0.524 | 11.177 → 9.801 |
+| ALAC | 12 | 3.169 → 2.563 | 1.791–1.897 → 1.751–1.856 | 0.401–1.590 → 0.401–1.568 | 3.212 → 2.793 |
+| ALAC | 100 | 3.156 → 2.551 | 1.790–2.099 → 1.745–2.062 | 0.401–1.589 → 0.400–1.604 | 4.288 → 3.742 |
+| ALAC | 500 | 3.174 → 2.560 | 1.823–1.943 → 1.778–1.918 | 0.401–1.669 → 0.401–1.634 | 12.310 → 10.958 |
+| WAV | 12 | 4.285 → 3.686 | 0.626–3.120 → 0.592–3.288 | 0.401–2.672 → 0.401–2.677 | 4.346 → 3.882 |
+| WAV | 100 | 4.293 → 3.689 | 0.632–3.128 → 0.600–3.388 | 0.401–2.691 → 0.401–2.695 | 5.552 → 4.883 |
+| WAV | 500 | 4.316 → 3.704 | 0.663–3.161 → 0.637–3.125 | 0.401–2.850 → 0.401–2.767 | 13.669 → 12.274 |
+
+FLAC passes all device deadlines. Tail-moov ALAC and raw PCM WAV fail the
+unchanged C2 deadlines. The original generated ALAC file is 4,236,546 bytes,
+with moov at 4,234,684 and mdat at 36. A diagnostic remux puts moov at 28
+and mdat at 1,898, preserving PCM and the 255 KiB threshold. Faststart ALAC
+measures 1.397 s album start, 0.596–0.598 s LMS moves and 0.400–0.401 s app
+moves. Tail-moov ALAC measures about 1.74–1.86 s strm-to-byte on navigation;
+faststart about 0.58 s. This isolates metadata-at-EOF ingestion in the pinned
+decoder, rather than threshold or mirror batch size. It is documented rather
+rewritten by this task: core changes and media mutations are excluded.
+
+WAV is sent by LMS as raw wire codec p with threshold 255 KiB. It has no exact
+source-frame descriptor for progressive publication; the immutable local WAV
+promise remains sealed until EOF. Uncached rows thus cost about 3.1 s; already
+cached moves cost about 0.6 s. No duration estimate is substituted for an exact
+frame count. Fixing this needs a separate source-length/core design decision.
+
+Q8 now requires exactly two `window replace … reason=seek-partial edits=2`
+lines for full → suffix → frame-zero history, and zero other replacements.
+This is the only navigation path with row edits until sparse items land.
+B1 retains byte identity, one LMS command, zero renderer Back seeks and no
+switch to the old partial. The old one-swap assertion fails with count 2.
+
+Full-gate result and all individual operation timings are recorded in
+`/home/codex/src/reports/yeney-fullq-01c-report.md`. Outstanding acceptance
+limits remain ALAC tail metadata and raw WAV C2 timing; stress timings are
+historical evidence, not the device acceptance model.
+
+The device-profile Q4 quota test also exposes a baseline pressure/navigation race.
+It reproduces with the unchanged b52323e binary and original Q4 test source.
+On the trimmed binary, a deep Back can retain an owned-selection ticket and
+reach the lazy deadline without its LMS command. No outbox or mirror model
+change is included in this measurement/trimming round; Q4 device acceptance
+remains outstanding. Q6 generation rebuild and Q7 batch fallback pass.
