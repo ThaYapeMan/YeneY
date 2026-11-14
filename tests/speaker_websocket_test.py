@@ -16,12 +16,18 @@ def main():
     owner.transport_state = 'PLAYING'
     owner.position = dict(Track='1', TrackURI='owned-one', RelTime='00:00:10')
     from sonos_websocket_fake import LocalApi
-    api = LocalApi(owner)
+    port = int(os.environ.get('YENEY_WS_TEST_PORT', '1443'))
+    api = LocalApi(owner, port=port)
+    coordinator_owner = Coordinator(address=('127.0.0.2', 0))
+    coordinator_owner.transport_state = 'PAUSED_PLAYBACK'
+    coordinator_owner.position = dict(Track='1', TrackURI='coordinator-item', RelTime='00:00:41')
+    coordinator = LocalApi(coordinator_owner, port=port+1, host='127.0.0.2')
     process = subprocess.Popen([fixture], stdout=subprocess.PIPE, text=True)
     lines = queue.Queue()
     thread = threading.Thread(target=lambda: [lines.put(line) for line in process.stdout], daemon=True)
     thread.start()
 
+    source_errors = []
     def wait(predicate, timeout=3):
         end = time.monotonic() + timeout
         while time.monotonic() < end:
@@ -29,6 +35,7 @@ def main():
                 line = lines.get(timeout=.1).rstrip().split('\t')
             except queue.Empty:
                 continue
+            if len(line) > 3 and line[3]: source_errors.append(line[3])
             if predicate(float(line[0]), float(line[1]), line[2]):
                 return float(line[0]), float(line[1])
         raise AssertionError('source deadline')
@@ -69,24 +76,31 @@ def main():
         assert time.monotonic() - start < .3
         assert api.polls > before
         print('PASS T1 metadata event triggers immediate paused poll', flush=True)
-        api.group = 'loopback-group-2'
-        start = time.monotonic()
-        process.send_signal(signal.SIGUSR1)
-        wait(lambda t, p, i: api.info_reads == 2 and p >= 0 and any(h['groupId'] == api.group for _, h in api.commands))
-        assert time.monotonic() - start < 1
-        assert any(h['groupId'] == api.group for _, h in api.commands)
-        print('PASS T6 group change re-reads local info and follows group without a one-second gap', flush=True)
+        fault_mark = len(source_errors)
+        for target in (coordinator, api):
+            api.websocket_url = target.websocket_url if target is coordinator else f'wss://127.0.0.1:{port}/websocket/api'
+            before = len(target.handshakes)
+            start = time.monotonic()
+            process.send_signal(signal.SIGUSR1)
+            expected_item, expected_position = ('coordinator-item', 41000) if target is coordinator else ('owned-two', 1000)
+            wait(lambda t, p, i: len(target.handshakes) > before and i == expected_item and p == expected_position)
+            assert time.monotonic() - start < 1
+        assert coordinator.info_reads == 1, coordinator.info_reads
+        assert len(source_errors) == fault_mark, source_errors[fault_mark:]
+        print(f'PASS B4 group and ungroup use 127.0.0.2:{port+1} coordinator and return to 127.0.0.1:{port}; independent clocks 41000/1000 ms, zero source faults, both gaps <1 s', flush=True)
         api.disabled = True
         api.disconnect()
         wait(lambda t, p, i: p < 0)
         api.disabled = False
         wait(lambda t, p, i: p >= 0, 33)
-        assert api.info_reads == 3
+        assert api.info_reads == 4
         print('PASS T2 runtime socket failure invalidates source and retries after 30 seconds', flush=True)
     finally:
         process.terminate()
         process.wait(5)
         process.stdout.close()
+        coordinator.close()
+        coordinator_owner.close()
         api.close()
         owner.close()
 

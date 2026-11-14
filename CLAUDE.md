@@ -587,7 +587,7 @@ Queue mode selects the read-only local WebSocket automatically, with UPnP as
 fallback; --position-source overrides YENEY_POSITION_SOURCE, room and global
 configuration, then default auto. Force upnp for the prior observation path.
 Room status exposes position_source and position_precision on each switch.
-There is one persistent local connection per room, polling at 5 Hz while
+There is one persistent local connection per room, polling at 20 Hz while
 playing/transitioning and 1 Hz otherwise, with state/item event subscriptions.
 Use midpoint sample times, discard RTT above 200 ms, and take the median offset
 at rate 1.000 over the last 2.5 seconds. State/item changes reset immediately;

@@ -21,7 +21,7 @@ and every source switch produces one journal/stdout line.
 
 ## Fit and consumers
 
-Poll at 5 Hz during PLAYING/TRANSITIONING and 1 Hz otherwise. Subscribe to both
+Poll at 20 Hz during PLAYING/TRANSITIONING and 1 Hz otherwise. Subscribe to both
 playback and metadata events, requesting a poll immediately on a state/item
 event. Sample time is the send/receive midpoint. Discard RTT above 200 ms.
 PositionFit retains a 2.5-second window and uses the median of offsets at rate
@@ -37,11 +37,23 @@ Rewinds retain the index/token selection authority, exactly one integer time
 command, and no renderer Seek echo. The ticket records that integer target.
 The fitted source is queried when the core asks for elapsed, rather than only
 when the room worker polls. The bridge's QueuePathSink supplies the relative
-clock; the unchanged core's queueRelativeClock option is disabled in the host.
+clock; the core's queueRelativeClock option is disabled in the host.
 UPnP retains its observation-origin subtraction. A precise clock subtracts the
 selected producer seek offset instead, preserving position before observation.
-No core source or pin change is required. All STAT milliseconds already pass
-unchanged through QueueMode::elapsed, player.cpp and the STAT wire fields.
+Player::requestStatus asks the core for a current STMt on its next control-loop
+turn, coalesced to at most one extra report per 50 ms. It does not move the
+periodic heartbeat. The bridge asks on confirmed discontinuity, audible item,
+playback state or source change, and once a renderer-seek/rewind position is
+known. STAT milliseconds pass through QueueMode::elapsed and the existing wire
+fields. A pre-seek fit cannot announce a newly selected producer. A successful
+renderer seek invalidates the cached UPnP identity before it can authorize
+navigation against the old row.
+
+Grouping re-reads local/info and follows its advertised secure websocketUrl,
+including a coordinator at another numeric address and port. The coordinator's
+own local/info verifies household/group identity. The deterministic test uses
+two independent clocks at 127.0.0.1 and 127.0.0.2, with no source faults and
+less than one second to group or ungroup.
 
 The former path parses whole-second RelTime, holds it until the next poll and
 subtracts the first observation as its clock origin. Truncation, sample age and

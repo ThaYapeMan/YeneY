@@ -3,6 +3,9 @@
 #include "position_settings.h"
 #include <cassert>
 #include <iostream>
+#include <filesystem>
+#include <fstream>
+#include <unistd.h>
 int main() {
     setenv("YENEY_CONFIG", "/dev/null", 1);
     unsetenv("YENEY_POSITION_SOURCE");
@@ -10,6 +13,19 @@ int main() {
     setenv("YENEY_POSITION_SOURCE", "upnp", 1);
     assert(bridge::positionSetting("Study") == "upnp");
     assert(bridge::positionSetting("Study", "websocket") == "websocket");
+    unsetenv("YENEY_POSITION_SOURCE");
+    const auto temporary = std::getenv("TMPDIR");
+    const auto config = std::filesystem::path(temporary ? temporary : "/var/tmp") /
+        ("position-settings-" + std::to_string(getpid()));
+    { std::ofstream file(config); file << "YENEY_POSITION_SOURCE=upnp\nroom.Study.YENEY_POSITION_SOURCE=websocket\n"; }
+    setenv("YENEY_CONFIG", config.c_str(), 1);
+    assert(bridge::positionSetting("Study") == "websocket");
+    assert(bridge::positionSetting("Port") == "upnp");
+    setenv("YENEY_POSITION_SOURCE", "auto", 1);
+    assert(bridge::positionSetting("Study") == "auto");
+    assert(bridge::positionSetting("Study", "upnp") == "upnp");
+    std::filesystem::remove(config);
+    std::cout << "PASS T2 room/global precedence, environment and CLI override\n";
     struct FutureSource : bridge::SpeakerPosition {
         bool ready = false;
         const char *name() const override { return "future"; }

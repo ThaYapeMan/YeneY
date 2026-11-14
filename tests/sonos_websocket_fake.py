@@ -16,7 +16,8 @@ import time
 
 
 class LocalApi:
-    def __init__(self, owner, port=1443):
+    def __init__(self, owner, port=1443, host='127.0.0.1'):
+        self.websocket_url = f'wss://{host}:{port}/websocket/api'
         self.owner = owner
         self.group = 'loopback-group-1'
         self.household = 'loopback-household'
@@ -50,7 +51,7 @@ class LocalApi:
                     return
                 if self.path == '/api/v1/players/local/info':
                     api.info_reads += 1
-                    body = json.dumps({'householdId': api.household, 'groupId': api.group}).encode()
+                    body = json.dumps({'householdId': api.household, 'groupId': api.group, 'websocketUrl': api.websocket_url}).encode()
                     self.send_response(200)
                     self.send_header('Content-Length', str(len(body)))
                     self.end_headers()
@@ -142,7 +143,7 @@ class LocalApi:
                     worker.join()
                     api.connections.discard(self.connection)
 
-        self.server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        self.server = ThreadingHTTPServer((host, port), Handler)
         self.server.daemon_threads = True
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(str(cert), str(key))

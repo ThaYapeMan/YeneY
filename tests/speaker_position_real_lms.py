@@ -21,6 +21,7 @@ def run(c):
     rows = []
     transitions = []
     detection_failures = []
+    window_failures = []
     mark = len(sonos.requests)
     measurement_started = time.monotonic()
 
@@ -43,6 +44,7 @@ def run(c):
         values = [v for _, v in data]
         mean_t = statistics.mean(t for t, _ in data)
         mean_v = statistics.mean(values)
+        assert duration >= 60, (label, duration)
         creep = sum((t-mean_t)*(v-mean_v) for t, v in data) / sum((t-mean_t)**2 for t, _ in data)
         result = dict(source=source, phase=label, n=len(data), median_ms=statistics.median(values),
                       within_30_pct=100*sum(abs(v)<=30 for v in values)/len(values),
@@ -50,10 +52,13 @@ def run(c):
         print('MEASURE TIMING03 ' + json.dumps(result), flush=True)
         rows.extend((label, t, v) for t, v in data)
         if precise:
-            assert abs(result['median_ms']) <= 10, result
-            assert result['within_30_pct'] >= 95, result
-            assert result['jumps_over_100_ms'] == 0, result
-            assert abs(creep) < .1, result
+            try:
+                assert abs(result['median_ms']) <= 10, result
+                assert result['within_30_pct'] >= 95, result
+                assert result['jumps_over_100_ms'] == 0, result
+                assert abs(creep) < .1, result
+            except AssertionError:
+                window_failures.append(result)
         return result
 
     try:
@@ -87,8 +92,19 @@ def run(c):
                 wait(lambda: any(' time 0' in r['request'] for r in c['proxy'].records[climark:]), 3, 'one rewind time command')
                 assert len([r for r in c['proxy'].records[climark:] if ' time ' in r['request'] and not r['request'].endswith(' ?')]) == 1
                 assert not [r for r in sonos.requests[soapmark:] if r[0] == 'Seek']
-            time.sleep(2)
-            measure('after-' + label, 8)
+            measure('after-' + label, 60)
+        start = time.monotonic()
+        cli('time 20', mac)
+        aligned = None
+        while time.monotonic() - start < 2:
+            point = sample()
+            if abs(point[1]) <= 30:
+                aligned = point[0] - start
+                break
+            time.sleep(.01)
+        transitions.append(('lms-in-item-seek', aligned))
+        print(f'MEASURE TIMING03 source={source} lms-in-item-seek_LMS_alignment_ms={aligned*1000 if aligned is not None else None}', flush=True)
+        measure('after-lms-in-item-seek', 60)
         with sonos.lock:
             sonos.position['RelTime'] = '00:02:58'
         time.sleep(2)
@@ -103,11 +119,37 @@ def run(c):
             time.sleep(.01)
         transitions.append(('boundary', aligned))
         print(f'MEASURE TIMING03 source={source} boundary_LMS_alignment_ms={aligned*1000 if aligned is not None else None}', flush=True)
-        time.sleep(2)
-        measure('boundary', 8)
+        measure('boundary', 60)
+        start = time.monotonic()
+        cli('playlist index 0', mac)
+        aligned = None
+        while time.monotonic() - start < 2:
+            point = sample()
+            if abs(point[1]) <= 30 and int(cli('playlist index ?', mac)[-1]) == 0:
+                aligned = point[0] - start
+                break
+            time.sleep(.01)
+        transitions.append(('row-switch', aligned))
+        print(f'MEASURE TIMING03 source={source} row-switch_LMS_alignment_ms={aligned*1000 if aligned is not None else None}', flush=True)
+        measure('after-row-switch', 60)
         polls = sum(r[0]=='GetPositionInfo' for r in sonos.requests[mark:])
         print(f'MEASURE TIMING03 source={source} UPnP_polls={polls} UPnP_polls_per_minute={polls*60/(time.monotonic()-measurement_started):.3f}', flush=True)
         if precise:
+            status_path = c['base'] / ('stream-pacing-' + b'Study'.hex() + '.json')
+            def source_status(expected, precision):
+                try:
+                    status = json.loads(status_path.read_text())['playback']
+                    return status['position_source'] == expected and status['position_precision'] == precision
+                except (OSError, ValueError, KeyError):
+                    return False
+            wait(lambda: source_status('websocket', 'ms'), 3, 'room websocket status')
+            sonos.local_api.disabled = True
+            sonos.local_api.disconnect()
+            wait(lambda: source_status('upnp', 'second'), 4, 'room runtime fallback status')
+            sonos.local_api.disabled = False
+            wait(lambda: source_status('websocket', 'ms'), 34, 'room runtime recovered status')
+            print('PASS T2 per-room runtime websocket/ms -> upnp/second -> websocket/ms status', flush=True)
+            assert not window_failures, window_failures
             assert not detection_failures, detection_failures
             assert all(delay is not None and delay < .3 for _, delay in transitions), transitions
     finally:

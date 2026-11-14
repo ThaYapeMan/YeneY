@@ -116,13 +116,23 @@ public:
     Tls() = default;
     Tls(const Tls &) = delete;
     ~Tls() { if (ssl) SSL_free(ssl); if (context) SSL_CTX_free(context); if (fd >= 0) close(fd); }
-    void connect(const std::string &host) {
+    void connect(const std::string &endpoint) {
+        auto host = endpoint;
+        unsigned port = 1443;
+        const auto colon = host.find(':');
+        if (colon != std::string::npos) {
+            size_t consumed = 0;
+            port = std::stoul(host.substr(colon + 1), &consumed);
+            if (consumed != host.size() - colon - 1) throw std::runtime_error("invalid API port");
+            host.resize(colon);
+            if (!port || port > 65535) throw std::runtime_error("invalid API port");
+        }
         fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd < 0) throw std::runtime_error("socket");
         timeval timeout{1, 0};
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
-        sockaddr_in address{}; address.sin_family = AF_INET; address.sin_port = htons(1443);
+        sockaddr_in address{}; address.sin_family = AF_INET; address.sin_port = htons(port);
         if (inet_pton(AF_INET, host.c_str(), &address.sin_addr) != 1 ||
             ::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof address)) throw std::runtime_error("connect");
         context = SSL_CTX_new(TLS_client_method());
@@ -157,7 +167,7 @@ public:
     }
     std::string info(const std::string &host) {
         connect(host);
-        send("GET /api/v1/players/local/info HTTP/1.1\r\nHost: " + host + ":1443\r\nX-Sonos-Api-Key: 123e4567-e89b-12d3-a456-426655440000\r\nConnection: close\r\n\r\n");
+        send("GET /api/v1/players/local/info HTTP/1.1\r\nHost: " + (host.find(':') == std::string::npos ? host + ":1443" : host) + "\r\nX-Sonos-Api-Key: 123e4567-e89b-12d3-a456-426655440000\r\nConnection: close\r\n\r\n");
         auto h = headers();
         if (h.find(" 200 ") == std::string::npos) throw std::runtime_error("local info HTTP status");
         auto at = h.find("Content-Length:");
@@ -171,7 +181,7 @@ public:
         connect(host);
         unsigned char nonce[16]; if (RAND_bytes(nonce, sizeof nonce) != 1) throw std::runtime_error("random");
         const auto key = base64(nonce, sizeof nonce);
-        send("GET /websocket/api HTTP/1.1\r\nHost: " + host + ":1443\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Protocol: v1.api.smartspeaker.audio\r\nX-Sonos-Api-Key: 123e4567-e89b-12d3-a456-426655440000\r\n\r\n");
+        send("GET /websocket/api HTTP/1.1\r\nHost: " + (host.find(':') == std::string::npos ? host + ":1443" : host) + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Protocol: v1.api.smartspeaker.audio\r\nX-Sonos-Api-Key: 123e4567-e89b-12d3-a456-426655440000\r\n\r\n");
         const auto h = headers();
         unsigned char digest[SHA_DIGEST_LENGTH];
         const auto input = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -231,9 +241,25 @@ struct WebsocketSpeakerPosition::Impl {
             try {
                 Tls lookup;
                 const Fields info(lookup.info(host));
-                const auto group = info["groupId"], household = info["householdId"];
+                auto group = info["groupId"], household = info["householdId"];
                 if (group.empty() || household.empty()) throw std::runtime_error("local info missing identity");
-                Tls connection; connection.websocket(host);
+                auto endpoint = host;
+                const auto url = info["websocketUrl"];
+                if (!url.empty()) {
+                    const std::string prefix = "wss://", suffix = "/websocket/api";
+                    if (url.rfind(prefix, 0) != 0 || url.size() <= prefix.size() + suffix.size() ||
+                        url.substr(url.size() - suffix.size()) != suffix)
+                        throw std::runtime_error("invalid coordinator websocket URL");
+                    endpoint = url.substr(prefix.size(), url.size() - prefix.size() - suffix.size());
+                }
+                if (endpoint != host && endpoint != host + ":1443") {
+                    Tls coordinatorLookup;
+                    const Fields coordinatorInfo(coordinatorLookup.info(endpoint));
+                    if (coordinatorInfo["householdId"] != household || coordinatorInfo["groupId"].empty())
+                        throw std::runtime_error("coordinator local info identity");
+                    group = coordinatorInfo["groupId"];
+                }
+                Tls connection; connection.websocket(endpoint);
                 unsigned serial = 0;
                 auto command = [&](const std::string &space, const std::string &name) {
                     const auto id = std::to_string(++serial);
@@ -273,7 +299,7 @@ struct WebsocketSpeakerPosition::Impl {
                                 last = received; error.clear();
                             } else if ((received - sent) * 1000 <= 200) immediate = true;
                         }
-                        next = immediate ? received : sent + ((state == "PLAYING" || state == "TRANSITIONING") ? .2 : 1);
+                        next = immediate ? received : sent + ((state == "PLAYING" || state == "TRANSITIONING") ? .05 : 1);
                         break;
                     }
                 }

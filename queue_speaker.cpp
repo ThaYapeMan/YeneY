@@ -86,7 +86,7 @@ void QueueRoom::Impl::observe() {
     const bool event = eventDirty->exchange(false);
     if (!event && now < nextPoll)
         return;
-    nextPoll = now + std::chrono::milliseconds(precise ? 50 : now < fastUntil ? 100 : pollMs);
+    nextPoll = now + std::chrono::milliseconds(precise ? 20 : now < fastUntil ? 100 : pollMs);
     const bool identityPoll = !precise || event || cachedPosition.empty() || now >= nextIdentityPoll ||
         precise->item != lastWebsocketItem ||
         (precise && previousPrecisePosition && precise->state != previousPrecisePosition->state);
@@ -214,7 +214,11 @@ void QueueRoom::Impl::observe() {
             logQueue("seek verification source=" + activePositionSource + " error_ms=" + std::to_string(error) + " tolerance_ms=500");
             rendererSeekPosition.reset();
             rendererPositionConfirmed = true;
-        } else if (!rendererEcho) rendererSeekPosition.reset();
+        } else if (rendererEcho) {
+            // The fitted clock still describes playback before our renderer
+            // seek. Do not announce this producer with that old coordinate.
+            return;
+        } else rendererSeekPosition.reset();
     }
     const bool preciseSeek = precise && !rendererEcho && previousPrecisePosition &&
         precise->item == previousPrecisePosition->item && precise->state == "PLAYING" &&

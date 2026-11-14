@@ -8,7 +8,8 @@ volatile std::sig_atomic_t regroup = 0;
 void group(int) { regroup = 1; }
 int main() {
     std::signal(SIGUSR1, group);
-    bridge::WebsocketSpeakerPosition source("127.0.0.1");
+    const auto port = std::getenv("YENEY_WS_TEST_PORT");
+    bridge::WebsocketSpeakerPosition source(port ? "127.0.0.1:" + std::string(port) : "127.0.0.1");
     std::cout.setf(std::ios::unitbuf);
     for (int n = 0; n < 5000; ++n) {
         if (regroup) { regroup = 0; source.groupChanged(); }

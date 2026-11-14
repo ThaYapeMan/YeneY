@@ -112,7 +112,13 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
           auto result =
               releasing ? coordinator.releaseTransport(name, args) : coordinator.transport(name, args);
           if (result.ok && (name == "AddURIToQueue" || name == "AddMultipleURIsToQueue" || name == "RemoveTrackRangeFromQueue")) ++queueEdits;
-          if (name == "Seek" && result.ok) speakerChanges->selected();
+          if (name == "Seek" && result.ok) {
+              speakerChanges->selected();
+              // A completed renderer seek invalidates the cached identity read
+              // from before the write. Read the owned URI before navigation.
+              cachedPosition.clear();
+              nextIdentityPoll = {};
+          }
           if (name == "SetAVTransportURI" && result.ok) {
               sourceAway = false;
               speakerChanges->transportSelected("x-rincon-queue:" + room.uuid + "#0");
