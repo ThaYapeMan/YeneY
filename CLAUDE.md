@@ -580,3 +580,51 @@ to binary `ee210e03`, as the owner directed. No deployment occurred.
 The not-accepted report includes every fault found, its cause and fix, the
 attempt-6 failure, and a structural ownership/state-machine assessment:
 `/home/codex/src/reports/yeney-fullq-01d-report.md`.
+
+## Speaker position source
+
+Queue mode selects the read-only local WebSocket automatically, with UPnP as
+fallback; --position-source overrides YENEY_POSITION_SOURCE, room and global
+configuration, then default auto. Force upnp for the prior observation path.
+Room status exposes position_source and position_precision on each switch.
+There is one persistent local connection per room, polling at 5 Hz while
+playing/transitioning and 1 Hz otherwise, with state/item event subscriptions.
+Use midpoint sample times, discard RTT above 200 ms, and take the median offset
+at rate 1.000 over the last 2.5 seconds. State/item changes reset immediately;
+a discontinuity above 150 ms triggers an immediate confirmation poll and reset.
+The first sample is usable. Socket/command failure falls back; retry after
+30 seconds. A sample older than three seconds is unusable.
+
+Speaker seek/rewind detection uses milliseconds; exact UPnP owned URI identity,
+the selection arbiter, I1–I6 and immutable audio promises remain authoritative.
+The STAT getter evaluates the fit at request time. QueuePathSink handles clock
+origins in the bridge: precise elapsed subtracts the selected seek offset,
+while UPnP preserves the first-observation origin. The core pin is unchanged.
+The old maximum 500 ms reconciliation tolerance is retained; precise-source
+errors require measurement rather than assuming whole-second accuracy.
+See docs/designs/speaker-position-source.md and the final report for measured
+figures and acceptance limitations. The owner probe is read-only; this task
+never deploys or contacts speakers.
+
+## Decisions — TIMING-03
+
+Use a 2.5-second median offset at rate 1.000: the measured ten ppm rate error
+contributes only 0.025 ms over this window, while a median limits isolated
+latency asymmetry. Request confirmation immediately after a suspected seek;
+a regular second 5 Hz poll could itself consume the detection budget. Wake
+the room worker every 20 ms while its precise source is active, retaining
+100 ms for the UPnP path and the existing SOAP poll interval.
+
+The core's original queueRelativeClock option subtracts the first observation,
+which loses even a precise source's initial phase. Implement source-specific
+origin handling in QueuePathSink and retain the unchanged core/pin. The
+UPnP path keeps its prior origin semantics. A retained item's old owner is not
+necessarily the new producer's audible occurrence after rewind; use the
+latter for the fitted clock callback. Integer time commands keep integer
+rewind tickets, so the clock subtracts the offset actually installed by LMS.
+
+Treat failed development measurements as failures, not baselines to rewrite.
+Record all final-binary transition checks; periodic STAT cadence may still
+limit how quickly an arbitrary-phase seek becomes visible at LMS. Do not
+change the core or issue extra LMS position mutations to conceal such a miss.
+Owner speakers and deployment remain outside this task.

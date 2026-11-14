@@ -205,6 +205,8 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	YENEY_REAL_LMS_VOLUME_ONLY=1 python3 tests/real_lms_test.py
 	python3 third_party/yeney-core/tests/decimator_quality.py --sox "$${YENEY_REAL_LMS_HOME:-$${YENEY_TEST_CACHE}/real-lms-9.1.1}/Bin/x86_64-linux/sox"
 	$(MAKE) -C third_party/yeney-core test
+	YENEY_TIMING_03=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
+	YENEY_TIMING_03=1 YENEY_POSITION_SOURCE=upnp YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
 
 sbstreamer.o sbencoder.o: sbencoder.h
 
@@ -562,13 +564,14 @@ full-queue-pressure: yeney
 	$(MAKE) -C third_party/yeney-core mp4-position-test
 	@for run in 1 2 3; do \
 	    printf 'D1 final-binary run=%s/3\n' "$$run"; \
-	    YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py || exit $$?; \
+	    source=websocket; fake=1; if test $$run = 3; then source=upnp; fake=0; fi; \
+	    YENEY_POSITION_SOURCE=$$source YENEY_FAKE_WEBSOCKET=$$fake YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py || exit $$?; \
 	done
 	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_CODEC=alac python3 tests/real_lms_test.py
 	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_CODEC=converted-flac python3 tests/real_lms_test.py
 
 full-queue-pressure-soak: yeney
-	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_SOAK_SEED=314159 python3 tests/real_lms_test.py
+	YENEY_POSITION_SOURCE=websocket YENEY_FAKE_WEBSOCKET=1 YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_SOAK_SEED=314159 python3 tests/real_lms_test.py
 
 
 .PHONY: full-queue-acceptance
@@ -664,6 +667,15 @@ speaker_websocket.o: speaker_websocket.cpp speaker_websocket.h speaker_position.
 speaker-position-fit-test: tests/speaker_position_fit_test.cpp speaker_position.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. $< -o $@
 
-test-run test-fast-run: speaker-position-fit-test
+test-run test-fast-run: speaker-position-test
 
 $(QUEUE_ROOM_OBJS): position_settings.h speaker_position.h speaker_websocket.h
+
+speaker-websocket-fixture: tests/speaker_websocket_fixture.cpp speaker_websocket.cpp speaker_websocket.h speaker_position.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. tests/speaker_websocket_fixture.cpp speaker_websocket.cpp -lssl -lcrypto -pthread -o $@
+
+.PHONY: speaker-position-test
+speaker-position-test: speaker-position-fit-test speaker-websocket-fixture
+	./speaker-position-fit-test
+	YENEY_WS_FIXTURE=./speaker-websocket-fixture python3 tests/speaker_websocket_test.py
+	python3 tests/sonos_timing_probe_test.py

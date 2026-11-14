@@ -816,3 +816,11 @@ prefix covers its exact overlap. Trimmed ALAC uses the original source origin
 when attaching. Converted hi-res audio and AAC/MP3 with unprovable landings use a
 single speaker switch with `landed-frame-unknown`; an exact PCM mismatch uses
 `landed-pcm-mismatch` and preserves the retained WAV until that switch.
+
+Queue mode can read the speaker's millisecond position from the Sonos local
+WebSocket API on port 1443. This read-only interface uses a public application
+key and the speaker's self-signed TLS certificate; it needs no Sonos account.
+It is an undocumented local interface, so socket failures fall back to UPnP and
+retry automatically. Room status shows `position_source` and
+`position_precision`. Set `YENEY_POSITION_SOURCE=upnp` (or
+`--position-source=upnp`) to force the previous position source.

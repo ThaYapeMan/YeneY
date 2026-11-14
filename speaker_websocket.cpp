@@ -6,6 +6,8 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <poll.h>
+#include <pthread.h>
+#include <signal.h>
 #include <unistd.h>
 #include <atomic>
 #include <chrono>
@@ -221,6 +223,10 @@ struct WebsocketSpeakerPosition::Impl {
     explicit Impl(std::string h) : host(std::move(h)), worker([this] { run(); }) {}
     ~Impl() { stop = true; worker.join(); }
     void run() {
+        sigset_t blocked;
+        sigemptyset(&blocked);
+        sigaddset(&blocked, SIGPIPE);
+        pthread_sigmask(SIG_BLOCK, &blocked, nullptr);
         while (!stop) {
             try {
                 Tls lookup;

@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import queue
+import signal
 import subprocess
 import threading
 import time
@@ -45,6 +46,13 @@ def main():
             truth = 10000 + (t - owner.position.stamp) * 1000
             errors.append(value - truth)
         assert max(abs(e) for e in errors) < 5, (min(errors), max(errors))
+        api.outlier_poll = api.polls + 1
+        until = time.monotonic() + .6
+        while time.monotonic() < until:
+            t, value = wait(lambda t, p, i: p > 0)
+            truth = 10000 + (t - owner.position.stamp) * 1000
+            assert abs(value - truth) < 5, (value, truth)
+        print('PASS T1 client discards a 250 ms RTT answer with a 400 ms false position; reported error stays below 5 ms', flush=True)
         print('PASS T1 handshake/key/subprotocol, local info, status parsing, midpoint with 50 ms spikes, both subscriptions', flush=True)
         start = time.monotonic()
         owner.position['RelTime'] = '00:00:05'
@@ -61,12 +69,19 @@ def main():
         assert time.monotonic() - start < .3
         assert api.polls > before
         print('PASS T1 metadata event triggers immediate paused poll', flush=True)
+        api.group = 'loopback-group-2'
+        start = time.monotonic()
+        process.send_signal(signal.SIGUSR1)
+        wait(lambda t, p, i: api.info_reads == 2 and p >= 0 and any(h['groupId'] == api.group for _, h in api.commands))
+        assert time.monotonic() - start < 1
+        assert any(h['groupId'] == api.group for _, h in api.commands)
+        print('PASS T6 group change re-reads local info and follows group without a one-second gap', flush=True)
         api.disabled = True
         api.disconnect()
         wait(lambda t, p, i: p < 0)
         api.disabled = False
         wait(lambda t, p, i: p >= 0, 33)
-        assert api.info_reads == 2
+        assert api.info_reads == 3
         print('PASS T2 runtime socket failure invalidates source and retries after 30 seconds', flush=True)
     finally:
         process.terminate()

@@ -218,11 +218,12 @@ def reltime_summary(rows):
         previous = upnp[i - 1]
         if row['item'] != previous['item'] or row['position_ms'] - previous['position_ms'] != 1000:
             continue
-        # A second-change lies in this observation bracket. Report the first
-        # observation's phase and retain the bracket width in the raw TSV.
+        # A second-change lies in this observation bracket. Estimate its midpoint;
+        # both observations remain in the TSV to preserve the uncertainty.
         event = reference.get('event')
         category = event[0] if event and 0 <= row['midpoint'] - event[1] < 2 else 'steady'
-        edges[category].append(abs(position - row['position_ms']))
+        edge_time = (previous['midpoint'] + row['midpoint']) / 2
+        edges[category].append(abs(project(reference, edge_time) - row['position_ms']))
     if offsets:
         truncated = sum(0 <= v < 1000 for v in offsets)
         rounded = sum(-500 <= v < 500 for v in offsets)

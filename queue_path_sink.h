@@ -12,6 +12,7 @@ class QueuePathSink : public yeney::Sink {
     std::atomic_bool relayPath{true}, ready{false}, reset{false}, waiting{false}, boundary{false};
     std::function<void()> pendingBoundary;
     bool nextRelay = true;
+    std::map<uint64_t, uint32_t> elapsedOrigins;
     std::atomic_bool successor{false};
     yeney::Command start{'s', 0, false};
     yeney::Sink &target() { return relayPath ? static_cast<yeney::Sink &>(relay) : stream; }
@@ -114,7 +115,12 @@ public:
     std::optional<yeney::EncodedSpool> encodedSpool(uint64_t id) override { return relay.encodedSpool(id); }
     bool queueEndRequiresPlayed(uint64_t id) const override { return target().queueEndRequiresPlayed(id); }
     bool queueItemProduced(uint64_t id) const override { return target().queueItemProduced(id); }
-    bool takeAudibleStart(yeney::AudibleStart &s) override { return relayPath && relay.takeAudibleStart(s); }
+    bool takeAudibleStart(yeney::AudibleStart &s) override {
+        if (!relayPath || !relay.takeAudibleStart(s)) return false;
+        elapsedOrigins[s.occurrence] = relay.audibleElapsedMs(s.occurrence).value_or(0);
+        while (elapsedOrigins.size() > 1024) elapsedOrigins.erase(elapsedOrigins.begin());
+        return true;
+    }
     bool takeAudibleState(yeney::AudibleState &s) override {
         while (relayPath && relay.takeAudibleState(s)) {
             if (waiting && s.state == yeney::PlaybackState::Stopped) {
@@ -126,7 +132,9 @@ public:
         return false;
     }
     std::optional<uint32_t> audibleElapsedMs(uint64_t id) const override {
-        return target().audibleElapsedMs(id);
+        if (!relayPath) return target().audibleElapsedMs(id);
+        const auto origin = elapsedOrigins.find(id);
+        return relay.relativeElapsedMs(id, origin == elapsedOrigins.end() ? 0 : origin->second);
     }
     std::optional<uint64_t> committedItemFrames(uint64_t id) const override {
         return target().committedItemFrames(id);

@@ -203,7 +203,17 @@ void QueueRoom::Impl::observe() {
     if (!precise && positionValid)
         upnpPosition.update({uri, transport, double(reportedMs), positionMonotonic(), 0});
     const uint64_t reportedElapsed = reportedMs / 1000;
-    const bool preciseSeek = precise && previousPrecisePosition &&
+    const bool rendererEcho = precise && rendererSeekPosition &&
+        precise->sampleTime - rendererSeekPosition->issued < 3;
+    if (precise && rendererSeekPosition) {
+        const auto error = precise->positionMs - rendererSeekPosition->targetMs -
+            (precise->state == "PLAYING" ? std::max(0.0, precise->sampleTime - rendererSeekPosition->issued) * 1000 : 0);
+        if (std::abs(error) <= 500) {
+            logQueue("seek verification source=" + activePositionSource + " error_ms=" + std::to_string(error) + " tolerance_ms=500");
+            rendererSeekPosition.reset();
+        } else if (!rendererEcho) rendererSeekPosition.reset();
+    }
+    const bool preciseSeek = precise && !rendererEcho && previousPrecisePosition &&
         precise->item == previousPrecisePosition->item && precise->state == "PLAYING" &&
         previousPrecisePosition->state == "PLAYING" &&
         std::abs(precise->positionMs - previousPrecisePosition->positionMs -
@@ -233,7 +243,7 @@ void QueueRoom::Impl::observe() {
                 " position_ms=" + std::to_string(positionMs) + " lms_offset_ms=" + std::to_string(offset) +
                 " decision=" + (rewind ? "time-command" : "stat") + " lms_commands=" + (rewind ? "1" : "0"));
             if (rewind) {
-                selections[index->second] = Selection{Selection::Queued, token->second, 0, {}, positionMs};
+                selections[index->second] = Selection{Selection::Queued, token->second, 0, {}, positionMs / 1000 * 1000};
                 selectionOrder.push_back(index->second);
                 advanceSelections();
             }
@@ -370,14 +380,14 @@ void QueueRoom::Impl::observe() {
     queue.speakerPosition(current, transport == "STOPPED" && nearEnd && estimatedEpisode ? realEnd :
                           elapsedMs * it->item->descriptor().rate / 1000, playback);
     if (precise) {
-        const auto owner = it->owner ? it->owner : it->stream;
+        const auto owner = queue.audibleOccurrence();
         const auto baseline = queue.audibleElapsedMs(owner);
         if (baseline) {
             const auto offset = int64_t(*baseline) - int64_t(precise->positionMs);
             const auto item = precise->item;
-            const auto ws = websocketPosition;
-            queue.positionClock(owner, [ws, item, offset]() -> std::optional<uint32_t> {
-                auto value = ws->position(positionMonotonic());
+            const auto fittedSource = selectedPosition.first;
+            queue.positionClock(owner, [fittedSource, item, offset]() -> std::optional<uint32_t> {
+                auto value = fittedSource->position(positionMonotonic());
                 if (!value || value->item != item) return {};
                 return uint32_t(std::clamp<int64_t>(int64_t(value->positionMs) + offset, 0, UINT32_MAX));
             });

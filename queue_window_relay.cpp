@@ -139,7 +139,10 @@ void QueueRoom::Impl::reconcileWindow() {
                 queue.reanchorSpeaker(current, 0, seekMs);
                 const bool superseded = std::any_of(selectionOrder.begin(), selectionOrder.end(),
                     [this](unsigned index) { return selections.count(index) && selections.at(index).token != navigationToken; });
-                if (!superseded && !rewind) actions.seekTime(seekMs);
+                if (!superseded && !rewind) {
+                    actions.seekTime(seekMs);
+                    rendererSeekPosition = RendererSeekPosition{seekMs, positionMonotonic()};
+                }
                 lastElapsed = seekMs / 1000;
                 speakerChanges->selected();
                 fastPoll();

@@ -611,7 +611,7 @@ void QueueRoom::Impl::run() {
         std::deque<std::pair<char, uint64_t>> pending;
         {
             std::unique_lock<std::mutex> lock(mutex);
-            changed.wait_for(lock, std::chrono::milliseconds(100),
+            changed.wait_for(lock, std::chrono::milliseconds(activePositionSource == "websocket" ? 20 : 100),
                              [&] { return closing || !commands.empty(); });
             if (closing)
                 break;

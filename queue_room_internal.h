@@ -168,6 +168,8 @@ struct QueueRoom::Impl {
     bool cachedMediaUri = false;
     std::chrono::steady_clock::time_point nextIdentityPoll{};
     std::optional<SpeakerPositionSample> previousPrecisePosition;
+    struct RendererSeekPosition { uint64_t targetMs; double issued; };
+    std::optional<RendererSeekPosition> rendererSeekPosition;
     unsigned pollMs = pollSetting();
     std::chrono::steady_clock::time_point nextPoll{}, fastUntil{};
     std::shared_ptr<std::atomic_bool> eventDirty = std::make_shared<std::atomic_bool>(false);

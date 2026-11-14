@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <memory>
 namespace bridge {
 // All times are seconds on steady_clock; positions and RTT are milliseconds.
 struct SpeakerPositionSample {
@@ -21,11 +22,12 @@ public:
 };
 // Ordered registrations permit further implementations without changing selection.
 class PositionSources {
-    std::vector<SpeakerPosition *> sources;
+    std::vector<std::shared_ptr<SpeakerPosition>> sources;
 public:
-    void add(SpeakerPosition &source) { sources.push_back(&source); }
-    std::pair<SpeakerPosition *, std::optional<SpeakerPositionSample>> select(double now) const {
-        for (auto *source : sources)
+    void add(std::shared_ptr<SpeakerPosition> source) { sources.push_back(std::move(source)); }
+    void add(SpeakerPosition &source) { sources.emplace_back(&source, [](SpeakerPosition *) {}); }
+    std::pair<std::shared_ptr<SpeakerPosition>, std::optional<SpeakerPositionSample>> select(double now) const {
+        for (const auto &source : sources)
             if (auto sample = source->position(now)) return {source, sample};
         return {sources.empty() ? nullptr : sources.back(), {}};
     }

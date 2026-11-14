@@ -1,12 +1,17 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "speaker_websocket.h"
 #include <chrono>
+#include <csignal>
 #include <iostream>
 #include <thread>
+volatile std::sig_atomic_t regroup = 0;
+void group(int) { regroup = 1; }
 int main() {
+    std::signal(SIGUSR1, group);
     bridge::WebsocketSpeakerPosition source("127.0.0.1");
     std::cout.setf(std::ios::unitbuf);
     for (int n = 0; n < 5000; ++n) {
+        if (regroup) { regroup = 0; source.groupChanged(); }
         const double now = bridge::positionMonotonic();
         auto value = source.position(now);
         std::cout.precision(12);

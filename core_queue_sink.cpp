@@ -1002,6 +1002,20 @@ std::optional<uint32_t> CoreQueueSink::audibleElapsedMs(uint64_t occurrence) con
         if (auto value = preciseElapsed()) return value;
     return speakerElapsed;
 }
+std::optional<uint32_t> CoreQueueSink::relativeElapsedMs(uint64_t occurrence, uint32_t coarseOrigin) const {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (occurrence != audibleSource) return {};
+    auto value = speakerElapsed;
+    auto origin = coarseOrigin;
+    if (preciseElapsed && occurrence == preciseOccurrence) {
+        if (auto fitted = preciseElapsed()) {
+            value = fitted;
+            const auto record = records.find(occurrence);
+            if (record != records.end()) origin = record->second.seekPositionMs;
+        }
+    }
+    return value ? std::optional<uint32_t>(*value >= origin ? *value - origin : 0) : std::nullopt;
+}
 void CoreQueueSink::positionClock(uint64_t occurrence, std::function<std::optional<uint32_t>()> clock) {
     std::lock_guard<std::mutex> lock(mutex);
     preciseOccurrence = occurrence;

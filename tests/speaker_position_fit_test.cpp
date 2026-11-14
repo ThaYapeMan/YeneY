@@ -1,8 +1,31 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "speaker_position.h"
+#include "position_settings.h"
 #include <cassert>
 #include <iostream>
 int main() {
+    setenv("YENEY_CONFIG", "/dev/null", 1);
+    unsetenv("YENEY_POSITION_SOURCE");
+    assert(bridge::positionSetting("Study") == "auto");
+    setenv("YENEY_POSITION_SOURCE", "upnp", 1);
+    assert(bridge::positionSetting("Study") == "upnp");
+    assert(bridge::positionSetting("Study", "websocket") == "websocket");
+    struct FutureSource : bridge::SpeakerPosition {
+        bool ready = false;
+        const char *name() const override { return "future"; }
+        const char *precision() const override { return "ms"; }
+        std::optional<bridge::SpeakerPositionSample> position(double now) const override {
+            return ready ? std::optional<bridge::SpeakerPositionSample>({"one", "PLAYING", 1000, now, 1}) : std::nullopt;
+        }
+    } future;
+    bridge::UpnpSpeakerPosition upnp;
+    upnp.update({"one", "PLAYING", 1000, 1, 10});
+    bridge::PositionSources sources;
+    sources.add(future); sources.add(upnp);
+    assert(std::string(sources.select(1).first->name()) == "upnp");
+    future.ready = true;
+    assert(std::string(sources.select(1).first->name()) == "future");
+    std::cout << "PASS T2 selection: default auto, environment, CLI override, ordered registration accepts a third source and fallback\n";
     bridge::PositionFit fit;
     assert(!fit.position(0));
     assert(fit.add({"one", "PLAYING", 1000, 1, 10}));

@@ -8,7 +8,7 @@ import time
 started = time.monotonic()
 soak = '--soak' in sys.argv
 cases = [('SOAK', str(seed)) for seed in (1729, 271828, 8675309)] if soak else [
-    (case, '') for case in ('S1', 'S2', 'S3', 'S4', 'S4b', 'S4c', 'S4d', 'S5', 'A1', 'A2', 'A3', 'B1', 'B2')]
+    (case, '') for case in ('S1', 'S2', 'S3', 'S4', 'S4b', 'S4c', 'S4d', 'S5', 'A1', 'A2', 'A3', 'B1', 'B2', 'F1', 'F2', 'F3')]
 matrix = [(case, seed, 'converted-flac-mixed' if soak and seed == '271828' else '') for case, seed in cases]
 if not soak:
     matrix += [(case, '', 'alac') for case in ('S1', 'S2', 'S5', 'A1', 'A2', 'A3')]
@@ -20,12 +20,14 @@ if not soak:
         matrix += [('S1', '', media) for media in ('private-mira', 'private-spell')]
     else:
         print('SKIP D5 private ALAC ReplayGain: YENEY_LENGTH_FIXTURE_DIR unset', flush=True)
-for case, seed, media in matrix:
+matrix = [(case, seed, media, ('upnp' if seed == '8675309' else 'websocket')) for case, seed, media in matrix] if soak else [
+    (case, seed, media, source) for source in ('websocket', 'upnp') for case, seed, media in matrix]
+for case, seed, media, source in matrix:
     case_started = time.monotonic()
-    env = dict(os.environ, YENEY_REAL_LMS_NAV_INVARIANTS='1', YENEY_NAV_CASE=case,
+    env = dict(os.environ, YENEY_POSITION_SOURCE=source, YENEY_FAKE_WEBSOCKET='1' if source == 'websocket' else '0', YENEY_REAL_LMS_NAV_INVARIANTS='1', YENEY_NAV_CASE=case,
                YENEY_NAV_SEED=seed, YENEY_NAV_MEDIA=media, YENEY_NAV_FAULT='mismatch' if case == 'D1' else '')
     result = subprocess.run([sys.executable, 'tests/real_lms_test.py'], env=env)
     if result.returncode:
         raise SystemExit(result.returncode)
-    print(f'PASS navigation case={case} media={media or "wav-flac"} seed={seed or "-"} runtime_seconds={time.monotonic()-case_started:.3f}', flush=True)
+    print(f'PASS navigation source={source} case={case} media={media or "wav-flac"} seed={seed or "-"} runtime_seconds={time.monotonic()-case_started:.3f}', flush=True)
 print(f'PASS navigation {"soak" if soak else "targeted"} gate runtime_seconds={time.monotonic()-started:.3f}', flush=True)

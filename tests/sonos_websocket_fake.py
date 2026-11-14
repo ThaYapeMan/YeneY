@@ -24,6 +24,7 @@ class LocalApi:
         self.spike_ms = 50
         self.spike_every = 5
         self.polls = 0
+        self.outlier_poll = 0
         self.info_reads = 0
         self.handshakes = []
         self.commands = []
@@ -56,6 +57,7 @@ class LocalApi:
                     self.wfile.write(body)
                     return
                 assert self.path == '/websocket/api'
+                self.close_connection = True
                 assert self.headers['Sec-WebSocket-Protocol'] == 'v1.api.smartspeaker.audio'
                 assert self.headers['X-Sonos-Api-Key'] == '123e4567-e89b-12d3-a456-426655440000'
                 api.handshakes.append(dict(self.headers))
@@ -123,11 +125,13 @@ class LocalApi:
                         assert header['command'] == 'getPlaybackStatus'
                         api.polls += 1
                         delay = (api.spike_ms if api.spike_every and api.polls % api.spike_every == 0 else api.rtt_ms) / 2000
+                        outlier = api.polls == api.outlier_poll
+                        if outlier: delay = .125
                         time.sleep(delay)
                         with owner.lock:
                             position = owner.position.milliseconds()
                             item, transport = state()
-                            body = {'positionMillis': round(position), 'itemId': item,
+                            body = {'positionMillis': round(position) + (400 if outlier else 0), 'itemId': item,
                                     'playbackState': 'PAUSED' if transport == 'PAUSED_PLAYBACK' else transport}
                         time.sleep(delay)
                         send(header, body)

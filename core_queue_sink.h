@@ -142,6 +142,7 @@ public:
     void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs, uint32_t seekPositionMs);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
     void positionClock(uint64_t occurrence, std::function<std::optional<uint32_t>()> clock);
+    std::optional<uint32_t> relativeElapsedMs(uint64_t occurrence, uint32_t coarseOrigin) const;
     bool speakerDriven() const override;
     std::optional<yeney::EncodedSpool> encodedSpool(uint64_t) override;
     bool queueEndRequiresPlayed(uint64_t) const override;

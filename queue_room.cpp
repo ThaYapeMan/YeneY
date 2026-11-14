@@ -125,7 +125,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
         host.resize(colon);
     if (positionSetting(room.name) != "upnp")
         websocketPosition = std::make_shared<WebsocketSpeakerPosition>(room.ip);
-    if (websocketPosition) positionSources.add(*websocketPosition);
+    if (websocketPosition) positionSources.add(websocketPosition);
     positionSources.add(upnpPosition);
     route.registerWith(*http);
     relayEvents(true);
@@ -281,7 +281,9 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     config.queueNextDelayMs = queueNextDelayMs();
     config.flacSourceInfo = [&room](uint64_t id, auto info) { return room.flacSourceInfo(id, info); };
     config.queueHostFailures = true;
-    config.queueRelativeClock = true;
+    // The bridge supplies elapsed relative to the selected seek offset.
+    // A precise source must retain time before the first observation.
+    config.queueRelativeClock = false;
     config.queueRemoteSource = [&room](uint64_t id) { return room.remoteSource(id); };
     config.log = [](const auto &line) { std::printf("core: %s\n", line.c_str()); if ((line.rfind("STMs ", 0) == 0 || line.rfind("STMt ", 0) == 0) && yeney_stream_track_changed) yeney_stream_track_changed(); };
     yeney::Player player(config, room.sink());

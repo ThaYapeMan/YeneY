@@ -110,3 +110,6 @@ field-cold-test
 
 /seek-worker-test
 /queue-native-decoder-test
+
+/speaker-position-fit-test
+/speaker-websocket-fixture
