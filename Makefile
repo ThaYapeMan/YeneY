@@ -580,3 +580,78 @@ full-queue-acceptance: yeney
 	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py
 	YENEY_FULLQ=1 YENEY_FULLQ_REJECT_BATCHES=1 python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=B1 YENEY_FULLQ_Q8=1 python3 tests/real_lms_test.py
+
+.PHONY: test-fast test-fast-run
+test-fast:
+	python3 scripts/run-tests.py $(MAKE) test-fast-run
+
+test-fast-run: export YENEY_DEBUG =
+test-fast-run: export YENEY_LMS_VOLUME = off
+test-fast-run: export YENEY_VOLUME_MAX = 100
+test-fast-run: export YENEY_LMS_ICON =
+test-fast-run: export YENEY_STREAM_PACING = wall
+test-fast-run: export YENEY_PLAYBACK_MODE = stream
+test-fast-run: export YENEY_START_LEAD_MS = 0
+test-fast-run: export YENEY_TIMING_PROBE = 0
+test-fast-run: export YENEY_TIMING_RAW = 0
+test-fast-run: export YENEY_TIMING_PRIOR = 1
+test-fast-run: export YENEY_TIMING_PUBLISH = 0
+test-fast-run: export YENEY_TIMING_LOCKED_EVERY_S = 5
+test-fast-run: export YENEY_AUDIBLE_OFFSET_MS = 0
+test-fast-run: export YENEY_TIMING_STALE_S = 60
+test-fast-run: yeney queue-native-decoder-test seek-worker-test consumption-diagnostic-test queue-declaration-test queue-window-test volume-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-source-test room-status-test queue-position-test playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test queue-item-store-test core-queue-sink-test timing-tap-test timing-contract-test cold-position-test field-cold-test oct11-acquisition-test oct12-boundary-test lms-position-test timing-probe-test timing-probe-field-test timing-probe-resets-test lead-test range-test range-history-test encoded-buffer-test speaker-state-test upnp-test xml-sanitize-test stream-content-test podcast-sink-test position-test encoder-test resume-state-test
+	./queue-native-decoder-test
+	./seek-worker-test mismatch
+	./seek-worker-test trim
+	./seek-worker-test warmup
+	./seek-worker-test warmup-short
+	./seek-worker-test unknown
+	./seek-worker-test unknown-origin
+	./seek-worker-test worker
+	./consumption-diagnostic-test
+	./queue-declaration-test
+	./queue-window-test
+	./volume-test
+	./stream-metrics-lifetime-test
+	./stream-metrics-lifetime-test worker
+	YENEY_STREAM_PACING=sonos YENEY_START_LEAD_MS=1000 ./stream-pacing-encoder-test
+	./encoded-backpressure-test
+	./stream-pacing-test
+	./stream-metrics-test
+	./queue-source-test
+	./room-status-test
+	./queue-position-test
+	./playback-mode-test
+	./queue-ownership-test
+	./queue-actions-test
+	./queue-metadata-test
+	./queue-route-test
+	./queue-item-store-test
+	./core-queue-sink-test
+	YENEY_TIMING_PROBE=1 YENEY_TIMING_PUBLISH=1 ./timing-tap-test
+	./timing-contract-test
+	./cold-position-test
+	./field-cold-test
+	./oct11-acquisition-test
+	./oct12-boundary-test
+	YENEY_TIMING_PRIOR=0 ./field-cold-test prior-setting
+	YENEY_TIMING_PRIOR=1 ./field-cold-test prior-setting
+	./lms-position-test
+	./timing-probe-test
+	./timing-probe-field-test
+	YENEY_TIMING_STALE_S=10 ./timing-probe-resets-test
+	YENEY_START_LEAD_MS=2000 ./lead-test
+	YENEY_START_LEAD_MS=0 ./lead-test
+	YENEY_START_LEAD_MS=2000 ./range-test
+	./range-history-test
+	./range-test
+	./encoded-buffer-test
+	./speaker-state-test
+	./upnp-test
+	./xml-sanitize-test
+	./stream-content-test
+	./podcast-sink-test
+	./position-test
+	./encoder-test
+	./resume-state-test
+	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py

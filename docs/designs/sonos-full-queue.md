@@ -426,3 +426,32 @@ it cannot tear down a replacement that is already decoding. Storage faults
 and source faults without a later cancellation retain their failure paths.
 The pressure soak exposed a truncated shared-stream response immediately
 before q, followed by a healthy immutable replacement and then stale cleanup.
+
+## FULLQ-01d validation — not accepted
+
+Implementation commit `5b9baef` was pushed while detached full-gate attempt 6
+ran, as the owner requested. Attempt 6 exited 2 after 5382.480 monotonic seconds
+(89.708 minutes). D3's 213 pressure moves, all three final-binary D1 runs, D2
+for native ALAC and converted 96 kHz FLAC, all targeted navigation, and all
+three original 200-move soaks passed. Their success does not constitute a
+successful complete gate.
+
+The unchanged core `decimator_quality.py` speed requirement failed: median
+13.6708x real time versus the required 20x, from five runs
+[14.6686, 13.4995, 13.6708, 16.725, 13.4775]. Signal-quality metrics passed;
+the cause of lower throughput was not established. No core change, threshold
+relaxation, rerun, or further production fix follows this failure, under the
+owner's final instruction. The final gate did not reach the mandatory consumer;
+the earlier read-only consumer remainder precheck passed `require_v1=True` at
+commit `f640132`, which does not replace final full-gate acceptance.
+
+The run exceeded 60 minutes, so `test-fast` was added for C++ unit checks and
+device-profile Q4; `test` retains every existing check and all four soaks.
+`test-fast` was not run after the failure because the owner instructed report
+and stop. Its under-20-minute acceptance remains unverified. Core pin
+`9d5aa42` is unchanged. R2 and ten retained D1 passes remain explicitly scoped
+to binary `ee210e03`, as the owner directed. No deployment occurred.
+
+The not-accepted report includes every fault found, its cause and fix, the
+attempt-6 failure, and a structural ownership/state-machine assessment:
+`/home/codex/src/reports/yeney-fullq-01d-report.md`.
