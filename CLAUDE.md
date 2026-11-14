@@ -636,3 +636,10 @@ meets its targets, but measured LMS alignment after app seek and rewind was
 also exceeded 0.1 ms/s. Full-gate admission requires a separate 30-second CPU
 idle measurement of at least 85 percent and no other test process; do not
 substitute a successful fast gate or a historical consumer check for it.
+
+Full-gate admission was blocked by three 30-second /proc/stat idle samples:
+13.643267%, 41.302780% and 7.146765%, all below 85%, with no other matching
+test process. No full make test attempt started, so no full-gate exit 0,
+soak acceptance or decimator acceptance is claimed. Independent T1–T8 red/green
+pairs, different physical coordinator endpoint following, precise queue SHM
+publication and the natural-boundary acceptance stimulus remain incomplete.
