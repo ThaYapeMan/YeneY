@@ -8,6 +8,7 @@ strict retains the optional 600 ms per SOAP stress model; inherited retains
 FULLQ_DELAY (600 ms default) and FULLQ_ALL_SOAP overrides from FULLQ-01b.
 """
 import http.client
+import hashlib
 import json
 import os
 import time
@@ -16,6 +17,7 @@ from urllib.parse import urlsplit
 
 
 def run(c):
+    print('FULLQ binary sha256=' + hashlib.sha256(Path(f'/proc/{c["bridge"].pid}/exe').read_bytes()).hexdigest(), flush=True)
     cli, mac, wait, items, sonos, proxy = (c[k] for k in ('cli', 'mac', 'wait', 'items', 'sonos', 'proxy'))
     ids = sorted(c['window_ids'], key=lambda i: int(next(t['url'].rsplit('/', 1)[-1].split('.')[0].rsplit('-', 1)[-1] for t in c['tracks'] if t['id'] == i)))
     count = int(os.environ.get('YENEY_FULLQ_ROWS', '12'))
@@ -43,7 +45,7 @@ def run(c):
     album_mark = len(sonos.requests)
     sonos.reject_batches = os.environ.get('YENEY_FULLQ_REJECT_BATCHES') == '1'
     text = lambda: (c['base'] / 'bridge.log').read_text()
-    def fetch(item):
+    def fetch(item, complete=False):
         u = urlsplit(item['uri'])
         conn = http.client.HTTPConnection(u.netloc, timeout=10)
         try:
@@ -52,7 +54,7 @@ def run(c):
             header = reply.read(44)
             first = reply.read(1)
             stamp = time.monotonic()
-            body = header + first + reply.read(4096 - 1)
+            body = header + first + (reply.read() if complete else reply.read(4096 - 1))
             assert reply.status == 200 and body[:4] == b'RIFF'
             return stamp, body
         finally:
@@ -170,35 +172,56 @@ def run(c):
         print('PASS Q7 batch rejection logged once; complete mirror preserved', flush=True)
 
     if os.environ.get('YENEY_FULLQ_QUOTA_MIB'):
-        for index in range(12):
-            logmark = len(text())
-            cli('playlist index ' + str(index), mac)
-            wait(lambda: len(items()) == count and sonos.position['TrackURI'] == items()[index]['uri'], 20, 'Q4 pressure move')
-            u = urlsplit(items()[index]['uri'])
-            conn = http.client.HTTPConnection(u.netloc, timeout=20)
-            try:
-                conn.request('GET', u.path)
-                response = conn.getresponse()
-                body = response.read()
-                assert response.status == 200
-                identity(index, body)
-            finally:
-                conn.close()
-            wait(lambda: f'window pairing lms_index={index} decision=' in text()[logmark:], 15, 'Q4 paired pressure move')
+        def pressure(indices):
+            for index in indices:
+                logmark = len(text())
+                cli('playlist index ' + str(index), mac)
+                wait(lambda: len(items()) == count and sonos.position['TrackURI'] == items()[index]['uri'], 20, 'Q4 pressure move')
+                u = urlsplit(items()[index]['uri'])
+                conn = http.client.HTTPConnection(u.netloc, timeout=20)
+                try:
+                    conn.request('GET', u.path)
+                    response = conn.getresponse()
+                    body = response.read()
+                    assert response.status == 200
+                    identity(index, body)
+                finally:
+                    conn.close()
+                wait(lambda: f'window pairing lms_index={index} decision=' in text()[logmark:], 15, 'Q4 paired pressure move')
+        pressure(range(12))
         wait(lambda: 'cache evicted lms_index=0' in text(), 10, 'Q4 oldest played audio evicted')
-        for app in (True, False):
+        for app, evicted_target in ((True, True), (False, False), (False, True)):
             if not app:
+                if evicted_target:
+                    _, complete_body = fetch(items()[0], True)
+                    identity(0, complete_body)
+                    eviction_mark = len(text())
+                    pressure(range(1, 11))
+                    wait(lambda: 'cache evicted lms_index=0' in text()[eviction_mark:], 10, 'Q4 LMS target evicted again')
+                return_start = time.monotonic()
                 cli('playlist index 11', mac)
                 wait(lambda: sonos.position['TrackURI'] == items()[11]['uri'], 20, 'Q4 LMS return')
-            mark = len(text())
+                wait(lambda: any(r[0] >= return_start and r[1] == immutable[11] for r in sonos.audible_reads), 15, 'Q4 LMS return audible')
+            mark, soapmark, climark = len(text()), len(sonos.requests), len(proxy.records)
+            move_start = time.monotonic()
             if app: c['select_item'](0)
             else: cli('playlist index 0', mac)
             stamp, body = fetch(items()[0])
             identity(0, body)
             wait(lambda: int(cli('playlist index ?', mac)[-1]) == 0, 10, 'Q4 deep Back LMS follows')
-            if app:
+            if evicted_target:
                 wait(lambda: 'decision=re-produced reason=evicted' in text()[mark:], 10, 'Q4 reasoned eviction reproduction')
+            wait(lambda: f'window pairing lms_index=0 decision=' in text()[mark:], 15, 'Q4 pairing committed')
+            wait(lambda: sonos.position['TrackURI'] == immutable[0], 20, 'Q4 renderer on target row')
+            if not app:
+                wait(lambda: any(r[0] >= move_start and r[1] == immutable[0] for r in sonos.audible_reads), 15, 'Q4 LMS deep Back audible')
             assert [i['uri'] for i in items()] == immutable
+            writes = [r['request'] for r in proxy.records[climark:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
+            assert writes == ([mac + ' playlist index 0'] if app else []), writes
+            seeks = [r for r in sonos.requests[soapmark:] if r[0] == 'Seek' and r[1].get('Unit') == 'TRACK_NR']
+            assert len(seeks) == int(not app), seeks
+            assert not [r for r in sonos.requests[soapmark:] if r[0] in ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue')]
+            print(f'PASS Q4 app={app} evicted_target={evicted_target} frame_zero=identical rows={len(items())} LMS_commands={len(writes)} TRACK_NR={len(seeks)} edits=0', flush=True)
         print('PASS Q4 deep app/LMS Back; evicted row reproduced, PCM identical, static URIs', flush=True)
     if os.environ.get('YENEY_FULLQ_GENERATION') == '1':
         old = set(immutable)

@@ -22,6 +22,8 @@ public:
     int streamMetadataIndex() const;
     bool remoteSource(uint64_t occurrence) const;
     bool deferStart();
+    std::unique_ptr<yeney::Decoder> decoder(const yeney::DecoderConfig &);
+    void sourcePeer(const std::string &);
     std::optional<yeney::FlacSourceInfo> flacSourceInfo(uint64_t, std::optional<yeney::FlacSourceInfo>);
 };
 void runQueueCoreClient(const char *, const uint8_t *, const char *, QueueRoom &);

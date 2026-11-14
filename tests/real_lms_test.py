@@ -239,21 +239,32 @@ perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
 nav_media = os.environ.get('YENEY_NAV_MEDIA', '')
 fullq_codec = os.environ.get('YENEY_FULLQ_CODEC', 'flac') if os.environ.get('YENEY_FULLQ') == '1' else 'flac'
-assert fullq_codec in ('flac', 'alac', 'wav')
-fixture_count = 12 if os.environ.get('YENEY_FULLQ') == '1' else 8
-for i,rate in enumerate((44100,)*8 if nav_media else (44100,48000)*(fixture_count//2)):
+assert fullq_codec in ('flac', 'alac', 'wav', 'converted-flac')
+scale_mb = int(os.environ.get('YENEY_FULLQ_SCALE_MB', '0'))
+assert scale_mb in (0, 4, 16, 40)
+assert not scale_mb or os.environ.get('YENEY_FULLQ_EXPERIMENT') == 'scale'
+fixture_count = 4 if scale_mb else 12 if os.environ.get('YENEY_FULLQ') == '1' else 8
+for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
-    source=bytearray(wav(rate,61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24,noise=True))
+    seconds = 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
+    if scale_mb:
+        seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
+    source=bytearray(wav(rate,seconds,noise=True))
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
         np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
     path.write_bytes(source)
     subprocess.run(['flac','-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
                     '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
-if fullq_codec in ('alac', 'wav'):
+if fullq_codec in ('alac', 'wav', 'converted-flac'):
     for i in range(fixture_count):
         source = base / f'input-{i}.wav'
-        if fullq_codec == 'alac':
+        if fullq_codec == 'converted-flac':
+            subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(source), '-ar', '96000',
+                            '-c:a', 'flac', '-metadata', f'title=Title & {i}',
+                            '-metadata', 'artist=Artist <one>', '-metadata', 'album=Album & fixture',
+                            str(base / f'library/fullq-{i}.flac')], check=True)
+        elif fullq_codec == 'alac':
             subprocess.run(['ffmpeg', '-v', 'error', '-y', '-i', str(source), '-c:a', 'alac',
                             '-metadata', f'title=Title & {i}', '-metadata', 'artist=Artist <one>',
                             '-metadata', 'album=Album & fixture',
@@ -385,8 +396,8 @@ try:
     assert len(ids)==4 and len(alac_ids)==2,tracks
     if nav_media:
         window_ids = [next(t['id'] for t in tracks if t.get('url','').endswith(f'/nav-{i}.flac' if i == 0 and nav_media.startswith('converted-flac') else f'/nav-{i}.m4a')) for i in range(8)]
-    if fullq_codec in ('alac', 'wav'):
-        extension = 'm4a' if fullq_codec == 'alac' else 'wav'
+    if fullq_codec in ('alac', 'wav', 'converted-flac'):
+        extension = 'm4a' if fullq_codec == 'alac' else 'flac' if fullq_codec == 'converted-flac' else 'wav'
         window_ids = [next(t['id'] for t in tracks if t.get('url', '').endswith(f'/fullq-{i}.{extension}'))
                       for i in range(fixture_count)]
     assert len(window_ids)==fixture_count,tracks
@@ -517,6 +528,10 @@ try:
     if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':
         from podcast_real_lms import run
         run(globals())
+        raise SystemExit(0)
+    if os.environ.get('YENEY_FULLQ_EXPERIMENT'):
+        from full_queue_experiments import run
+        run(locals())
         raise SystemExit(0)
     if os.environ.get('YENEY_FULLQ')=='1':
         from full_queue_real_lms import run
@@ -821,6 +836,7 @@ finally:
     if proxy:
         cleanup(proxy.close);(base/'cli.json').write_text(json.dumps(proxy.records,indent=2))
     if sonos:
+        (base/'sonos-requests.json').write_text(json.dumps(sonos.requests,indent=2))
         def ownership_restored():
             owned={entry[1]['EnqueuedURI'] for entry in sonos.actions('AddURIToQueue')}
             assert not any(i['uri'] in owned for i in sonos.items) and sonos.crossfade,'owned cleanup/crossfade'

@@ -1,6 +1,7 @@
 extern "C" void yeney_stream_track_changed() __attribute__((weak));
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
+#include "queue_native_decoder.h"
 #include "queue_uri_log.h"
 #include "queue_rows.h"
 namespace bridge {
@@ -127,6 +128,10 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
     paths.describeSource = [this](uint64_t id) {
         std::lock_guard<std::mutex> lock(sourceMutex);
         sourceTracks[id] = selectedTrack;
+        // Paired producers bypass append's new-row path. Publish their known
+        // relay classification before decoding, including FIR lookahead.
+        if (!remotePlaybackSource(selectedTrack.id, selectedTrack.remote, selectedTrack.url))
+            remote[id] = false;
         if (selectedSourceIndex >= 0) sourceIndices[id] = unsigned(selectedSourceIndex);
         if (selectedToken) sourceTokens[id] = selectedToken;
         queue.sourceIdentity(id, selectedToken, selectedTrack.url, selectedTrack.startOffsetMs, selectedCommand.value);
@@ -206,6 +211,38 @@ void QueueRoom::refusePlayback(bool member) {
 bool QueueRoom::queueActive() const { return impl->paths.isRelay(); }
 int QueueRoom::streamMetadataIndex() const { return impl->metadataIndex; }
 bool QueueRoom::deferStart() { return impl->selectionDeferred; }
+std::unique_ptr<yeney::Decoder> QueueRoom::decoder(const yeney::DecoderConfig &config) {
+    queue_audio::PlaylistEntry source;
+    std::string host;
+    const auto occurrence = impl->queue.latestOccurrence();
+    {
+        std::lock_guard<std::mutex> lock(impl->sourceMutex);
+        auto found = impl->sourceTracks.find(occurrence);
+        if (found != impl->sourceTracks.end()) source = found->second;
+        host = impl->nativeHost.empty() ? impl->host : impl->nativeHost;
+    }
+    const auto extension = source.url.substr(source.url.find_last_of('.') + 1);
+    const bool native = (config.codec == 'f' && extension == "flac") ||
+                        (config.codec == 'l' && (extension == "m4a" || extension == "alac")) ||
+                        (config.codec == 'p' && extension == "wav");
+    if (impl->paths.isRelay() && native && !config.transcoded && !source.startOffsetMs &&
+        !remotePlaybackSource(source.id, source.remote, source.url) &&
+        !source.id.empty() && source.id.find_first_not_of("0123456789") == std::string::npos) {
+        logQueue("native input occurrence=" + std::to_string(occurrence) +
+                       " track_id=" + source.id + " binding=immutable");
+        impl->nativeInputOccurrence = occurrence;
+        return nativeQueueDecoder(config, host, source.id, source.startOffsetMs,
+            [occurrence](const auto &line) {
+                logQueue("native input occurrence=" + std::to_string(occurrence) + " " + line);
+            });
+    }
+    impl->nativeInputOccurrence = 0;
+    return yeney::makeDecoder(config);
+}
+void QueueRoom::sourcePeer(const std::string &peer) {
+    std::lock_guard<std::mutex> lock(impl->sourceMutex);
+    impl->nativeHost = peer;
+}
 std::optional<yeney::FlacSourceInfo> QueueRoom::flacSourceInfo(uint64_t id,
                                                                std::optional<yeney::FlacSourceInfo> info) {
     return impl->sourceInfo(id, info);
@@ -228,11 +265,15 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     }
     config.server = host;
     config.name = name;
-    config.connectionReady = [&icon](const auto &peer) { icon.connected(peer); };
+    config.connectionReady = [&icon, &room](const auto &peer) {
+        room.sourcePeer(peer);
+        icon.connected(peer);
+    };
     std::copy(mac, mac + 6, config.mac.begin());
     config.startOnSubmit = true;
     config.observeCommand = [&room](const auto &c) { room.command(c); };
     config.deferQueueStart = [&room] { return room.deferStart(); };
+    config.decoderFactory = [&room](const auto &c) { return room.decoder(c); };
     config.queueNextDelayMs = queueNextDelayMs();
     config.flacSourceInfo = [&room](uint64_t id, auto info) { return room.flacSourceInfo(id, info); };
     config.queueHostFailures = true;

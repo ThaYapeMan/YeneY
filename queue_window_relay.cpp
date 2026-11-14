@@ -113,7 +113,12 @@ void QueueRoom::Impl::reconcileWindow() {
         if (producer != records.end() && producer->seekPositionMs) {
             const auto selection = selections.find(audible->index);
             const bool rewind = rewindEcho;
-            const auto seekMs = rewind ? uint32_t(*selection->second.rewindMs) : producer->seekPositionMs;
+            // The admission status can precede LMS installing the new HTTP
+            // stream's seek clock. Use the post-decode status while LMS still
+            // waits for playback; it names this same audible occurrence.
+            const auto seekMs = rewind ? uint32_t(*selection->second.rewindMs) :
+                snapshot.waitingToPlay && snapshot.index == audible->index ?
+                    snapshot.timeMs : producer->seekPositionMs;
             if (producer->pairedFrom && producer->landedFrame && target.size() == 1 &&
                 target.front().item == producer->item && !target.front().originMs) {
                 auto retained = std::find_if(items.begin(), items.end(), [&](const auto &e) {
@@ -185,7 +190,7 @@ void QueueRoom::Impl::reconcileWindow() {
             if (navigationItem->uri != target.front().uri) owned.erase(navigationItem->uri);
             selections.erase(audible->index);
             bound = true;
-            if (const auto reason = replacementReasons.find(navigationToken); reason != replacementReasons.end()) {
+            if (const auto reason = replacementReasons.find(navigationToken); reason != replacementReasons.end() && reason->second != "evicted") {
                 logQueue("window target re-produced lms_index=" + std::to_string(audible->index) +
                     " origin_ms=" + std::to_string(navigationItem->originMs) +
                     " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]) + " reason=" + reason->second);
@@ -224,9 +229,10 @@ void QueueRoom::Impl::reconcileWindow() {
                 retired.insert(retired.end(), target.begin(), target.end());
                 target = {*navigationItem};
             }
-            logQueue("window target re-produced lms_index=" + std::to_string(audible->index) +
-                " origin_ms=" + std::to_string(navigationItem->originMs) +
-                " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]) + " reason=" + reason);
+            if (std::string(reason) != "evicted")
+                logQueue("window target re-produced lms_index=" + std::to_string(audible->index) +
+                    " origin_ms=" + std::to_string(navigationItem->originMs) +
+                    " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]) + " reason=" + reason);
         }
     }
     const auto superseded = lmsNavigation && std::any_of(selectionOrder.begin(), selectionOrder.end(),
@@ -284,8 +290,9 @@ void QueueRoom::Impl::reconcileWindow() {
                     entries.erase(found);
                     found = entries.end();
                 } else if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end() && found->second.size() == 1) {
-                    lazy->second->reset();
                     auto &entry = found->second.front();
+                    lazy->second->reset(entry.item);
+                    if (evicted) logQueue("cache evicted lms_index=" + std::to_string(slot.index));
                     entry.stream = UINT64_MAX - slot.token;
                     entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
                 }
@@ -705,6 +712,11 @@ void QueueRoom::Impl::advanceSelections() {
         }
         selection->second.phase = Selection::Producing;
         selection->second.first = queue.latestOccurrence() + 1;
+        selection->second.commandRequest = std::make_shared<std::atomic<uint64_t>>(0);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            pendingCommandRequest = selection->second.commandRequest;
+        }
         speakerNavFirst[selection->second.token] = selection->second.first;
         if (selection->second.rewindMs) {
             selection->second.issued = std::chrono::steady_clock::now();

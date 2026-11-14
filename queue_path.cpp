@@ -73,7 +73,8 @@ void QueueRoom::Impl::received(const yeney::Command &c) {
         if (c.letter == 'q') {
             bool unopened = false;
             const auto latest = queue.latestOccurrence();
-            if (paths.isRelay() && latest) {
+            cancelledSourceThrough = latest;
+            if (paths.isRelay() && latest && nativeInputOccurrence != latest) {
                 const auto records = queue.snapshot();
                 const auto producer = std::find_if(records.begin(), records.end(), [latest](const auto &record) {
                     return record.source.occurrence == latest;
@@ -83,14 +84,18 @@ void QueueRoom::Impl::received(const yeney::Command &c) {
             }
             std::lock_guard<std::mutex> lock(mutex);
             if (unopened) {
-                // Let LMS retire the cancelled HTTP request before opening
-                // its replacement on the same player stream endpoint.
+                // Preserve the legacy shared-source cancellation guard. Native
+                // immutable input has no dependency on this retirement window.
                 cancelledHeaderUntil = std::chrono::steady_clock::now() +
                     std::chrono::milliseconds(queue_audio::QueueWindow::settleMs);
                 logQueue("producer cancellation occurrence=" + std::to_string(latest) +
                          " admission_delay_ms=" + std::to_string(queue_audio::QueueWindow::settleMs));
             }
             ++selectionRequest;
+            if (pendingCommandRequest) {
+                pendingCommandRequest->store(selectionRequest.load() + 1);
+                pendingCommandRequest.reset();
+            }
             paths.cancelSelection();
             selectionDeferred = false;
             if (!paths.isRelay()) {
@@ -148,6 +153,21 @@ void QueueRoom::Impl::selectPath() {
         try {
             auto snapshot = reader.read(host, mac);
             if (!acceptSnapshot(snapshot)) return;
+            for (const auto &pending : selections) {
+                if (pending.second.phase != Selection::Producing ||
+                    !pending.second.commandRequest || pending.second.commandRequest->load() != selectedRequest) continue;
+                const auto slot = window.find(pending.second.token);
+                if (snapshot.index != pending.first || !slot || pending.first >= snapshot.entries.size() ||
+                    snapshot.entries[pending.first].url != slot->track.url) {
+                    // This is the q+s response to our command, but LMS already
+                    // exposes a newer controller selection. Keep its HTTP
+                    // request unopened until that controller's own q+s arrives.
+                    logQueue("admission superseded reason=selection-source lms_index=" +
+                        std::to_string(pending.first) + " snapshot_index=" + std::to_string(snapshot.index) +
+                        " request=" + std::to_string(selectedRequest));
+                    return;
+                }
+            }
             if (selectedNewPlay && snapshot.waitingToPlay && snapshot.index < snapshot.entries.size()) {
                 const auto &entry = snapshot.entries[snapshot.index];
                 if (entry.url.compare(0, 10, "podcast://") == 0 && !entry.finiteRemote()) {
@@ -176,6 +196,13 @@ void QueueRoom::Impl::selectPath() {
                 for (auto pending = selections.begin(); pending != selections.end();) {
                     bool supplied = false;
                     if (pending->first != snapshot.index && pending->second.phase == Selection::Producing) {
+                        // The controller selected a different index before
+                        // this app command's producer arrived. Retain its live
+                        // declaration, but it cannot authorize treating a later
+                        // controller return as the old app command's echo.
+                        if (speakerNavCommands.erase(pending->second.token))
+                            logQueue("selection echo retired reason=controller-index lms_index=" +
+                                std::to_string(pending->first) + " target_index=" + std::to_string(snapshot.index));
                         const auto lazy = lazyItems.find(pending->second.token);
                         const auto item = lazy == lazyItems.end() ? nullptr : lazy->second->ready();
                         if (item) {
@@ -190,13 +217,27 @@ void QueueRoom::Impl::selectPath() {
                     else ++pending;
                 }
             }
+            if (!selectedNewPlay && !navigationSelecting && selectedSourceIndex >= 0 &&
+                snapshot.index != unsigned(selectedSourceIndex)) {
+                // A controller can change LMS while its q is still in flight
+                // to the player. The old decode-ahead ticket must not open the
+                // shared stream endpoint against that controller's new source.
+                logQueue("admission superseded reason=controller-index producer_index=" +
+                    std::to_string(selectedSourceIndex) + " snapshot_index=" + std::to_string(snapshot.index));
+                return;
+            }
             playlist = std::move(snapshot);
             window.reconcile(playlist);
             if (playlist.index >= window.cap()) logQueue("window rebuild reason=beyond-cap");
             const auto selection = selections.find(playlist.index);
             const auto pairing = selection != selections.end() && selection->second.phase == Selection::Producing;
-            const auto index = navigationSelecting || pairing ? playlist.index :
-                playlist.index + (selectedNewPlay ? 0 : 1);
+            auto index = playlist.index;
+            if (!navigationSelecting && !pairing && !selectedNewPlay) {
+                // Status still names the audible row during decode-ahead.
+                // Repeat-one and repeat-all determine the incoming producer,
+                // including the wrap before the speaker reaches the boundary.
+                index = playlist.successor(index);
+            }
             if (navigationSelecting && pairing && playlist.mode != "stop" &&
                 speakerNavCommands[selection->second.token]) {
                 std::lock_guard<std::mutex> sourceLock(sourceMutex);
@@ -260,7 +301,27 @@ void QueueRoom::Impl::selectPath() {
         if (selection != selections.end() && selection->second.phase == Selection::Producing &&
             selection->second.rewindMs)
             track.startOffsetMs = uint32_t(*selection->second.rewindMs);
-        else if (selectedNewPlay) track.startOffsetMs = playlist.timeMs;
+        else if (selection != selections.end() && selection->second.phase == Selection::Producing &&
+                 selection->second.commandRequest && selection->second.commandRequest->load() == selectedRequest)
+            track.startOffsetMs = 0; // Our playlist-index response starts its selected row.
+        else if (selectedNewPlay) {
+            bool sameAudible = false;
+            {
+                std::lock_guard<std::mutex> lock(sourceMutex);
+                for (const auto &entry : items) if (entry.stream == current && entry.sourceUrl == track.url) {
+                    const auto index = sourceIndices.find(entry.owner ? entry.owner : entry.stream);
+                    sameAudible = navigationSelecting ? selectedIndex == int(navigationFrom) :
+                        index != sourceIndices.end() && selectedIndex == int(index->second);
+                }
+            }
+            // Decode-ahead can already describe a different producer. Seek
+            // authority belongs to the audible row, never that future source.
+            if (selectedSourceIndex < 0 || sameAudible) track.startOffsetMs = playlist.timeMs;
+            if (playlist.timeMs)
+                logQueue("selection clock lms_index=" + std::to_string(selectedIndex) +
+                    " decision=" + (sameAudible ? "audible-seek" : "new-row") +
+                    " source_offset_ms=" + std::to_string(track.startOffsetMs));
+        }
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
             selectedTrack = track;

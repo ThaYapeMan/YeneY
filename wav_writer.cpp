@@ -69,6 +69,10 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
               std::chrono::milliseconds wait,
               std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve) {
     auto item = published;
+    if (request.method() == upnp::StreamRequest::Method::Get) {
+        item = Item::retainAudio(item);
+        if (!item) { request.reply(503); return true; }
+    }
     struct Diagnostic {
         upnp::StreamRequest &request;
         std::shared_ptr<Item> item;

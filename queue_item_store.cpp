@@ -165,7 +165,8 @@ struct ItemState {
     const uint64_t serial;
     uint64_t produced = 0;
     bool evicted = false;
-    bool finished = false, protectedItem = false, interrupted = false;
+    bool finished = false, protectedItem = false, interrupted = false, parked = false;
+    unsigned responses = 0;
     std::exception_ptr fault;
     std::deque<RamChunk> ram;
     std::vector<HistoryChunk> history;
@@ -204,7 +205,7 @@ struct StoreState {
             std::shared_ptr<ItemState> oldest;
             for (const auto &pair : items) {
                 const auto &i = pair.second;
-                if (i.get() != writing && (i->finished || i->fault) && !i->protectedItem &&
+                if (i.get() != writing && (i->finished || i->fault || i->parked) && !i->protectedItem && !i->responses &&
                     !i->history.empty() && (!oldest || i->serial < oldest->serial))
                     oldest = i;
             }
@@ -217,7 +218,7 @@ struct StoreState {
             }
             oldest->history.clear();
             oldest->evicted = true;
-            fail(*oldest, std::make_exception_ptr(std::runtime_error("item history evicted; LMS re-render required")));
+            fail(*oldest, std::make_exception_ptr(ItemCancelled("item history evicted; LMS re-render required")));
         }
     }
     void spill(ItemState &item, std::unique_lock<std::mutex> &lock) {
@@ -383,6 +384,31 @@ size_t Store::ramBytes() const {
 }
 Item::Item(std::shared_ptr<StoreState> s, std::shared_ptr<ItemState> i)
     : store(std::move(s)), state(std::move(i)) {}
+std::shared_ptr<Item> Item::retainAudio(const std::shared_ptr<Item> &item) {
+    if (!item) return {};
+    struct Lease {
+        std::shared_ptr<Item> owner;
+        std::shared_ptr<StoreState> store;
+        std::shared_ptr<ItemState> state;
+        bool active = false;
+        ~Lease() {
+            if (!active) return;
+            std::lock_guard<std::mutex> lock(store->mutex);
+            --state->responses;
+            store->changed.notify_all();
+        }
+    };
+    auto lease = std::make_shared<Lease>();
+    lease->owner = item;
+    lease->store = item->store;
+    lease->state = item->state;
+    std::lock_guard<std::mutex> lock(item->store->mutex);
+    if (item->state->evicted) return {};
+    item->store->check(*item->state);
+    ++item->state->responses;
+    lease->active = true;
+    return std::shared_ptr<Item>(lease, item.get());
+}
 const Descriptor &Item::descriptor() const { return state->descriptor; }
 std::string Item::room() const { return store->directory.filename().string(); }
 std::optional<uint64_t> Item::contentLength() const {
@@ -407,6 +433,7 @@ void Item::append(const yeney::Frame *frames, size_t count, bool processed) {
     store->check(*state);
     if (state->finished || (!frames && count))
         throw std::invalid_argument("invalid item append");
+    state->parked = false;
     try {
         if (count > UINT64_MAX - state->produced)
             throw std::overflow_error("frame count overflow");
@@ -460,6 +487,10 @@ void Item::finish() {
         throw;
     }
     store->changed.notify_all();
+}
+void Item::park() {
+    std::lock_guard<std::mutex> lock(store->mutex);
+    if (!state->fault) state->parked = true;
 }
 void Item::interrupt() {
     std::lock_guard<std::mutex> writer(store->producer);

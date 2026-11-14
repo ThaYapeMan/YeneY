@@ -36,6 +36,12 @@ struct PlaylistSnapshot {
     std::string revision;
     unsigned shuffle = 0, repeat = 0;
     bool waitingToPlay = false;
+    unsigned successor(unsigned current) const {
+        if (current >= entries.size()) return unsigned(entries.size());
+        if (repeat == 1) return current;
+        if (++current == entries.size() && repeat == 2) return 0;
+        return current;
+    }
 };
 // Read-only metadata snapshot. LMS alone determines stream order; the relay
 // has no occurrence matching, playlist edit inference or mirroring policy.

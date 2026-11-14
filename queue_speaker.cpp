@@ -161,9 +161,11 @@ void QueueRoom::Impl::observe() {
     }
     if (checked != items.end() && !checked->item) return;
     if (checked != items.end()) {
+        if (discardEvicted(*checked)) return;
         try {
             (void)checked->item->contentLength();
         } catch (const queue_audio::ItemCancelled &) {
+            if (discardEvicted(*checked)) return;
             cancelledCurrent = true;
         }
     }

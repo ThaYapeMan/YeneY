@@ -149,6 +149,11 @@ int main() {
         while (!activations && std::chrono::steady_clock::now() < activateDeadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         assert(activations == 1);
+        // A room snapshot can still name the retired binding after HTTP has
+        // queued its replacement. It must not erase that activation's claim.
+        once->reset(onceDeclaration);
+        assert(once->claimActivation());
+        assert(!once->claimActivation());
         once->publish(item);
         assert(pendingA.get() == lazyFull);
         auto pendingTail = pendingB.get();

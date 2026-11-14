@@ -57,9 +57,13 @@ public:
     uint64_t producedFrames() const;
     bool finished() const;
     bool evicted() const;
+    // Hold already admitted audio for one HTTP response. Automatic quota
+    // eviction still applies to other history; explicit cancellation wins.
+    static std::shared_ptr<Item> retainAudio(const std::shared_ptr<Item> &);
     void append(const yeney::Frame *, size_t count, bool processed);
     void finish(); // Exact requires count; UpperBound permits short EOF; pending seals
     void interrupt(); // Retain produced audio; unavailable suffix still fails.
+    void park(); // Producer stopped; retained prefix may be reused or evicted.
     void cancel(const std::string &reason = "cancelled");
     void releaseAudio(); // invalidate readers and release RAM/disk immediately
     Reader reader(uint64_t byteOffset = 0) const;

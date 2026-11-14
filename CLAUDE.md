@@ -353,9 +353,8 @@ land. B1/B2/F3 and immutable WAV resources remain unchanged.
 
 FLAC passes the device timing matrix. Tail-moov ALAC and raw WAV still miss
 latency deadlines with core pin `9d5aa42`; the assertions remain enabled.
-Faststart ALAC removes the metadata-at-EOF delay without changing PCM. The
-device-profile Q4 quota case also reproduces a baseline pressure/navigation
-race; it remains outstanding without a mirror/outbox model change. See
+Faststart ALAC removes the metadata-at-EOF delay without changing PCM. FULLQ-01d addresses the device-profile Q4 pressure/navigation race in bridge
+admission and selection ownership. See
 `docs/designs/sonos-full-queue.md` for measured numbers and final gate evidence.
 
 Incoming finite starts carry an occurrence-token/producer-lower-bound admission
@@ -368,3 +367,187 @@ A controller move may retire an older app selection only when its retained WAV
 already supplies its complete promise (or a finished upper-bound resource).
 Keep incomplete declarations protected. Generation-rebuild edit counts are
 logged after both removal and row publication complete.
+
+
+## Decisions — FULLQ-01d cache-pressure admission
+
+Decode-ahead uses the playlist repeat policy: repeat-one stays at the current
+index; repeat-all wraps to index zero. Using an out-of-range successor at the
+last row misclassified the start as a stream handoff and blocked the selection
+outbox. An owned-selection log described a queued ticket, not available audio.
+
+Before admitting a natural successor, reject a metadata snapshot whose current
+index differs from the producer that requested it. LMS can change its index
+before its q reaches the bridge; opening the obsolete request against the
+shared stream endpoint can consume the new source's prefix. There is no
+cancellation settling delay. Controller navigation to another index retires
+an older app command's echo authority while preserving its live declaration;
+a later controller return must still perform its one TRACK_NR Seek.
+
+Eviction invalidates only the lazy binding observed by the room. HTTP may have
+already noticed eviction and queued a replacement; room cleanup must preserve
+that newer activation. Log one decision=re-produced reason=evicted when the
+replacement binds, including natural decode-ahead. Keep static rows and URIs,
+immutable declarations, producer admission tickets, arbiter and outbox fences.
+
+Owner-updated full-gate rule: start when no other task runs python3 -m pytest
+or make test. Ignore load average because network-disk waits contribute to it;
+an open Codex CLI does not block admission. Earlier load/CPU waits remain in
+the report as historical evidence. Record any wait for another test process. Run make test detached
+and retain its exit status and monotonic runtime independently of the session.
+The consumer checkout is supplied explicitly and read-only.
+
+An app command's admission also carries the exact q+s request serial. If that
+response arrives after LMS already exposes another index or source URL, keep
+its shared-endpoint HTTP request unopened. The newer controller's q+s has a
+different serial and may admit the new source. An occurrence lower bound alone
+cannot distinguish these responses when the first producer was never admitted.
+
+Repeat-wrap row admission does not imply a gapless DSP continuation across the
+album boundary. Preserve the original linear source-class continuation fence,
+so the first row's frame-zero conversion prefix remains unchanged on Back.
+
+Publish known relay-source classification at producer admission, including
+producers paired to retained rows. A paired producer bypasses append's new-row
+path; leaving it unknown incorrectly applies the core's remote lookahead delay
+to a local converted file and can withhold the successor needed for its final
+FIR frames. Explicit finite-remote played-end rules remain unchanged.
+
+Admission fences cannot make LMS's shared `/stream.mp3?player=...` endpoint
+immutable: LMS can switch sources after a metadata read and before the old
+HTTP GET runs. Frame-zero native local FLAC, ALAC and WAV producers therefore bind encoded
+input to `/music/<admitted-id>/download`. The original stream still supplies
+Slimproto flow and status; it cannot supply another row's bytes to the decoder.
+The replacement input uses bounded socket/decoder buffers, closes on producer
+cancellation and follows the core's existing byte credits. Its own validated
+HTTP EOF completes the source if the shared request lost a prefix. It does not
+cache entire encoded files or issue another LMS selection command. Nonzero in-item seeks, remote,
+transcoded and stream-mode input retain their existing path. Container parsing,
+conversion and the core pin are unchanged; ALAC/WAV startup remains core work.
+
+An index change starts the new row at frame zero; the previous run's LMS
+elapsed status cannot become its seek offset. Explicit same-row seek and rewind
+authority remains. The bridge sink also clears a stale admission origin when
+the decoder reports source frame zero, including an unpaired reproduction.
+Otherwise a correct full WAV can be mistaken for a seek suffix and replaced
+when it becomes history. Nonzero and unknown decoded seek coordinates keep
+their existing handling.
+
+An active HTTP response holds its admitted audio under the store's eviction
+lock until that response closes. Ordinary metadata handles and HEAD probes do
+not hold audio. Under quota pressure the store continues evicting other
+eligible history; closing the response immediately restores eligibility.
+Explicit release/cancellation still invalidates the response. This closes the
+app-selection interval before its event/poll reaches the room: previously a
+retained row could be evicted halfway through its promised WAV response.
+Lazy resolution acquires this response lease atomically with eviction before
+returning a producer. No navigation-wide protection, quota increase, deadline
+change or test retry is used. A focused HTTP test triggers quota pressure during
+body transmission, verifies the complete bytes and bounded quota, then verifies
+post-close eviction and explicit revocation.
+
+Selection-clock authority follows the audible row and its source URL, including
+when decode-ahead has already admitted another producer. A same-row LMS seek
+retains its requested offset; a different row starts from zero. An exact q+s
+response to the bridge's own playlist-index command starts at zero, while an
+explicit speaker-rewind ticket keeps its own offset. Native download transport
+uses the core connection's resolved peer address, preserving hostname-based
+LMS configuration without another DNS operation in the event loop.
+
+Preserve the negotiated native representation. LMS advertises WAV as raw PCM
+(`p`), so source-bound WAV input removes RIFF chunk headers, padding and
+non-audio chunks before feeding the unchanged decoder. A download container
+must not give that raw decoder early length information. The core still seals
+the finite output WAV only after raw-input EOF; its C2 timing limit remains.
+The transport regression covers fragmented WAV chunks, odd padding and trailing
+metadata, and verifies that only the original PCM payload reaches the decoder.
+
+Automatic history eviction is recoverable cancellation, including the interval
+after an HTTP response completes and before its app selection is observed.
+Speaker observation invalidates an evicted lazy binding at that point, retains
+the row/URI, and lets its existing selection ticket re-produce the source. It
+must not classify a missing cache entry as a room fault and remove the queue.
+The normal quota keeps running after response close; the existing one-command
+selection and reasoned replacement publication remain authoritative.
+
+## FULLQ-01d scaling measurements
+
+Retained measurements on binary SHA256 `ee210e03b221d679270e76a4d62efef4f6622c7cbc9c2c8a8e663888d9e19d79`, reused under the owner instruction; no final-binary R2 rerun.
+
+Device profile: 30 ms SOAP, 400 ms transition, 50 ms GENA. Generated distinct
+PCM, with source files near 4, 16 and 40 decimal MB. Jump is an LMS selection of
+an unproduced row; Next uses a fully produced decode-ahead row. Times end at
+the first audible PCM byte after the WAV header. R1/D1–D3 retain 24 MiB; these
+size measurements use 512 MiB for the large files and prepared references.
+Default fixtures and core pin `9d5aa42` are unchanged.
+
+| Source | Nominal MB | File MB | Unproduced jump s | Produced Next s | Source MB at first decoder PCM | Whole-input MB/s |
+|---|---:|---:|---:|---:|---:|---:|
+| ALAC tail moov | 4 | 4.060 | 1.698 | 0.411 | 4.060 | 3.632 |
+| ALAC tail moov | 16 | 16.061 | 4.827 | 0.404 | 16.061 | 3.712 |
+| ALAC tail moov | 40 | 40.063 | 11.384 | 0.414 | 40.063 | 3.713 |
+| ALAC faststart | 4 | 4.060 | 0.583 | 0.405 | 0.033 | — |
+| ALAC faststart | 16 | 16.061 | 0.594 | 0.401 | 0.033 | — |
+| ALAC faststart | 40 | 40.063 | 0.584 | 0.430 | 0.049 | — |
+| FLAC | 4 | 4.068 | 0.593 | 0.414 | 0.049 | — |
+| FLAC | 16 | 16.072 | 0.594 | 0.415 | 0.049 | — |
+| FLAC | 40 | 40.079 | 0.595 | 0.428 | 0.049 | — |
+| WAV | 4 | 4.057 | 2.817 | 0.409 | 0.016 | 1.922 |
+| WAV | 16 | 16.053 | 9.067 | 0.401 | 0.033 | 1.921 |
+| WAV | 40 | 40.043 | 21.578 | 0.401 | 0.016 | 1.921 |
+
+Tail-moov ALAC jump cost grows by 0.2696 s per source MB (3.709 MB/s equivalent); fitted fixed overhead is 0.560 s.
+
+WAV jump cost grows by 0.5214 s per source MB (1.918 MB/s equivalent); fitted fixed overhead is 0.700 s.
+
+The byte counts are taken at first decoder PCM output, before the renderer transition. Input-EOF records identify the whole-source publication barrier; raw WAV can decode PCM earlier while its finite output declaration remains pending until EOF. Effective
+whole-input rates include the existing input pacing and decoder backpressure;
+they are not link bandwidth. Prepared Next results isolate the cost after
+production. ALAC metadata-at-EOF and WAV raw-PCM finite-length publication changes
+belong to `yeney-core`. Their existing 12-row C2 audible-latency assertions
+remain enabled and failing; no ALAC/WAV C2 timing check is added to `make test`.
+
+A source-admission status can also precede LMS installing a same-row seek
+clock: the seed-8675309 soak requested 16 seconds, while admission briefly
+reported 17 before the stream opened; the decoded frame and subsequent status
+confirmed 16. For an LMS seek still waiting to play, reconciliation uses the
+post-decode status for that audible index rather than the admission clock.
+Explicit speaker-rewind tickets retain their requested offset. No wait, retry
+or assertion change is involved.
+
+Stopped native producers retain reusable unfinished prefixes. Such prefixes
+are parked for normal quota eviction once unprotected and without an HTTP
+response; resuming append makes them active again. Previously these prefixes
+were neither finished nor faulted, so repeated converted-source selections
+could exhaust 24 MiB despite evictable history and trigger room-fault cleanup.
+Parking preserves the immutable promise and prefix bytes without reserving
+storage indefinitely. Active response leases and current/next protection win.
+
+The pre-existing 250 ms unopened shared-source cancellation guard remains
+for legacy inputs, including its regression assertion. Immutable native inputs
+bypass it because their HTTP identity is independent of the player stream.
+This preserves the old fallback contract without using a settling delay to
+solve native Q4. The second full run passed all navigation and pressure soaks
+but exposed this removed fallback contract; it exited 2 after 2474.540 seconds.
+
+Post-Play saved-backup pruning cannot reuse admission identity: before each
+DestroyObject it checks the observed coordinator role and reads the live transport
+after playlist identity verification, immediately before the write. A regroup or foreign
+source defers that maintenance without a write or room fault. The takeover
+regression caught a stale-identity deletion after an immediate regroup. This
+guard applies to backup maintenance and preserves the full-queue cold/navigation
+SOAP-count assertions.
+
+Repeat wrap also checks eviction at the append point of use. After an HTTP
+response closes, quota eviction can precede periodic row cleanup; a new
+frame-zero producer must clear the old evicted binding and publish through
+the existing lazy row. It must never append a duplicate row for that token.
+The seed-314159 full-gate soak exposed a thirteenth row at move 158; the
+existing immutable-row assertion remains unchanged.
+
+A source fault belongs to its producer occurrence. When LMS q has already
+cancelled that occurrence, append ignores its stale non-storage source fault;
+it cannot tear down a replacement that is already decoding. Storage faults
+and source faults without a later cancellation retain their failure paths.
+The pressure soak exposed a truncated shared-stream response immediately
+before q, followed by a healthy immutable replacement and then stale cleanup.

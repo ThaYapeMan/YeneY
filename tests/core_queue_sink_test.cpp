@@ -620,5 +620,22 @@ int main() {
         assert(row.item->finished() && row.item->producedFrames() == 100);
         puts("PASS missing descriptor/boundary: independent sealed production, no lost PCM, worker alive");
     }
+    for (uint64_t landed : {uint64_t(0), uint64_t(500)}) {
+        CoreQueueSink sink("AdmissionClock", c, 1);
+        sink.sourceIdentity(1, 7, "file://admitted-row", 1250);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 100, 0, 0});
+        sink.contentPosition(landed, true);
+        sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        std::vector<yeney::Frame> pcm(100, {65536, -65536});
+        assert(sink.write(pcm.data(), pcm.size(), false) == pcm.size());
+        sink.resolvedItemBoundary({1, 0, 100, 0, "no-transition"});
+        sink.waitIdle();
+        const auto row = sink.snapshot()[0];
+        assert(row.originMs == (landed ? 1250u : 0u));
+        assert(row.seekPositionMs == (landed ? 1250u : 0u));
+        assert(row.wavOrigin == landed && row.item->producedFrames() == 100);
+    }
+    puts("PASS decoded frame zero overrides stale admission clock; in-item seek origin retained");
     std::filesystem::remove_all(root);
 }

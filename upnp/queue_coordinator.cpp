@@ -256,6 +256,15 @@ void QueueCoordinator::destroyPlaylist(const std::string &id) {
     if (item == saved.end() || item->title.compare(0, 13, "Before YeneY "))
         throw std::runtime_error("queue-backup-identity-changed");
     fence();
+    // The playlist read above can overlap a source takeover after Play.
+    // Validate transport after that read, immediately before this write,
+    // retaining the admitted topology lease and its cold-start SOAP count.
+    if (raw("AVTransport", "GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI") !=
+        "x-rincon-queue:" + room.uuid + "#0") {
+        invalidateIdentity();
+        if (log) log("backup retention deferred reason=ownership-changed");
+        return;
+    }
     raw("ContentDirectory", "DestroyObject", {{"ObjectID", id}});
 }
 } // namespace upnp

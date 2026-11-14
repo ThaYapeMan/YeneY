@@ -301,6 +301,12 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             records[id].landedFrame = landed;
             records[id].warmupFrames = warmup;
             records[id].wavOrigin = landed.value_or(0);
+            if (landed && !*landed && !records[id].estimated) {
+                // Decoded source coordinates outrank the pre-start LMS clock.
+                // A genuine frame-zero production is a complete row, including
+                // when no retained candidate exists to pair it with.
+                records[id].originMs = records[id].sourceOriginMs = 0;
+            }
             records[id].seekPositionMs = records[id].originMs;
         }
         QueueRecord tail;
@@ -1129,7 +1135,10 @@ void CoreQueueSink::flush() {
                     return entry.second.item == i && entry.second.sourceToken && !entry.second.originMs &&
                         entry.second.fault.empty() && entry.second.incomplete == "flushed";
                 });
-                if (reusable) continue; // A new same-source producer can continue this immutable WAV.
+                if (reusable) {
+                    i->park();
+                    continue; // A new same-source producer can continue this immutable WAV.
+                }
             }
             try {
                 const auto length = i->contentLength();

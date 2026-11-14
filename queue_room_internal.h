@@ -35,7 +35,10 @@ using namespace queue_room_detail;
 struct TrackFault : std::runtime_error { using std::runtime_error::runtime_error; };
 struct QueueRoom::Impl {
     upnp::Speaker room;
-    std::string host, mac, session;
+    std::string host, mac, session, nativeHost;
+    std::atomic<uint64_t> nativeInputOccurrence{0};
+    std::atomic<uint64_t> cancelledSourceThrough{0};
+    std::chrono::steady_clock::time_point cancelledHeaderUntil{};
     std::function<std::string()> streamUrl;
     std::shared_ptr<upnp::OwnSpeakerControl> speaker;
     queue_audio::CoreQueueSink queue;
@@ -94,7 +97,6 @@ struct QueueRoom::Impl {
     uint64_t navigationToken = 0;
     std::optional<Entry> navigationItem;
     std::chrono::steady_clock::time_point navigationDeadline{};
-    std::chrono::steady_clock::time_point cancelledHeaderUntil{};
     std::map<uint64_t, std::shared_ptr<queue_audio::LazyItem>> lazyItems;
     // Worker-owned selections are independent for each LMS index.
     struct Selection {
@@ -103,8 +105,10 @@ struct QueueRoom::Impl {
         std::optional<uint64_t> observed{};
         std::optional<uint64_t> rewindMs{};
         std::chrono::steady_clock::time_point issued{};
+        std::shared_ptr<std::atomic<uint64_t>> commandRequest{};
     };
     std::map<unsigned, Selection> selections;
+    std::shared_ptr<std::atomic<uint64_t>> pendingCommandRequest;
     std::deque<unsigned> selectionOrder;
     std::map<uint64_t, uint64_t> producerAdmissions;
     void advanceSelections();
@@ -175,6 +179,7 @@ struct QueueRoom::Impl {
     void command(char c, uint64_t next);
     void append();
     void trimHistory();
+    bool discardEvicted(Entry &);
     void reconcileWindow();
     void observe();
     void run();

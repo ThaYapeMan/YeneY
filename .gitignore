@@ -109,3 +109,4 @@ field-cold-test
 /consumption-diagnostic-test
 
 /seek-worker-test
+/queue-native-decoder-test

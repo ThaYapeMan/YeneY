@@ -15,7 +15,8 @@ upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
     io.deletePlaylist = [this](const auto &id) {
         if (speaker->speaker().coordinator != room.name) {
             coordinator.invalidateIdentity();
-            throw std::runtime_error("room-group-member");
+            logQueue("backup retention deferred reason=ownership-changed");
+            return;
         }
         coordinator.destroyPlaylist(id);
     };
@@ -91,6 +92,10 @@ void QueueRoom::Impl::release(bool stop) {
     for (const auto &lazy : lazyItems) lazy.second->cancel();
     lazyItems.clear();
     selections.clear();
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        pendingCommandRequest.reset();
+    }
     selectionOrder.clear();
     producerAdmissions.clear();
     speakerNavCommands.clear();
@@ -281,6 +286,8 @@ void QueueRoom::Impl::append() {
             continue; // LMS cancelled this render, not a speaker rejection.
         if (record.item && record.item->evicted())
             continue; // Cache loss is served by the row's new lazy producer.
+        if (!record.storageFault && !record.fault.empty() && owner <= cancelledSourceThrough)
+            continue; // A later LMS q retired this source fault before publication.
         if (!record.fault.empty())
             { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
         if (record.pairedFrom && record.actual - record.attachOffset < record.verificationFrames)
@@ -334,6 +341,15 @@ void QueueRoom::Impl::append() {
                         return i.item && !i.segmentOffset && identity != sourceTokens.end() &&
                                identity->second == token->second;
                     });
+                    if (cached != items.end() && cached->item->evicted()) {
+                        // Eviction can follow the last HTTP response before
+                        // periodic cleanup. A repeat-wrap producer must bind
+                        // this existing lazy row, never append a duplicate.
+                        lock.unlock();
+                        discardEvicted(*cached);
+                        lock.lock();
+                        cached = items.end();
+                    }
                     if (cached != items.end() && record.source.occurrence < cached->stream)
                         continue; // A newer producer already owns this retained URI's clock.
                     if (cached != items.end() && cached->item == record.item && !cached->originMs) {
@@ -373,15 +389,17 @@ void QueueRoom::Impl::append() {
                     entry->item = record.item;
                     entry->frames = (*length - 44) / 6;
                     entry->originMs = record.originMs;
-                    if (speakerSelection) {
+                    {
                         const auto reason = replacementReasons.find(token->second);
                         if (reason != replacementReasons.end()) {
-                            logQueue("window target re-produced lms_index=" + std::to_string(sourceIndices.at(owner)) +
-                                " origin_ms=" + std::to_string(record.originMs) + " lms_commands=1 reason=" + reason->second);
+                            const auto commands = std::to_string(speakerNavCommands[token->second]);
+                            if (reason->second != "evicted")
+                                logQueue("window target re-produced lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                                    " origin_ms=" + std::to_string(record.originMs) + " lms_commands=" + commands + " reason=" + reason->second);
                             logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
-                                " decision=re-produced reason=" + reason->second + " lms_commands=1");
+                                " decision=re-produced reason=" + reason->second + " lms_commands=" + commands);
                             replacementReasons.erase(reason);
-                        } else logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                        } else if (speakerSelection) logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
                             " decision=paired lms_commands=1");
                     }
                     logQueue("lazy bound lms_index=" + std::to_string(sourceIndices[owner]) +
@@ -567,23 +585,26 @@ void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
     publish();
     speakerCommand("stop", member ? "group-member" : reason == "track-fault-limit" ? reason : "room-fault");
 }
+bool QueueRoom::Impl::discardEvicted(Entry &entry) {
+    if (!entry.item || !entry.item->evicted()) return false;
+    std::lock_guard<std::mutex> lock(sourceMutex);
+    const auto owner = entry.owner ? entry.owner : entry.stream;
+    const auto identity = sourceTokens.find(owner);
+    if (identity == sourceTokens.end()) return false;
+    const auto token = identity->second;
+    const auto lazy = lazyItems.find(token);
+    if (lazy == lazyItems.end()) return false;
+    replacementReasons[token] = "evicted";
+    lazy->second->reset(entry.item);
+    entry.stream = UINT64_MAX - token;
+    entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
+    logQueue("cache evicted lms_index=" + std::to_string(sourceIndices.at(owner)));
+    return true;
+}
 void QueueRoom::Impl::trimHistory() {
     // Rows survive navigation; the item store evicts unprotected played audio.
     if (!started || lmsNavigation) return;
-    for (auto &entry : items) {
-        if (!entry.item || !entry.item->evicted()) continue;
-        const auto owner = entry.owner ? entry.owner : entry.stream;
-        const auto identity = sourceTokens.find(owner);
-        if (identity == sourceTokens.end()) continue;
-        const auto token = identity->second;
-        const auto lazy = lazyItems.find(token);
-        if (lazy == lazyItems.end()) continue;
-        replacementReasons[token] = "evicted";
-        lazy->second->reset();
-        entry.stream = UINT64_MAX - token;
-        entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
-        logQueue("cache evicted lms_index=" + std::to_string(sourceIndices.at(owner)));
-    }
+    for (auto &entry : items) discardEvicted(entry);
 }
 void QueueRoom::Impl::run() {
     for (;;) {

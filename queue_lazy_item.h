@@ -57,8 +57,11 @@ public:
         changed.notify_all();
         return true;
     }
-    void reset() {
+    void reset(const std::shared_ptr<Item> &expected) {
         std::lock_guard<std::mutex> lock(mutex);
+        // HTTP may already have observed eviction and queued a new activation.
+        // Retire only the binding the room observed, never that newer request.
+        if (produced != expected) return;
         produced.reset();
         requested = cancelled = activationClaimed = false;
         issuedCommands = 0;
@@ -127,19 +130,28 @@ public:
                 }
             }
         } lease{*this, lock, &request};
-        if (!produced && !requested) {
-            requested = true;
-            lock.unlock();
-            try { activate(); }
-            catch (...) { cancel(); throw; }
-            lock.lock();
-        }
-        while (!produced && !cancelled && !request.aborted() && !request.peerClosed()) {
+        while (!cancelled && !request.aborted() && !request.peerClosed()) {
+            if (produced) {
+                // Acquire under the store's eviction lock before returning an
+                // admitted HTTP entity. A plain shared_ptr only keeps metadata.
+                if (auto retained = Item::retainAudio(produced)) return retained;
+                produced.reset();
+                requested = activationClaimed = false;
+                issuedCommands = 0;
+            }
             if (std::chrono::steady_clock::now() >= deadline) return {};
+            if (!requested) {
+                requested = true;
+                lock.unlock();
+                try { activate(); }
+                catch (...) { cancel(); throw; }
+                lock.lock();
+                continue;
+            }
             changed.wait_until(lock, std::min(deadline,
                 std::chrono::steady_clock::now() + std::chrono::milliseconds(50)));
         }
-        return cancelled || request.aborted() || request.peerClosed() ? nullptr : produced;
+        return {};
     }
 };
 } // namespace queue_audio

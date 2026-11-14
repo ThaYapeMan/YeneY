@@ -91,7 +91,10 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
             resolve = i->second.resolve;
             if (!item && i->second.ready) {
                 item = i->second.ready();
-                if (item) resolve = {};
+                if (item && r.method() == upnp::StreamRequest::Method::Get) {
+                    item = Item::retainAudio(item);
+                    if (item) resolve = {};
+                }
             }
         }
     }

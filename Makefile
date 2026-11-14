@@ -8,11 +8,18 @@ export LAMPASTREAM_CHECKOUT ?= $(abspath ../LampaStream)
 OWN_UPNP_SOURCES = upnp/http_server.cpp upnp/gena.cpp upnp/xml.cpp upnp/http.cpp upnp/soap.cpp upnp/discovery.cpp upnp/own_speaker_control.cpp
 UPNP_OBJS = $(OWN_UPNP_SOURCES:.cpp=.o) upnp/encoded_buffer.o
 
-QUEUE_ROOM_OBJS = queue_room.o queue_relay.o queue_path.o queue_speaker.o queue_lms_commands.o queue_status.o queue_window_relay.o
+QUEUE_ROOM_OBJS = queue_room.o queue_relay.o queue_path.o queue_speaker.o queue_lms_commands.o queue_status.o queue_window_relay.o queue_native_decoder.o
 
 OBJS = volume_control.o $(QUEUE_ROOM_OBJS) core_queue_sink.o core_sonos.o core_shm.o audio_mode.o $(UPNP_OBJS) yeney.o sbstreamer.o sbencoder.o sonos-status.o sonos-position.o
 
 all: yeney libqueueitems.a yeney-queue-dryrun
+
+queue_room.o queue_native_decoder.o: queue_native_decoder.h
+
+queue-native-decoder-test: tests/queue_native_decoder_test.cpp queue_native_decoder.cpp queue_native_decoder.h
+	g++ -std=c++17 -g -O2 -Wall -Wextra -I. tests/queue_native_decoder_test.cpp queue_native_decoder.cpp -pthread -o $@
+
+test-run: queue-native-decoder-test
 
 CORE_LIB = third_party/yeney-core/libyeneycore.a
 .PHONY: core-library
@@ -31,7 +38,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
-	rm -f consumption-diagnostic-test queue-declaration-test seek-worker-test
+	rm -f consumption-diagnostic-test queue-declaration-test seek-worker-test queue-native-decoder-test
 	rm -f queue-window-test podcast-metadata-fixture podcast-sink-test volume-test lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
 .PHONY: test test-run install
@@ -68,6 +75,7 @@ test-run: export YENEY_TIMING_LOCKED_EVERY_S = 5
 test-run: export YENEY_AUDIBLE_OFFSET_MS = 0
 test-run: export YENEY_TIMING_STALE_S = 60
 test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-history-test range-test encoded-buffer-test stream-content-test http-server-test speaker-state-test yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
+	./queue-native-decoder-test
 	./seek-worker-test mismatch
 	./seek-worker-test trim
 	./seek-worker-test warmup
@@ -541,12 +549,26 @@ navigation-soak: yeney
 navigation-targeted: yeney
 	python3 tests/navigation_suite.py
 
-test-run: navigation-targeted navigation-soak
+test-run: full-queue-pressure-soak full-queue-pressure navigation-targeted navigation-soak
 
 seek-worker-test: tests/seek_worker_test.cpp tests/test_temp.h core_queue_sink.o libqueueitems.a
 	g++ -std=c++17 -g -O2 -Wall -Wextra -fno-access-control -I. -Itests -o $@ tests/seek_worker_test.cpp core_queue_sink.o libqueueitems.a -lFLAC -pthread
 
 test-run: seek-worker-test
+
+.PHONY: full-queue-pressure full-queue-pressure-soak
+full-queue-pressure: yeney
+	$(MAKE) -C third_party/yeney-core mp4-position-test
+	@for run in 1 2 3; do \
+	    printf 'D1 final-binary run=%s/3\n' "$$run"; \
+	    YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py || exit $$?; \
+	done
+	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_CODEC=alac python3 tests/real_lms_test.py
+	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_CODEC=converted-flac python3 tests/real_lms_test.py
+
+full-queue-pressure-soak: yeney
+	YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_SOAK_SEED=314159 python3 tests/real_lms_test.py
+
 
 .PHONY: full-queue-acceptance
 full-queue-acceptance: yeney

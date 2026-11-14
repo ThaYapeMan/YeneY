@@ -411,6 +411,83 @@ struct Request : upnp::StreamRequest {
     void reply(unsigned status, const std::string & = {}) override { wire = std::to_string(status); }
     std::string serverName() const override { return "test"; }
 };
+void activeResponseQuota() {
+    Temp tmp;
+    Config config;
+    config.root = tmp.root;
+    config.ramBytes = 24576;
+    const auto pcm = signal(4096);
+    uint64_t cost;
+    {
+        Store measure("MeasureResponse", config);
+        auto item = measure.create({"measure", 44100, 4096, 1});
+        item->append(pcm.data(), pcm.size(), false);
+        item->finish();
+        cost = measure.diskBytes();
+    }
+    config.diskBytes = cost * 2 + cost / 2;
+    {
+        Store parked("Parked", config);
+        auto prefix = parked.create({"prefix", 44100, 8192, 1});
+        prefix->append(pcm.data(), pcm.size(), false);
+        prefix->park();
+        assert(!prefix->finished() && prefix->contentLength() == 8192 * 6 + 44);
+        std::vector<char> bytes(pcm.size() * 6);
+        auto reader = prefix->reader(44);
+        size_t received = 0;
+        while (received < bytes.size()) received += reader.read(bytes.data() + received, bytes.size() - received);
+        const auto expected = reference(pcm, 44100);
+        assert(std::equal(bytes.begin(), bytes.end(), expected.begin() + 44));
+        for (auto name : {"second", "third"}) {
+            auto item = parked.create({name, 44100, 4096, 1});
+            item->append(pcm.data(), pcm.size(), false);
+            item->finish();
+        }
+        assert(prefix->evicted());
+        assert(parked.diskBytes() <= config.diskBytes);
+        puts("PASS parked unfinished prefix: promise and PCM retained until normal quota eviction");
+    }
+    Store store("Response", config);
+    auto make = [&](const std::string &name) {
+        auto item = store.create({name, 44100, 4096, 1});
+        item->append(pcm.data(), pcm.size(), false);
+        item->finish();
+        return item;
+    };
+    auto a = make("a"), b = make("b");
+    struct PressureRequest : Request {
+        std::function<void()> pressure;
+        bool applied = false;
+        bool send(const char *data, size_t bytes) override {
+            Request::send(data, bytes);
+            if (!applied && bytes == 8192) {
+                applied = true;
+                pressure();
+            }
+            return true;
+        }
+    } request;
+    std::shared_ptr<Item> c;
+    request.pressure = [&] { c = make("c"); };
+    assert(serveWav(request, a));
+    assert(request.applied && !request.disconnected && !a->evicted() && b->evicted());
+    const auto expected = reference(pcm, 44100);
+    assert(request.wire.substr(request.wire.find("\r\n\r\n") + 4) ==
+           std::string(expected.begin(), expected.end()));
+    assert(store.diskBytes() <= config.diskBytes);
+    auto d = make("d");
+    assert(a->evicted() && !Item::retainAudio(a)); // Eligible again after HTTP closes.
+    bool recoverable = false;
+    try { (void)a->contentLength(); }
+    catch (const ItemCancelled &) { recoverable = true; }
+    assert(recoverable); // A cache miss must not become a room/storage fault.
+    auto held = Item::retainAudio(c);
+    assert(held);
+    c->releaseAudio(); // Explicit revocation still invalidates an active response.
+    fails([&] { readAll(held->reader()); }, "left queue window");
+    assert(store.diskBytes() <= config.diskBytes && !d->evicted());
+    puts("PASS HTTP response survives quota pressure; other history evicted; close restores eligibility; explicit release wins");
+}
 void http() {
     Temp tmp;
     Config c;
@@ -496,5 +573,6 @@ int main() {
     quotaAndStartup();
     windowQuota();
     lifecycleAndCorruption();
+    activeResponseQuota();
     http();
 }

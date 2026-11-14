@@ -34,6 +34,12 @@ int main() {
     catch (const std::runtime_error &) { invalidPolicy = true; }
     assert(invalidPolicy);
     snapshot.revision = "18"; snapshot.shuffle = 1; snapshot.repeat = 2;
+    assert(snapshot.successor(9) == 0 && snapshot.successor(4) == 5);
+    snapshot.repeat = 1;
+    assert(snapshot.successor(9) == 9 && snapshot.successor(4) == 4);
+    snapshot.repeat = 0;
+    assert(snapshot.successor(9) == 10 && snapshot.successor(4) == 5);
+    snapshot.repeat = 2;
     QueueWindow model;
     model.reconcile(snapshot);
     assert(model.policy().revision == "18" && model.policy().shuffle == 1 && model.policy().repeat == 2);
