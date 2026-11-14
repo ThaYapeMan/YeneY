@@ -49,7 +49,9 @@ std::optional<yeney::FlacSourceInfo> QueueRoom::Impl::sourceInfo(uint64_t occurr
 void QueueRoom::Impl::relayEvents(bool enabled) {
     // Keep the fence across relay/stream handoffs: a delayed queue edit must
     // not look like a foreign-source takeover to the continuous stream path.
-    speaker->queueEvents([dirty = eventDirty, changes = speakerChanges, enabled](const upnp::GenaEvent &event) {
+    speaker->queueEvents([dirty = eventDirty, changes = speakerChanges, ws = std::weak_ptr<WebsocketSpeakerPosition>(websocketPosition), enabled](const upnp::GenaEvent &event) {
+        if (event.service == upnp::Service::ZoneGroupTopology)
+            if (auto source = ws.lock()) source->groupChanged();
         if (event.service == upnp::Service::AVTransport) {
             if (!changes->event(event)) return false;
             if (enabled) *dirty = true;

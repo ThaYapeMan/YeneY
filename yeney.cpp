@@ -1036,6 +1036,8 @@ int main(int argc, char** argv)
     }
     if (!gPlayer->discover(room, ip ? ip : "")) return EXIT_FAILURE;
     const auto selectedSpeaker = gPlayer->speaker();
+    if (const auto source = findOption(argc, argv, "--position-source"))
+        setenv("YENEY_POSITION_SOURCE", source, 1);
     bridge::playerName() = bridge::playerNames(selectedSpeaker.name, findOption(argc, argv, "--show-sonos-suffix"),
         std::getenv("YENEY_CONFIG") ? std::getenv("YENEY_CONFIG") : "/etc/yeney/config");
     bridge::streamMetrics().configure(selectedSpeaker.name);

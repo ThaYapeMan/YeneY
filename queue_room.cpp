@@ -123,6 +123,10 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
     auto colon = host.find(':');
     if (colon != std::string::npos)
         host.resize(colon);
+    if (positionSetting(room.name) != "upnp")
+        websocketPosition = std::make_shared<WebsocketSpeakerPosition>(room.ip);
+    if (websocketPosition) positionSources.add(*websocketPosition);
+    positionSources.add(upnpPosition);
     route.registerWith(*http);
     relayEvents(true);
     paths.describeSource = [this](uint64_t id) {

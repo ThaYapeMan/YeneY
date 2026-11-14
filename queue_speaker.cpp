@@ -69,10 +69,28 @@ void QueueRoom::Impl::observe() {
         return !commands.empty();
     };
     const auto now = std::chrono::steady_clock::now();
+    const auto selectedPosition = positionSources.select(positionMonotonic());
+    const auto precise = selectedPosition.first && std::string(selectedPosition.first->precision()) == "ms" ?
+        selectedPosition.second : std::nullopt;
+    const std::string source = selectedPosition.first ? selectedPosition.first->name() : "upnp";
+    if (activePositionSource != source) {
+        activePositionSource = source;
+        activePositionPrecision = selectedPosition.first ? selectedPosition.first->precision() : "second";
+        queue.positionClock(0, {});
+        previousPrecisePosition.reset();
+        logQueue("position source=" + source + " reason=" +
+            (precise ? "local-api-ready" : websocketPosition ? websocketPosition->failure() : "configured"));
+        publish();
+    }
     const bool event = eventDirty->exchange(false);
     if (!event && now < nextPoll)
         return;
-    nextPoll = now + std::chrono::milliseconds(now < fastUntil ? 100 : pollMs);
+    nextPoll = now + std::chrono::milliseconds(precise ? 50 : now < fastUntil ? 100 : pollMs);
+    const bool identityPoll = !precise || event || cachedPosition.empty() || now >= nextIdentityPoll ||
+        precise->item != lastWebsocketItem ||
+        (precise && previousPrecisePosition && precise->state != previousPrecisePosition->state);
+    if (identityPoll) {
+    nextIdentityPoll = now + std::chrono::seconds(1);
     const auto positionStarted = std::chrono::steady_clock::now();
     const auto p = actions.position().response;
     auto position = speakerChanges->poll(positionStarted,
@@ -89,11 +107,20 @@ void QueueRoom::Impl::observe() {
     const auto media = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response;
     const auto mediaFields = speakerChanges->poll(mediaStarted,
         {{"NumberOfTracks", media.value("NrTracks")}, {"AVTransportURI", media.value("CurrentURI")}});
+    cachedPosition = std::move(position);
+    cachedTransport = transportFields;
+    cachedMedia = mediaFields;
+    cachedMediaUri = media.child("CurrentURI");
+    }
+    auto position = cachedPosition;
+    const auto &transportFields = cachedTransport;
+    const auto &mediaFields = cachedMedia;
+    if (precise) lastWebsocketItem = precise->item;
     // Only this exact owned URI identifies the audible item. CurrentTrack and
     // NumberOfTracks may renumber during our edits without a playback boundary.
     const auto uri = position.at("CurrentTrackURI");
     const auto avUri = mediaFields.at("AVTransportURI");
-    if (media.child("CurrentURI")) {
+    if (cachedMediaUri) {
         sourceAway = !avUri.empty() && avUri != "x-rincon-queue:" + room.uuid + "#0";
         takeoverSource = transportSourceClass(avUri);
     }
@@ -171,12 +198,22 @@ void QueueRoom::Impl::observe() {
     }
     unsigned ph = 0, pm = 0, ps = 0;
     const bool positionValid = sscanf(position.at("RelativeTimePosition").c_str(), "%u:%u:%u", &ph, &pm, &ps) == 3;
-    const uint64_t reportedElapsed = positionValid ? uint64_t(ph * 3600 + pm * 60 + ps) : 0;
+    const uint64_t reportedMs = precise ? uint64_t(precise->positionMs) :
+        positionValid ? uint64_t(ph * 3600 + pm * 60 + ps) * 1000 : 0;
+    if (!precise && positionValid)
+        upnpPosition.update({uri, transport, double(reportedMs), positionMonotonic(), 0});
+    const uint64_t reportedElapsed = reportedMs / 1000;
+    const bool preciseSeek = precise && previousPrecisePosition &&
+        precise->item == previousPrecisePosition->item && precise->state == "PLAYING" &&
+        previousPrecisePosition->state == "PLAYING" &&
+        std::abs(precise->positionMs - previousPrecisePosition->positionMs -
+            (precise->sampleTime - previousPrecisePosition->sampleTime) * 1000) > 150;
+    previousPrecisePosition = precise;
     const auto playbackAdvance = lastPositionAt == std::chrono::steady_clock::time_point{} ? 0 :
         std::chrono::duration_cast<std::chrono::seconds>(now - lastPositionAt).count();
     if (positionValid && it != items.end() && it == previousItem &&
         transport == "PLAYING" && !lmsNavigation && !navigationSelecting &&
-        (reportedElapsed < lastElapsed || reportedElapsed > lastElapsed + 2 + uint64_t(playbackAdvance))) {
+        (precise ? preciseSeek : (reportedElapsed < lastElapsed || reportedElapsed > lastElapsed + 2 + uint64_t(playbackAdvance)))) {
         const auto owner = it->owner ? it->owner : it->stream;
         const auto index = sourceIndices.find(owner);
         const auto token = sourceTokens.find(owner);
@@ -190,7 +227,7 @@ void QueueRoom::Impl::observe() {
             // though its informational duration still describes the full item.
             const auto originMs = producer->estimated ? producer->sourceOriginMs : producer->originMs;
             const auto positionMs = uint64_t(originMs) +
-                it->segmentOffset * 1000 / it->item->descriptor().rate + reportedElapsed * 1000;
+                it->segmentOffset * 1000 / it->item->descriptor().rate + reportedMs;
             const bool rewind = positionMs < offset;
             logQueue("speaker-seek lms_index=" + std::to_string(index->second) +
                 " position_ms=" + std::to_string(positionMs) + " lms_offset_ms=" + std::to_string(offset) +
@@ -237,9 +274,9 @@ void QueueRoom::Impl::observe() {
             previousItem != items.end() && previousItem->frames <= (endEvidence + 1) * previousItem->item->descriptor().rate)
             throw TrackFault("declared boundary stopped with unplayed episode audio");
     }
-    const auto source = avUri;
-    const bool sourceChanged = media.child("CurrentURI") && source != "x-rincon-queue:" + room.uuid + "#0" &&
-                               (!source.empty() || !nearEnd);
+    const auto transportSource = avUri;
+    const bool sourceChanged = cachedMediaUri && transportSource != "x-rincon-queue:" + room.uuid + "#0" &&
+                               (!transportSource.empty() || !nearEnd);
     const bool missingItem = it == items.end();
     const bool unsolicited = now >= ownUntil && !waitingForPlay;
     if (unsolicited && expectedState != "STOPPED" &&
@@ -275,7 +312,8 @@ void QueueRoom::Impl::observe() {
                                                            : yeney::PlaybackState::Stopped;
     if (playback == yeney::PlaybackState::Stopped && it != std::prev(items.end()))
         return;
-    const auto elapsed = transport == "STOPPED" && nearEnd ? endEvidence : uint64_t(h * 3600 + m * 60 + s);
+    const auto elapsedMs = transport == "STOPPED" && nearEnd ? endEvidence * 1000 : reportedMs;
+    const auto elapsed = elapsedMs / 1000;
     if (transport != "STOPPED")
         lastElapsed = elapsed;
     const auto frames = it->frames;
@@ -326,11 +364,25 @@ void QueueRoom::Impl::observe() {
             const auto before = queue.audibleElapsedMs(owner);
             if (before && snapshot.index < snapshot.entries.size() &&
                 snapshot.entries[snapshot.index].url == it->sourceUrl)
-                pauseTime = int64_t(snapshot.timeMs) + int64_t(it->segmentOffset * 1000 / rate + elapsed * 1000) - *before;
+                pauseTime = int64_t(snapshot.timeMs) + int64_t(it->segmentOffset * 1000 / rate + elapsedMs) - *before;
         } catch (const std::exception &) { logQueue("pause position baseline unavailable"); }
     }
     queue.speakerPosition(current, transport == "STOPPED" && nearEnd && estimatedEpisode ? realEnd :
-                          elapsed * it->item->descriptor().rate, playback);
+                          elapsedMs * it->item->descriptor().rate / 1000, playback);
+    if (precise) {
+        const auto owner = it->owner ? it->owner : it->stream;
+        const auto baseline = queue.audibleElapsedMs(owner);
+        if (baseline) {
+            const auto offset = int64_t(*baseline) - int64_t(precise->positionMs);
+            const auto item = precise->item;
+            const auto ws = websocketPosition;
+            queue.positionClock(owner, [ws, item, offset]() -> std::optional<uint32_t> {
+                auto value = ws->position(positionMonotonic());
+                if (!value || value->item != item) return {};
+                return uint32_t(std::clamp<int64_t>(int64_t(value->positionMs) + offset, 0, UINT32_MAX));
+            });
+        }
+    }
     if (current != previous || state != old) {
         publish();
         logQueue("state=" + state + (state == "PLAYING" ? " audible occurrence=" : " occurrence=") +

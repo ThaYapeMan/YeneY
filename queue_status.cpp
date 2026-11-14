@@ -18,6 +18,8 @@ void QueueRoom::Impl::publish() {
     v.reason = pathReason;
     v.path = pathReason == "remote-source" ? "stream" : "relay";
     v.state = state;
+    v.positionSource = activePositionSource.empty() ? "upnp" : activePositionSource;
+    v.positionPrecision = activePositionPrecision;
     v.owned = ownership.active() && !externalReleased;
     v.occurrence = current;
     v.lastFault = fault;

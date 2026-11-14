@@ -12,6 +12,7 @@ namespace bridge {
 struct ModeStatus {
     std::string requested = "stream", active = "stream", state = "active", reason = "default-stream";
     std::string path;
+    std::string positionSource = "upnp", positionPrecision = "second";
     bool owned = false;
     uint64_t occurrence = 0;
     uint32_t renderedRate = 0;
@@ -67,7 +68,9 @@ public:
         if (!v.path.empty())
             out << ",\"path\":" << q(v.path);
         if (v.active == "queue") {
-            out << ",\"occurrence\":" << v.occurrence << ",\"owned\":" << (v.owned ? "true" : "false")
+            out << ",\"position_source\":" << q(v.positionSource)
+                << ",\"position_precision\":" << q(v.positionPrecision)
+                << ",\"occurrence\":" << v.occurrence << ",\"owned\":" << (v.owned ? "true" : "false")
                 << ",\"rendered_rate\":" << v.renderedRate << ",\"current_owned_item\":" << q(queueUriLog(v.currentUri))
                 << ",\"last_fault\":" << q(queueUriLog(v.lastFault)) << ",\"owned_item_uris\":[";
             for (size_t i = 0; i < v.ownedUris.size(); ++i) {

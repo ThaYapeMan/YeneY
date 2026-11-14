@@ -69,6 +69,8 @@ class CoreQueueSink : public yeney::Sink {
     std::function<bool(char, uint32_t)> commandHandler;
     std::optional<yeney::PlaybackState> speakerState;
     std::optional<uint32_t> speakerElapsed;
+    std::function<std::optional<uint32_t>()> preciseElapsed;
+    uint64_t preciseOccurrence = 0;
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
     uint64_t continuationSerial = UINT64_MAX / 2, producingSegment = 0;
     uint64_t speakerItemFrame = 0;
@@ -139,6 +141,7 @@ public:
     bool takeQueueRefetch() override { return refetchRequested.exchange(false); }
     void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs, uint32_t seekPositionMs);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
+    void positionClock(uint64_t occurrence, std::function<std::optional<uint32_t>()> clock);
     bool speakerDriven() const override;
     std::optional<yeney::EncodedSpool> encodedSpool(uint64_t) override;
     bool queueEndRequiresPlayed(uint64_t) const override;

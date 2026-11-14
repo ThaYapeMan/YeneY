@@ -48,6 +48,12 @@ class Position(dict):
         self.stamp = time.monotonic()
         super().__init__(value)
 
+    def milliseconds(self):
+        value = super().__getitem__('RelTime')
+        seconds = sum(int(v)*w for v, w in zip(value.split(':'), (3600, 60, 1)))
+        return seconds * 1000 + (max(0, time.monotonic() - self.stamp) * 1000
+            if getattr(self.owner, 'realtime', False) and self.owner.transport_state == 'PLAYING' else 0)
+
     def __getitem__(self, key):
         value = super().__getitem__(key)
         if key == 'RelTime' and getattr(self.owner, 'realtime', False) and self.owner.transport_state == 'PLAYING':
@@ -110,6 +116,10 @@ class Coordinator(ThreadingHTTPServer):
         self.busy, self.max_busy, self.grouped = 0, 0, False
         self.worker = threading.Thread(target=self.serve_forever)
         self.worker.start()
+        self.local_api = None
+        if os.environ.get('YENEY_FAKE_WEBSOCKET') == '1':
+            from sonos_websocket_fake import LocalApi
+            self.local_api = LocalApi(self)
 
     @property
     def transport_state(self):
@@ -169,6 +179,7 @@ class Coordinator(ThreadingHTTPServer):
             connection.close()
 
     def close(self):
+        if self.local_api: self.local_api.close()
         if getattr(self,'device_audio',None):self.device_audio.close()
         self.echo_stop.set(); self.echo_worker.join(5)
         assert not self.echo_worker.is_alive()
@@ -253,7 +264,7 @@ class Handler(BaseHTTPRequestHandler):
             urn, action = node.tag[1:].split('}')
             service = next(k for k, v in SERVICES.items() if v == urn)
             args = {child.tag: child.text or '' for child in node}
-            assert self.path == PATHS[service]
+            assert self.path == PATHS[service] or (action == 'GetPositionInfo' and self.path == '/MediaRenderer/AVTransport/Control')
             assert self.headers['SOAPAction'] == '"'+urn+'#'+action+'"'
             with s.lock:
                 s.requests.append((action, args, service, time.monotonic()))

@@ -892,6 +892,7 @@ bool CoreQueueSink::speakerDriven() const {
 }
 void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::PlaybackState state) {
     std::unique_lock<std::mutex> lock(mutex);
+    preciseElapsed = {};
     const auto it = records.find(id);
     if (!speakerClock || it == records.end() || !it->second.item)
         return;
@@ -996,7 +997,15 @@ bool CoreQueueSink::takeAudibleState(yeney::AudibleState &state) {
 }
 std::optional<uint32_t> CoreQueueSink::audibleElapsedMs(uint64_t occurrence) const {
     std::lock_guard<std::mutex> lock(mutex);
-    return occurrence == audibleSource ? speakerElapsed : std::nullopt;
+    if (occurrence != audibleSource) return {};
+    if (preciseElapsed && occurrence == preciseOccurrence)
+        if (auto value = preciseElapsed()) return value;
+    return speakerElapsed;
+}
+void CoreQueueSink::positionClock(uint64_t occurrence, std::function<std::optional<uint32_t>()> clock) {
+    std::lock_guard<std::mutex> lock(mutex);
+    preciseOccurrence = occurrence;
+    preciseElapsed = std::move(clock);
 }
 bool CoreQueueSink::isPaused() const {
     std::lock_guard<std::mutex> lock(mutex);

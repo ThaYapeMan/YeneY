@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include "core_queue_sink.h"
+#include "speaker_websocket.h"
+#include "position_settings.h"
 #include "lms_icon.h"
 #include "queue_path_sink.h"
 #include "queue_playlist.h"
@@ -158,6 +160,14 @@ struct QueueRoom::Impl {
     // The only outgoing CLI mutation path: called solely from speaker evidence.
     void speakerCommand(const std::string &command, const std::string &reason);
     void externalStop(const std::string &reason);
+    std::shared_ptr<WebsocketSpeakerPosition> websocketPosition;
+    UpnpSpeakerPosition upnpPosition;
+    PositionSources positionSources;
+    std::string activePositionSource, activePositionPrecision = "second", lastWebsocketItem;
+    std::map<std::string, std::string> cachedPosition, cachedTransport, cachedMedia;
+    bool cachedMediaUri = false;
+    std::chrono::steady_clock::time_point nextIdentityPoll{};
+    std::optional<SpeakerPositionSample> previousPrecisePosition;
     unsigned pollMs = pollSetting();
     std::chrono::steady_clock::time_point nextPoll{}, fastUntil{};
     std::shared_ptr<std::atomic_bool> eventDirty = std::make_shared<std::atomic_bool>(false);
