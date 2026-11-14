@@ -36,6 +36,8 @@ unsigned pollSetting();
 using namespace queue_room_detail;
 struct TrackFault : std::runtime_error { using std::runtime_error::runtime_error; };
 struct QueueRoom::Impl {
+    std::atomic<yeney::Player *> statusPlayer{nullptr};
+    void requestStatus() { if (auto player = statusPlayer.load()) player->requestStatus(); }
     upnp::Speaker room;
     std::string host, mac, session, nativeHost;
     std::atomic<uint64_t> nativeInputOccurrence{0};

@@ -256,6 +256,7 @@ bool QueueRoom::remoteSource(uint64_t id) const {
     auto it = impl->remote.find(id);
     return it == impl->remote.end() || it->second;
 }
+void QueueRoom::statusPlayer(yeney::Player *player) { impl->statusPlayer.store(player); }
 void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name, QueueRoom &room) {
     std::signal(SIGINT, stopRoom);
     std::signal(SIGTERM, stopRoom);
@@ -287,8 +288,10 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     config.queueRemoteSource = [&room](uint64_t id) { return room.remoteSource(id); };
     config.log = [](const auto &line) { std::printf("core: %s\n", line.c_str()); if ((line.rfind("STMs ", 0) == 0 || line.rfind("STMt ", 0) == 0) && yeney_stream_track_changed) yeney_stream_track_changed(); };
     yeney::Player player(config, room.sink());
+    room.statusPlayer(&player);
     player.run(roomStop);
     room.shutdown();
+    room.statusPlayer(nullptr);
     icon.shutdown();
     std::exit(0);
 }

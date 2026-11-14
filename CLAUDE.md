@@ -599,7 +599,11 @@ Speaker seek/rewind detection uses milliseconds; exact UPnP owned URI identity,
 the selection arbiter, I1–I6 and immutable audio promises remain authoritative.
 The STAT getter evaluates the fit at request time. QueuePathSink handles clock
 origins in the bridge: precise elapsed subtracts the selected seek offset,
-while UPnP preserves the first-observation origin. The core pin is unchanged.
+while UPnP preserves the first-observation origin. The host requests an immediate
+STMt through Player::requestStatus after confirmed discontinuities, audible item
+and playback-state changes, source switches and a known speaker-rewind echo.
+The core handles requests on its next control-loop turn, coalescing extra
+status reports to at most one per 50 ms without moving the periodic heartbeat.
 The old maximum 500 ms reconciliation tolerance is retained; precise-source
 errors require measurement rather than assuming whole-second accuracy.
 See docs/designs/speaker-position-source.md and the final report for measured
@@ -643,3 +647,30 @@ test process. No full make test attempt started, so no full-gate exit 0,
 soak acceptance or decimator acceptance is claimed. Independent T1–T8 red/green
 pairs, different physical coordinator endpoint following, precise queue SHM
 publication and the natural-boundary acceptance stimulus remain incomplete.
+
+
+## TIMING-03b acceptance and gate admission
+
+Compare midpoint LMS time queries at 4 Hz against true renderer position.
+Use 120 seconds for steady playback and 60 seconds after each app seek,
+rewind, LMS in-item seek, natural boundary and row switch. Each window requires
+median error within 10 ms, at least 95 percent within 30 ms, no consecutive
+error jump above 100 ms, and absolute fitted creep below 0.1 ms/s. Never
+compute creep from a window shorter than 60 seconds. Event alignment must
+reach 30 ms error within 300 ms.
+
+The replacement gate admission rule uses no other task's pytest/make-test
+process, cgroup cpu.stat usage below 15 percent of eight cores over 30 seconds,
+and a standalone decimator speed measurement reaching the unchanged 20x
+requirement. Record /proc/stat idle and load as information only. Repeat a
+failed fitness measurement after five minutes; record the figures after an
+hour without treating that alone as an end to the round. Run the final full
+gate detached, preserving its exit status and monotonic runtime.
+
+QueuePathSink sends queue audio to CoreQueueSink, which retains immutable WAV
+items and supplies audible elapsed to the core. It does not publish a queue
+SHM timing record. The stream-only TimingTap exports accepted decoder frames
+without a local audible schedule. Neither that production coordinate nor YNPT's
+decoded content_frame is an existing queue audible-position field. R5 therefore
+leaves SHM v1 and YNPT unchanged; the unchanged require_v1 consumer remains
+mandatory.

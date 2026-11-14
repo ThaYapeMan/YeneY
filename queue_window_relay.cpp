@@ -152,6 +152,7 @@ void QueueRoom::Impl::reconcileWindow() {
                 logQueue("window lms-nav from_index=" + std::to_string(navigationFrom) +
                     " to_index=" + std::to_string(audible->index) +
                     " action=slide history=" + std::to_string(history) + " lms_commands=0 kind=seek edits=0");
+                if (rewindEcho) requestStatus();
                 if (rewindEcho) logQueue("window pairing lms_index=" + std::to_string(audible->index) +
                     " decision=paired reason=speaker-rewind elapsed_ms=" + std::to_string(
                     std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - selected->second.issued).count()) +
@@ -543,6 +544,7 @@ void QueueRoom::Impl::reconcileWindow() {
             " decision=paired lms_commands=" + std::to_string(speakerNavCommands[navigationToken]));
         if (reused) logQueue("window retained target audio reused lms_commands=0");
         if (bound) logQueue("window lazy target producer adopted lms_commands=0");
+        if (rewindEcho) requestStatus();
         if (rewindEcho) logQueue("window pairing lms_index=" + std::to_string(audible->index) +
             " decision=paired reason=speaker-rewind elapsed_ms=" + std::to_string(
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - selected->second.issued).count()) +

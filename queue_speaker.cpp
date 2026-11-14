@@ -73,7 +73,8 @@ void QueueRoom::Impl::observe() {
     const auto precise = selectedPosition.first && std::string(selectedPosition.first->precision()) == "ms" ?
         selectedPosition.second : std::nullopt;
     const std::string source = selectedPosition.first ? selectedPosition.first->name() : "upnp";
-    if (activePositionSource != source) {
+    const bool positionSourceChanged = activePositionSource != source;
+    if (positionSourceChanged) {
         activePositionSource = source;
         activePositionPrecision = selectedPosition.first ? selectedPosition.first->precision() : "second";
         queue.positionClock(0, {});
@@ -205,12 +206,14 @@ void QueueRoom::Impl::observe() {
     const uint64_t reportedElapsed = reportedMs / 1000;
     const bool rendererEcho = precise && rendererSeekPosition &&
         precise->sampleTime - rendererSeekPosition->issued < 3;
+    bool rendererPositionConfirmed = false;
     if (precise && rendererSeekPosition) {
         const auto error = precise->positionMs - rendererSeekPosition->targetMs -
             (precise->state == "PLAYING" ? std::max(0.0, precise->sampleTime - rendererSeekPosition->issued) * 1000 : 0);
         if (std::abs(error) <= 500) {
             logQueue("seek verification source=" + activePositionSource + " error_ms=" + std::to_string(error) + " tolerance_ms=500");
             rendererSeekPosition.reset();
+            rendererPositionConfirmed = true;
         } else if (!rendererEcho) rendererSeekPosition.reset();
     }
     const bool preciseSeek = precise && !rendererEcho && previousPrecisePosition &&
@@ -393,6 +396,8 @@ void QueueRoom::Impl::observe() {
             });
         }
     }
+    if (positionSourceChanged || preciseSeek || rendererPositionConfirmed || current != previous || state != old)
+        requestStatus();
     if (current != previous || state != old) {
         publish();
         logQueue("state=" + state + (state == "PLAYING" ? " audible occurrence=" : " occurrence=") +

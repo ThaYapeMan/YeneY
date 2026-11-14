@@ -15,6 +15,7 @@ public:
               std::function<std::string()> streamUri);
     ~QueueRoom();
     void shutdown();
+    void statusPlayer(yeney::Player *);
     yeney::Sink &sink();
     void command(const yeney::Command &);
     void refusePlayback(bool member);
