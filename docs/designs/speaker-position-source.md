@@ -88,7 +88,8 @@ polling fell to 58.047 polls/minute.
 374.903 ms, exceeding the 300 ms requirement. Reading a current fit at STAT
 construction fixes steady playback but does not itself request an immediate
 STAT between the unchanged core's one-second periodic reports. Rewind also
-passes through the existing CLI/producer restart. No extra position mutation,
+passes through the existing CLI/producer restart. The eight-second post-seek creep estimate was -0.160992 ms/s, also outside
+the stated 0.1 ms/s target. No extra position mutation,
 core modification or threshold relaxation was used to conceal those misses.
 
 The forced-UPnP comparison measured steady median -474.442 ms, zero percent

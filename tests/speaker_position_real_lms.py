@@ -53,8 +53,7 @@ def run(c):
             assert abs(result['median_ms']) <= 10, result
             assert result['within_30_pct'] >= 95, result
             assert result['jumps_over_100_ms'] == 0, result
-            if duration >= 120:
-                assert abs(creep) < .1, result
+            assert abs(creep) < .1, result
         return result
 
     try:

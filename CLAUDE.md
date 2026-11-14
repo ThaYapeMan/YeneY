@@ -628,3 +628,11 @@ Record all final-binary transition checks; periodic STAT cadence may still
 limit how quickly an arbitrary-phase seek becomes visible at LMS. Do not
 change the core or issue extra LMS position mutations to conceal such a miss.
 Owner speakers and deployment remain outside this task.
+
+TIMING-03 validation remains not accepted: final test-fast exited 0 in
+249.341 s (unchanged-base result: 0 in 173.413 s). The 120-second steady clock
+meets its targets, but measured LMS alignment after app seek and rewind was
+411.048 and 374.903 ms, exceeding 300 ms. The short post-seek creep estimate
+also exceeded 0.1 ms/s. Full-gate admission requires a separate 30-second CPU
+idle measurement of at least 85 percent and no other test process; do not
+substitute a successful fast gate or a historical consumer check for it.
