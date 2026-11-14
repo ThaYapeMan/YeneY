@@ -224,7 +224,7 @@ switch to the old partial. The old one-swap assertion fails with count 2.
 
 FULLQ-01c individual operation timings are recorded in
 `/home/codex/src/reports/yeney-fullq-01c-report.md`. Its full gate never started:
-the old watcher incorrectly blocked on an open Codex CLI. FULLQ-01d replaces
+the old watcher incorrectly blocked on an idle session of another task. FULLQ-01d replaces
 that start rule and records the detached full-gate result separately.
 ALAC tail metadata and raw WAV C2 timing remain core acceptance limits; stress
 timings are historical evidence, not the device acceptance model.
@@ -267,7 +267,7 @@ or URI mutation is required.
 
 The owner-updated full-gate rule is no other task running python3 -m pytest
 or make test. Ignore load average because network-disk waits contribute to it;
-an open Codex CLI does not block admission. Earlier load/CPU waits remain
+an idle session of another task does not block admission. Earlier load/CPU waits remain
 historical evidence. Record any wait for another test process. The detached gate records its
 status and monotonic runtime independently of the tool session.
 

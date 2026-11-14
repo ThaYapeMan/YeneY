@@ -392,7 +392,7 @@ immutable declarations, producer admission tickets, arbiter and outbox fences.
 
 Owner-updated full-gate rule: start when no other task runs python3 -m pytest
 or make test. Ignore load average because network-disk waits contribute to it;
-an open Codex CLI does not block admission. Earlier load/CPU waits remain in
+an idle session of another task does not block admission. Earlier load/CPU waits remain in
 the report as historical evidence. Record any wait for another test process. Run make test detached
 and retain its exit status and monotonic runtime independently of the session.
 The consumer checkout is supplied explicitly and read-only.
