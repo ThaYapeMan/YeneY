@@ -235,7 +235,8 @@ std::unique_ptr<yeney::Decoder> QueueRoom::decoder(const yeney::DecoderConfig &c
     const auto extension = source.url.substr(source.url.find_last_of('.') + 1);
     const bool native = (config.codec == 'f' && extension == "flac") ||
                         (config.codec == 'l' && (extension == "m4a" || extension == "alac")) ||
-                        (config.codec == 'p' && (extension == "wav" || extension == "aiff" || extension == "aif"));
+                        (config.codec == 'p' && (extension == "wav" || extension == "aiff" || extension == "aif")) ||
+                        (config.codec == 'm' && extension == "mp3");
     if (impl->paths.isRelay() && native && !config.transcoded && !source.startOffsetMs &&
         !remotePlaybackSource(source.id, source.remote, source.url) &&
         !source.id.empty() && source.id.find_first_not_of("0123456789") == std::string::npos) {

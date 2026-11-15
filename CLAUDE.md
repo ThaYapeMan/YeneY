@@ -741,3 +741,21 @@ This length proof is independent of the source-origin known bit.
 P3's 4/16/40 MB WAV jumps measured 0.592/0.593/0.593 seconds, versus the
 prior 2.8/9.0/21.4-second growth. All sixteen after-matrix cases passed,
 including four 12-row C2 runs, exact byte checks and both ALAC layouts.
+
+
+## Decisions — TIMING-03b P4 MP3 content position
+
+Keep minimp3's existing delay/padding removal unchanged. A valid Xing/Info
+LAME-compatible extension plus a host-proven finite original resource at byte
+zero permits content origin zero and an exact header-derived content count.
+Recognize the LAME and Lavc labels used by the generated libmp3lame fixtures.
+The native local MP3 path binds the admitted immutable download and provides
+that proof only after its full HTTP-200 response header; seek, partial and
+remote/endless paths provide no proof. A known count alone is not origin proof.
+
+Six focused cases preserve identical pre-item PCM: full from-start, original
+header under seek context, real MPEG seek suffix, endless prefix, absent LAME
+information and absent Xing. Real LMS 9.1.1 removes 44 container/tag bytes from
+the generated shared stream, but its decoded PCM matches the original download
+exactly. SHM mixed-validity and proven/unproven MP3 tests keep the v1 prefix
+byte-identical. The unchanged consumer gate passes.

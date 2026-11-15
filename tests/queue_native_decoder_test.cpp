@@ -46,7 +46,8 @@ public:
 };
 }
 namespace yeney {
-std::unique_ptr<Decoder> makeDecoder(const DecoderConfig &config) { return std::make_unique<BytesDecoder>(config); }
+std::function<bool()> observedMp3Proof;
+std::unique_ptr<Decoder> makeDecoder(const DecoderConfig &config) { observedMp3Proof = config.mp3FromStart; return std::make_unique<BytesDecoder>(config); }
 }
 int main() {
     int server = socket(AF_INET, SOCK_STREAM, 0);
@@ -205,6 +206,36 @@ int main() {
         decoder.reset(); aiffPeer.join();
     }
     std::cout << "PASS C1 immutable WAV/AIFF origin=0 proven; partial AIFF origin unknown; PCM byte identity\n";
+    for (bool complete : {true, false}) {
+        std::thread mp3Peer([&] {
+            int fd = accept(server, nullptr, nullptr); assert(fd >= 0);
+            std::string request; char buffer[1024];
+            while (request.find("\r\n\r\n") == std::string::npos) {
+                auto n = recv(fd, buffer, sizeof(buffer), 0); assert(n > 0); request.append(buffer, n);
+            }
+            std::string reply = complete ? "HTTP/1.1 200 OK\r\n" : "HTTP/1.1 206 Partial Content\r\n";
+            reply += "Content-Length: "+std::to_string(native.size())+"\r\n\r\n"+native;
+            for (size_t sent = 0; sent < reply.size();) {
+                auto n = send(fd, reply.data()+sent, reply.size()-sent, MSG_NOSIGNAL);
+                assert(n > 0); sent += size_t(n);
+            }
+            close(fd);
+        });
+        yeney::DecoderConfig mp3; mp3.codec = 'm';
+        decoder = bridge::nativeQueueDecoder(mp3, "127.0.0.1", "17", 0, {}, port);
+        decoder->feed(rawCredit.data(), rawCredit.size()); decoder->finish(); actual.clear();
+        deadline = std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while (!decoder->done()) {
+            yeney::Frame frames[32]; auto n = decoder->take(frames, 32);
+            for (size_t i = 0; i < n; ++i) actual.push_back(char(frames[i].left));
+            assert(decoder->error().empty()); assert(std::chrono::steady_clock::now() < deadline);
+            std::this_thread::yield();
+        }
+        assert(actual == native);
+        assert(yeney::observedMp3Proof && yeney::observedMp3Proof() == complete);
+        decoder.reset(); mp3Peer.join();
+    }
+    std::cout << "PASS C4 immutable MP3 host proof only for full finite response; bytes unchanged\n";
     std::atomic<bool> accepted{false}, release{false};
     std::thread stalled([&] {
         int fd = accept(server, nullptr, nullptr);

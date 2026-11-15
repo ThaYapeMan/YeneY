@@ -193,9 +193,10 @@ class NativeDecoder final : public yeney::Decoder {
     std::shared_ptr<std::atomic_bool> pcmOriginKnown = std::make_shared<std::atomic_bool>(false);
     std::shared_ptr<NativeMovie> movie = std::make_shared<NativeMovie>();
     std::shared_ptr<std::atomic<uint64_t>> pcmFrames = std::make_shared<std::atomic<uint64_t>>(UINT64_MAX);
+    std::shared_ptr<std::atomic_bool> fileFromStart = std::make_shared<std::atomic_bool>(false);
     static yeney::DecoderConfig withOrigin(yeney::DecoderConfig config,
                                           std::shared_ptr<std::atomic_bool> proof,
-                                          std::shared_ptr<NativeMovie> metadata, std::shared_ptr<std::atomic<uint64_t>> frames, bool preload) {
+                                          std::shared_ptr<NativeMovie> metadata, std::shared_ptr<std::atomic<uint64_t>> frames, std::shared_ptr<std::atomic_bool> original, bool preload) {
         if (config.codec == 'p') config.pcmSourceStart = [proof]() -> std::optional<uint64_t> {
             return proof->load() ? std::optional<uint64_t>(0) : std::nullopt;
         };
@@ -203,6 +204,7 @@ class NativeDecoder final : public yeney::Decoder {
             const auto count = frames->load();
             return count == UINT64_MAX ? std::nullopt : std::optional<uint64_t>(count);
         };
+        if (config.codec == 'm') config.mp3FromStart = [original] { return original->load(); };
         if (preload) config.mp4Metadata = [metadata] { return metadata->get(); };
         return config;
     }
@@ -408,6 +410,7 @@ class NativeDecoder final : public yeney::Decoder {
                     remaining = std::stoull(fields.substr(length + 17));
                     responseBytes = remaining;
                     fullResponse = headers.substr(9, 3) == "200";
+                    fileFromStart->store(fullResponse && !offsetMs);
                     representation.length(remaining);
                     body = true;
                     data = headers.data() + split + 4;
@@ -449,7 +452,7 @@ public:
     NativeDecoder(const yeney::DecoderConfig &config, const std::string &host,
                   const std::string &track, unsigned offsetMs,
                   std::function<void(const std::string &)> logger, unsigned port)
-        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown, movie, pcmFrames, config.codec == 'l' && !offsetMs))), log(std::move(logger)) {
+        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown, movie, pcmFrames, fileFromStart, config.codec == 'l' && !offsetMs))), log(std::move(logger)) {
         worker = std::thread([this, host, track, offsetMs, port, rawPcm = config.codec == 'p',
                               preload = config.codec == 'l' && !offsetMs,
                               pcmWidth = config.size >= '0' && config.size <= '3' &&
