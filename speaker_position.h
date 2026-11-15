@@ -12,6 +12,7 @@ namespace bridge {
 struct SpeakerPositionSample {
     std::string item, state;
     double positionMs = 0, sampleTime = 0, rttMs = 0;
+    double observedAt = 0; // midpoint of the latest accepted source observation
 };
 class SpeakerPosition {
 public:
@@ -72,6 +73,7 @@ public:
         if (samples.empty()) return {};
         auto result = samples.back();
         result.positionMs = std::max(0.0, estimate(now));
+        result.observedAt = samples.back().sampleTime;
         result.sampleTime = now;
         return result;
     }

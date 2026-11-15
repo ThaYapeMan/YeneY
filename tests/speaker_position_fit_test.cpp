@@ -56,6 +56,8 @@ int main() {
     assert(std::abs(fit.position(5.4)->positionMs - 5800) < .001);
     assert(fit.add({"two", "PLAYING", 0, 5.5, 10}));
     assert(fit.position(5.5)->positionMs == 0);
+    assert(fit.position(5.55)->observedAt == 5.5);
+    assert(fit.position(5.55)->sampleTime == 5.55);
     assert(fit.add({"two", "PAUSED", 100, 5.6, 10}));
     assert(fit.position(10)->positionMs == 100);
     std::cout << "PASS T8 fit: RTT >200 ms discarded; outlier movement <5 ms; confirmed 400 ms seek reset in 200 ms; first sample, item and pause reset\n";

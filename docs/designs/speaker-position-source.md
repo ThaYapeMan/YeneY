@@ -75,7 +75,7 @@ The earlier Port probe measured 999.98 ms/s, residual median 1.7 ms and p95
 9.6 ms at 5 Hz; RTT median approximately 10 ms with occasional 50 ms spikes.
 Firmware was 86.10-81100, API 1.54.2. This task does not contact those devices.
 
-## Loopback evidence and acceptance
+## TIMING-03 historical loopback evidence
 
 The TLS fake models the handshake, local info, subscriptions, status messages,
 continuous position, symmetric RTT and occasional 50 ms spikes. Its group ID
@@ -127,3 +127,43 @@ both sides of each sample bracket.
 No precise UPnP edge fit is implemented. That later source can register through
 the same interface once the owner's second-change measurements validate it.
 The SHM v1 prefix and timing record layouts remain unchanged.
+
+## TIMING-03b measured loopback figures
+
+The final Part A run uses 20 Hz WebSocket polling while playing and a 20 ms
+room observation interval. The former 5 Hz polling could still produce a
+345.473 ms rewind despite immediate status requests. Keep the existing 1 Hz
+paused cadence, one-second UPnP identity refresh and UPnP fallback schedule.
+Midpoint LMS queries run at 4 Hz; RTT spikes are enabled. Steady playback uses
+120 seconds and every event window uses 60 seconds. Creep is computed only
+on windows at least 60 seconds long.
+
+| Window | Samples | Median LMS minus true ms | Within ±30 ms | Jumps >100 ms | Creep ms/s |
+|---|---:|---:|---:|---:|---:|
+| steady | 480 | -1.054300 | 100.000% | 0 | -0.000551 |
+| after-app-seek | 240 | -0.616803 | 100.000% | 0 | 0.007756 |
+| after-rewind | 240 | -0.802791 | 100.000% | 0 | -0.005553 |
+| after-lms-in-item-seek | 240 | -0.344100 | 100.000% | 0 | -0.013482 |
+| boundary | 240 | 0.418028 | 100.000% | 0 | 0.027198 |
+| after-row-switch | 240 | -0.972096 | 100.000% | 0 | 0.000391 |
+
+| Event | First aligned LMS reading ms |
+|---|---:|
+| app-seek | 101.156 |
+| rewind | 256.344 |
+| lms-in-item-seek | 108.261 |
+| boundary | 74.344 |
+| row-switch | 154.496 |
+
+The row-switch check exposed a new row being announced against the old row's
+fit. A fitted sample now retains the midpoint of its last accepted observation
+separately from its projected position time. After a renderer seek, the room
+requires an accepted observation newer than the completed write before
+announcing the new producer. It does not substitute the requested seek position
+for an observed position. Renderer seek completion also invalidates the old
+cached UPnP identity; neither stale observation can authorize navigation.
+
+The owner evidence of 14 November above is unchanged: the two Port captures
+had roughly one second of LMS lag. These container-local measurements establish
+Part A timing behavior, not a new device comparison or deployment. Full-gate
+and independent core-item acceptance are reported separately.

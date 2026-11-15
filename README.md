@@ -824,3 +824,17 @@ It is an undocumented local interface, so socket failures fall back to UPnP and
 retry automatically. Room status shows `position_source` and
 `position_precision`. Set `YENEY_POSITION_SOURCE=upnp` (or
 `--position-source=upnp`) to force the previous position source.
+
+
+The TIMING-03b loopback comparison measured a −1.054 ms steady median over
+120 seconds, all samples within ±30 ms, zero jumps and −0.000551 ms/s creep.
+App seek, rewind, LMS in-item seek, natural boundary and row switch aligned in
+101.156, 256.344, 108.261, 74.344 and 154.496 ms. Their 60-second median errors
+were −0.617, −0.803, −0.344, +0.418 and −0.972 ms; all samples were within
+±30 ms with zero jumps, and the largest absolute creep was 0.027198 ms/s.
+This uses 20 Hz precise-source sampling and coalesced immediate core status
+requests. The owner's two Port captures on 14 November had medians of +991
+and +1047 ms for speaker position minus LMS time; the new loopback figures
+await the owner device comparison. See
+[the position-source design](docs/designs/speaker-position-source.md) for the
+measurement table and retained historical failures.

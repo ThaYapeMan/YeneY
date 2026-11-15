@@ -116,6 +116,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
               speakerChanges->selected();
               // A completed renderer seek invalidates the cached identity read
               // from before the write. Read the owned URI before navigation.
+              rendererObservationAfter = positionMonotonic();
               cachedPosition.clear();
               nextIdentityPoll = {};
           }

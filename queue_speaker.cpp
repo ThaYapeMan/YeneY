@@ -72,6 +72,10 @@ void QueueRoom::Impl::observe() {
     const auto selectedPosition = positionSources.select(positionMonotonic());
     const auto precise = selectedPosition.first && std::string(selectedPosition.first->precision()) == "ms" ?
         selectedPosition.second : std::nullopt;
+    if (precise && rendererObservationAfter && precise->observedAt < rendererObservationAfter)
+        return;
+    const bool rendererObservationConfirmed = precise && rendererObservationAfter;
+    if (rendererObservationConfirmed) rendererObservationAfter = 0;
     const std::string source = selectedPosition.first ? selectedPosition.first->name() : "upnp";
     const bool positionSourceChanged = activePositionSource != source;
     if (positionSourceChanged) {
@@ -206,7 +210,7 @@ void QueueRoom::Impl::observe() {
     const uint64_t reportedElapsed = reportedMs / 1000;
     const bool rendererEcho = precise && rendererSeekPosition &&
         precise->sampleTime - rendererSeekPosition->issued < 3;
-    bool rendererPositionConfirmed = false;
+    bool rendererPositionConfirmed = rendererObservationConfirmed;
     if (precise && rendererSeekPosition) {
         const auto error = precise->positionMs - rendererSeekPosition->targetMs -
             (precise->state == "PLAYING" ? std::max(0.0, precise->sampleTime - rendererSeekPosition->issued) * 1000 : 0);

@@ -674,3 +674,11 @@ without a local audible schedule. Neither that production coordinate nor YNPT's
 decoded content_frame is an existing queue audible-position field. R5 therefore
 leaves SHM v1 and YNPT unchanged; the unchanged require_v1 consumer remains
 mandatory.
+
+
+TIMING-03b position observations retain the accepted source midpoint separately
+from projected sample time. After an acknowledged renderer seek, require a fit
+with a newer accepted observation before announcing the new producer. Never
+use a pre-seek fit with the post-seek owned URI. Invalidate the cached UPnP
+identity after renderer seek completion so that it cannot authorize navigation
+back to the previous row. No requested-position substitution or settling delay.
