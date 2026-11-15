@@ -22,6 +22,9 @@ def replay(member=False):
         h.state(1,5);h.until(lambda:len(h.packets('STMs'))==1)
         if not member: assert len(h.sonos.actions('SaveQueue'))==1
         for cycle in range(3):
+            # Admission starts playback before saved-backup maintenance ends.
+            # The takeover snapshot must exclude that already admitted work.
+            h.until(lambda: sum(p['title'].startswith('Before YeneY ') for p in h.sonos.saved) <= 5)
             if not member: time.sleep(7 if cycle==0 else .2)
             with h.sonos.lock:
                 before=len(writes(h))
