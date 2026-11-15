@@ -15,8 +15,11 @@
 #include <unistd.h>
 namespace bridge {
 namespace {
-class NativeWavePayload {
-    bool enabled, top = true, audio = false, found = false, format = false;
+class NativePcmPayload {
+    bool enabled, top = true, audio = false, found = false, format = false, wave = true;
+    bool soundHeader = false;
+    uint64_t soundSkip = 0;
+    std::function<void()> provenOrigin;
     uint64_t expected = 0, received = 0, left = 0, padding = 0;
     std::string header;
     static uint32_t little(const char *p) {
@@ -24,15 +27,31 @@ class NativeWavePayload {
         return uint32_t(b[0]) | uint32_t(b[1]) << 8 | uint32_t(b[2]) << 16 | uint32_t(b[3]) << 24;
     }
 public:
-    explicit NativeWavePayload(bool rawPcm) : enabled(rawPcm) {}
+    explicit NativePcmPayload(bool rawPcm, std::function<void()> origin)
+        : enabled(rawPcm), provenOrigin(std::move(origin)) {}
     void length(uint64_t bytes) { expected = bytes; }
     template<class Feed> bool feed(const char *bytes, size_t count, Feed consume) {
         received += count;
         if (!enabled) return consume(bytes, count);
-        // LMS advertises WAV as raw PCM ('p'), removing RIFF chunks. Preserve
-        // that representation; a download's header must not add early length
-        // information to the pinned core's raw-PCM decoder.
+        // The immutable download begins at byte zero. Strip container framing,
+        // preserving LMS's raw PCM representation and its byte order.
         while (count) {
+            if (soundHeader) {
+                const auto n = std::min(count, size_t(8) - header.size());
+                header.append(bytes, n); bytes += n; count -= n;
+                if (header.size() != 8) continue;
+                const auto *b = reinterpret_cast<const uint8_t *>(header.data());
+                soundSkip = uint32_t(b[0]) << 24 | uint32_t(b[1]) << 16 | uint32_t(b[2]) << 8 | b[3];
+                if (soundSkip > left - 8) throw std::runtime_error("native AIFF sound offset");
+                left -= 8; soundHeader = false; audio = true; header.clear();
+                provenOrigin();
+                continue;
+            }
+            if (soundSkip) {
+                const auto n = size_t(std::min<uint64_t>(soundSkip, count));
+                soundSkip -= n; left -= n; bytes += n; count -= n;
+                continue;
+            }
             if (left) {
                 const auto n = size_t(std::min<uint64_t>(left, count));
                 if (audio && !consume(bytes, n)) return false;
@@ -45,18 +64,30 @@ public:
             header.append(bytes, n); bytes += n; count -= n;
             if (header.size() != needed) continue;
             if (top) {
-                if (header.compare(0, 4, "RIFF") || header.compare(8, 4, "WAVE") ||
-                    uint64_t(little(header.data()+4)) + 8 != expected)
-                    throw std::runtime_error("native WAV RIFF framing");
+                wave = !header.compare(0, 4, "RIFF") && !header.compare(8, 4, "WAVE");
+                const bool aiff = !header.compare(0, 4, "FORM") &&
+                    (!header.compare(8, 4, "AIFF") || !header.compare(8, 4, "AIFC"));
+                const auto *b = reinterpret_cast<const uint8_t *>(header.data()+4);
+                const uint32_t length = wave ? little(header.data()+4) :
+                    uint32_t(b[0]) << 24 | uint32_t(b[1]) << 16 | uint32_t(b[2]) << 8 | b[3];
+                if ((!wave && !aiff) || uint64_t(length) + 8 != expected)
+                    throw std::runtime_error("native PCM container framing");
                 top = false;
             } else {
-                left = little(header.data()+4);
+                const auto *b = reinterpret_cast<const uint8_t *>(header.data()+4);
+                left = wave ? little(header.data()+4) :
+                    uint32_t(b[0]) << 24 | uint32_t(b[1]) << 16 | uint32_t(b[2]) << 8 | b[3];
                 padding = left & 1;
-                audio = header.compare(0, 4, "data") == 0;
+                audio = header.compare(0, 4, wave ? "data" : "SSND") == 0;
                 if (audio) {
                     if (found || !format) throw std::runtime_error("native WAV data order");
                     found = true;
-                } else if (!header.compare(0, 4, "fmt ")) {
+                    if (wave) provenOrigin();
+                    else {
+                        if (left < 8) throw std::runtime_error("native AIFF sound framing");
+                        soundHeader = true; audio = false;
+                    }
+                } else if (!header.compare(0, 4, wave ? "fmt " : "COMM")) {
                     if (format || left < 16) throw std::runtime_error("native WAV format framing");
                     format = true;
                 }
@@ -66,11 +97,19 @@ public:
         return true;
     }
     void finish() const {
-        if (enabled && (top || !found || !format || left || padding || !header.empty() || received != expected))
+        if (enabled && (top || !found || !format || left || padding || soundHeader || soundSkip || !header.empty() || received != expected))
             throw std::runtime_error("native WAV truncated chunks");
     }
 };
 class NativeDecoder final : public yeney::Decoder {
+    std::shared_ptr<std::atomic_bool> pcmOriginKnown = std::make_shared<std::atomic_bool>(false);
+    static yeney::DecoderConfig withOrigin(yeney::DecoderConfig config,
+                                          std::shared_ptr<std::atomic_bool> proof) {
+        if (config.codec == 'p') config.pcmSourceStart = [proof]() -> std::optional<uint64_t> {
+            return proof->load() ? std::optional<uint64_t>(0) : std::nullopt;
+        };
+        return config;
+    }
     std::unique_ptr<yeney::Decoder> decoder;
     std::atomic<bool> stop{false};
     mutable std::mutex mutex;
@@ -134,7 +173,10 @@ class NativeDecoder final : public yeney::Decoder {
             bool body = false;
             uint64_t remaining = 0;
             uint64_t supplied = 0;
-            NativeWavePayload representation(rawPcm);
+            bool fullResponse = false;
+            NativePcmPayload representation(rawPcm, [this, &fullResponse, offsetMs] {
+                if (fullResponse && !offsetMs) pcmOriginKnown->store(true);
+            });
             auto feed = [&](const char *data, size_t bytes) {
                 size_t consumed = 0;
                 while (!stop && consumed < bytes) {
@@ -184,6 +226,7 @@ class NativeDecoder final : public yeney::Decoder {
                     if (length == std::string::npos || fields.find("\r\ntransfer-encoding:") != std::string::npos)
                         throw std::runtime_error("native source HTTP framing");
                     remaining = std::stoull(fields.substr(length + 17));
+                    fullResponse = headers.substr(9, 3) == "200";
                     representation.length(remaining);
                     body = true;
                     data = headers.data() + split + 4;
@@ -206,7 +249,7 @@ public:
     NativeDecoder(const yeney::DecoderConfig &config, const std::string &host,
                   const std::string &track, unsigned offsetMs,
                   std::function<void(const std::string &)> logger, unsigned port)
-        : decoder(yeney::makeDecoder(config)), log(std::move(logger)) {
+        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown))), log(std::move(logger)) {
         worker = std::thread([this, host, track, offsetMs, port, rawPcm = config.codec == 'p'] {
             produce(host, track, offsetMs, port, rawPcm);
         });

@@ -682,3 +682,23 @@ with a newer accepted observation before announcing the new producer. Never
 use a pre-seek fit with the post-seek owned URI. Invalidate the cached UPnP
 identity after renderer seek completion so that it cannot authorize navigation
 back to the previous row. No requested-position substitution or settling delay.
+
+
+## Decisions — TIMING-03b P1 PCM origin
+
+LMS 9.1.1 sends native WAV and AIFF as raw wire-p PCM, including seeks; strm
+format fields do not change with the offset and the stream response has no
+source-frame proof. Generated 16/44.1 and 24/96 stereo ramps confirmed all
+requested captures at 0.229443, 5, 30 and 39.25 seconds. Never publish an
+implicit zero-known PCM origin. The core accepts only a nonblocking host
+pcmSourceStart callback carrying proven provenance. The bridge proves frame
+zero from its full HTTP-200 immutable download after validating complete
+RIFF/FORM response framing and locating the first audio payload. Partial and
+shared-stream responses remain unknown. Native AIFF uses that same immutable
+path with its original byte order and SSND offset. Unknown landing keeps the
+existing separate-item fallback and cannot authorize in-item attachment.
+
+Keep the production LampaStream consumer and its require_v1 gate unchanged.
+Its generated full-frame-zero producer fixture now supplies its known origin
+explicitly through the host API; the production standalone player does not.
+All prior consumer assertions, PCM bytes and SHM fields remain unchanged.

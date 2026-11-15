@@ -637,5 +637,34 @@ int main() {
         assert(row.wavOrigin == landed && row.item->producedFrames() == 100);
     }
     puts("PASS decoded frame zero overrides stale admission clock; in-item seek origin retained");
+    {
+        CoreQueueSink sink("UnknownPcmSeek", c, 1);
+        sink.windowRetention(2, 3);
+        std::vector<yeney::Frame> pcm;
+        for (int n = 0; n < 100; ++n) pcm.push_back({n * 65536, -n * 65536});
+        sink.sourceIdentity(1, 7, "file://pcm-origin", 0);
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 8000, 100, 0, 0});
+        sink.contentPosition(0, true);
+        sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        sink.write(pcm.data(), pcm.size(), false);
+        sink.resolvedItemBoundary({1, 0, 100, 0, "no-transition"});
+        sink.waitIdle();
+        const auto original = sink.snapshot().front().item;
+        sink.retainInterruptedOnNextFlush(); sink.flush();
+        sink.sourceIdentity(2, 7, "file://pcm-origin", 1);
+        sink.coreEvent("strm", 2, 0);
+        sink.trackDescriptor({2, 8000, 92, 0, 0});
+        sink.contentPosition(0, false);
+        sink.trackBoundary(0, {8000, 24, 2, false}, false);
+        sink.write(pcm.data()+8, 92, false);
+        sink.resolvedItemBoundary({2, 0, 92, 0, "no-transition"});
+        sink.waitIdle();
+        const auto row = sink.snapshot().back();
+        assert(!row.landedFrame && row.item != original && !row.pairedFrom);
+        assert(row.seekReason == "landed-frame-unknown" && row.originMs == 1 && row.seekPositionMs == 1);
+        assert(original->finished() && original->producedFrames() == 100);
+        puts("PASS C1 unknown PCM seek: no false landing or in-item pairing; retained full WAV unchanged");
+    }
     std::filesystem::remove_all(root);
 }

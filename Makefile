@@ -679,3 +679,5 @@ speaker-position-test: speaker-position-fit-test speaker-websocket-fixture
 	./speaker-position-fit-test
 	YENEY_WS_FIXTURE=./speaker-websocket-fixture python3 tests/speaker_websocket_test.py
 	python3 tests/sonos_timing_probe_test.py
+
+$(QUEUE_ROOM_OBJS) core_sonos.o: third_party/yeney-core/core/decoder.h

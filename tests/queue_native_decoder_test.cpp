@@ -15,7 +15,13 @@ class BytesDecoder final : public yeney::Decoder {
     mutable std::mutex mutex;
     std::deque<uint8_t> bytes;
     bool finished = false;
+    std::function<std::optional<uint64_t>()> origin;
 public:
+    explicit BytesDecoder(const yeney::DecoderConfig &config) : origin(config.pcmSourceStart) {}
+    bool sourceStart(uint64_t &frame) const override {
+        if (origin) if (auto value = origin()) { frame = *value; return true; }
+        return false;
+    }
     size_t feed(const uint8_t *data, size_t size) override {
         std::lock_guard<std::mutex> lock(mutex);
         size = std::min(size, size_t(32) - bytes.size());
@@ -40,7 +46,7 @@ public:
 };
 }
 namespace yeney {
-std::unique_ptr<Decoder> makeDecoder(const DecoderConfig &) { return std::make_unique<BytesDecoder>(); }
+std::unique_ptr<Decoder> makeDecoder(const DecoderConfig &config) { return std::make_unique<BytesDecoder>(config); }
 }
 int main() {
     int server = socket(AF_INET, SOCK_STREAM, 0);
@@ -157,8 +163,48 @@ int main() {
         std::this_thread::yield();
     }
     assert(actual == native); // RIFF/fmt/JUNK/LIST never enter the PCM decoder.
+    uint64_t origin = 99;
+    assert(decoder->sourceStart(origin) && origin == 0);
     decoder.reset();
     wavePeer.join();
+    auto big32 = [](std::string &s, uint32_t n) {
+        for (int shift : {24, 16, 8, 0}) s.push_back(char(n >> shift));
+    };
+    std::string aiff = "AIFFCOMM";
+    big32(aiff, 18); aiff.append(18, '\0');
+    aiff += "SSND"; big32(aiff, uint32_t(native.size()+11));
+    big32(aiff, 3); big32(aiff, 0); aiff += "pad" + native; aiff.push_back('\0');
+    std::string form = "FORM"; big32(form, uint32_t(aiff.size())); form += aiff;
+    for (bool complete : {true, false}) {
+        std::thread aiffPeer([&] {
+            int fd = accept(server, nullptr, nullptr); assert(fd >= 0);
+            std::string request; char buffer[1024];
+            while (request.find("\r\n\r\n") == std::string::npos) {
+                auto n = recv(fd, buffer, sizeof(buffer), 0); assert(n > 0); request.append(buffer, n);
+            }
+            std::string reply = complete ? "HTTP/1.1 200 OK\r\n" : "HTTP/1.1 206 Partial Content\r\n";
+            reply += "Content-Length: " + std::to_string(form.size()) + "\r\n\r\n" + form;
+            for (size_t sent = 0; sent < reply.size();) {
+                auto n = send(fd, reply.data()+sent, std::min<size_t>(17, reply.size()-sent), MSG_NOSIGNAL);
+                assert(n > 0); sent += size_t(n);
+            }
+            close(fd);
+        });
+        decoder = bridge::nativeQueueDecoder({}, "127.0.0.1", "16", complete ? 0 : 1250, {}, port);
+        decoder->feed(rawCredit.data(), rawCredit.size()); decoder->finish(); actual.clear();
+        deadline = std::chrono::steady_clock::now()+std::chrono::seconds(10);
+        while (!decoder->done()) {
+            yeney::Frame frames[32]; auto n = decoder->take(frames, 32);
+            for (size_t i = 0; i < n; ++i) actual.push_back(char(frames[i].left));
+            assert(decoder->error().empty()); assert(std::chrono::steady_clock::now() < deadline);
+            std::this_thread::yield();
+        }
+        assert(actual == native);
+        assert(decoder->sourceStart(origin) == complete);
+        if (complete) assert(origin == 0);
+        decoder.reset(); aiffPeer.join();
+    }
+    std::cout << "PASS C1 immutable WAV/AIFF origin=0 proven; partial AIFF origin unknown; PCM byte identity\n";
     std::atomic<bool> accepted{false}, release{false};
     std::thread stalled([&] {
         int fd = accept(server, nullptr, nullptr);

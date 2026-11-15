@@ -551,10 +551,11 @@ void CoreQueueSink::append(const std::vector<yeney::Frame> &input, bool processe
             const auto reason = got != stored.size() ? "verification-short-read" : "landed-pcm-mismatch";
             uint32_t retainedGain;
             { std::lock_guard<std::mutex> lock(mutex); retainedGain = records.at(r.pairedFrom).gain; }
-            std::printf("yeney: queue window seek occurrence=%llu decision=fallback reason=%s first_differing_frame=%llu landed_frame=%llu wav_origin=%llu retained_gain=%u producer_gain=%u\n",
+            const auto landedText = r.landedFrame ? std::to_string(*r.landedFrame) : "unknown";
+            std::printf("yeney: queue window seek occurrence=%llu decision=fallback reason=%s first_differing_frame=%llu landed_frame=%s wav_origin=%llu retained_gain=%u producer_gain=%u\n",
                 (unsigned long long)active, reason,
                 (unsigned long long)(cursor + (got != stored.size() ? got : size_t(mismatch.first - stored.begin())) / 6),
-                (unsigned long long)r.landedFrame.value_or(0), (unsigned long long)r.wavOrigin,
+                landedText.c_str(), (unsigned long long)r.wavOrigin,
                 retainedGain, r.gain);
             // The outgoing immutable item remains owned by its existing route.
             // Publish this producer separately; the controller retires that route
