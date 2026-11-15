@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix='yeney-worker-boundary-', dir=os.environ
     subprocess.run(['g++', '-g', '-o', str(work/'yeney'), *objects,
                     str(checkout/'libqueuecontroller.a'), str(checkout/'libqueueitems.a'),
                     str(checkout/'third_party/yeney-core/libyeneycore.a'),
-                    '-lFLAC++', '-lFLAC', '-lcrypto', '-lpthread'], check=True)
+                    '-lFLAC++', '-lFLAC', '-lssl', '-lcrypto', '-lpthread'], check=True)
     env = dict(os.environ, YENEY_ACCEPTANCE_BINARY=str(work/'yeney'), YENEY_REAL_LMS_NAV_INVARIANTS='1',
                YENEY_NAV_CASE='D6', YENEY_NAV_MEDIA='', YENEY_TEST_WORKER_TRIGGER=str(work/'trigger'))
     raise SystemExit(subprocess.run([sys.executable, str(ROOT/'tests/real_lms_test.py')], env=env).returncode)

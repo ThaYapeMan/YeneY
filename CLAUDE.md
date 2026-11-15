@@ -767,3 +767,12 @@ information and absent Xing. Real LMS 9.1.1 removes 44 container/tag bytes from
 the generated shared stream, but its decoded PCM matches the original download
 exactly. SHM mixed-validity and proven/unproven MP3 tests keep the v1 prefix
 byte-identical. The unchanged consumer gate passes.
+
+## TIMING-03b full-gate attempt limit
+
+The third allowed full-gate attempt passed targeted navigation and all registered
+soaks, then exposed a missing -lssl in worker_fault_binary_test.py's private
+fault-injection link. The corrected fixture passes D6 without changing any
+assertion. The three-attempt limit prohibits a fourth full make test in this
+round. Preserve the original nonzero full-gate result and run the remaining
+commands separately; that continuation does not constitute full-gate acceptance.
