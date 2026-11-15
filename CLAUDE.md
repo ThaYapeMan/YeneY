@@ -702,3 +702,24 @@ Keep the production LampaStream consumer and its require_v1 gate unchanged.
 Its generated full-frame-zero producer fixture now supplies its known origin
 explicitly through the host API; the production standalone player does not.
 All prior consumer assertions, PCM bytes and SHM fields remain unchanged.
+
+
+## Decisions — TIMING-03b P2 tail-moov ALAC
+
+The 3.7 MB/s startup barrier came from mirroring the shared stream's control-
+loop input credits into the immutable download while the demuxer buffered mdat
+until moov. Native full-file ALAC now inspects bounded leading box headers and
+fetches the tail metadata with an explicit byte range starting at mdat's end.
+LMS 9.1.1 honors explicit ranges but ignores suffix ranges. Validate HTTP 206,
+Content-Length and the exact Content-Range against the original response.
+Supply only the moov payload to the core; retain original sequential offsets.
+The in-band moov must still match, so mismatched or missing metadata faults.
+No whole-file encoded disk cache is used. Without range support, the immutable
+source ingests against its own decoder backpressure rather than shared-stream
+credits; ordinary FLAC, faststart and PCM paths retain their prior pacing.
+
+The 4/16/40 MB tail-moov jumps fell from 1.700/4.830/11.403 seconds to
+0.592/0.592/0.593 seconds. Twelve-row C2 passed: album 1.391 seconds, LMS
+changes below 0.595 seconds, app changes about 0.400 seconds. The focused
+pipeline delivers PCM before the unserved encoded tail; prefetched ordinary,
+wide/co64 and trimmed containers retain exact samples and source coordinates.

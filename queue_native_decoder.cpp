@@ -15,6 +15,52 @@
 #include <unistd.h>
 namespace bridge {
 namespace {
+struct NativeMovie {
+    std::mutex mutex;
+    std::condition_variable changed;
+    yeney::Bytes movie;
+    bool ready = false, cancelled = false;
+    yeney::Bytes get() {
+        std::unique_lock<std::mutex> lock(mutex);
+        changed.wait(lock, [&] { return ready || cancelled; });
+        return cancelled ? yeney::Bytes{} : std::move(movie);
+    }
+    void publish(yeney::Bytes value = {}) {
+        { std::lock_guard<std::mutex> lock(mutex); if (ready) return; movie = std::move(value); ready = true; }
+        changed.notify_all();
+    }
+    void cancel() {
+        { std::lock_guard<std::mutex> lock(mutex); cancelled = true; }
+        changed.notify_all();
+    }
+};
+// Inspect only bounded leading box headers. The main response retains its
+// original byte offsets; metadata is supplied separately to the core parser.
+std::optional<uint64_t> tailMovie(const yeney::Bytes &bytes, uint64_t total, bool &decided) {
+    uint64_t cursor = 0;
+    while (cursor + 8 <= bytes.size()) {
+        auto number = [&](size_t at) {
+            return uint32_t(bytes[at]) << 24 | uint32_t(bytes[at+1]) << 16 |
+                   uint32_t(bytes[at+2]) << 8 | bytes[at+3];
+        };
+        uint64_t length = number(size_t(cursor));
+        size_t header = 8;
+        if (length == 1) {
+            if (cursor + 16 > bytes.size()) return {};
+            length = uint64_t(number(size_t(cursor+8))) << 32 | number(size_t(cursor+12));
+            header = 16;
+        }
+        if (length < header || cursor > total || length > total-cursor) { decided = true; return {}; }
+        const auto *kind = bytes.data()+size_t(cursor)+4;
+        if (!std::memcmp(kind, "moov", 4)) { decided = true; return {}; }
+        if (!std::memcmp(kind, "mdat", 4)) {
+            decided = true;
+            return cursor+length < total ? std::optional<uint64_t>(cursor+length) : std::nullopt;
+        }
+        cursor += length;
+    }
+    return {};
+}
 class NativePcmPayload {
     bool enabled, top = true, audio = false, found = false, format = false, wave = true;
     bool soundHeader = false;
@@ -103,11 +149,14 @@ public:
 };
 class NativeDecoder final : public yeney::Decoder {
     std::shared_ptr<std::atomic_bool> pcmOriginKnown = std::make_shared<std::atomic_bool>(false);
+    std::shared_ptr<NativeMovie> movie = std::make_shared<NativeMovie>();
     static yeney::DecoderConfig withOrigin(yeney::DecoderConfig config,
-                                          std::shared_ptr<std::atomic_bool> proof) {
+                                          std::shared_ptr<std::atomic_bool> proof,
+                                          std::shared_ptr<NativeMovie> metadata, bool preload) {
         if (config.codec == 'p') config.pcmSourceStart = [proof]() -> std::optional<uint64_t> {
             return proof->load() ? std::optional<uint64_t>(0) : std::nullopt;
         };
+        if (preload) config.mp4Metadata = [metadata] { return metadata->get(); };
         return config;
     }
     std::unique_ptr<yeney::Decoder> decoder;
@@ -135,7 +184,82 @@ class NativeDecoder final : public yeney::Decoder {
         }
         return false;
     }
-    void produce(std::string host, std::string track, unsigned offsetMs, unsigned port, bool rawPcm) {
+    yeney::Bytes fetchMovie(const std::string &host, const std::string &track,
+                            unsigned port, uint64_t start, uint64_t total) {
+        constexpr uint64_t cap = 32ull * 1024 * 1024;
+        if (start >= total || total-start > cap) return {};
+        struct Socket { int fd = -1; ~Socket() { if (fd >= 0) ::close(fd); } } socket;
+        socket.fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC | SOCK_NONBLOCK, 0);
+        if (socket.fd < 0) throw std::runtime_error("metadata socket");
+        sockaddr_in peer{}; peer.sin_family = AF_INET; peer.sin_port = htons(port);
+        if (inet_pton(AF_INET, host.c_str(), &peer.sin_addr) != 1) return {};
+        if (::connect(socket.fd, reinterpret_cast<sockaddr *>(&peer), sizeof(peer)) < 0) {
+            if (errno != EINPROGRESS || !wait(socket.fd, POLLOUT)) return {};
+            int error = 0; socklen_t length = sizeof(error);
+            if (getsockopt(socket.fd, SOL_SOCKET, SO_ERROR, &error, &length) < 0 || error) return {};
+        }
+        const auto request = "GET /music/"+track+"/download HTTP/1.1\r\nHost: "+host+":"+
+            std::to_string(port)+"\r\nRange: bytes="+std::to_string(start)+"-"+
+            std::to_string(total-1)+"\r\nConnection: close\r\n\r\n";
+        size_t sent = 0;
+        while (!stop && sent < request.size()) {
+            if (!wait(socket.fd, POLLOUT)) return {};
+            auto n = ::send(socket.fd, request.data()+sent, request.size()-sent, MSG_NOSIGNAL);
+            if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
+            if (n <= 0) return {};
+            sent += size_t(n);
+        }
+        std::string headers;
+        yeney::Bytes bytes;
+        bool body = false;
+        while (!stop && (!body || bytes.size() < total-start)) {
+            if (!wait(socket.fd, POLLIN)) return {};
+            char chunk[16384]; auto n = ::recv(socket.fd, chunk, sizeof(chunk), 0);
+            if (n < 0 && (errno == EAGAIN || errno == EINTR)) continue;
+            if (n <= 0) return {};
+            const char *data = chunk; size_t count = size_t(n);
+            if (!body) {
+                headers.append(chunk, count); auto split = headers.find("\r\n\r\n");
+                if (split == std::string::npos) {
+                    if (headers.size() > 65536) return {};
+                    continue;
+                }
+                if (headers.size() < 12 || headers.substr(9, 3) != "206") return {};
+                auto fields = headers.substr(0, split);
+                for (auto &c : fields) if (c >= 'A' && c <= 'Z') c += 'a'-'A';
+                const auto length = fields.find("\r\ncontent-length:");
+                const auto expected = "\r\ncontent-range: bytes "+std::to_string(start)+"-"+
+                    std::to_string(total-1)+"/"+std::to_string(total);
+                const auto range = fields.find(expected);
+                if (length == std::string::npos || std::stoull(fields.substr(length+17)) != total-start ||
+                    range == std::string::npos ||
+                    (range+expected.size() != fields.size() && fields[range+expected.size()] != '\r') ||
+                    fields.find("\r\ntransfer-encoding:") != std::string::npos)
+                    return {};
+                body = true; data = headers.data()+split+4; count = headers.size()-split-4;
+            }
+            if (count > total-start-bytes.size()) return {};
+            bytes.insert(bytes.end(), data, data+count);
+            if (!headers.empty()) headers.clear();
+        }
+        for (size_t cursor = 0; cursor+8 <= bytes.size();) {
+            auto number = [&](size_t at) { return uint32_t(bytes[at]) << 24 | uint32_t(bytes[at+1]) << 16 |
+                uint32_t(bytes[at+2]) << 8 | bytes[at+3]; };
+            uint64_t length = number(cursor); size_t header = 8;
+            if (length == 1) {
+                if (cursor+16 > bytes.size()) return {};
+                length = uint64_t(number(cursor+8)) << 32 | number(cursor+12); header = 16;
+            }
+            if (length < header || length > bytes.size()-cursor) return {};
+            if (!std::memcmp(bytes.data()+cursor+4, "moov", 4)) {
+                if (log) log("metadata_range start="+std::to_string(start)+" bytes="+std::to_string(length));
+                return yeney::Bytes(bytes.begin()+cursor+header, bytes.begin()+cursor+size_t(length));
+            }
+            cursor += size_t(length);
+        }
+        return {};
+    }
+    void produce(std::string host, std::string track, unsigned offsetMs, unsigned port, bool rawPcm, bool preload) {
         struct Socket {
             int fd = -1;
             ~Socket() { if (fd >= 0) ::close(fd); }
@@ -172,7 +296,9 @@ class NativeDecoder final : public yeney::Decoder {
             std::string headers;
             bool body = false;
             uint64_t remaining = 0;
-            uint64_t supplied = 0;
+            uint64_t supplied = 0, responseBytes = 0;
+            bool inspected = !preload, independentInput = false;
+            yeney::Bytes leading;
             bool fullResponse = false;
             NativePcmPayload representation(rawPcm, [this, &fullResponse, offsetMs] {
                 if (fullResponse && !offsetMs) pcmOriginKnown->store(true);
@@ -181,7 +307,7 @@ class NativeDecoder final : public yeney::Decoder {
                 size_t consumed = 0;
                 while (!stop && consumed < bytes) {
                     const auto credit = allowance.load();
-                    const size_t permitted = sharedEof ? bytes - consumed :
+                    const size_t permitted = (sharedEof || independentInput) ? bytes - consumed :
                         size_t(std::min<uint64_t>(bytes - consumed, credit > supplied ? credit - supplied : 0));
                     auto count = permitted ? decoder->feed(
                         reinterpret_cast<const uint8_t *>(data + consumed), permitted) : 0;
@@ -190,13 +316,18 @@ class NativeDecoder final : public yeney::Decoder {
                     if (!count) {
                         if (!decoder->error().empty()) return false;
                         std::unique_lock<std::mutex> lock(mutex);
-                        changed.wait_for(lock, std::chrono::milliseconds(2), [this] { return stop.load(); });
+                        changed.wait_for(lock, std::chrono::microseconds(independentInput ? 100 : 2000),
+                                         [this] { return stop.load(); });
                     }
                 }
                 return !stop.load();
             };
             while (!stop) {
                 if (body && !remaining) {
+                    if (!inspected) {
+                        movie->publish();
+                        if (!representation.feed(reinterpret_cast<const char *>(leading.data()), leading.size(), feed)) return;
+                    }
                     representation.finish();
                     if (log) log("encoded_eof bytes=" + std::to_string(ingested.load()) +
                         " ingest_us=" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(
@@ -226,6 +357,7 @@ class NativeDecoder final : public yeney::Decoder {
                     if (length == std::string::npos || fields.find("\r\ntransfer-encoding:") != std::string::npos)
                         throw std::runtime_error("native source HTTP framing");
                     remaining = std::stoull(fields.substr(length + 17));
+                    responseBytes = remaining;
                     fullResponse = headers.substr(9, 3) == "200";
                     representation.length(remaining);
                     body = true;
@@ -234,11 +366,30 @@ class NativeDecoder final : public yeney::Decoder {
                 }
                 if (bytes > remaining) throw std::runtime_error("native source excess bytes");
                 ingested += bytes;
-                if (!representation.feed(data, bytes, feed)) return;
+                if (!inspected) {
+                    leading.insert(leading.end(), data, data+bytes);
+                    bool decided = false;
+                    const auto tail = tailMovie(leading, responseBytes, decided);
+                    if (decided || leading.size() >= 65536) {
+                        inspected = true;
+                        yeney::Bytes metadata;
+                        if (tail) {
+                            try { metadata = fetchMovie(host, track, port, *tail, responseBytes); }
+                            catch (const std::exception &) { if (log) log("metadata_range unavailable"); }
+                        }
+                        // A server without range support must not pace this
+                        // immutable download by unrelated shared-stream credits.
+                        if (tail && metadata.empty()) independentInput = true;
+                        movie->publish(std::move(metadata));
+                        if (!representation.feed(reinterpret_cast<const char *>(leading.data()), leading.size(), feed)) return;
+                        leading.clear();
+                    }
+                } else if (!representation.feed(data, bytes, feed)) return;
                 remaining -= bytes;
                 if (!headers.empty()) headers.clear();
             }
         } catch (const std::exception &e) {
+            movie->publish();
             if (!stop) {
                 std::lock_guard<std::mutex> lock(mutex);
                 failure = e.what();
@@ -249,13 +400,15 @@ public:
     NativeDecoder(const yeney::DecoderConfig &config, const std::string &host,
                   const std::string &track, unsigned offsetMs,
                   std::function<void(const std::string &)> logger, unsigned port)
-        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown))), log(std::move(logger)) {
-        worker = std::thread([this, host, track, offsetMs, port, rawPcm = config.codec == 'p'] {
-            produce(host, track, offsetMs, port, rawPcm);
+        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown, movie, config.codec == 'l' && !offsetMs))), log(std::move(logger)) {
+        worker = std::thread([this, host, track, offsetMs, port, rawPcm = config.codec == 'p',
+                              preload = config.codec == 'l' && !offsetMs] {
+            produce(host, track, offsetMs, port, rawPcm, preload);
         });
     }
     ~NativeDecoder() override {
         stop = true;
+        movie->cancel();
         changed.notify_all();
         worker.join();
     }

@@ -39,6 +39,28 @@ def run(c):
     immutable = [i['uri'] for i in items()]
     codec = os.environ.get('YENEY_FULLQ_CODEC', 'flac')
     if os.environ['YENEY_FULLQ_EXPERIMENT'] == 'scale':
+        if codec == 'alac':
+            import struct
+            original = (base/'library/fullq-3.m4a').read_bytes()
+            cursor = 0
+            while cursor+8 <= len(original):
+                length, kind = struct.unpack_from('>I4s', original, cursor)
+                assert length >= 8
+                if kind == b'moov': break
+                cursor += length
+            assert kind == b'moov'
+            connection = http.client.HTTPConnection('127.0.0.1', 9000, timeout=10)
+            connection.request('GET', '/music/'+ids[3]+'/download',
+                               headers={'Range': f'bytes={cursor}-{cursor+length-1}'})
+            response = connection.getresponse()
+            metadata = response.read(length)
+            range_result = dict(status=response.status, content_range=response.getheader('Content-Range'),
+                                requested_start=cursor, requested_bytes=length, received=len(metadata))
+            connection.close()
+            if response.status == 206:
+                assert metadata == original[cursor:cursor+length]
+                assert range_result['content_range'] == f'bytes {cursor}-{cursor+length-1}/{len(original)}'
+            print('RANGE ALAC ' + json.dumps(range_result), flush=True)
         import numpy as np
         def expected_pcm(index):
             values = np.frombuffer((base/f'input-{index}.wav').read_bytes()[44:], dtype='<i2').astype('<i4')*256
