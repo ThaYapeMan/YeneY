@@ -986,7 +986,6 @@ int main(int argc, char** argv)
         printf("%s\n", bridge::firmwareVersion());
         return EXIT_SUCCESS;
     }
-    printf("yeney: version=%s\n", bridge::firmwareVersion());
     warnLegacyEnvironment();
     bridge::warnDebugSettings();
     if (findOption(argc, argv, "--file") || findFlag(argc, argv, "--file")) {
@@ -998,6 +997,7 @@ int main(int argc, char** argv)
         const auto ip = findOption(argc, argv, "--ip");
         return listRoomsCommand(ip ? ip : "", findFlag(argc, argv, "--details"));
     }
+    printf("yeney: version=%s\n", bridge::firmwareVersion());
     (void)pauseMode();
     (void)audioMode();
     warnObsoletePlayer();
