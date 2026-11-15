@@ -135,6 +135,10 @@ def run(c):
         seek_issued = time.monotonic()
         if case != 'S4d': cli(f'time {position}', mac)
         if case != 'S4d': wait(lambda: 'kind=seek' in log()[mark:], 10, 'LMS seek reconciled')
+        if case == 'D1':
+            # Check the initial seek clock before the half-second dwell; a
+            # correct playing clock has advanced beyond a static target later.
+            wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= .5, 5, 'mismatch fallback clock within 500 ms')
         time.sleep(.5)
         text = log()[mark:]
         if case == 'D1':
@@ -145,7 +149,6 @@ def run(c):
             assert len(sonos.actions('Seek')) == seek_count + 1 and sonos.position['TrackURI'] != uri
             assert not sonos.actions('Stop') and c['bridge'].poll() is None
             assert 'worker fault=' not in log() and 'relay fault=' not in log()
-            wait(lambda: abs(float(cli('time ?', mac)[-1]) - position) <= .5, 5, 'mismatch fallback clock within 500 ms')
             print(text, flush=True)
             print('PASS D1 fake corrupts one ALAC frame: evidence, live HTTP reader byte-identical before one speaker switch, zero Stop, process alive, LMS clock within 500 ms', flush=True)
             return
