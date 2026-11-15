@@ -1,3 +1,4 @@
+#include "bridge_version.h"
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include <atomic>
@@ -57,7 +58,7 @@ public:
             return out + '"';
         };
         std::ostringstream out;
-        out << "{\"requested\":" << q(v.requested) << ",\"active\":" << q(v.active)
+        out << "{\"firmware\":" << q(firmwareVersion()) << ",\"requested\":" << q(v.requested) << ",\"active\":" << q(v.active)
             << ",\"state\":" << q(v.state) << ",\"reason\":" << q(v.reason);
         const auto &volume = roomVolumeSettings();
         out << ",\"lms_volume\":" << q(volume.speaker ? "speaker" : "off")

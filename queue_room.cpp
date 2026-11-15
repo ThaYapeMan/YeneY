@@ -1,3 +1,4 @@
+#include "bridge_version.h"
 extern "C" void yeney_stream_track_changed() __attribute__((weak));
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
@@ -270,6 +271,7 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     std::signal(SIGTERM, stopRoom);
     LmsIcon icon(mac, [](const auto &line) { std::printf("%s\n", line.c_str()); });
     yeney::Config config;
+    config.firmware = bridge::firmwareVersion();
     std::string host = server ? server : "";
     auto colon = host.find(':');
     if (colon != std::string::npos) {

@@ -1,3 +1,4 @@
+#include "bridge_version.h"
 #include "volume_worker.h"
 // yeney.cpp -- bridges a Sonos zone player into an LMS session
 //
@@ -981,6 +982,11 @@ static int listRoomsCommand(const std::string& ip, bool details)
 int main(int argc, char** argv)
 {
     setvbuf(stdout, nullptr, _IOLBF, 0);
+    if (findFlag(argc, argv, "--version")) {
+        printf("%s\n", bridge::firmwareVersion());
+        return EXIT_SUCCESS;
+    }
+    printf("yeney: version=%s\n", bridge::firmwareVersion());
     warnLegacyEnvironment();
     bridge::warnDebugSettings();
     if (findOption(argc, argv, "--file") || findFlag(argc, argv, "--file")) {

@@ -116,3 +116,5 @@ field-cold-test
 
 /native-mp4-fixture
 /native-pcm-fixture
+
+/bridge_version.h

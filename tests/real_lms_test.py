@@ -362,6 +362,7 @@ if nav_media or fullq_codec == 'alac':
             for output in ('flc', 'pcm', 'mp3', 'aac'):
                 prefs.write(f'  - {source}-{output}-*-*\n')
 lms=bridge=tap=sonos=remote=proxy=None
+identity_only=os.environ.get('YENEY_REAL_LMS_IDENTITY_ONLY')=='1'
 name_only=os.environ.get('YENEY_REAL_LMS_NAME_ONLY')=='1'
 volume_only=os.environ.get('YENEY_REAL_LMS_VOLUME_ONLY')=='1'
 extra_remotes=[]
@@ -442,6 +443,23 @@ try:
     assert 'pref_digitalVolumeControl' not in audio_page, 'native volume preference unexpectedly offered'
     assert 'pref_transitionType' in audio_page, 'player audio settings did not render'
     print('PASS real LMS 9.1.1 native volume preference: Model=yeney; Settings > Player > Audio rendered; pref_digitalVolumeControl absent (HasDigitalOut defaults to 0); YeneY setting is sole source',flush=True)
+    if identity_only:
+        binary = os.environ.get('YENEY_ACCEPTANCE_BINARY', str(ROOT/'yeney'))
+        fields = cli('players 0 100')
+        print('IDENTITY CLI players: '+repr(fields), flush=True)
+        print('IDENTITY CLI model: '+repr(cli('model ?',mac)), flush=True)
+        print('IDENTITY CLI modelname: '+repr(cli('modelname ?',mac)), flush=True)
+        expected = subprocess.check_output([binary, '--version'], text=True).strip()
+        assert 'model:yeney' in fields and 'modelname:YeneY' in fields, fields
+        assert 'firmware:'+expected in fields, (expected, fields)
+        state=base/('stream-pacing-'+b'Study'.hex()+'.json')
+        wait(lambda:state.exists() and json.loads(state.read_text()).get('playback',{}).get('firmware')==expected, 5, 'firmware status')
+        bridge_log.flush()
+        assert 'yeney: version='+expected in (base/'bridge.log').read_text()
+        hellos=[bytes.fromhex(r['body'])[36:].decode() for r in tap.records if r['op']=='HELO']
+        assert any('Firmware='+expected in caps and caps.startswith('Model=yeney,ModelName=YeneY,') for caps in hellos),hellos
+        print('PASS C6 real LMS 9.1.1: firmware='+expected+'; model=yeney modelname=YeneY; HELO, --version, journal and room status identical', flush=True)
+        raise SystemExit(0)
     if name_only:
         wait(lambda:cli('name ?',mac)[-1]=='Study (Sonos)',10,'initial true name')
         cli('playlist clear',mac)
@@ -845,7 +863,7 @@ finally:
             owned={entry[1]['EnqueuedURI'] for entry in sonos.actions('AddURIToQueue')}
             assert not any(i['uri'] in owned for i in sonos.items) and sonos.crossfade,'owned cleanup/crossfade'
             assert sonos.verified_save and sonos.snapshots[sonos.last_save]==sonos.original,'verified Before YeneY backup'
-        if not volume_only and not name_only:cleanup(ownership_restored)
+        if not volume_only and not name_only and not identity_only:cleanup(ownership_restored)
         cleanup(sonos.close)
     if remote:cleanup(remote.close)
     for source in extra_remotes:cleanup(source.close)

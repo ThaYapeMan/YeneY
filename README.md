@@ -838,3 +838,9 @@ and +1047 ms for speaker position minus LMS time; the new loopback figures
 await the owner device comparison. See
 [the position-source design](docs/designs/speaker-position-source.md) for the
 measurement table and retained historical failures.
+
+`yeney --version`, the startup journal, room status (`playback.firmware`) and
+the LMS player firmware field show the same compile-time version:
+`0.9.0-<bridge revision> (core <core revision>)`. Builds read the release from
+`VERSION` and both revisions from Git. HELO model identity remains
+`Model=yeney,ModelName=YeneY`.

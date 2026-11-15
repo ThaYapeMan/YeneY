@@ -14,6 +14,12 @@ OBJS = speaker_websocket.o volume_control.o $(QUEUE_ROOM_OBJS) core_queue_sink.o
 
 all: yeney libqueueitems.a yeney-queue-dryrun
 
+.PHONY: version-refresh
+version-refresh:
+bridge_version.h: version-refresh
+	python3 scripts/build-version.py
+$(OBJS) oct12-boundary-test stream-metrics-test stream-pacing-test encoded-backpressure-test stream-pacing-encoder-test stream-metrics-lifetime-test room-status-test: bridge_version.h
+
 queue_room.o queue_native_decoder.o: queue_native_decoder.h
 
 queue-native-decoder-test: tests/queue_native_decoder_test.cpp queue_native_decoder.cpp queue_native_decoder.h
@@ -202,6 +208,7 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F1 python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F2 python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F3 python3 tests/real_lms_test.py
+	YENEY_REAL_LMS_IDENTITY_ONLY=1 python3 tests/real_lms_test.py
 	YENEY_REAL_LMS_VOLUME_ONLY=1 python3 tests/real_lms_test.py
 	python3 third_party/yeney-core/tests/decimator_quality.py --sox "$${YENEY_REAL_LMS_HOME:-$${YENEY_TEST_CACHE}/real-lms-9.1.1}/Bin/x86_64-linux/sox"
 	$(MAKE) -C third_party/yeney-core test
