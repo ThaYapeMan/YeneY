@@ -130,8 +130,8 @@ The SHM v1 prefix and timing record layouts remain unchanged.
 
 ## TIMING-03b measured loopback figures
 
-The final Part A run uses 20 Hz WebSocket polling while playing and a 20 ms
-room observation interval. The former 5 Hz polling could still produce a
+The final timing validation after the core changes uses 20 Hz WebSocket polling
+while playing and a 20 ms room observation interval. The former 5 Hz polling could still produce a
 345.473 ms rewind despite immediate status requests. Keep the existing 1 Hz
 paused cadence, one-second UPnP identity refresh and UPnP fallback schedule.
 Midpoint LMS queries run at 4 Hz; RTT spikes are enabled. Steady playback uses
@@ -140,20 +140,20 @@ on windows at least 60 seconds long.
 
 | Window | Samples | Median LMS minus true ms | Within ±30 ms | Jumps >100 ms | Creep ms/s |
 |---|---:|---:|---:|---:|---:|
-| steady | 480 | -1.054300 | 100.000% | 0 | -0.000551 |
-| after-app-seek | 240 | -0.616803 | 100.000% | 0 | 0.007756 |
-| after-rewind | 240 | -0.802791 | 100.000% | 0 | -0.005553 |
-| after-lms-in-item-seek | 240 | -0.344100 | 100.000% | 0 | -0.013482 |
-| boundary | 240 | 0.418028 | 100.000% | 0 | 0.027198 |
-| after-row-switch | 240 | -0.972096 | 100.000% | 0 | 0.000391 |
+| steady | 480 | -0.812667 | 100.000% | 0 | 0.003376 |
+| after-app-seek | 240 | -1.091641 | 100.000% | 0 | 0.000464 |
+| after-rewind | 240 | -1.171680 | 100.000% | 0 | -0.003549 |
+| after-lms-in-item-seek | 240 | -0.858553 | 100.000% | 0 | -0.008924 |
+| boundary | 240 | 0.098543 | 100.000% | 0 | 0.004323 |
+| after-row-switch | 240 | -1.181051 | 100.000% | 0 | 0.007424 |
 
 | Event | First aligned LMS reading ms |
 |---|---:|
-| app-seek | 101.156 |
-| rewind | 256.344 |
-| lms-in-item-seek | 108.261 |
-| boundary | 74.344 |
-| row-switch | 154.496 |
+| app-seek | 101.308 |
+| rewind | 266.394 |
+| lms-in-item-seek | 107.455 |
+| boundary | 117.776 |
+| row-switch | 152.188 |
 
 The row-switch check exposed a new row being announced against the old row's
 fit. A fitted sample now retains the midpoint of its last accepted observation
@@ -165,5 +165,6 @@ cached UPnP identity; neither stale observation can authorize navigation.
 
 The owner evidence of 14 November above is unchanged: the two Port captures
 had roughly one second of LMS lag. These container-local measurements establish
-Part A timing behavior, not a new device comparison or deployment. Full-gate
-and independent core-item acceptance are reported separately.
+timing behavior after the core changes, not a new device comparison or
+deployment. The core suite passes. Full-gate acceptance was not achieved
+within the three-attempt limit; subsequent validation is reported separately.
