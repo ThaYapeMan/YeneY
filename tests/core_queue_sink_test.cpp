@@ -351,6 +351,21 @@ int main() {
                      "audible end includes all retained source PCM\n";
     }
     {
+        CoreQueueSink sink("SpeakerProducerLag", c, 1);
+        sink.useSpeakerClock();
+        sink.coreEvent("strm", 1, 0);
+        sink.trackDescriptor({1, 48000, 1000, 0, 0});
+        sink.trackBoundary(0, {48000, 24, 2, false}, false);
+        std::vector<yeney::Frame> pcm(200, {256, -256});
+        sink.write(pcm.data(), pcm.size(), false);
+        sink.waitIdle();
+        sink.speakerPosition(1, 400, yeney::PlaybackState::Playing);
+        assert(!sink.outputEmpty(200)); // renderer confirms playback beyond producer progress
+        sink.speakerPosition(1, 400, yeney::PlaybackState::Paused);
+        assert(sink.outputEmpty(200)); // no playing observation to override producer exhaustion
+        std::cout << "PASS speaker producer lag: confirmed playing before immutable end is not a local underrun\n";
+    }
+    {
         CoreQueueSink sink("SpeakerZero", c, 1);
         sink.useSpeakerClock();
         sink.coreEvent("strm", 1, 0);

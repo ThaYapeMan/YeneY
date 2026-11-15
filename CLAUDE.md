@@ -684,6 +684,14 @@ identity after renderer seek completion so that it cannot authorize navigation
 back to the previous row. No requested-position substitution or settling delay.
 
 
+A renderer-confirmed PLAYING observation before a finite immutable item's end
+also outranks temporary replacement-producer exhaustion. Do not send STMo and
+pause a playing speaker merely because the local producer briefly trails its
+precise clock. End-of-item and paused exhaustion checks remain active. The full
+gate exposed this in F1's same-index concurrent readers; the sink regression and
+F1 on both position sources retain all original assertions.
+
+
 ## Decisions — TIMING-03b P1 PCM origin
 
 LMS 9.1.1 sends native WAV and AIFF as raw wire-p PCM, including seeks; strm

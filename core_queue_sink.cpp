@@ -1100,9 +1100,13 @@ bool CoreQueueSink::outputEmpty(uint64_t frame) const {
     if (speakerClock && audible != records.end() && audible->second.item) {
         try {
             // A paired producer may trail an app seek while its immutable WAV
-            // already holds the audible audio. Producer exhaustion is not starvation.
+            // already holds the audible audio. A precise playing observation
+            // before the promised end also outranks a replacement producer's
+            // temporary lag. Producer exhaustion is not renderer starvation.
             if (audible->second.item->contentLength() &&
-                audible->second.item->producedFrames() > speakerItemFrame) return false;
+                (audible->second.item->producedFrames() > speakerItemFrame ||
+                 (speakerState == yeney::PlaybackState::Playing && audible->second.promised &&
+                  speakerItemFrame < *audible->second.promised))) return false;
         } catch (const std::exception &) {
             // The room worker owns item cancellation and storage-fault handling.
         }
