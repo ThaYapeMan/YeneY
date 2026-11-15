@@ -66,6 +66,12 @@ class NativePcmPayload {
     bool soundHeader = false;
     uint64_t soundSkip = 0;
     std::function<void()> provenOrigin;
+    std::function<void(uint64_t)> provenFrames;
+    bool framingMatches = false;
+    unsigned expectedWidth = 0, headerWidth = 0;
+    size_t formatNeed = 0;
+    std::string formatPrefix;
+    std::optional<uint64_t> commonFrames;
     uint64_t expected = 0, received = 0, left = 0, padding = 0;
     std::string header;
     static uint32_t little(const char *p) {
@@ -73,8 +79,9 @@ class NativePcmPayload {
         return uint32_t(b[0]) | uint32_t(b[1]) << 8 | uint32_t(b[2]) << 16 | uint32_t(b[3]) << 24;
     }
 public:
-    explicit NativePcmPayload(bool rawPcm, std::function<void()> origin)
-        : enabled(rawPcm), provenOrigin(std::move(origin)) {}
+    explicit NativePcmPayload(bool rawPcm, unsigned width, std::function<void()> origin,
+                              std::function<void(uint64_t)> frames)
+        : enabled(rawPcm), provenOrigin(std::move(origin)), provenFrames(std::move(frames)), expectedWidth(width) {}
     void length(uint64_t bytes) { expected = bytes; }
     template<class Feed> bool feed(const char *bytes, size_t count, Feed consume) {
         received += count;
@@ -82,6 +89,25 @@ public:
         // The immutable download begins at byte zero. Strip container framing,
         // preserving LMS's raw PCM representation and its byte order.
         while (count) {
+            if (formatNeed) {
+                const auto n = std::min(count, std::min<size_t>(size_t(left), formatNeed-formatPrefix.size()));
+                formatPrefix.append(bytes, n); bytes += n; count -= n; left -= n;
+                if (formatPrefix.size() < formatNeed) continue;
+                const auto *b = reinterpret_cast<const uint8_t *>(formatPrefix.data());
+                if (wave) {
+                    const auto kind = unsigned(b[0]) | unsigned(b[1]) << 8;
+                    if (kind == 1 || (kind == 65534 && formatPrefix.size() >= 40 && b[24] == 1 && !b[25]))
+                        headerWidth = unsigned(b[12]) | unsigned(b[13]) << 8;
+                } else {
+                    const auto channels = unsigned(b[0]) << 8 | b[1];
+                    const auto bits = unsigned(b[6]) << 8 | b[7];
+                    headerWidth = channels * ((bits+7)/8);
+                    commonFrames = uint32_t(b[2]) << 24 | uint32_t(b[3]) << 16 | uint32_t(b[4]) << 8 | b[5];
+                }
+                formatNeed = 0; formatPrefix.clear();
+                if (!left && padding) { left = padding; padding = 0; }
+                continue;
+            }
             if (soundHeader) {
                 const auto n = std::min(count, size_t(8) - header.size());
                 header.append(bytes, n); bytes += n; count -= n;
@@ -90,7 +116,15 @@ public:
                 soundSkip = uint32_t(b[0]) << 24 | uint32_t(b[1]) << 16 | uint32_t(b[2]) << 8 | b[3];
                 if (soundSkip > left - 8) throw std::runtime_error("native AIFF sound offset");
                 left -= 8; soundHeader = false; audio = true; header.clear();
-                provenOrigin();
+                const uint64_t available = expected >= received-count ? expected-(received-count) : 0;
+                if (left > available) { left = available; framingMatches = false; padding = 0; }
+                if (soundSkip > left) throw std::runtime_error("native AIFF response offset");
+                if (framingMatches) {
+                    provenOrigin();
+                    if (headerWidth && headerWidth == expectedWidth && commonFrames &&
+                        *commonFrames <= UINT64_MAX/headerWidth && *commonFrames*headerWidth == left-soundSkip)
+                        provenFrames(*commonFrames);
+                }
                 continue;
             }
             if (soundSkip) {
@@ -116,8 +150,8 @@ public:
                 const auto *b = reinterpret_cast<const uint8_t *>(header.data()+4);
                 const uint32_t length = wave ? little(header.data()+4) :
                     uint32_t(b[0]) << 24 | uint32_t(b[1]) << 16 | uint32_t(b[2]) << 8 | b[3];
-                if ((!wave && !aiff) || uint64_t(length) + 8 != expected)
-                    throw std::runtime_error("native PCM container framing");
+                if (!wave && !aiff) throw std::runtime_error("native PCM container framing");
+                framingMatches = uint64_t(length)+8 == expected;
                 top = false;
             } else {
                 const auto *b = reinterpret_cast<const uint8_t *>(header.data()+4);
@@ -128,14 +162,22 @@ public:
                 if (audio) {
                     if (found || !format) throw std::runtime_error("native WAV data order");
                     found = true;
-                    if (wave) provenOrigin();
-                    else {
+                    if (wave) {
+                        const uint64_t available = expected >= received-count ? expected-(received-count) : 0;
+                        if (left > available) { left = available; framingMatches = false; padding = 0; }
+                        if (framingMatches) {
+                            provenOrigin();
+                            if (headerWidth && headerWidth == expectedWidth && !(left%headerWidth))
+                                provenFrames(left/headerWidth);
+                        }
+                    } else {
                         if (left < 8) throw std::runtime_error("native AIFF sound framing");
                         soundHeader = true; audio = false;
                     }
                 } else if (!header.compare(0, 4, wave ? "fmt " : "COMM")) {
-                    if (format || left < 16) throw std::runtime_error("native WAV format framing");
+                    if (format || left < (wave ? 16u : 18u)) throw std::runtime_error("native PCM format framing");
                     format = true;
+                    formatNeed = wave && left >= 40 ? 40 : wave ? 16 : 18;
                 }
             }
             header.clear();
@@ -150,11 +192,16 @@ public:
 class NativeDecoder final : public yeney::Decoder {
     std::shared_ptr<std::atomic_bool> pcmOriginKnown = std::make_shared<std::atomic_bool>(false);
     std::shared_ptr<NativeMovie> movie = std::make_shared<NativeMovie>();
+    std::shared_ptr<std::atomic<uint64_t>> pcmFrames = std::make_shared<std::atomic<uint64_t>>(UINT64_MAX);
     static yeney::DecoderConfig withOrigin(yeney::DecoderConfig config,
                                           std::shared_ptr<std::atomic_bool> proof,
-                                          std::shared_ptr<NativeMovie> metadata, bool preload) {
+                                          std::shared_ptr<NativeMovie> metadata, std::shared_ptr<std::atomic<uint64_t>> frames, bool preload) {
         if (config.codec == 'p') config.pcmSourceStart = [proof]() -> std::optional<uint64_t> {
             return proof->load() ? std::optional<uint64_t>(0) : std::nullopt;
+        };
+        if (config.codec == 'p') config.pcmSourceFrames = [frames]() -> std::optional<uint64_t> {
+            const auto count = frames->load();
+            return count == UINT64_MAX ? std::nullopt : std::optional<uint64_t>(count);
         };
         if (preload) config.mp4Metadata = [metadata] { return metadata->get(); };
         return config;
@@ -259,7 +306,7 @@ class NativeDecoder final : public yeney::Decoder {
         }
         return {};
     }
-    void produce(std::string host, std::string track, unsigned offsetMs, unsigned port, bool rawPcm, bool preload) {
+    void produce(std::string host, std::string track, unsigned offsetMs, unsigned port, bool rawPcm, bool preload, unsigned pcmWidth) {
         struct Socket {
             int fd = -1;
             ~Socket() { if (fd >= 0) ::close(fd); }
@@ -300,8 +347,10 @@ class NativeDecoder final : public yeney::Decoder {
             bool inspected = !preload, independentInput = false;
             yeney::Bytes leading;
             bool fullResponse = false;
-            NativePcmPayload representation(rawPcm, [this, &fullResponse, offsetMs] {
+            NativePcmPayload representation(rawPcm, pcmWidth, [this, &fullResponse, offsetMs] {
                 if (fullResponse && !offsetMs) pcmOriginKnown->store(true);
+            }, [this, &fullResponse, offsetMs](uint64_t frames) {
+                if (fullResponse && !offsetMs) pcmFrames->store(frames);
             });
             auto feed = [&](const char *data, size_t bytes) {
                 size_t consumed = 0;
@@ -400,10 +449,13 @@ public:
     NativeDecoder(const yeney::DecoderConfig &config, const std::string &host,
                   const std::string &track, unsigned offsetMs,
                   std::function<void(const std::string &)> logger, unsigned port)
-        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown, movie, config.codec == 'l' && !offsetMs))), log(std::move(logger)) {
+        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown, movie, pcmFrames, config.codec == 'l' && !offsetMs))), log(std::move(logger)) {
         worker = std::thread([this, host, track, offsetMs, port, rawPcm = config.codec == 'p',
-                              preload = config.codec == 'l' && !offsetMs] {
-            produce(host, track, offsetMs, port, rawPcm, preload);
+                              preload = config.codec == 'l' && !offsetMs,
+                              pcmWidth = config.size >= '0' && config.size <= '3' &&
+                                  config.channels >= '1' && config.channels <= '2' ?
+                                  unsigned(config.size-'0'+1)*unsigned(config.channels-'0') : 0] {
+            produce(host, track, offsetMs, port, rawPcm, preload, pcmWidth);
         });
     }
     ~NativeDecoder() override {

@@ -456,9 +456,9 @@ LMS configuration without another DNS operation in the event loop.
 
 Preserve the negotiated native representation. LMS advertises WAV as raw PCM
 (`p`), so source-bound WAV input removes RIFF chunk headers, padding and
-non-audio chunks before feeding the unchanged decoder. A download container
-must not give that raw decoder early length information. The core still seals
-the finite output WAV only after raw-input EOF; its C2 timing limit remains.
+non-audio chunks before feeding the unchanged decoder. The original FULLQ-01d pin withheld early length information and sealed raw
+PCM only at EOF. TIMING-03b P3 replaces that restriction for validated full
+container responses, while inconsistent headers retain EOF publication.
 The transport regression covers fragmented WAV chunks, odd padding and trailing
 metadata, and verifies that only the original PCM payload reaches the decoder.
 
@@ -723,3 +723,21 @@ The 4/16/40 MB tail-moov jumps fell from 1.700/4.830/11.403 seconds to
 changes below 0.595 seconds, app changes about 0.400 seconds. The focused
 pipeline delivers PCM before the unserved encoded tail; prefetched ordinary,
 wide/co64 and trimmed containers retain exact samples and source coordinates.
+
+
+## Decisions — TIMING-03b P3 raw PCM length
+
+The immutable PCM transport reads format block width and data length before
+feeding audio. A matching full HTTP response, RIFF/FORM length, audio-data
+bounds and frame width allow pcmSourceFrames to publish the exact count at
+header time. AIFF also requires COMM count to agree with SSND payload after
+its offset. Trailing non-audio chunks and padding remain excluded. Inconsistent
+headers provide no early count and retain EOF publication; a data chunk that
+extends past the validated response consumes only the available audio bytes.
+No requested time, LMS duration, padding synthesis or length estimate is used.
+This length proof is independent of the source-origin known bit.
+
+
+P3's 4/16/40 MB WAV jumps measured 0.592/0.593/0.593 seconds, versus the
+prior 2.8/9.0/21.4-second growth. All sixteen after-matrix cases passed,
+including four 12-row C2 runs, exact byte checks and both ALAC layouts.
