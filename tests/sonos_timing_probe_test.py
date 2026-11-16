@@ -13,6 +13,10 @@ root = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('probe', root/'scripts/sonos-timing-probe.py')
 probe = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(probe)
+for state in ('PLAYING', 'PLAYBACK_STATE_PLAYING'):
+    assert probe.project(dict(position_ms=1000, midpoint=1, state=state), 1.2) == 1200
+for state in ('PLAYBACK_STATE_BUFFERING', 'TRANSITIONING', 'PLAYBACK_STATE_PAUSED', 'PLAYBACK_STATE_IDLE', 'UNKNOWN'):
+    assert probe.project(dict(position_ms=1000, midpoint=1, state=state), 1.2) == 1000
 assert 'median_ms=991.000' in probe.summary([(i*.25, 991) for i in range(480)])
 assert 'creep_ms_per_s=0.000000' in probe.summary([(i*.25, 991) for i in range(480)])
 owner = Coordinator()

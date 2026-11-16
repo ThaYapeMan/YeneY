@@ -189,7 +189,7 @@ class LmsClock:
 
 
 def project(sample, at):
-    return sample['position_ms'] + ((at - sample['midpoint']) * 1000 if sample['state'] in ('PLAYING', 'TRANSITIONING') else 0)
+    return sample['position_ms'] + ((at - sample['midpoint']) * 1000 if sample['state'].removeprefix('PLAYBACK_STATE_') == 'PLAYING' else 0)
 
 
 def reltime_summary(rows):
