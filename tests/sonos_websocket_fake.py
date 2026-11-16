@@ -194,7 +194,9 @@ class LocalApi:
                                     # Position changes during steady playback are poll-only.
                                     changed = any(current.get(k) != previous.get(k) for k in ('playbackState', 'itemId')) or stamp != previous_stamp
                                     if changed:
-                                        last_previous[:] = [previous.get('itemId', ''), current['positionMillis'] if current.get('playbackState') == 'PLAYBACK_STATE_PAUSED' else previous.get('positionMillis', 0)]
+                                        seek = stamp[:2] == previous_stamp[:2] and stamp[2] != previous_stamp[2]
+                                        item_change = current.get('itemId') != previous.get('itemId')
+                                        last_previous[:] = [previous.get('itemId', ''), previous.get('positionMillis', 0) if seek or item_change else current['positionMillis']]
                                         current.update(previousItemId=last_previous[0], previousPositionMillis=last_previous[1])
                                         send({'namespace': 'playback:1', 'command': 'playbackStatus'}, current)
                                 if api.events_enabled and stamp[0] != previous_stamp[0] and 'playbackMetadata:1' in subscribed:

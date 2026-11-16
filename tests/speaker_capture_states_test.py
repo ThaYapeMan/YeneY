@@ -17,8 +17,10 @@ def main():
     api = LocalApi(owner, port=0)
     api.websocket_url = f'wss://127.0.0.1:{api.server.server_port}/websocket/api'
     api.spike_every = 0
-    process = subprocess.Popen(['./speaker-websocket-fixture'], stdout=subprocess.PIPE, text=True,
+    process = subprocess.Popen([os.environ.get('YENEY_CAPTURE_STATE_FIXTURE', './speaker-websocket-fixture')], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                env=dict(os.environ, YENEY_WS_TEST_PORT=str(api.server.server_port)))
+    journal = []
+    threading.Thread(target=lambda: [journal.append(line) for line in process.stderr], daemon=True).start()
     lines = queue.Queue()
     threading.Thread(target=lambda: [lines.put(line.rstrip('\n').split('\t')) for line in process.stdout], daemon=True).start()
 
@@ -53,17 +55,24 @@ def main():
         unchanged = wait(lambda f: float(f[0]) > float(paused[0])+.1)
         assert unchanged[5] == revision, (paused, unchanged)
         api.rtt_ms = 100
+        api.emit_status(dict(playbackState='PLAYBACK_STATE_PAUSED', itemId='2', positionMillis=held-40,
+                             previousItemId='2', previousPositionMillis=held))
+        tiny = wait(lambda f: f[4] == 'PAUSED' and abs(float(f[1])-(held-40)) < 1)
+        wait(lambda f: f[4] == 'PAUSED' and abs(float(f[1])-held) < 1 and float(f[0]) > float(tiny[0]))
+        print('PASS G3 a 40 ms event seek resets immediately, before its contradicting poll', flush=True)
         api.emit_status(dict(playbackState='PLAYBACK_STATE_PLAYING', itemId='99', positionMillis=77777))
         wait(lambda f: f[2] == '99')
         wait(lambda f: f[2] == '2' and f[4] == 'PAUSED')
         api.rtt_ms = 10
         print('PASS G3 repeated event changes nothing; contradicting command answer wins', flush=True)
+        journal_mark = len(journal)
         owner.transport_state = 'PLAYING'
         buffered = wait(lambda f: f[4] == 'TRANSITIONING')
         held = float(buffered[1])
         buffered2 = wait(lambda f: f[4] == 'TRANSITIONING' and float(f[0]) > float(buffered[0])+.1)
         assert abs(float(buffered2[1])-held) < 2, (buffered, buffered2)
         wait(lambda f: f[4] == 'PLAYING')
+        assert not any('speaker seek ' in line for line in journal[journal_mark:]), journal[journal_mark:]
         print('PASS G4 buffering position held; transition is distinct from pause and fault', flush=True)
         api.state_override = 'PLAYBACK_STATE_IDLE'
         wait(lambda f: f[4] == 'STOPPED')
@@ -71,6 +80,7 @@ def main():
         wait(lambda f: f[4] == 'UNKNOWN' and f[6] == 'FUTURE_STATE')
         run = subprocess.run(['./yeney', '--position-source-check', '--ip', f'127.0.0.1:{api.server.server_port}', '--seconds', '1'], capture_output=True, text=True, timeout=10)
         assert run.returncode and 'raw=FUTURE_STATE mapped=UNKNOWN' in run.stdout, run.stdout
+        assert sum('speaker unknown playbackState=FUTURE_STATE' in line for line in journal) == 1, journal
         print('PASS G2 playing, paused, buffering, idle and unknown; unknown diagnostic exits nonzero', flush=True)
         api.state_override = None
         api.emit_error(dict(errorCode='ERROR_PLAYBACK_FAILED', reason='fixture occurrence', itemId='2', httpStatus=403))
@@ -101,7 +111,7 @@ def main():
         assert 'residual_ms rms=' in run.stdout, run.stdout
         print('PASS G7 diagnostic mapped states, item, playing and residual; metadata quality retained', flush=True)
     finally:
-        process.terminate(); process.wait(5); process.stdout.close()
+        process.terminate(); process.wait(5); process.stdout.close(); process.stderr.close()
         api.close(); owner.close()
 
 

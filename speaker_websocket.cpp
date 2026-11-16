@@ -504,7 +504,7 @@ struct WebsocketSpeakerPosition::Impl {
     std::atomic_bool stop{false}, regroup{false};
     double last = 0;
     uint64_t failures = 0, revision = 0;
-    std::optional<SpeakerPositionSample> known;
+    std::optional<SpeakerPositionSample> known, lastEvent;
     std::set<std::string> unknownStates;
     std::string quality, qualityItem, playbackError;
     std::vector<SpeakerPositionSample> eventSamples;
@@ -533,12 +533,18 @@ struct WebsocketSpeakerPosition::Impl {
         rawState = sample.rawState;
         if (sample.state == "UNKNOWN" && unknownStates.insert(rawState).second)
             journal.push_back("speaker unknown playbackState=" + rawState);
-        if (known && sample.item == known->item && sample.state == known->state) {
+        const bool repeated = lastEvent && sample.item == lastEvent->item && sample.rawState == lastEvent->rawState &&
+            sample.positionMs == lastEvent->positionMs && sample.previousItem == lastEvent->previousItem &&
+            sample.previousPositionMs == lastEvent->previousPositionMs;
+        lastEvent = sample;
+        if (repeated) return false;
+        const bool explicitSeek = (!known || !speakerTransitioning(known->state)) && sample.previousPositionMs &&
+            sample.previousItem == sample.item && std::abs(*sample.previousPositionMs-sample.positionMs) > .5;
+        if (!explicitSeek && known && sample.item == known->item && sample.state == known->state) {
             const auto expected = known->positionMs + (speakerPlaying(known->state) ? (now-known->sampleTime)*1000 : 0);
             if (std::abs(sample.positionMs-expected) <= 150) return false;
         }
-        if ((!known || !speakerTransitioning(known->state)) && sample.previousPositionMs && sample.previousItem == sample.item &&
-            std::abs(*sample.previousPositionMs-sample.positionMs) > 150)
+        if (explicitSeek)
             journal.push_back("speaker seek itemId=" + sample.item + " from_ms=" + std::to_string(*sample.previousPositionMs) + " to_ms=" + std::to_string(sample.positionMs));
         sample.event = true;
         fit.add(sample); known = sample; last = now; error.clear(); ++revision;
