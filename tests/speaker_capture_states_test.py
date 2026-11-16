@@ -117,13 +117,17 @@ def main():
         assert sum('speaker unknown playbackState=FUTURE_STATE' in line for line in journal) == 1, journal
         print('PASS G2 playing, paused, buffering, idle and unknown; unknown diagnostic exits nonzero', flush=True)
         api.state_override = None
-        api.emit_error(dict(errorCode='ERROR_PLAYBACK_FAILED', reason='fixture occurrence', itemId='2', httpStatus=403))
+        for shape in ('capture', 'tidy'):
+            api.shape = shape
+            api.emit_error(dict(errorCode='ERROR_PLAYBACK_FAILED', reason='fixture '+shape, itemId='2', httpStatus=403))
+        api.shape = 'capture'
         wait(lambda f: f[4] == 'PLAYING')
         for code in ('ERROR_COMMAND_FAILED', 'ERROR_NOT_CAPABLE', 'ERROR_INVALID_OBJECT_ID'):
             api.command_error = code
             run = subprocess.run(['./yeney', '--position-source-check', '--ip', f'127.0.0.1:{api.server.server_port}', '--seconds', '1'], capture_output=True, text=True, timeout=10)
             assert run.returncode and 'command error code='+code in run.stdout, run.stdout
         api.command_error = None
+        wait(lambda f: sum('speaker playbackError ' in line for line in journal) == 2)
         print('PASS G7 playbackError is informational; globalError command failures retain all three codes', flush=True)
         stable = wait(lambda f: f[4] == 'PLAYING')
         api.events_enabled = False

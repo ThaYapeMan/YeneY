@@ -387,7 +387,8 @@ public:
     }
     Fields message() {
         Fields answer(connection.message());
-        if (answer["type"] != "playbackError" && (answer["type"] == "error" || answer["type"] == "globalError" || !answer["errorCode"].empty()))
+        const auto type = answer["type"].empty() ? answer["command"] : answer["type"];
+        if (type != "playbackError" && (type == "error" || type == "globalError" || !answer["errorCode"].empty()))
             throw std::runtime_error("command error code=" + answer["errorCode"] + " reason=" + answer["reason"]);
         return answer;
     }
