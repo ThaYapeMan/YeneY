@@ -19,6 +19,7 @@ class LocalApi:
     def __init__(self, owner, port=1443, host='127.0.0.1'):
         self.websocket_url = f'wss://{host}:{port}/websocket/api'
         self.owner = owner
+        owner.local_api_clock = self
         self.group = 'loopback-group-1'
         self.household = 'loopback-household'
         self.rtt_ms = 10
@@ -32,6 +33,21 @@ class LocalApi:
         self.connections = set()
         self.disabled = False
         self.variant = 'chunked'
+        self.shape = 'capture'
+        self.events_enabled = True
+        self.answer_profile = os.environ.get('YENEY_FAKE_ANSWER_PROFILE')
+        self.events_enabled = os.environ.get('YENEY_FAKE_IGNORE_EVENTS') != '1'
+        self.state_override = None
+        self.item_override = None
+        self.senders = {}
+        self.emit_status = lambda body: self.broadcast('playbackStatus', body)
+        self.emit_error = lambda body: self.broadcast('playbackError', body)
+        self.command_error = None
+        self.quality = dict(bitDepth=24, sampleRate=44100, lossless=True, immersive=False)
+        self.silent = False
+        self.partial_frame = False
+        self.buffering_seconds = .3
+        self.buffering_until = 0
         self.info_variant = None
         self.info_extra = {}
         self.requests = []
@@ -91,9 +107,9 @@ class LocalApi:
                 api.handshakes.append(dict(self.headers))
                 accept = base64.b64encode(hashlib.sha1((self.headers['Sec-WebSocket-Key'] +
                                                        '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
-                headers = ('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
-                           f'Sec-WebSocket-Accept: {accept}\r\nSec-WebSocket-Protocol: v1.api.smartspeaker.audio\r\n'
-                           'X-Unknown: harmless\r\n\r\n')
+                headers = ('HTTP/1.1 101 Switching Protocols\r\nSec-WebSocket-Protocol: v1.api.smartspeaker.audio\r\n'
+                           f'Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n'
+                           'Server: Linux UPnP/1.0 Sonos/86.11-82170 (ZPS12)\r\n\r\n')
                 if api.variant == 'upgrade-case':
                     headers = ('http/1.1 101 switching protocols\r\nuPgRaDe: WebSocket\r\ncOnNeCtIoN: keep-alive, uPgRaDe\r\n'
                                f'sEc-WeBsOcKeT-aCcEpT: {accept}\r\nsEc-WeBsOcKeT-pRoToCoL: V1.API.SMARTSPEAKER.AUDIO\r\n\r\n')
@@ -106,6 +122,14 @@ class LocalApi:
                 subscribed = set()
 
                 def send(header, body):
+                    if api.shape == 'capture':
+                        header = dict(header)
+                        name = header.pop('command', header.get('type', 'none'))
+                        header.update(householdId=api.household, locationId='loopback-location', groupId=api.group)
+                        if 'cmdId' in header:
+                            header.update(response=name, success=not bool(body.get('errorCode')), type='globalError' if body.get('errorCode') else 'playbackStatus' if name == 'getPlaybackStatus' else 'none')
+                        else:
+                            header.update(name=name, type=name)
                     if api.variant == 'extra-fields': body = dict(future={'nested': [1, True, None]}, **body)
                     if api.variant == 'field-order':
                         header = dict(reversed(list(header.items())))
@@ -119,28 +143,68 @@ class LocalApi:
                     if api.variant == 'fragmented':
                         cut = len(value)//2
                         wire = frame(value[:cut], 1) + frame(b'ping', 0x89) + frame(value[cut:], 0x80)
+                    if api.silent: return
+                    if api.partial_frame: wire = wire[:3]
                     with lock:
                         if api.variant == 'split-tcp':
                             for at in range(0, len(wire), 3): self.connection.sendall(wire[at:at+3])
                         else: self.connection.sendall(wire)
 
+                last_change = [None, 0, 0]
+                last_previous = ['', 0]
                 def state():
                     with owner.lock:
-                        return (owner.position['TrackURI'], owner.transport_state)
+                        return (owner.position['TrackURI'], owner.transport_state, owner.position.stamp)
+
+                def status():
+                    with owner.lock:
+                        current = state()
+                        position = owner.position.milliseconds()
+                        if last_change[0] != current:
+                            last_change[:] = [current, time.monotonic(), position]
+                            if api.shape == 'capture' and owner.transport_state == 'PLAYING':
+                                api.buffering_until = time.monotonic()+api.buffering_seconds
+                        transport = owner.transport_state
+                        buffering = transport == 'PLAYING' and time.monotonic()-last_change[1] < api.buffering_seconds
+                        mapped = 'BUFFERING' if buffering else 'PAUSED' if transport == 'PAUSED_PLAYBACK' else 'IDLE' if transport == 'STOPPED' else transport
+                        if api.shape == 'tidy':
+                            return dict(positionMillis=round(position), itemId=current[0], playbackState='PAUSED' if transport == 'PAUSED_PLAYBACK' else transport)
+                        body = dict(_objectType='playbackStatus', playbackState=api.state_override or 'PLAYBACK_STATE_'+mapped,
+                                    isDucking=False, queueVersion='7', queueId='loopback-queue',
+                                    itemId=api.item_override or str(owner.position.get('Track', '1')),
+                                    positionMillis=round(last_change[2] if buffering else position), previousItemId=last_previous[0], previousPositionMillis=last_previous[1],
+                                    playModes=dict(_objectType='playMode', repeat=False, repeatOne=False, shuffle=False, crossfade=False),
+                                    availablePlaybackActions=dict(_objectType='playbackAction', **{key: True for key in
+                                        ('canPlay','canSkip','canSkipBack','canSkipToPrevious','canSeek','canPause','canStop','canRepeat','canRepeatOne','canCrossfade','canShuffle')}),
+                                    sourceIsLanSwappable=True)
+                        return body
+
+                api.senders[self.connection] = (send, status)
+
 
                 def events():
-                    previous = state()
+                    previous = status()
+                    previous_stamp = state()
                     while not done.wait(.01):
-                        current = state()
-                        if current != previous:
+                        current = status()
+                        stamp = state()
+                        if current != previous or stamp != previous_stamp:
                             try:
-                                if 'playback:1' in subscribed:
-                                    send({'namespace': 'playback:1', 'command': 'playbackStatus'}, {})
-                                if 'playbackMetadata:1' in subscribed:
-                                    send({'namespace': 'playbackMetadata:1', 'command': 'metadataStatus'}, {})
+                                if api.events_enabled and 'playback:1' in subscribed:
+                                    # Position changes during steady playback are poll-only.
+                                    changed = any(current.get(k) != previous.get(k) for k in ('playbackState', 'itemId')) or stamp != previous_stamp
+                                    if changed:
+                                        last_previous[:] = [previous.get('itemId', ''), current['positionMillis'] if current.get('playbackState') == 'PLAYBACK_STATE_PAUSED' else previous.get('positionMillis', 0)]
+                                        current.update(previousItemId=last_previous[0], previousPositionMillis=last_previous[1])
+                                        send({'namespace': 'playback:1', 'command': 'playbackStatus'}, current)
+                                if api.events_enabled and stamp[0] != previous_stamp[0] and 'playbackMetadata:1' in subscribed:
+                                    metadata = {} if api.shape == 'tidy' else dict(container=dict(id=dict(objectId='yeney:loopback-1')),
+                                        currentItem=dict(track=dict(name='Fixture', durationMillis=180000,
+                                            quality=api.quality)), nextItem={})
+                                    send({'namespace': 'playbackMetadata:1', 'command': 'metadataStatus'}, metadata)
                             except OSError:
                                 return
-                            previous = current
+                            previous, previous_stamp = current, stamp
                 worker = threading.Thread(target=events, daemon=True)
                 worker.start()
                 try:
@@ -162,6 +226,9 @@ class LocalApi:
                         api.commands.append((time.monotonic(), header))
                         assert header['householdId'] == api.household
                         assert header['groupId'] == api.group
+                        if api.command_error and header['command'] == 'subscribe':
+                            send(header, dict(errorCode=api.command_error, reason='fixture command failure'))
+                            continue
                         if header['command'] == 'subscribe':
                             if api.variant == 'slow-first' and not subscribed: time.sleep(.6)
                             subscribed.add(header['namespace'])
@@ -171,15 +238,20 @@ class LocalApi:
                         api.polls += 1
                         if api.variant == 'interleaved': send({'command': 'metadataStatus'}, {})
                         if api.variant == 'slow-first' and api.polls == 1: time.sleep(.6)
+                        if api.answer_profile:
+                            interval = time.monotonic() - getattr(api, '_last_poll', time.monotonic())
+                            api._last_poll = time.monotonic()
+                            if api.answer_profile == 'cable': api.rtt_ms, api.spike_ms, api.spike_every = 10, 12, 5
+                            else:
+                                api.rtt_ms, api.spike_ms = (77, 227) if interval > .12 else (11, 50)
+                                api.spike_every = 6
                         delay = (api.spike_ms if api.spike_every and api.polls % api.spike_every == 0 else api.rtt_ms) / 2000
                         outlier = api.polls == api.outlier_poll
                         if outlier: delay = .125
                         time.sleep(delay)
                         with owner.lock:
-                            position = owner.position.milliseconds()
-                            item, transport = state()
-                            body = {'positionMillis': round(position) + (400 if outlier else 0), 'itemId': item,
-                                    'playbackState': 'PAUSED' if transport == 'PAUSED_PLAYBACK' else transport}
+                            body = status()
+                            if outlier: body['positionMillis'] += 400
                         time.sleep(delay)
                         send(header, body)
                 except (OSError, ValueError):
@@ -188,6 +260,7 @@ class LocalApi:
                     done.set()
                     worker.join()
                     api.connections.discard(self.connection)
+                    api.senders.pop(self.connection, None)
 
         self.server = ThreadingHTTPServer((host, port), Handler)
         self.server.daemon_threads = True
@@ -196,6 +269,16 @@ class LocalApi:
         self.server.socket = context.wrap_socket(self.server.socket, server_side=True)
         self.worker = threading.Thread(target=self.server.serve_forever)
         self.worker.start()
+
+    def broadcast(self, name, body):
+        for send, status in list(self.senders.values()):
+            try:
+                send({'namespace': 'playback:1', 'command': name}, dict(body))
+                if name == 'playbackError':
+                    current = status()
+                    current.update(previousItemId=current.get('itemId', ''), previousPositionMillis=current['positionMillis'])
+                    send({'namespace': 'playback:1', 'command': 'playbackStatus'}, current)
+            except OSError: pass
 
     def disconnect(self):
         for connection in list(self.connections):

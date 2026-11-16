@@ -8,11 +8,26 @@
 #include <vector>
 #include <memory>
 namespace bridge {
+// Local API wire states are translated only here. Bare names remain supported
+// for older local API implementations and the named legacy fixture variant.
+inline std::string mapSpeakerState(const std::string &raw) {
+    if (raw == "PLAYBACK_STATE_PLAYING" || raw == "PLAYING") return "PLAYING";
+    if (raw == "PLAYBACK_STATE_PAUSED" || raw == "PAUSED") return "PAUSED";
+    if (raw == "PLAYBACK_STATE_BUFFERING" || raw == "TRANSITIONING") return "TRANSITIONING";
+    if (raw == "PLAYBACK_STATE_IDLE" || raw == "STOPPED") return "STOPPED";
+    return "UNKNOWN";
+}
+inline bool speakerPlaying(const std::string &state) { return state == "PLAYING"; }
+inline bool speakerTransitioning(const std::string &state) { return state == "TRANSITIONING"; }
 // All times are seconds on steady_clock; positions and RTT are milliseconds.
 struct SpeakerPositionSample {
     std::string item, state;
     double positionMs = 0, sampleTime = 0, rttMs = 0;
-    double observedAt = 0; // midpoint of the latest accepted source observation
+    double observedAt = 0; // midpoint for polls, arrival time for events
+    bool event = false;
+    std::string rawState = {};
+    std::string previousItem = {};
+    std::optional<double> previousPositionMs = {};
 };
 class SpeakerPosition {
 public:
@@ -37,7 +52,7 @@ class PositionFit {
     std::deque<SpeakerPositionSample> samples;
     std::optional<SpeakerPositionSample> pending;
     static bool moving(const std::string &state) {
-        return state == "PLAYING" || state == "TRANSITIONING";
+        return speakerPlaying(state);
     }
     double estimate(double now) const {
         std::vector<double> offsets;
@@ -53,6 +68,7 @@ public:
         if (!std::isfinite(sample.positionMs) || !std::isfinite(sample.sampleTime) ||
             !std::isfinite(sample.rttMs) || sample.rttMs < 0 || sample.rttMs > 200 || sample.positionMs < 0)
             return false;
+        if (sample.event) reset();
         if (!samples.empty() && sample.sampleTime <= samples.back().sampleTime) return false;
         if (!samples.empty() && (sample.item != samples.back().item || sample.state != samples.back().state)) reset();
         if (!samples.empty() && std::abs(sample.positionMs - estimate(sample.sampleTime)) > 150) {

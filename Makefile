@@ -214,6 +214,8 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	$(MAKE) -C third_party/yeney-core test
 	YENEY_TIMING_03=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
 	YENEY_TIMING_03=1 YENEY_POSITION_SOURCE=upnp YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
+	YENEY_TIMING_03D_CONTRACT=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
+	YENEY_TIMING_03D=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
 
 sbstreamer.o sbencoder.o: sbencoder.h
 
@@ -688,6 +690,8 @@ speaker-position-test: speaker-position-fit-test speaker-websocket-fixture yeney
 	python3 tests/local_api_compat_test.py
 	YENEY_COMPAT_FIXTURE=./speaker-websocket-fixture python3 tests/local_api_compat_test.py
 	python3 tests/local_api_capture_test.py
+	python3 tests/local_api_capture_interrupt_test.py
+	python3 tests/speaker_capture_states_test.py
 	python3 tests/sonos_timing_probe_test.py
 
 $(QUEUE_ROOM_OBJS) core_sonos.o: third_party/yeney-core/core/decoder.h

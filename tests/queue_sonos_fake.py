@@ -48,17 +48,22 @@ class Position(dict):
         self.stamp = time.monotonic()
         super().__init__(value)
 
+    def playing_elapsed(self):
+        api = getattr(self.owner, 'local_api_clock', None)
+        origin = max(self.stamp, api.buffering_until) if api and api.shape == 'capture' else self.stamp
+        return max(0, time.monotonic()-origin)
+
     def milliseconds(self):
         value = super().__getitem__('RelTime')
         seconds = sum(int(v)*w for v, w in zip(value.split(':'), (3600, 60, 1)))
-        return seconds * 1000 + (max(0, time.monotonic() - self.stamp) * 1000
+        return seconds * 1000 + (self.playing_elapsed() * 1000
             if getattr(self.owner, 'realtime', False) and self.owner.transport_state == 'PLAYING' else 0)
 
     def __getitem__(self, key):
         value = super().__getitem__(key)
         if key == 'RelTime' and getattr(self.owner, 'realtime', False) and self.owner.transport_state == 'PLAYING':
             seconds = sum(int(v)*w for v, w in zip(value.split(':'), (3600, 60, 1)))
-            seconds += int(time.monotonic() - self.stamp)
+            seconds += int(self.playing_elapsed())
             return f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
         return value
 

@@ -14,6 +14,7 @@ struct ModeStatus {
     std::string requested = "stream", active = "stream", state = "active", reason = "default-stream";
     std::string path;
     std::string positionSourceReason;
+    std::string speakerRawState, speakerQuality, speakerPlaybackError;
     std::string positionSource = "upnp", positionPrecision = "second";
     bool owned = false;
     uint64_t occurrence = 0;
@@ -72,6 +73,9 @@ public:
         if (v.active == "queue") {
             out << ",\"position_source\":" << q(v.positionSource)
                 << ",\"position_precision\":" << q(v.positionPrecision)
+                << ",\"speaker_playback_state\":" << q(v.speakerRawState)
+                << ",\"speaker_playback_error\":" << q(v.speakerPlaybackError)
+                << ",\"speaker_quality\":" << q(v.speakerQuality)
                 << ",\"position_source_reason\":" << q(v.positionSourceReason)
                 << ",\"occurrence\":" << v.occurrence << ",\"owned\":" << (v.owned ? "true" : "false")
                 << ",\"rendered_rate\":" << v.renderedRate << ",\"current_owned_item\":" << q(queueUriLog(v.currentUri))

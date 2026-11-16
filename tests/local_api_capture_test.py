@@ -15,6 +15,7 @@ capture = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(capture)
 owner = Coordinator()
 api = LocalApi(owner, port=0)
+api.shape = 'tidy'
 api.websocket_url = f'wss://127.0.0.1:{api.server.server_port}/websocket/api'
 api.info_variant = 'id-chunks'
 api.info_extra = {'groups': [{'id': api.group, 'playerIds': ['RINCON_ARRAY_ONLY']}], 'serialNumbers': ['ARRAY-SERIAL-002']}

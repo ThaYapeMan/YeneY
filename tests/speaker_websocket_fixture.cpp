@@ -13,11 +13,13 @@ int main() {
     std::cout.setf(std::ios::unitbuf);
     for (int n = 0; n < 5000; ++n) {
         if (regroup) { regroup = 0; source.groupChanged(); }
+        for (const auto &line : source.takeJournal()) std::cerr << line << std::endl;
         const double now = bridge::positionMonotonic();
         auto value = source.position(now);
         std::cout.precision(12);
         std::cout << now << '\t' << (value ? value->positionMs : -1) << '\t'
-                  << (value ? value->item : "") << '\t' << source.failure() << '\n';
+                  << (value ? value->item : "") << '\t' << source.failure() << '\t' << (value ? value->state : "") << '\t'
+                  << source.revision() << '\t' << source.rawState() << '\t' << source.quality() << '\n';
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 }

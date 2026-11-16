@@ -189,3 +189,39 @@ owner; loopback success does not establish speaker capacity at 20 Hz.
 Status publishes the source reason even when the source does not change. Each
 new failed connection attempt is eligible for a journal reminder, limited to one
 per ten minutes. Polling cadence, fit, navigation and core pin remain unchanged.
+
+
+### Captured states and change events
+
+The local API state mapping lives in `speaker_position.h`. PLAYING advances
+the clock; PAUSED and IDLE hold it; BUFFERING holds it as a transition while
+keeping the fast polling cadence. Unknown values hold position, appear in room
+status, and are journaled once per room and raw value. The diagnostic fails
+when it observes an unknown value.
+
+A changed playbackStatus event contributes an arrival-time sample with no RTT.
+It immediately resets the fit, requests status, and schedules a confirming
+getPlaybackStatus. A valid command answer overrides the event, including a
+contradiction; a discarded slow answer cannot remove the event clock. Repeated
+state/item/expected-position information does not reset the fit or request
+status. Every event retains previousItemId and previousPositionMillis for
+logging. Same-item seeks log their from/to positions; a completed exact promise
+logs the previous item's final position and promised duration. These logs do
+not change navigation or length enforcement.
+
+Local itemId values are queue-row strings, not URI identities. A row change
+requests an immediate identity poll. UPnP's exact owned URI remains authoritative;
+a numeric row disagreement is journaled once. Nonnumeric IDs are accepted.
+Metadata quality and playbackError events are diagnostics only: quality is
+journaled per item and appears in status, and each error occurrence is journaled
+with its last value retained in status. A globalError command response rejects
+the command with its error code.
+
+The public documentation sources and capture precedence are listed in the
+README's “Sources for the Sonos local API” developer section. The requested
+GlobalError URL returned HTTP 404 during TIMING-03d; the supplied owner summary
+provides its command-error requirements. The public previousPositionMillis
+table says string but its example and the local capture use a number. The
+client accepts either representation. Captured quality, locationId, local
+response headers and extra action fields are retained by the fixture even
+where the public cloud reference does not list them.

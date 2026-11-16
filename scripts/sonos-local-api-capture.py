@@ -12,6 +12,10 @@ import os
 import re
 from pathlib import Path
 import socket
+import struct
+import select
+import ipaddress
+import urllib.parse
 import ssl
 import tarfile
 import time
@@ -26,15 +30,88 @@ class Buffer:
     def makefile(self, *_): return io.BytesIO(self.data)
 
 
+def read_chunk(connection, size, deadline):
+    connection.setblocking(False)
+    while time.monotonic() < deadline:
+        remaining = min(.1, max(0, deadline-time.monotonic()))
+        if not connection.pending() and not select.select([connection], [], [], remaining)[0]: continue
+        try: return connection.recv(size)
+        except (ssl.SSLWantReadError, ssl.SSLWantWriteError, socket.timeout, BlockingIOError): continue
+    return None
+
+
+class Messages:
+    """Incremental nonblocking TLS/frame reader; readiness is only a hint."""
+    def __init__(self, connection):
+        self.connection = connection
+        self.buffer = bytearray()
+        self.fragments = bytearray()
+        self.outgoing = bytearray()
+        connection.setblocking(False)
+
+    def receive(self, timeout):
+        end = time.monotonic() + timeout
+        while True:
+            if self.outgoing:
+                try:
+                    sent = self.connection.send(self.outgoing)
+                    del self.outgoing[:sent]
+                except (ssl.SSLWantReadError, ssl.SSLWantWriteError, BlockingIOError): pass
+            if len(self.buffer) >= 2:
+                first, length = self.buffer[:2]
+                size, offset = length & 127, 2
+                needed = 2 if size == 126 else 8 if size == 127 else 0
+                if len(self.buffer) >= offset + needed:
+                    if needed:
+                        size = int.from_bytes(self.buffer[offset:offset+needed], 'big')
+                        offset += needed
+                    if size > 1024*1024: raise RuntimeError('frame exceeds 1 MiB')
+                    if length & 128: raise RuntimeError('masked server frame')
+                    if len(self.buffer) >= offset + size:
+                        body = self.buffer[offset:offset+size]
+                        del self.buffer[:offset+size]
+                        opcode = first & 15
+                        if opcode == 8: raise EOFError('websocket close')
+                        if opcode == 9:
+                            if len(body) > 125: raise RuntimeError('oversize ping')
+                            mask = os.urandom(4)
+                            self.outgoing.extend(bytes([0x8a, 0x80 | len(body)]) + mask + bytes(c ^ mask[i%4] for i,c in enumerate(body)))
+                            continue
+                        if opcode == 10: continue
+                        if opcode not in (0, 1): raise RuntimeError('unsupported opcode')
+                        self.fragments.extend(body)
+                        if len(self.fragments) > 1024*1024: raise RuntimeError('message exceeds 1 MiB')
+                        if first & 128:
+                            value = json.loads(self.fragments)
+                            self.fragments.clear()
+                            return value
+                        continue
+            remaining = end - time.monotonic()
+            if remaining <= 0: return None
+            if not self.connection.pending() and not select.select([self.connection], [], [], remaining)[0]: return None
+            try:
+                data = self.connection.recv(16384)
+            except (ssl.SSLWantReadError, ssl.SSLWantWriteError, socket.timeout, BlockingIOError):
+                continue
+            if not data: raise EOFError('connection dropped')
+            self.buffer.extend(data)
+
+
 def capture(host, port, seconds, destination=None):
     context = ssl._create_unverified_context()
     files, identities = {}, {}
+    events = []
+    ending = 'completed'
+    raw = bytearray()
+    info_body = b''
+    response = None
+    reader = None
 
     def remember(value, context=None, scalar_ids=False):
         if isinstance(value, dict):
             for key, child in value.items():
                 name = key.lower()
-                kind = next((k for k in ('household', 'group', 'player', 'serial') if k in name), None)
+                kind = next((k for k in ('household', 'group', 'player', 'serial', 'device', 'location', 'queue') if k in name), None)
                 if name == 'coordinatorid': kind = 'player'
                 identity = kind if kind and ('id' in name or 'serial' in name) else context if name == 'id' else None
                 if identity and isinstance(child, str) and child:
@@ -48,74 +125,107 @@ def capture(host, port, seconds, destination=None):
     def connect():
         return context.wrap_socket(socket.create_connection((host, port), timeout=3), server_hostname=host)
 
-    with connect() as connection:
-        connection.sendall((f'GET /api/v1/players/local/info HTTP/1.1\r\nHost: {host}:{port}\r\n'
-                            f'X-Sonos-Api-Key: {probe.API_KEY}\r\nConnection: close\r\n\r\n').encode())
-        raw = bytearray()
-        while True:
-            data = connection.recv(16384)
-            if not data: break
-            raw.extend(data)
-            if len(raw) > 1024*1024: raise RuntimeError('local/info capture exceeds 1 MiB')
-    files['local-info.http'] = bytes(raw)
-    response = http.client.HTTPResponse(Buffer(bytes(raw)))
-    response.begin()
-    if response.status != 200: raise RuntimeError(f'local/info HTTP {response.status}')
-    info_body = response.read(65537)
-    info = json.loads(info_body)
-    remember(info)
-    client = probe.SonosSocket.__new__(probe.SonosSocket)
-    client.socket = connect()
     try:
-        key = base64.b64encode(os.urandom(16)).decode()
-        client.socket.sendall((f'GET /websocket/api HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n'
-                               f'Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n'
-                               f'Sec-WebSocket-Protocol: {probe.PROTOCOL}\r\nX-Sonos-Api-Key: {probe.API_KEY}\r\n\r\n').encode())
-        headers = bytearray()
-        while not headers.endswith(b'\r\n\r\n'):
-            headers.extend(client.read(1))
-            if len(headers) > 16384: raise RuntimeError('upgrade headers exceed 16 KiB')
-        files['websocket-upgrade.http'] = bytes(headers)
-        upgrade = http.client.HTTPResponse(Buffer(bytes(headers)))
-        upgrade.begin()
-        accept = base64.b64encode(hashlib.sha1((key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
-        if upgrade.status != 101 or upgrade.getheader('Sec-WebSocket-Accept') != accept:
-            raise RuntimeError('invalid upgrade')
-        for serial, namespace, command in ((1, 'playback:1', 'subscribe'), (2, 'playbackMetadata:1', 'subscribe'),
-                                           (3, 'playback:1', 'getPlaybackStatus')):
-            header = dict(namespace=namespace, command=command, householdId=info['householdId'],
-                          groupId=info['groupId'], cmdId=str(serial))
-            client.send(json.dumps([header, {}]).encode())
-        end = time.monotonic() + seconds
-        events, answers = [], set()
-        total = 0
-        while time.monotonic() < end:
-            client.socket.settimeout(min(.5, max(.01, end-time.monotonic())))
-            # Readiness polling keeps a timeout from discarding a partial frame.
-            import select
-            if not client.socket.pending() and not select.select([client.socket], [], [], .1)[0]: continue
-            client.socket.settimeout(3)
-            value = client.receive()
-            remember(value)
-            encoded = json.dumps(dict(elapsed=seconds-(end-time.monotonic()), message=value), ensure_ascii=False).encode()
-            total += len(encoded)
-            if total > 16*1024*1024: raise RuntimeError('event capture exceeds 16 MiB')
-            events.append(encoded)
-            if isinstance(value, list) and value and str(value[0].get('cmdId')) in ('1', '2', '3'):
-                answers.add(str(value[0]['cmdId']))
-        if answers != {'1', '2', '3'}: raise RuntimeError('missing subscription or status answers')
-        files['messages.jsonl'] = b'\n'.join(events) + b'\n'
+        with connect() as connection:
+            connection.sendall((f'GET /api/v1/players/local/info HTTP/1.1\r\nHost: {host}:{port}\r\n'
+                                f'X-Sonos-Api-Key: {probe.API_KEY}\r\nConnection: close\r\n\r\n').encode())
+            raw = bytearray()
+            deadline = time.monotonic() + seconds
+            while True:
+                data = read_chunk(connection, 16384, deadline)
+                if data is None:
+                    ending = "duration elapsed during local/info"
+                    break
+                if not data: break
+                raw.extend(data)
+                if len(raw) > 1024*1024: raise RuntimeError('local/info capture exceeds 1 MiB')
+        files['local-info.http'] = bytes(raw)
+        response = http.client.HTTPResponse(Buffer(bytes(raw)))
+        response.begin()
+        if response.status != 200: raise RuntimeError(f'local/info HTTP {response.status}')
+        info_body = response.read(65537)
+        info = json.loads(info_body)
+        remember(info)
+        client = probe.SonosSocket.__new__(probe.SonosSocket)
+        client.socket = connect()
+        try:
+            key = base64.b64encode(os.urandom(16)).decode()
+            client.socket.sendall((f'GET /websocket/api HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n'
+                                   f'Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: {key}\r\n'
+                                   f'Sec-WebSocket-Protocol: {probe.PROTOCOL}\r\nX-Sonos-Api-Key: {probe.API_KEY}\r\n\r\n').encode())
+            headers = bytearray()
+            deadline = time.monotonic() + seconds
+            while not headers.endswith(b'\r\n\r\n'):
+                data = read_chunk(client.socket, 1, deadline)
+                if data is None: raise EOFError('duration elapsed during upgrade')
+                if not data: raise EOFError('connection dropped during upgrade')
+                headers.extend(data)
+                files['websocket-upgrade.http'] = bytes(headers)
+                if len(headers) > 16384: raise RuntimeError('upgrade headers exceed 16 KiB')
+            files['websocket-upgrade.http'] = bytes(headers)
+            upgrade = http.client.HTTPResponse(Buffer(bytes(headers)))
+            upgrade.begin()
+            accept = base64.b64encode(hashlib.sha1((key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
+            if upgrade.status != 101 or upgrade.getheader('Sec-WebSocket-Accept') != accept:
+                raise RuntimeError('invalid upgrade')
+            client.socket.setblocking(True)
+            for serial, namespace, command in ((1, 'playback:1', 'subscribe'), (2, 'playbackMetadata:1', 'subscribe'),
+                                               (3, 'playback:1', 'getPlaybackStatus')):
+                header = dict(namespace=namespace, command=command, householdId=info['householdId'],
+                              groupId=info['groupId'], cmdId=str(serial))
+                client.send(json.dumps([header, {}]).encode())
+            end = time.monotonic() + seconds
+            answers = set()
+            reader = Messages(client.socket)
+            total = 0
+            while time.monotonic() < end:
+                value = reader.receive(min(.5, max(.01, end-time.monotonic())))
+                if value is None: continue
+                remember(value)
+                encoded = json.dumps(dict(elapsed=seconds-(end-time.monotonic()), message=value), ensure_ascii=False).encode()
+                total += len(encoded)
+                if total > 16*1024*1024: raise RuntimeError('event capture exceeds 16 MiB')
+                events.append(encoded)
+                if isinstance(value, list) and value and str(value[0].get('cmdId')) in ('1', '2', '3'):
+                    answers.add(str(value[0]['cmdId']))
+            if answers != {'1', '2', '3'}: ending = 'duration elapsed; missing subscription or status answers'
+            files['messages.jsonl'] = b'\n'.join(events) + b'\n'
+        finally:
+            client.close()
+        files['local-info.json'] = info_body
+    except BaseException as error:
+        ending = f'{type(error).__name__}: {error}'
     finally:
-        client.close()
-    files['local-info.json'] = info_body
+        files['messages.jsonl'] = b'\n'.join(events) + b'\n'
+        files['local-info.http'] = bytes(raw)
+        if reader and (reader.buffer or reader.fragments):
+            files['partial-websocket.bin'] = bytes(reader.fragments + reader.buffer)
+        files['ending.txt'] = (ending + '\n').encode()
     files['README.txt'] = (b'Read-only capture: local/info, upgrade, two subscriptions, one getPlaybackStatus, then events.\n'
                            b'Identifiers replaced consistently before writing. Header spelling/order, body text, chunk extensions and trailers retained.\n'
                            b'Chunk sizes and Content-Length are recalculated after redaction; extra chunks may hold longer placeholders.\n')
 
     def redact(data):
+        for match in re.finditer(rb'"((?:device|location|queue|household|group|player)Id|serialNumber)"\s*:\s*"([^"\r\n]+)"', data, re.I):
+            value = match[2].decode('utf-8', errors='replace')
+            kind = re.sub('Id$|Number$', '', match[1].decode(), flags=re.I).upper()
+            identities.setdefault(value, f'REDACTED_{kind}_{len(identities)+1}')
         for original, replacement in sorted(identities.items(), key=lambda pair: -len(pair[0])):
             data = data.replace(json.dumps(original, ensure_ascii=True)[1:-1].encode(), replacement.encode())
-            data = data.replace(original.encode(), replacement.encode())
+            data = data.replace(original.encode('utf-8', errors='replace'), replacement.encode())
+        # Discover addresses and owned object identifiers in every wire artifact.
+        text = urllib.parse.unquote(data.decode('utf-8', errors='replace'))
+        pattern = r'yeney:[A-Za-z0-9_-]+|(?:[0-9]{1,3}\.){3}[0-9]{1,3}|(?:[0-9A-Fa-f]{0,4}:){2,}[0-9A-Fa-f]{0,4}'
+        for match in re.finditer(pattern, text):
+            value = match.group()
+            if not value.startswith('yeney:'):
+                try: ipaddress.ip_address(value)
+                except ValueError: continue
+            identities.setdefault(value, f'REDACTED_ADDRESS_{len(identities)+1}')
+        for original, replacement in sorted(identities.items(), key=lambda pair: -len(pair[0])):
+            encoded = original.encode('utf-8', errors='replace')
+            pattern = b''.join(b'(?:' + re.escape(bytes([byte])) + b'|(?i:%' + f'{byte:02x}'.encode() + b'))' for byte in encoded)
+            data = re.sub(pattern, replacement.encode(), data)
         return data
 
     def redacted_info():
@@ -150,7 +260,7 @@ def capture(host, port, seconds, destination=None):
     # Write only redacted data; originals never reach disk.
     with tarfile.open(destination, 'w:gz') as archive:
         for name, data in files.items():
-            data = redacted_info() if name == 'local-info.http' else redact(data)
+            data = redacted_info() if name == 'local-info.http' and response and info_body else redact(data)
             entry = tarfile.TarInfo(name); entry.size = len(data); entry.mode = 0o600
             archive.addfile(entry, io.BytesIO(data))
     return destination

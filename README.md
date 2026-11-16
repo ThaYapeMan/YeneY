@@ -619,6 +619,25 @@ user-facing playback settings retain their names and defaults.
 
 ## For developers
 
+### Sources for the Sonos local API
+
+Use the owner's captured local API messages alongside the Sonos developer documentation:
+[playbackStatus](https://docs.sonos.com/reference/playback-playbackstatus),
+[playbackError](https://docs.sonos.com/reference/playback-playbackerror),
+[metadataStatus](https://docs.sonos.com/reference/metadatastatus),
+[groups objects](https://docs.sonos.com/reference/groups-objects),
+[GlobalError](https://docs.sonos.com/docs/globalerror),
+[Control](https://docs.sonos.com/docs/control), and
+[Playback objects](https://docs.sonos.com/docs/playback-objects).
+The captures take precedence for local wire shapes. Public documentation describes
+cloud item identifiers; the captured local queue uses row number strings. The
+previous-position table says string, while its example and the capture use a
+number; accept both. Quality and local header fields absent from these public
+pages remain capture-based extensions. BUFFERING precedes playback and holds
+position. IDLE means neither playing nor paused, including startup, an empty
+queue, a source that cannot pause, or a playback error. Events report changes,
+including user seeks and track boundaries; steady progression is poll-only.
+
 ### Building and testing
 
 ```sh

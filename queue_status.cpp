@@ -21,6 +21,7 @@ void QueueRoom::Impl::publish() {
     v.positionSource = activePositionSource.empty() ? "upnp" : activePositionSource;
     v.positionPrecision = activePositionPrecision;
     v.positionSourceReason = activePositionReason;
+    if (websocketPosition) { v.speakerPlaybackError = websocketPosition->playbackError(); v.speakerRawState = websocketPosition->rawState(); v.speakerQuality = websocketPosition->quality(); }
     v.owned = ownership.active() && !externalReleased;
     v.occurrence = current;
     v.lastFault = fault;

@@ -16,6 +16,12 @@ public:
     std::optional<SpeakerPositionSample> position(double now) const override;
     std::string failure() const;
     uint64_t failureCount() const;
+    uint64_t revision() const;
+    std::string rawState() const;
+    std::string quality() const;
+    std::string playbackError() const;
+    std::vector<SpeakerPositionSample> takeEvents();
+    std::vector<std::string> takeJournal();
     void groupChanged();
 };
 double positionMonotonic();

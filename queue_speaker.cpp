@@ -94,7 +94,26 @@ void QueueRoom::Impl::observe() {
         logQueue("position source=" + source + " reason=" + reason);
         publish();
     }
-    const bool event = eventDirty->exchange(false);
+    bool websocketEvent = false;
+    if (websocketPosition) {
+        for (const auto &line : websocketPosition->takeJournal()) logQueue(line);
+        for (const auto &sample : websocketPosition->takeEvents()) {
+            logQueue("speaker event itemId=" + sample.item + " position_ms=" + std::to_string(sample.positionMs) +
+                " previousItemId=" + sample.previousItem + " previousPositionMillis=" +
+                (sample.previousPositionMs ? std::to_string(*sample.previousPositionMs) : "unavailable"));
+            const auto length = websocketExactLengths.find(sample.previousItem);
+            if (sample.previousPositionMs && length != websocketExactLengths.end() &&
+                (sample.item != sample.previousItem || sample.state == "STOPPED") &&
+                *sample.previousPositionMs >= length->second - 1000)
+                logQueue("speaker finished itemId=" + sample.previousItem + " last_position_ms=" +
+                    std::to_string(*sample.previousPositionMs) + " exact_promised_ms=" + std::to_string(length->second));
+        }
+        const auto revision = websocketPosition->revision();
+        websocketEvent = revision != websocketRevision;
+        websocketRevision = revision;
+        if (websocketEvent) { requestStatus(); publish(); }
+    }
+    const bool event = eventDirty->exchange(false) || websocketEvent;
     if (!event && now < nextPoll)
         return;
     nextPoll = now + std::chrono::milliseconds(precise ? 20 : now < fastUntil ? 100 : pollMs);
@@ -131,6 +150,19 @@ void QueueRoom::Impl::observe() {
     // Only this exact owned URI identifies the audible item. CurrentTrack and
     // NumberOfTracks may renumber during our edits without a playback boundary.
     const auto uri = position.at("CurrentTrackURI");
+    if (precise && !precise->item.empty() && precise->item.find_first_not_of("0123456789") == std::string::npos &&
+        precise->item != position.at("CurrentTrack") && !itemDisagreementLogged) {
+        logQueue("speaker itemId disagrees with UPnP row; owned URI wins itemId=" + precise->item + " row=" + position.at("CurrentTrack"));
+        itemDisagreementLogged = true;
+    }
+    if (precise && precise->item == position.at("CurrentTrack")) {
+        const auto owned = std::find_if(items.begin(), items.end(), [&](const auto &entry) { return entry.uri == uri; });
+        if (owned != items.end() && owned->item) {
+            const auto &descriptor = owned->item->descriptor();
+            if (descriptor.kind == queue_audio::PromiseKind::Exact && descriptor.promisedFrames && descriptor.rate)
+                websocketExactLengths[precise->item] = double(*descriptor.promisedFrames) * 1000 / descriptor.rate;
+        }
+    }
     const auto avUri = mediaFields.at("AVTransportURI");
     if (cachedMediaUri) {
         sourceAway = !avUri.empty() && avUri != "x-rincon-queue:" + room.uuid + "#0";
@@ -143,7 +175,8 @@ void QueueRoom::Impl::observe() {
         if (!commands.empty())
             return; // SlimProto arrived while SOAP was in flight.
     }
-    const auto transport = transportFields.at("TransportState");
+    const bool buffering = precise && speakerTransitioning(precise->state);
+    const auto transport = buffering ? (state == "PAUSED" ? std::string("PAUSED_PLAYBACK") : std::string("PLAYING")) : transportFields.at("TransportState");
     const auto reportedStatus = transportFields.at("TransportStatus");
     // Seek and rebuffer both pass through TRANSITIONING mid-item.
     if (pathReason == "remote-finite" && state == "PLAYING" && transport == "PAUSED_PLAYBACK") {
@@ -220,7 +253,7 @@ void QueueRoom::Impl::observe() {
     bool rendererPositionConfirmed = rendererObservationConfirmed;
     if (precise && rendererSeekPosition) {
         const auto error = precise->positionMs - rendererSeekPosition->targetMs -
-            (precise->state == "PLAYING" ? std::max(0.0, precise->sampleTime - rendererSeekPosition->issued) * 1000 : 0);
+            (speakerPlaying(precise->state) ? std::max(0.0, precise->sampleTime - rendererSeekPosition->issued) * 1000 : 0);
         if (std::abs(error) <= 500) {
             logQueue("seek verification source=" + activePositionSource + " error_ms=" + std::to_string(error) + " tolerance_ms=500");
             rendererSeekPosition.reset();
@@ -232,15 +265,15 @@ void QueueRoom::Impl::observe() {
         } else rendererSeekPosition.reset();
     }
     const bool preciseSeek = precise && !rendererEcho && previousPrecisePosition &&
-        precise->item == previousPrecisePosition->item && precise->state == "PLAYING" &&
-        previousPrecisePosition->state == "PLAYING" &&
+        precise->item == previousPrecisePosition->item && (speakerPlaying(precise->state) || speakerTransitioning(precise->state)) &&
+        speakerPlaying(previousPrecisePosition->state) &&
         std::abs(precise->positionMs - previousPrecisePosition->positionMs -
             (precise->sampleTime - previousPrecisePosition->sampleTime) * 1000) > 150;
     previousPrecisePosition = precise;
     const auto playbackAdvance = lastPositionAt == std::chrono::steady_clock::time_point{} ? 0 :
         std::chrono::duration_cast<std::chrono::seconds>(now - lastPositionAt).count();
     if (positionValid && it != items.end() && it == previousItem &&
-        transport == "PLAYING" && !lmsNavigation && !navigationSelecting &&
+        (transport == "PLAYING" || (precise && speakerTransitioning(precise->state))) && !lmsNavigation && !navigationSelecting &&
         (precise ? preciseSeek : (reportedElapsed < lastElapsed || reportedElapsed > lastElapsed + 2 + uint64_t(playbackAdvance)))) {
         const auto owner = it->owner ? it->owner : it->stream;
         const auto index = sourceIndices.find(owner);
@@ -335,7 +368,8 @@ void QueueRoom::Impl::observe() {
     unsigned h = 0, m = 0, s = 0;
     if (sscanf(position.at("RelativeTimePosition").c_str(), "%u:%u:%u", &h, &m, &s) != 3)
         return;
-    const auto playback = transport == "PLAYING"           ? yeney::PlaybackState::Playing
+    const auto playback = precise && speakerTransitioning(precise->state) ? (state == "PAUSED" ? yeney::PlaybackState::Paused : yeney::PlaybackState::Playing)
+                          : transport == "PLAYING"           ? yeney::PlaybackState::Playing
                           : transport == "PAUSED_PLAYBACK" ? yeney::PlaybackState::Paused
                                                            : yeney::PlaybackState::Stopped;
     if (playback == yeney::PlaybackState::Stopped && it != std::prev(items.end()))

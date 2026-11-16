@@ -18,10 +18,12 @@ def main():
     from sonos_websocket_fake import LocalApi
     port = int(os.environ.get('YENEY_WS_TEST_PORT', '1443'))
     api = LocalApi(owner, port=port)
+    api.shape = 'tidy'
     coordinator_owner = Coordinator(address=('127.0.0.2', 0))
     coordinator_owner.transport_state = 'PAUSED_PLAYBACK'
     coordinator_owner.position = dict(Track='1', TrackURI='coordinator-item', RelTime='00:00:41')
     coordinator = LocalApi(coordinator_owner, port=port+1, host='127.0.0.2')
+    coordinator.shape = 'tidy'
     process = subprocess.Popen([fixture], stdout=subprocess.PIPE, text=True)
     lines = queue.Queue()
     thread = threading.Thread(target=lambda: [lines.put(line) for line in process.stdout], daemon=True)

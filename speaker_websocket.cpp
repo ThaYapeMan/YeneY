@@ -15,6 +15,7 @@
 #include <mutex>
 #include <thread>
 #include <map>
+#include <set>
 #include <stdexcept>
 #include <vector>
 #include <cstring>
@@ -375,7 +376,8 @@ public:
     }
     Fields message() {
         Fields answer(connection.message());
-        if (answer["type"] == "error" || !answer["errorCode"].empty()) throw std::runtime_error("command error");
+        if (answer["type"] != "playbackError" && (answer["type"] == "error" || answer["type"] == "globalError" || !answer["errorCode"].empty()))
+            throw std::runtime_error("command error code=" + answer["errorCode"] + " reason=" + answer["reason"]);
         return answer;
     }
     static SpeakerPositionSample sample(const Fields &answer, double sent, double received) {
@@ -386,7 +388,17 @@ public:
         try { position = std::stod(pos, &used); }
         catch (...) { throw std::runtime_error("invalid position"); }
         if (used != pos.size() || !std::isfinite(position) || position < 0) throw std::runtime_error("invalid position");
-        return {answer["itemId"], state, position, (sent + received) / 2, (received - sent) * 1000};
+        SpeakerPositionSample result{answer["itemId"], mapSpeakerState(state), position, (sent + received) / 2, (received - sent) * 1000};
+        result.rawState = state;
+        result.previousItem = answer["previousItemId"];
+        const auto previous = answer["previousPositionMillis"];
+        if (!previous.empty()) {
+            try {
+                used = 0; const auto value = std::stod(previous, &used);
+                if (used == previous.size() && std::isfinite(value) && value >= 0) result.previousPositionMs = value;
+            } catch (...) {} // Optional diagnostic evidence must not invalidate a position.
+        }
+        return result;
     }
 };
 
@@ -405,8 +417,19 @@ int positionSourceCheck(const std::string &host, double seconds, std::ostream &o
         });
         bool playback = false, metadata = false, selected = false;
         double lastAccepted = 0;
+        std::map<std::string, unsigned> events{{"playbackStatus", 0}, {"metadataStatus", 0}, {"playbackError", 0}};
+        std::set<std::string> states, items;
+        bool playingSeen = false, unknown = false;
         auto receive = [&] {
             auto answer = session.message();
+            if (answer["cmdId"].empty()) ++events[answer["type"].empty() ? answer["command"] : answer["type"]];
+            if (!answer["itemId"].empty()) items.insert(answer["itemId"]);
+            if (!answer["playbackState"].empty()) {
+                const auto raw = answer["playbackState"], mapped = mapSpeakerState(raw);
+                states.insert(raw); items.insert(answer["itemId"]);
+                playingSeen = playingSeen || speakerPlaying(mapped);
+                unknown = unknown || mapped == "UNKNOWN";
+            }
             if (answer["cmdId"] == "1") { playback = true; out << "playback subscription OK\n"; }
             if (answer["cmdId"] == "2") { metadata = true; out << "metadata subscription OK\n"; }
             return answer;
@@ -436,7 +459,7 @@ int positionSourceCheck(const std::string &host, double seconds, std::ostream &o
                         rtts.push_back(sample.rttMs);
                         if (sample.rttMs > 200) ++slow;
                         if (fit.add(sample)) { selected = true; lastAccepted = positionMonotonic(); }
-                        if (sample.state == "PLAYING") points.emplace_back(sample.sampleTime, sample.positionMs);
+                        if (speakerPlaying(sample.state)) points.emplace_back(sample.sampleTime, sample.positionMs);
                         break;
                     }
                     std::this_thread::sleep_until(std::chrono::steady_clock::time_point(
@@ -464,7 +487,11 @@ int positionSourceCheck(const std::string &host, double seconds, std::ostream &o
         }
         selected = selected && positionMonotonic() - lastAccepted <= 3;
         out << "selected source=" << (selected ? "websocket" : "upnp") << std::endl;
-        return selected ? 0 : 1;
+        for (const auto &raw : states) out << "playbackState raw=" << raw << " mapped=" << mapSpeakerState(raw) << '\n';
+        for (const auto &entry : events) out << "events type=" << entry.first << " count=" << entry.second << '\n';
+        for (const auto &item : items) out << "itemId=" << item << '\n';
+        out << "playing recognised=" << (playingSeen ? "true" : "false") << std::endl;
+        return selected && !unknown ? 0 : 1;
     } catch (const std::exception &e) {
         out << step << " FAIL reason=" << e.what() << "\nselected source=upnp\n";
         return 1;
@@ -476,7 +503,47 @@ struct WebsocketSpeakerPosition::Impl {
     PositionFit fit;
     std::atomic_bool stop{false}, regroup{false};
     double last = 0;
-    uint64_t failures = 0;
+    uint64_t failures = 0, revision = 0;
+    std::optional<SpeakerPositionSample> known;
+    std::set<std::string> unknownStates;
+    std::string quality, qualityItem, playbackError;
+    std::vector<SpeakerPositionSample> eventSamples;
+    std::vector<std::string> journal;
+    std::string rawState;
+    bool information(const Fields &answer, double now) {
+        const auto type = answer["type"].empty() ? answer["command"] : answer["type"];
+        std::lock_guard<std::mutex> lock(mutex);
+        if (type == "playbackError") {
+            playbackError = "errorCode=" + answer["errorCode"] + " reason=" + answer["reason"] +
+                " itemId=" + answer["itemId"] + " httpStatus=" + answer["httpStatus"];
+            journal.push_back("speaker playbackError " + playbackError); ++revision;
+            return false;
+        }
+        if (type == "metadataStatus" && !answer["bitDepth"].empty()) {
+            const auto item = (known ? known->item : std::string{}) + "|" + answer["objectId"];
+            const auto value = "bitDepth=" + answer["bitDepth"] + " sampleRate=" + answer["sampleRate"] + " lossless=" + answer["lossless"];
+            if (qualityItem != item || quality.empty()) { journal.push_back("speaker quality " + value); ++revision; }
+            quality = value; qualityItem = item;
+        }
+        if (answer["playbackState"].empty()) return false;
+        auto sample = LocalSession::sample(answer, now, now);
+        sample.event = true;
+        eventSamples.push_back(sample);
+        if (rawState != sample.rawState) ++revision;
+        rawState = sample.rawState;
+        if (sample.state == "UNKNOWN" && unknownStates.insert(rawState).second)
+            journal.push_back("speaker unknown playbackState=" + rawState);
+        if (known && sample.item == known->item && sample.state == known->state) {
+            const auto expected = known->positionMs + (speakerPlaying(known->state) ? (now-known->sampleTime)*1000 : 0);
+            if (std::abs(sample.positionMs-expected) <= 150) return false;
+        }
+        if ((!known || !speakerTransitioning(known->state)) && sample.previousPositionMs && sample.previousItem == sample.item &&
+            std::abs(*sample.previousPositionMs-sample.positionMs) > 150)
+            journal.push_back("speaker seek itemId=" + sample.item + " from_ms=" + std::to_string(*sample.previousPositionMs) + " to_ms=" + std::to_string(sample.positionMs));
+        sample.event = true;
+        fit.add(sample); known = sample; last = now; error.clear(); ++revision;
+        return true;
+    }
     std::thread worker;
     explicit Impl(std::string h) : host(std::move(h)), worker([this] { run(); }) {}
     ~Impl() { stop = true; worker.join(); }
@@ -495,7 +562,7 @@ struct WebsocketSpeakerPosition::Impl {
                     if (positionMonotonic() < next) {
                         if (connection.readable()) {
                             const auto event = session.message();
-                            if (event["command"] == "playbackStatus" || event["command"] == "metadataStatus") next = 0;
+                            if (information(event, positionMonotonic())) next = 0;
                         } else std::this_thread::sleep_for(std::chrono::milliseconds(10));
                         continue;
                     }
@@ -506,17 +573,24 @@ struct WebsocketSpeakerPosition::Impl {
                         if (stop) return;
                         if (positionMonotonic() - sent > 3) throw std::runtime_error("no answer for 3 s");
                         const auto answer = session.message();
-                        if (answer["cmdId"] != id) { immediate = true; continue; }
+                        if (answer["cmdId"] != id) { immediate = information(answer, positionMonotonic()) || immediate; continue; }
                         const auto received = positionMonotonic();
                         const auto sample = LocalSession::sample(answer, sent, received);
                         const auto &state = sample.state;
                         {
                             std::lock_guard<std::mutex> lock(mutex);
+                            if (rawState != sample.rawState) ++revision;
+                            rawState = sample.rawState;
+                            if (sample.state == "UNKNOWN" && unknownStates.insert(rawState).second)
+                                journal.push_back("speaker unknown playbackState=" + rawState);
+                            // A command answer confirms or overrides the event clock.
+                            if (known && known->event && sample.rttMs <= 200) fit.reset();
                             if (fit.add(sample)) {
+                                known = sample;
                                 last = received; error.clear();
                             } else if ((received - sent) * 1000 <= 200) immediate = true;
                         }
-                        next = immediate ? received : sent + ((state == "PLAYING" || state == "TRANSITIONING") ? .05 : 1);
+                        next = immediate ? received : sent + ((speakerPlaying(state) || speakerTransitioning(state)) ? .05 : 1);
                         break;
                     }
                 }
@@ -541,5 +615,15 @@ std::string WebsocketSpeakerPosition::failure() const {
     return impl->error;
 }
 uint64_t WebsocketSpeakerPosition::failureCount() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->failures; }
+uint64_t WebsocketSpeakerPosition::revision() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->revision; }
+std::string WebsocketSpeakerPosition::rawState() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->rawState; }
+std::string WebsocketSpeakerPosition::quality() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->quality; }
+std::string WebsocketSpeakerPosition::playbackError() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->playbackError; }
+std::vector<SpeakerPositionSample> WebsocketSpeakerPosition::takeEvents() {
+    std::lock_guard<std::mutex> lock(impl->mutex); auto result = std::move(impl->eventSamples); impl->eventSamples.clear(); return result;
+}
+std::vector<std::string> WebsocketSpeakerPosition::takeJournal() {
+    std::lock_guard<std::mutex> lock(impl->mutex); auto result = std::move(impl->journal); impl->journal.clear(); return result;
+}
 void WebsocketSpeakerPosition::groupChanged() { impl->regroup = true; }
 } // namespace bridge
