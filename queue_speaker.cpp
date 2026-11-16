@@ -113,6 +113,10 @@ void QueueRoom::Impl::observe() {
         websocketRevision = revision;
         if (websocketEvent) { requestStatus(); publish(); }
     }
+    // LMS keeps extrapolating while the room is playing. Refresh the held
+    // BUFFERING coordinate without reporting a pause; the core coalesces
+    // requested reports at its existing 50 ms limit.
+    if (precise && speakerTransitioning(precise->state)) requestStatus();
     const bool event = eventDirty->exchange(false) || websocketEvent;
     if (!event && now < nextPoll)
         return;

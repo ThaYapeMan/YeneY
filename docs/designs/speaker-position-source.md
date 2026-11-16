@@ -225,3 +225,12 @@ table says string but its example and the local capture use a number. The
 client accepts either representation. Captured quality, locationId, local
 response headers and extra action fields are retained by the fixture even
 where the public cloud reference does not list them.
+
+
+While BUFFERING holds the precise position, the room requests status on its
+existing observation cadence. The core's existing 50 ms coalescing bounds these
+reports. This keeps LMS's playing-time extrapolation close to the held speaker
+coordinate without reporting a pause, adding SOAP requests, changing source
+polling, or changing the fit. A single status report at transition start is not
+sufficient: LMS would otherwise extrapolate through the buffering interval and
+jump back at the PLAYING event.
