@@ -210,6 +210,14 @@ def capture(host, port, seconds, destination=None):
             value = match[2].decode('utf-8', errors='replace')
             kind = re.sub('Id$|Number$', '', match[1].decode(), flags=re.I).upper()
             identities.setdefault(value, f'REDACTED_{kind}_{len(identities)+1}')
+        key_pattern = r'((?:device|location|queue|household|group|player)Id|serialNumber)'
+        decoded = urllib.parse.unquote(data.decode('utf-8', errors='replace'))
+        for pattern in (r'(?im)^(?:X-Sonos-)?'+key_pattern+r':[ \t]*([^\r\n]+)',
+                        r'(?i)'+key_pattern+r'=([^&\s"<>]+)'):
+            for match in re.finditer(pattern, decoded):
+                kind = re.sub('Id$|Number$', '', match[1], flags=re.I).upper()
+                value = match[2].strip('" ')
+                if value: identities.setdefault(value, f'REDACTED_{kind}_{len(identities)+1}')
         for original, replacement in sorted(identities.items(), key=lambda pair: -len(pair[0])):
             data = data.replace(json.dumps(original, ensure_ascii=True)[1:-1].encode(), replacement.encode())
             data = data.replace(original.encode('utf-8', errors='replace'), replacement.encode())

@@ -50,6 +50,7 @@ class LocalApi:
         self.buffering_until = 0
         self.info_variant = None
         self.info_extra = {}
+        self.info_headers = {}
         self.requests = []
         self.directory = tempfile.TemporaryDirectory(prefix='sonos-ws-')
         root = Path(self.directory.name)
@@ -79,6 +80,7 @@ class LocalApi:
                     headers = ('HTTP/1.1 200 OK\r\nContent-type: application/json\r\n'
                                'X-Sonos-Type: discoveryInfo\r\nServer: Linux UPnP/1.0 Sonos/98.0-82170 (ZPS23)\r\n'
                                'Connection: close\r\n')
+                    headers += ''.join(f'{name}: {value}\r\n' for name, value in api.info_headers.items())
                     if mode == 'length':
                         headers += f'Content-Length: {len(body)}\r\n'
                         wire = body

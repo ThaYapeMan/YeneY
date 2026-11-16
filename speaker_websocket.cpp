@@ -592,6 +592,7 @@ struct WebsocketSpeakerPosition::Impl {
                             // A command answer confirms or overrides the event clock.
                             if (known && known->event && sample.rttMs <= 200) fit.reset();
                             if (fit.add(sample)) {
+                                if (known && sample.item != known->item) ++revision;
                                 known = sample;
                                 last = received; error.clear();
                             } else if ((received - sent) * 1000 <= 200) immediate = true;

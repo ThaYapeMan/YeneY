@@ -91,8 +91,13 @@ def main():
             assert run.returncode and 'command error code='+code in run.stdout, run.stdout
         api.command_error = None
         print('PASS G7 playbackError is informational; globalError command failures retain all three codes', flush=True)
+        stable = wait(lambda f: f[4] == 'PLAYING')
+        api.events_enabled = False
         api.item_override = 'opaque-row'
-        wait(lambda f: f[2] == 'opaque-row')
+        polled = wait(lambda f: f[2] == 'opaque-row')
+        assert int(polled[5]) > int(stable[5]), (stable, polled)
+        print('PASS G5 poll-only item change requests room status without an event', flush=True)
+        api.events_enabled = True
         api.item_override = None
         owner.position = dict(Track='3', TrackURI='owned-next', RelTime='00:00:00')
         wait(lambda f: f[2] == '3' and 'bitDepth=24 sampleRate=44100 lossless=true' in f[7])

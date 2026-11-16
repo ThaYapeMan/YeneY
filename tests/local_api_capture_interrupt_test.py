@@ -18,8 +18,9 @@ spec.loader.exec_module(capture)
 owner = Coordinator()
 api = LocalApi(owner, port=0)
 api.websocket_url = f'wss://127.0.0.1:{api.server.server_port}/websocket/api'
+api.info_headers = dict(DeviceId='HEADER-DEVICE', LocationId='HEADER-LOCATION', QueueId='HEADER-QUEUE')
 api.info_extra = dict(deviceId='DEVICE-PRIVATE', locationId='LOCATION-PRIVATE', queueId='QUEUE-PRIVATE',
-                      objectId='yeney:private-session-1', url='http://192.0.2.5:1234/audio', encodedUrl='http://192%2E0%2E2%2E5/media/yeney%3Aprivate-session-1', ipv6='2001:db8::1')
+                      objectId='yeney:private-session-1', queryUrl='http://example.invalid/?deviceId=QUERY-DEVICE&locationId=QUERY-LOCATION&queueId=QUERY-QUEUE', url='http://192.0.2.5:1234/audio', encodedUrl='http://192%2E0%2E2%2E5/media/yeney%3Aprivate-session-1', ipv6='2001:db8::1')
 try:
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
@@ -43,7 +44,7 @@ try:
                 contents = {name: archive.extractfile(name).read() for name in archive.getnames()}
             assert contents['ending.txt'].strip()
             combined = b''.join(contents.values())
-            for private in ('DEVICE-PRIVATE','LOCATION-PRIVATE','QUEUE-PRIVATE','yeney:private-session-1','192.0.2.5','127.0.0.1','2001:db8::1','private-session','192%2E0%2E2%2E5'):
+            for private in ('DEVICE-PRIVATE','LOCATION-PRIVATE','QUEUE-PRIVATE','yeney:private-session-1','192.0.2.5','127.0.0.1','2001:db8::1','private-session','192%2E0%2E2%2E5','HEADER-DEVICE','HEADER-LOCATION','HEADER-QUEUE','QUERY-DEVICE','QUERY-LOCATION','QUERY-QUEUE'):
                 assert private.encode() not in combined, (mode, private)
             if mode == 'partial': assert contents['partial-websocket.bin']
             if mode == 'drop': assert b'EOFError' in contents['ending.txt']
