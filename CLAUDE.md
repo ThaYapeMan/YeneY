@@ -43,6 +43,8 @@ The program line-buffers stdout, including under systemd. Use `journalctl` for t
 ## Conventions
 
 - All documentation and commit messages in English.
+- Metric (SI) units only, in code comments, documentation, logs and reports:
+  metres, millimetres, kilograms, °C. Never imperial units.
 - Always push after committing.
 
 - Runtime state, settings and logging must also work when the binary runs directly,

@@ -619,6 +619,11 @@ user-facing playback settings retain their names and defaults.
 
 ## For developers
 
+### Units
+
+YeneY uses metric (SI) units only, in code comments, documentation, logs and reports:
+metres, millimetres, kilograms, °C. Imperial units are not used.
+
 ### Sources for the Sonos local API
 
 Use the owner's captured local API messages alongside the Sonos developer documentation:
