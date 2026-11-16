@@ -16,13 +16,15 @@ def main():
     api.websocket_url = f'wss://127.0.0.1:{port}/websocket/api'
     binary = os.environ.get('YENEY_CHECK_BINARY', './yeney')
     fixture = os.environ.get('YENEY_COMPAT_FIXTURE')
-    variants = ['chunked', 'length', 'close', 'extensions', 'mixed-case', 'oversize', 'truncated',
+    variants = ['chunked', 'length', 'close', 'extensions', 'id-chunks', 'mixed-case', 'oversize', 'truncated',
                 'upgrade-case', 'fragmented', 'split-tcp', 'extra-fields', 'field-order',
                 'numeric-string', 'optional-missing', 'interleaved', 'slow-first']
+    selected = os.environ.get('YENEY_COMPAT_VARIANT')
     try:
         for variant in variants:
+            if selected and variant != selected: continue
             api.variant = variant
-            if os.environ.get('YENEY_COMPAT_BEFORE'): api.info_variant = variant if variants.index(variant) < 7 else 'length'
+            if os.environ.get('YENEY_COMPAT_BEFORE'): api.info_variant = variant if variants.index(variant) < 8 else 'length'
             api.polls = 0
             api.requests.clear()
             api.commands.clear()
