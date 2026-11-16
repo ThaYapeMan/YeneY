@@ -33,6 +33,7 @@ class LocalApi:
         self.disabled = False
         self.variant = 'chunked'
         self.info_variant = None
+        self.info_extra = {}
         self.requests = []
         self.directory = tempfile.TemporaryDirectory(prefix='sonos-ws-')
         root = Path(self.directory.name)
@@ -56,7 +57,7 @@ class LocalApi:
                 if self.path == '/api/v1/players/local/info':
                     api.info_reads += 1
                     body = json.dumps({'householdId': api.household, 'groupId': api.group, 'websocketUrl': api.websocket_url,
-                                       'playerId': 'RINCON_CAPTURE_TEST', 'serialNumber': 'CAPTURE-SERIAL-001'}).encode()
+                                       'playerId': 'RINCON_CAPTURE_TEST', 'serialNumber': 'CAPTURE-SERIAL-001', **api.info_extra}).encode()
                     if api.variant == 'oversize': body = b'x' * 65537
                     mode = api.info_variant or api.variant
                     headers = ('HTTP/1.1 200 OK\r\nContent-type: application/json\r\n'

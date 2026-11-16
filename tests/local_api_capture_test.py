@@ -15,6 +15,7 @@ spec.loader.exec_module(capture)
 owner = Coordinator()
 api = LocalApi(owner, port=0)
 api.websocket_url = f'wss://127.0.0.1:{api.server.server_port}/websocket/api'
+api.info_extra = {'groups': [{'id': api.group, 'playerIds': ['RINCON_ARRAY_ONLY']}], 'serialNumbers': ['ARRAY-SERIAL-002']}
 try:
     with tempfile.TemporaryDirectory() as work:
         def change():
@@ -32,6 +33,7 @@ try:
         assert b'101 Switching Protocols' in contents['websocket-upgrade.http']
         combined = b''.join(contents.values())
         assert api.household.encode() not in combined and api.group.encode() not in combined
+        assert b'RINCON_ARRAY_ONLY' not in combined and b'ARRAY-SERIAL-002' not in combined
         assert b'RINCON_CAPTURE_TEST' not in combined and b'CAPTURE-SERIAL-001' not in combined
         assert b'REDACTED_PLAYER_' in combined and b'REDACTED_SERIAL_' in combined
         assert b'REDACTED_HOUSEHOLD_' in combined and b'REDACTED_GROUP_' in combined

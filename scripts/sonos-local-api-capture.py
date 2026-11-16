@@ -29,7 +29,7 @@ def capture(host, port, seconds, destination=None):
     context = ssl._create_unverified_context()
     files, identities = {}, {}
 
-    def remember(value, context=None):
+    def remember(value, context=None, scalar_ids=False):
         if isinstance(value, dict):
             for key, child in value.items():
                 name = key.lower()
@@ -38,9 +38,11 @@ def capture(host, port, seconds, destination=None):
                 identity = kind if kind and ('id' in name or 'serial' in name) else context if name == 'id' else None
                 if identity and isinstance(child, str) and child:
                     identities.setdefault(child, f'REDACTED_{identity.upper()}_{len(identities)+1}')
-                remember(child, kind or context)
+                remember(child, kind or context, bool(identity))
         elif isinstance(value, list):
-            for child in value: remember(child, context)
+            for child in value: remember(child, context, scalar_ids)
+        elif scalar_ids and context and isinstance(value, str) and value:
+            identities.setdefault(value, f'REDACTED_{context.upper()}_{len(identities)+1}')
 
     def connect():
         return context.wrap_socket(socket.create_connection((host, port), timeout=3), server_hostname=host)
