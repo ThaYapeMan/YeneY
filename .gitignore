@@ -113,6 +113,7 @@ field-cold-test
 
 /speaker-position-fit-test
 /speaker-websocket-fixture
+/websocket-timer-fixture
 
 /native-mp4-fixture
 /native-pcm-fixture

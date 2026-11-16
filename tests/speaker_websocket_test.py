@@ -96,7 +96,7 @@ def main():
         api.disabled = False
         wait(lambda t, p, i: p >= 0, 33)
         assert api.info_reads == 4
-        print('PASS T2 runtime socket failure invalidates source and retries after 30 seconds', flush=True)
+        print('PASS T2 runtime socket failure invalidates source and recovers once reachable', flush=True)
     finally:
         process.terminate()
         process.wait(5)

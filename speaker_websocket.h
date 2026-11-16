@@ -9,7 +9,7 @@ class WebsocketSpeakerPosition : public SpeakerPosition {
     struct Impl;
     std::unique_ptr<Impl> impl;
 public:
-    WebsocketSpeakerPosition(std::string host);
+    WebsocketSpeakerPosition(std::string host, bool diagnostic = false);
     ~WebsocketSpeakerPosition();
     const char *name() const override { return "websocket"; }
     const char *precision() const override { return "ms"; }
@@ -21,6 +21,11 @@ public:
     std::string rawState() const;
     std::string quality() const;
     std::string playbackError() const;
+    std::string connectionState() const;
+    void diagnosticRate(unsigned hz);
+    void finishDiagnostic();
+    std::string connections() const;
+    std::vector<SpeakerPositionSample> takeSamples();
     std::vector<SpeakerPositionSample> takeEvents();
     std::vector<std::string> takeJournal();
     void groupChanged();

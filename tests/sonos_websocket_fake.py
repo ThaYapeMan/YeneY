@@ -51,10 +51,21 @@ class LocalApi:
         self.status_captured = threading.Event()
         self.buffering_seconds = .3
         self.buffering_until = 0
+        self.last_clock_stamp = None
         self.info_variant = None
         self.info_extra = {}
         self.info_headers = {}
         self.requests = []
+        self.control_senders = {}
+        self.controls = []
+        self.ping_interval = 60
+        self.subscription_lifetime = 3 * 24 * 60 * 60
+        self.ping_before_reply = False
+        self.drop_status_answers = False
+        self.reply_delay_once = 0
+        self.answer_pings = True
+        self.tls_sessions = []
+        self.reply_times = []
         self.directory = tempfile.TemporaryDirectory(prefix='sonos-ws-')
         root = Path(self.directory.name)
         key, cert = root / 'key.pem', root / 'cert.pem'
@@ -122,9 +133,22 @@ class LocalApi:
                     for at in range(0, len(headers), 3): self.connection.sendall(headers[at:at+3].encode())
                 else: self.connection.sendall(headers.encode())
                 api.connections.add(self.connection)
+                api.tls_sessions.append((self.connection.version(), self.connection.cipher()[0]))
                 lock = threading.Lock()
                 done = threading.Event()
                 subscribed = set()
+                expiry = {}
+                request_times = {}
+                connected = time.monotonic()
+                next_ping = connected + api.ping_interval
+
+                def control(opcode, body):
+                    assert len(body) <= 125
+                    with lock:
+                        self.connection.sendall(bytes([0x80 | opcode, len(body)]) + body)
+                    api.controls.append(dict(when=time.monotonic(), direction='sent', opcode=opcode))
+
+                api.control_senders[self.connection] = control
 
                 def send(header, body):
                     if api.shape == 'capture':
@@ -154,6 +178,9 @@ class LocalApi:
                         if api.variant == 'split-tcp':
                             for at in range(0, len(wire), 3): self.connection.sendall(wire[at:at+3])
                         else: self.connection.sendall(wire)
+                    if header.get('response', header.get('command')) == 'getPlaybackStatus':
+                        api.reply_times.append((id(self.connection), time.monotonic(),
+                                                (time.monotonic()-request_times[header['cmdId']])*1000))
 
                 last_change = [None, 0, 0]
                 last_previous = ['', 0]
@@ -167,10 +194,11 @@ class LocalApi:
                         position = owner.position.milliseconds()
                         if last_change[0] != current:
                             last_change[:] = [current, time.monotonic(), position]
-                            if api.shape == 'capture' and owner.transport_state == 'PLAYING':
+                            if api.last_clock_stamp != current and api.shape == 'capture' and owner.transport_state == 'PLAYING':
                                 api.buffering_until = time.monotonic()+api.buffering_seconds
+                            api.last_clock_stamp = current
                         transport = owner.transport_state
-                        buffering = transport == 'PLAYING' and time.monotonic()-last_change[1] < api.buffering_seconds
+                        buffering = transport == 'PLAYING' and time.monotonic() < api.buffering_until
                         mapped = 'BUFFERING' if buffering else 'PAUSED' if transport == 'PAUSED_PLAYBACK' else 'IDLE' if transport == 'STOPPED' else transport
                         if api.shape == 'tidy':
                             return dict(positionMillis=round(position), itemId=current[0], playbackState='PAUSED' if transport == 'PAUSED_PLAYBACK' else transport)
@@ -188,9 +216,21 @@ class LocalApi:
 
 
                 def events():
+                    nonlocal next_ping
                     previous = status()
                     previous_stamp = state()
                     while not done.wait(.01):
+                        now = time.monotonic()
+                        try:
+                            if api.ping_interval and now >= next_ping:
+                                control(9, b'fixture-heartbeat')
+                                next_ping = now + api.ping_interval
+                            expired = [namespace for namespace, end in expiry.copy().items() if now >= end]
+                            for namespace in expired:
+                                expiry.pop(namespace, None); subscribed.discard(namespace)
+                                send({'namespace': namespace, 'command': 'subscriptionExpired'}, {})
+                        except OSError:
+                            return
                         current = status()
                         stamp = state()
                         if current != previous or stamp != previous_stamp:
@@ -226,23 +266,36 @@ class LocalApi:
                         assert length & 128 and size <= 65536
                         mask = self.rfile.read(4)
                         value = self.rfile.read(size)
-                        if opcode & 15 == 10:
+                        payload = bytes(c ^ mask[i % 4] for i, c in enumerate(value))
+                        if opcode & 15 == 8: break
+                        if opcode & 15 in (9, 10):
+                            api.controls.append(dict(when=time.monotonic(), direction='received', opcode=opcode & 15))
+                            if opcode & 15 == 9 and api.answer_pings: control(10, payload)
                             continue
                         assert opcode == 0x81
-                        header, body = json.loads(bytes(c ^ mask[i % 4] for i, c in enumerate(value)))
+                        header, body = json.loads(payload)
+                        request_times[header['cmdId']] = time.monotonic()
                         api.commands.append((time.monotonic(), header))
                         assert header['householdId'] == api.household
-                        assert header['groupId'] == api.group
+                        if header['groupId'] != api.group:
+                            send(header, dict(errorCode='ERROR_INVALID_OBJECT_ID', reason='group moved'))
+                            continue
                         if api.command_error and header['command'] == 'subscribe':
                             send(header, dict(errorCode=api.command_error, reason='fixture command failure'))
                             continue
                         if header['command'] == 'subscribe':
                             if api.variant == 'slow-first' and not subscribed: time.sleep(.6)
                             subscribed.add(header['namespace'])
+                            expiry[header['namespace']] = time.monotonic() + api.subscription_lifetime
                             send(header, {})
                             continue
                         assert header['command'] == 'getPlaybackStatus'
                         api.polls += 1
+                        if api.ping_before_reply: control(9, b'command-in-flight')
+                        if api.drop_status_answers: continue
+                        if api.reply_delay_once:
+                            delay_once = api.reply_delay_once; api.reply_delay_once = 0
+                            time.sleep(delay_once)
                         if api.variant == 'interleaved': send({'command': 'metadataStatus'}, {})
                         if api.variant == 'slow-first' and api.polls == 1: time.sleep(.6)
                         if api.answer_profile:
@@ -272,6 +325,7 @@ class LocalApi:
                     worker.join()
                     api.connections.discard(self.connection)
                     api.senders.pop(self.connection, None)
+                    api.control_senders.pop(self.connection, None)
 
         self.server = ThreadingHTTPServer((host, port), Handler)
         self.server.daemon_threads = True
@@ -297,6 +351,15 @@ class LocalApi:
                 connection.shutdown(socket.SHUT_RDWR)
             except OSError:
                 pass
+
+    def control(self, opcode, body=b''):
+        for send in list(self.control_senders.values()):
+            try: send(opcode, body)
+            except OSError: pass
+
+    def regroup(self, group):
+        self.group = group
+        self.broadcast('groupCoordinatorChanged', dict(groupId=group))
 
     def close(self):
         self.disabled = True

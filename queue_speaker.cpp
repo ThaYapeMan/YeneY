@@ -78,7 +78,7 @@ void QueueRoom::Impl::observe() {
     if (rendererObservationConfirmed) rendererObservationAfter = 0;
     const std::string source = selectedPosition.first ? selectedPosition.first->name() : "upnp";
     const bool positionSourceChanged = activePositionSource != source;
-    const std::string reason = precise ? "local-api-ready" : websocketPosition ? websocketPosition->failure() : "configured";
+    const std::string reason = precise ? (websocketPosition ? websocketPosition->connectionState() : "local-api-ready") : websocketPosition ? websocketPosition->failure() : "configured";
     const bool reasonChanged = activePositionReason != reason;
     activePositionReason = reason;
     const double reasonNow = positionMonotonic();

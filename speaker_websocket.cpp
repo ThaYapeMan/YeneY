@@ -10,6 +10,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <atomic>
 #include <chrono>
 #include <mutex>
@@ -26,6 +27,9 @@ namespace bridge {
 double positionMonotonic() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+struct ConnectionCounts {
+    std::atomic_uint held{0}, peak{0}, opened{0}, websockets{0}, websocketPeak{0};
+};
 namespace {
 // Bounded JSON reader: retain scalar fields while validating the entire message.
 class Fields {
@@ -171,10 +175,20 @@ class Tls {
     int fd = -1;
     SSL_CTX *context = nullptr;
     SSL *ssl = nullptr;
+    std::string buffered, fragments, awaitingPong;
+    double connected = 0, lastSent = 0, pingSent = 0;
+    std::shared_ptr<ConnectionCounts> counts;
+    bool websocketReady = false;
 public:
-    Tls() = default;
+    std::function<void(const std::string &)> observe = [](const std::string &) {};
+    explicit Tls(std::shared_ptr<ConnectionCounts> c = {}) : counts(std::move(c)) {}
     Tls(const Tls &) = delete;
-    ~Tls() { if (ssl) SSL_free(ssl); if (context) SSL_CTX_free(context); if (fd >= 0) close(fd); }
+    ~Tls() {
+        if (ssl) SSL_free(ssl);
+        if (context) SSL_CTX_free(context);
+        if (fd >= 0) { close(fd); if (counts) --counts->held; }
+        if (counts && websocketReady) --counts->websockets;
+    }
     void connect(const std::string &endpoint) {
         auto host = endpoint;
         unsigned port = 1443;
@@ -188,6 +202,11 @@ public:
         }
         fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
         if (fd < 0) throw std::runtime_error("socket");
+        if (counts) {
+            ++counts->opened;
+            const auto held = ++counts->held;
+            if (held > counts->peak) counts->peak = held;
+        }
         timeval timeout{1, 0};
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof timeout);
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof timeout);
@@ -200,15 +219,32 @@ public:
         ssl = SSL_new(context);
         if (!ssl) throw std::runtime_error("TLS allocation");
         SSL_set_fd(ssl, fd);
+        const std::set<std::string> required{
+            "ECDHE-RSA-CHACHA20-POLY1305", "ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"};
+        std::set<std::string> offered;
+        for (int n = 0; const auto cipher = SSL_get_cipher_list(ssl, n); ++n) offered.insert(cipher);
+        for (const auto &cipher : required)
+            if (!offered.count(cipher)) throw std::runtime_error("required S2 TLS suite unavailable: " + cipher);
         if (SSL_connect(ssl) != 1) throw std::runtime_error("TLS handshake");
+        connected = lastSent = positionMonotonic();
+        observe("TLS protocol=" + std::string(SSL_get_version(ssl)) + " cipher=" + SSL_get_cipher_name(ssl));
+        for (const auto &cipher : required) observe("TLS offered_s2=" + cipher);
     }
     void send(const std::string &bytes) {
         size_t at = 0;
         while (at < bytes.size()) {
             int n = SSL_write(ssl, bytes.data() + at, int(bytes.size() - at));
-            if (n <= 0) throw std::runtime_error("socket write");
+            if (n <= 0) {
+                const auto error = SSL_get_error(ssl, n);
+                if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE) {
+                    pollfd p{fd, short(error == SSL_ERROR_WANT_READ ? POLLIN : POLLOUT), 0};
+                    if (::poll(&p, 1, 1000) > 0) continue;
+                }
+                throw std::runtime_error("TLS write failed");
+            }
             at += n;
         }
+        lastSent = positionMonotonic();
     }
     std::string read(size_t count) {
         std::string out(count, '\0'); size_t at = 0;
@@ -313,6 +349,13 @@ public:
         if (h.status != 101 || !h.token("upgrade", "websocket") || !h.token("connection", "upgrade") ||
             h.get("sec-websocket-accept") != base64(digest, sizeof digest) ||
             !h.token("sec-websocket-protocol", "v1.api.smartspeaker.audio")) throw std::runtime_error("websocket handshake");
+        if (fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK) < 0)
+            throw std::runtime_error("nonblocking WebSocket socket");
+        websocketReady = true;
+        if (counts) {
+            const auto held = ++counts->websockets;
+            if (held > counts->websocketPeak) counts->websocketPeak = held;
+        }
     }
     void frame(const std::string &body, unsigned opcode = 1) {
         if (body.size() > 65535) throw std::runtime_error("websocket send size");
@@ -328,33 +371,106 @@ public:
         pollfd p{fd, POLLIN, 0};
         return SSL_pending(ssl) || ::poll(&p, 1, 0) > 0;
     }
-    std::string message() {
-        std::string message;
+    double age() const { return connected ? positionMonotonic()-connected : 0; }
+    void maintenance(double now = positionMonotonic()) {
+        if (!awaitingPong.empty() && now - pingSent >= 3)
+            throw std::runtime_error("WebSocket pong missing for 3 s");
+        if (awaitingPong.empty() && now - lastSent >= 30) {
+            awaitingPong = std::to_string(now); pingSent = now;
+            frame(awaitingPong, 9);
+            observe("websocket control=ping direction=sent age_s=" + std::to_string(now-connected));
+        }
+    }
+    std::optional<std::string> message() {
         for (;;) {
-            auto h = read(2); const auto opcode = h[0] & 15; const bool final = h[0] & 0x80;
-            uint64_t size = h[1] & 127;
-            if (h[1] & 0x80) throw std::runtime_error("masked server frame");
-            if (size == 126) { auto b = read(2); size = (uint8_t(b[0]) << 8) | uint8_t(b[1]); }
-            else if (size == 127) { auto b = read(8); size = 0; for (unsigned char c : b) size = (size << 8) | c; }
-            if (size > 65536 || message.size() + size > 65536) throw std::runtime_error("websocket message too large");
-            const auto body = read(size);
-            if (opcode == 8) throw std::runtime_error("socket closed");
-            if (opcode == 9) { frame(body, 10); continue; }
-            if (opcode == 10) continue;
-            if (opcode != 0 && opcode != 1) throw std::runtime_error("websocket opcode");
-            message += body;
-            if (final) return message;
+            if (buffered.size() >= 2) {
+                const auto first = uint8_t(buffered[0]), second = uint8_t(buffered[1]);
+                const auto opcode = first & 15;
+                uint64_t size = second & 127;
+                const size_t extra = size == 126 ? 2 : size == 127 ? 8 : 0;
+                size_t offset = 2 + extra;
+                if (second & 128) throw std::runtime_error("masked server frame");
+                if (buffered.size() >= offset) {
+                    if (extra) {
+                        size = 0;
+                        for (size_t n = 2; n < offset; ++n) size = (size << 8) | uint8_t(buffered[n]);
+                    }
+                    if (size > 65536 || fragments.size() + size > 65536)
+                        throw std::runtime_error("websocket message too large");
+                    if (opcode >= 8 && (!(first & 128) || size > 125))
+                        throw std::runtime_error("invalid websocket control frame");
+                    if (buffered.size() >= offset + size) {
+                        const auto body = buffered.substr(offset, size);
+                        buffered.erase(0, offset + size);
+                        const auto age = " age_s=" + std::to_string(positionMonotonic()-connected);
+                        if (opcode == 8) {
+                            const auto code = body.size() >= 2 ? (uint8_t(body[0]) << 8) | uint8_t(body[1]) : 1005;
+                            const auto reason = body.size() >= 2 ? body.substr(2) : "";
+                            observe("websocket control=close code=" + std::to_string(code) + " reason=" + reason + age);
+                            try { frame(body, 8); } catch (...) {}
+                            throw std::runtime_error("WebSocket close code=" + std::to_string(code) + " reason=" + reason);
+                        }
+                        if (opcode == 9) {
+                            observe("websocket control=ping direction=received" + age);
+                            frame(body, 10);
+                            observe("websocket control=pong direction=sent" + age);
+                        } else if (opcode == 10) {
+                            observe("websocket control=pong direction=received" + age);
+                            if (body == awaitingPong) awaitingPong.clear();
+                        } else {
+                            if (opcode != 0 && opcode != 1) throw std::runtime_error("websocket opcode");
+                            fragments += body;
+                            if (first & 128) { auto result = std::move(fragments); fragments.clear(); return result; }
+                        }
+                        // Control frames do not promise another application frame.
+                        // Continue only through buffered bytes or a nonblocking read.
+                        continue;
+                    }
+                }
+            }
+            char bytes[16384];
+            const auto n = SSL_read(ssl, bytes, sizeof bytes);
+            if (n > 0) { buffered.append(bytes, n); continue; }
+            const auto error = SSL_get_error(ssl, n);
+            if (error == SSL_ERROR_WANT_READ || error == SSL_ERROR_WANT_WRITE ||
+                (error == SSL_ERROR_SYSCALL && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))) return {};
+            const bool end = error == SSL_ERROR_ZERO_RETURN || (error == SSL_ERROR_SYSCALL && n == 0) ||
+                (error == SSL_ERROR_SSL && ERR_GET_REASON(ERR_peek_last_error()) == SSL_R_UNEXPECTED_EOF_WHILE_READING);
+            const auto reason = end ? "TLS/TCP end" : "TLS read error=" + std::to_string(error);
+            observe("websocket transport=end reason=" + reason + " age_s=" + std::to_string(positionMonotonic()-connected));
+            throw std::runtime_error(reason);
         }
     }
 };
 class LocalSession {
     std::string group, household;
     unsigned serial = 0;
+    std::map<std::string, std::string> pending;
+    std::map<std::string, double> deadlines;
+    double renewAt = 0;
+    std::string ending = "session finished";
+    std::function<void(const std::string &)> report = [](const std::string &) {};
+    std::shared_ptr<ConnectionCounts> counts;
 public:
     Tls connection;
+    explicit LocalSession(std::shared_ptr<ConnectionCounts> c = {}) : counts(c), connection(std::move(c)) {}
+    void failPending(const std::string &reason) {
+        ending = reason;
+        for (const auto &entry : pending)
+            report("speaker command failed cmdId=" + entry.first + " command=" + entry.second + " reason=" + reason);
+        pending.clear();
+        deadlines.clear();
+    }
+    ~LocalSession() {
+        failPending(ending);
+        report(std::string(connection.age() ? "websocket connection=end reason=" : "websocket setup=end reason=") + ending + " age_s=" + std::to_string(connection.age()));
+    }
     void open(const std::string &host, const std::function<void(const std::string &)> &step) {
-        Tls lookup;
-        const Fields info(lookup.info(host));
+        report = step;
+        connection.observe = step;
+        std::string discovery;
+        { Tls lookup(counts); discovery = lookup.info(host); }
+        const Fields info(discovery);
         group = info["groupId"]; household = info["householdId"];
         if (group.empty() || household.empty()) throw std::runtime_error("local info missing identity");
         auto endpoint = host;
@@ -367,7 +483,7 @@ public:
             endpoint = url.substr(prefix.size(), url.size() - prefix.size() - suffix.size());
         }
         if (endpoint != host && endpoint != host + ":1443") {
-            Tls coordinatorLookup;
+            Tls coordinatorLookup(counts);
             const Fields coordinatorInfo(coordinatorLookup.info(endpoint));
             if (coordinatorInfo["householdId"] != household || coordinatorInfo["groupId"].empty())
                 throw std::runtime_error("coordinator local info identity");
@@ -376,20 +492,66 @@ public:
         step("local/info OK");
         connection.websocket(endpoint);
         step("WebSocket upgrade OK");
+        subscribe();
+        const auto deadline = positionMonotonic() + 3;
+        while (!pending.empty()) {
+            if (positionMonotonic() >= deadline) { failPending("subscription answer missing for 3 s"); throw std::runtime_error("subscription timeout"); }
+            message();
+        }
+    }
+    void subscribe() {
         command("playback:1", "subscribe"); command("playbackMetadata:1", "subscribe");
+        renewAt = positionMonotonic() + 24 * 60 * 60;
+    }
+    void maintenance(double now = positionMonotonic()) {
+        connection.maintenance();
+        for (const auto &entry : deadlines) {
+            if (now >= entry.second) {
+                const auto reason = "no answer for 3 s command=" + pending.at(entry.first);
+                failPending(reason);
+                throw std::runtime_error(reason);
+            }
+        }
+        if (now >= renewAt) subscribe();
     }
     std::string command(const std::string &space, const std::string &name) {
         const auto id = std::to_string(++serial);
         connection.frame("[{\"namespace\":" + quote(space) + ",\"command\":" + quote(name) +
             ",\"householdId\":" + quote(household) + ",\"groupId\":" + quote(group) +
             ",\"cmdId\":" + quote(id) + "},{}]");
+        pending[id] = space + ":" + name;
+        deadlines[id] = positionMonotonic() + 3;
         return id;
     }
     Fields message() {
-        Fields answer(connection.message());
+        maintenance();
+        std::optional<std::string> message;
+        try { message = connection.message(); }
+        catch (const std::exception &e) { failPending(e.what()); throw; }
+        if (!message) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            return Fields("{}");
+        }
+        Fields answer(*message);
         const auto type = answer["type"].empty() ? answer["command"] : answer["type"];
-        if (type != "playbackError" && (type == "error" || type == "globalError" || !answer["errorCode"].empty()))
+        if (type == "groupCoordinatorChanged" || type == "groups" || type == "groupStatus" ||
+            (!answer["groupId"].empty() && answer["groupId"] != group)) {
+            failPending("group moved; resolving local/info");
+            throw std::runtime_error("group moved; resolving local/info");
+        }
+        if (type == "subscriptionExpired") { subscribe(); return Fields("{}"); }
+        if (!answer["cmdId"].empty() && type != "playbackError" &&
+            (type == "error" || type == "globalError" || !answer["errorCode"].empty() || answer["success"] == "false")) {
+            failPending("command error code=" + answer["errorCode"] + " reason=" + answer["reason"]);
             throw std::runtime_error("command error code=" + answer["errorCode"] + " reason=" + answer["reason"]);
+        }
+        const auto waiting = pending.find(answer["cmdId"]);
+        if (waiting != pending.end()) {
+            if (waiting->second == "playback:1:subscribe") report("playback subscription OK");
+            if (waiting->second == "playbackMetadata:1:subscribe") report("metadata subscription OK");
+            pending.erase(waiting);
+            deadlines.erase(answer["cmdId"]);
+        }
         return answer;
     }
     static SpeakerPositionSample sample(const Fields &answer, double sent, double received) {
@@ -416,104 +578,115 @@ public:
 
 }
 int positionSourceCheck(const std::string &host, double seconds, std::ostream &out) {
-    sigset_t blocked, previous;
-    sigemptyset(&blocked); sigaddset(&blocked, SIGPIPE);
-    pthread_sigmask(SIG_BLOCK, &blocked, &previous);
-    struct Restore { sigset_t mask; ~Restore() { pthread_sigmask(SIG_SETMASK, &mask, nullptr); } } restore{previous};
-    std::string step = "local/info";
-    try {
-        LocalSession session;
-        session.open(host, [&](const std::string &message) {
-            out << message << std::endl;
-            step = message == "local/info OK" ? "WebSocket upgrade" : "subscriptions";
-        });
-        bool playback = false, metadata = false, selected = false;
-        double lastAccepted = 0;
-        std::map<std::string, unsigned> events{{"playbackStatus", 0}, {"metadataStatus", 0}, {"playbackError", 0}};
-        std::set<std::string> states, items;
-        bool playingSeen = false, unknown = false;
-        auto receive = [&] {
-            auto answer = session.message();
-            if (answer["cmdId"].empty()) ++events[answer["type"].empty() ? answer["command"] : answer["type"]];
-            if (!answer["itemId"].empty()) items.insert(answer["itemId"]);
-            if (!answer["playbackState"].empty()) {
-                const auto raw = answer["playbackState"], mapped = mapSpeakerState(raw);
-                states.insert(raw); items.insert(answer["itemId"]);
-                playingSeen = playingSeen || speakerPlaying(mapped);
-                unknown = unknown || mapped == "UNKNOWN";
-            }
-            if (answer["cmdId"] == "1") { playback = true; out << "playback subscription OK\n"; }
-            if (answer["cmdId"] == "2") { metadata = true; out << "metadata subscription OK\n"; }
-            return answer;
-        };
-        const auto subscriptionDeadline = positionMonotonic() + 3;
-        while (!playback || !metadata) {
-            if (positionMonotonic() > subscriptionDeadline) throw std::runtime_error("subscription timeout");
-            receive();
+    WebsocketSpeakerPosition source(host, true);
+    source.diagnosticRate(5);
+    std::set<std::string> states, items;
+    std::map<std::string, unsigned> events{{"playbackStatus",0},{"metadataStatus",0},{"playbackError",0}};
+    bool playingSeen = false, unknown = false, selected = false;
+    const auto traces = [&] {
+        for (const auto &line : source.takeJournal()) {
+            if (line.rfind("events type=",0)==0) {
+                const auto end = line.find(" count=");
+                ++events[line.substr(12,end-12)];
+            } else out << line << std::endl;
         }
-        step = "getPlaybackStatus";
-        PositionFit fit;
-        for (const int hz : {5, 20}) {
-            std::vector<double> rtts;
-            std::vector<std::pair<double, double>> points;
-            unsigned errors = 0, slow = 0;
-            const double end = positionMonotonic() + seconds / 2;
-            std::exception_ptr failure;
-            try {
-                while (positionMonotonic() < end) {
-                    const double sent = positionMonotonic();
-                    const auto id = session.command("playback:1", "getPlaybackStatus");
-                    for (;;) {
-                        if (positionMonotonic() - sent > 3) throw std::runtime_error("no answer for 3 s");
-                        const auto answer = receive();
-                        if (answer["cmdId"] != id) continue;
-                        const auto sample = LocalSession::sample(answer, sent, positionMonotonic());
-                        rtts.push_back(sample.rttMs);
-                        if (sample.rttMs > 200) ++slow;
-                        if (fit.add(sample)) { selected = true; lastAccepted = positionMonotonic(); }
-                        if (speakerPlaying(sample.state)) points.emplace_back(sample.sampleTime, sample.positionMs);
-                        break;
-                    }
-                    std::this_thread::sleep_until(std::chrono::steady_clock::time_point(
-                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(sent + 1.0 / hz))));
-                }
-            } catch (...) { ++errors; failure = std::current_exception(); }
-            const auto metric = [&](double fraction) { return rtts.empty() ? std::numeric_limits<double>::quiet_NaN() :
-                rtts[std::min(rtts.size()-1, size_t(std::ceil(rtts.size()*fraction))-1)]; };
-            std::sort(rtts.begin(), rtts.end());
-            out << "getPlaybackStatus " << (failure ? "FAIL" : "OK") << " rate=" << hz << "Hz answers=" << rtts.size() << " errors=" << errors
-                << " rtt_ms median=" << (rtts.empty() ? metric(.5) : (rtts[(rtts.size()-1)/2] + rtts[rtts.size()/2])/2) << " p95=" << metric(.95)
-                << " max=" << metric(1) << " discarded_slow_share=" << (rtts.empty() ? 0 : double(slow)/rtts.size());
-            if (points.size() >= 2) {
-                double x = 0, y = 0, xx = 0, xy = 0;
-                const double origin = points.front().first;
-                for (auto p : points) { const auto t = p.first-origin; x += t; y += p.second; xx += t*t; xy += t*p.second; }
-                const double n = points.size(), denominator = n*xx-x*x;
-                const double slope = denominator > 0 ? (n*xy-x*y)/denominator : 0, intercept = (y-slope*x)/n;
-                double sum = 0, maximum = 0;
-                for (auto p : points) { double residual = p.second-intercept-slope*(p.first-origin); sum += residual*residual; maximum = std::max(maximum, std::abs(residual)); }
-                out << " playing_line_slope_ms_s=" << slope << " residual_ms rms=" << std::sqrt(sum/n) << " max=" << maximum;
-            } else out << " residual_ms=unavailable (speaker not playing)";
-            out << std::endl;
-            if (failure) std::rethrow_exception(failure);
-        }
-        selected = selected && positionMonotonic() - lastAccepted <= 3;
-        out << "selected source=" << (selected ? "websocket" : "upnp") << std::endl;
-        for (const auto &raw : states) out << "playbackState raw=" << raw << " mapped=" << mapSpeakerState(raw) << '\n';
-        for (const auto &entry : events) out << "events type=" << entry.first << " count=" << entry.second << '\n';
-        for (const auto &item : items) out << "itemId=" << item << '\n';
-        out << "playing recognised=" << (playingSeen ? "true" : "false") << std::endl;
-        return selected && !unknown ? 0 : 1;
-    } catch (const std::exception &e) {
-        out << step << " FAIL reason=" << e.what() << "\nselected source=upnp\n";
+    };
+    const auto readyDeadline = positionMonotonic() + 3;
+    while (!source.position(positionMonotonic()) && positionMonotonic() < readyDeadline && !source.failureCount()) {
+        traces();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    traces();
+    if (!source.position(positionMonotonic())) {
+        const auto reason = source.failure();
+        source.finishDiagnostic(); traces();
+        out << (reason.find("local info") != std::string::npos ? "local/info" : "subscriptions")
+            << " FAIL reason=" << reason << "\nselected source=upnp\n";
+        out << source.connections() << '\n';
         return 1;
     }
+    out << source.connections() << '\n';
+    for (const int hz : {5, 20}) {
+        source.diagnosticRate(hz);
+        std::vector<double> rtts;
+        struct Segment { std::string item; std::vector<std::pair<double, double>> points; };
+        std::vector<Segment> segments;
+        bool split = true;
+        const auto failures = source.failureCount();
+        const auto end = positionMonotonic() + seconds / 2;
+        while (positionMonotonic() < end) {
+            traces();
+            if (!source.takeEvents().empty()) split = true;
+            for (const auto &sample : source.takeSamples()) {
+                states.insert(sample.rawState); items.insert(sample.item);
+                unknown = unknown || sample.state == "UNKNOWN";
+                rtts.push_back(sample.rttMs);
+                if (!speakerPlaying(sample.state)) { split = true; continue; }
+                playingSeen = true;
+                bool discontinuity = false;
+                if (!segments.empty() && !segments.back().points.empty()) {
+                    const auto previous = segments.back().points.back();
+                    discontinuity = std::abs(sample.positionMs - previous.second - (sample.sampleTime-previous.first)*1000) > 150;
+                }
+                if (split || segments.empty() || segments.back().item != sample.item || discontinuity)
+                    segments.push_back({sample.item, {}});
+                segments.back().points.emplace_back(sample.sampleTime, sample.positionMs);
+                split = false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        traces();
+        std::sort(rtts.begin(), rtts.end());
+        const auto metric = [&](double fraction) {
+            return rtts.empty() ? std::numeric_limits<double>::quiet_NaN() :
+                rtts[std::min(rtts.size()-1, size_t(std::ceil(rtts.size()*fraction))-1)];
+        };
+        const auto errors = source.failureCount()-failures;
+        out << "getPlaybackStatus " << (source.position(positionMonotonic()) ? "OK" : "FAIL")
+            << " rate=" << hz << "Hz answers=" << rtts.size() << " errors=" << errors
+            << " rtt_ms median=" << (rtts.empty() ? metric(.5) : (rtts[(rtts.size()-1)/2]+rtts[rtts.size()/2])/2)
+            << " p95=" << metric(.95) << " max=" << metric(1)
+            << " discarded_slow_share=" << (rtts.empty() ? 0 : double(std::count_if(rtts.begin(),rtts.end(),[](double x){return x>200;}))/rtts.size());
+        if (segments.empty()) out << " residual_ms=unavailable (speaker not playing)";
+        out << std::endl;
+        unsigned serial = 0;
+        for (const auto &segment : segments) {
+            const auto &points = segment.points;
+            out << "playing segment=" << ++serial << " itemId=" << segment.item << " rate=" << hz << "Hz samples=" << points.size();
+            if (points.size() < 2) { out << " residual_ms=unavailable (fewer than two samples)\n"; continue; }
+            double x=0, y=0, xx=0, xy=0;
+            const auto origin = points.front().first;
+            for (auto point : points) { const auto t=point.first-origin; x+=t; y+=point.second; xx+=t*t; xy+=t*point.second; }
+            const double n=points.size(), denominator=n*xx-x*x;
+            const double slope=denominator>0 ? (n*xy-x*y)/denominator : 0, intercept=(y-slope*x)/n;
+            double sum=0, maximum=0;
+            for (auto point : points) { const auto residual=point.second-intercept-slope*(point.first-origin); sum+=residual*residual; maximum=std::max(maximum,std::abs(residual)); }
+            out << " playing_line_slope_ms_s=" << slope << " residual_ms rms=" << std::sqrt(sum/n) << " max=" << maximum << std::endl;
+        }
+    }
+    source.finishDiagnostic(); traces();
+    for (const auto &sample : source.takeSamples()) {
+        states.insert(sample.rawState); items.insert(sample.item);
+        unknown = unknown || sample.state == "UNKNOWN";
+    }
+    selected = bool(source.position(positionMonotonic()));
+    out << "selected source=" << (selected ? "websocket" : "upnp") << std::endl;
+    for (const auto &raw : states) out << "playbackState raw=" << raw << " mapped=" << mapSpeakerState(raw) << '\n';
+    for (const auto &item : items) out << "itemId=" << item << '\n';
+    for (const auto &event : events) out << "events type=" << event.first << " count=" << event.second << '\n';
+    out << "playing recognised=" << (playingSeen ? "true" : "false") << std::endl;
+    out << source.connections() << '\n';
+    return selected && !unknown ? 0 : 1;
 }
 struct WebsocketSpeakerPosition::Impl {
     std::string host, error = "connecting";
     mutable std::mutex mutex;
     PositionFit fit;
     std::atomic_bool stop{false}, regroup{false};
+    std::atomic_uint diagnosticHz{0};
+    bool diagnostic = false, reconnecting = true;
+    std::shared_ptr<ConnectionCounts> counts = std::make_shared<ConnectionCounts>();
+    std::vector<SpeakerPositionSample> observedSamples;
     double last = 0;
     uint64_t failures = 0, revision = 0, diagnostics = 0;
     std::optional<SpeakerPositionSample> known, lastEvent;
@@ -525,6 +698,7 @@ struct WebsocketSpeakerPosition::Impl {
     bool information(const Fields &answer, double now) {
         const auto type = answer["type"].empty() ? answer["command"] : answer["type"];
         std::lock_guard<std::mutex> lock(mutex);
+        if (diagnostic && !type.empty() && answer["cmdId"].empty()) journal.push_back("events type=" + type + " count=1");
         if (type == "playbackError") {
             playbackError = "errorCode=" + answer["errorCode"] + " reason=" + answer["reason"] +
                 " itemId=" + answer["itemId"] + " httpStatus=" + answer["httpStatus"];
@@ -564,20 +738,25 @@ struct WebsocketSpeakerPosition::Impl {
         return true;
     }
     std::thread worker;
-    explicit Impl(std::string h) : host(std::move(h)), worker([this] { run(); }) {}
-    ~Impl() { stop = true; worker.join(); }
+    explicit Impl(std::string h, bool d) : host(std::move(h)), diagnostic(d), worker([this] { run(); }) {}
+    ~Impl() { stop = true; if (worker.joinable()) worker.join(); }
     void run() {
         sigset_t blocked;
         sigemptyset(&blocked);
         sigaddset(&blocked, SIGPIPE);
         pthread_sigmask(SIG_BLOCK, &blocked, nullptr);
+        unsigned consecutiveFailures = 0;
         while (!stop) {
             try {
-                LocalSession session;
-                session.open(host, [](const std::string &) {});
+                LocalSession session(counts);
+                { std::lock_guard<std::mutex> lock(mutex); reconnecting = true; }
+                session.open(host, [this](const std::string &line) {
+                    std::lock_guard<std::mutex> lock(mutex); journal.push_back(line);
+                });
                 auto &connection = session.connection;
                 double next = 0;
                 while (!stop && !regroup.exchange(false)) {
+                    session.maintenance();
                     if (positionMonotonic() < next) {
                         if (connection.readable()) {
                             const auto event = session.message();
@@ -589,8 +768,11 @@ struct WebsocketSpeakerPosition::Impl {
                     const auto id = session.command("playback:1", "getPlaybackStatus");
                     bool immediate = false;
                     for (;;) {
-                        if (stop) return;
-                        if (positionMonotonic() - sent > 3) throw std::runtime_error("no answer for 3 s");
+                        if (stop && !diagnostic) return;
+                        if (positionMonotonic() - sent > 3) {
+                            session.failPending("no answer for 3 s");
+                            throw std::runtime_error("no answer for 3 s");
+                        }
                         const auto answer = session.message();
                         if (answer["cmdId"] != id) { immediate = information(answer, positionMonotonic()) || immediate; continue; }
                         const auto received = positionMonotonic();
@@ -598,6 +780,7 @@ struct WebsocketSpeakerPosition::Impl {
                         const auto &state = sample.state;
                         {
                             std::lock_guard<std::mutex> lock(mutex);
+                            if (diagnostic) observedSamples.push_back(sample);
                             // Only a request sent after an event can confirm it.
                             // An older in-flight answer may describe the prior coordinate.
                             if (known && known->event && sent < known->sampleTime) {
@@ -614,29 +797,41 @@ struct WebsocketSpeakerPosition::Impl {
                                 if (known && sample.item != known->item) ++revision;
                                 known = sample;
                                 last = received; error.clear();
+                                reconnecting = false; consecutiveFailures = 0;
                             } else if ((received - sent) * 1000 <= 200) immediate = true;
                         }
-                        next = immediate ? received : sent + ((speakerPlaying(state) || speakerTransitioning(state)) ? .05 : 1);
+                        const auto hz = diagnosticHz.load();
+                        next = immediate ? received : sent + (hz ? 1.0 / hz : (speakerPlaying(state) || speakerTransitioning(state)) ? .05 : 1);
                         break;
                     }
                 }
             } catch (const std::exception &e) {
-                { std::lock_guard<std::mutex> lock(mutex); error = e.what(); ++failures; fit.reset(); }
-                const auto retry = positionMonotonic() + 30;
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    error = e.what(); ++failures; reconnecting = true;
+                    journal.push_back("speaker reconnecting reason=" + error + " fitted_line_hold_s=3");
+                }
+                // A diagnostic reports a failed initial setup once. A session
+                // that was already healthy still exercises normal reconnection.
+                if (diagnostic && last == 0) return;
+                const auto delay = consecutiveFailures == 0 ? 0u : 1u << std::min(consecutiveFailures - 1, 4u);
+                ++consecutiveFailures;
+                const auto retry = positionMonotonic() + delay;
                 while (!stop && !regroup.exchange(false) && positionMonotonic() < retry)
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
             }
         }
     }
 };
-WebsocketSpeakerPosition::WebsocketSpeakerPosition(std::string host) : impl(new Impl(std::move(host))) {}
+WebsocketSpeakerPosition::WebsocketSpeakerPosition(std::string host, bool diagnostic) : impl(new Impl(std::move(host), diagnostic)) {}
 WebsocketSpeakerPosition::~WebsocketSpeakerPosition() = default;
 std::optional<SpeakerPositionSample> WebsocketSpeakerPosition::position(double now) const {
     std::lock_guard<std::mutex> lock(impl->mutex);
-    return now - impl->last <= 3 && impl->error.empty() ? impl->fit.position(now) : std::nullopt;
+    return now - impl->last <= 3 ? impl->fit.position(now) : std::nullopt;
 }
 std::string WebsocketSpeakerPosition::failure() const {
     std::lock_guard<std::mutex> lock(impl->mutex);
+    if (positionMonotonic() - impl->last <= 3 && impl->fit.position(positionMonotonic())) return {};
     if (impl->error.empty() && positionMonotonic() - impl->last > 3) return "position sample older than 3 s";
     return impl->error;
 }
@@ -646,6 +841,19 @@ uint64_t WebsocketSpeakerPosition::diagnosticRevision() const { std::lock_guard<
 std::string WebsocketSpeakerPosition::rawState() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->rawState; }
 std::string WebsocketSpeakerPosition::quality() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->quality; }
 std::string WebsocketSpeakerPosition::playbackError() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->playbackError; }
+std::string WebsocketSpeakerPosition::connectionState() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->reconnecting ? "reconnecting" : "local-api-ready"; }
+void WebsocketSpeakerPosition::diagnosticRate(unsigned hz) { impl->diagnosticHz = hz; }
+void WebsocketSpeakerPosition::finishDiagnostic() { impl->stop = true; if (impl->worker.joinable()) impl->worker.join(); }
+std::string WebsocketSpeakerPosition::connections() const {
+    const auto &c = *impl->counts;
+    return "connections scope=this-check held_tls=" + std::to_string(c.held) + " peak_tls=" + std::to_string(c.peak) +
+        " held_websocket=" + std::to_string(c.websockets) + " peak_websocket=" + std::to_string(c.websocketPeak) +
+        " opened_tls=" + std::to_string(c.opened) + " external_connections=not-observed";
+}
+std::vector<SpeakerPositionSample> WebsocketSpeakerPosition::takeSamples() {
+    std::lock_guard<std::mutex> lock(impl->mutex);
+    auto samples = std::move(impl->observedSamples); impl->observedSamples.clear(); return samples;
+}
 std::vector<SpeakerPositionSample> WebsocketSpeakerPosition::takeEvents() {
     std::lock_guard<std::mutex> lock(impl->mutex); auto result = std::move(impl->eventSamples); impl->eventSamples.clear(); return result;
 }

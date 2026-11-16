@@ -626,6 +626,90 @@ metres, millimetres, kilograms, °C. Imperial units are not used.
 
 ### Sources for the Sonos local API
 
+Additional connection-lifecycle sources (read for behaviour; nothing copied):
+
+| Source | Licence or publication terms | Use |
+| --- | --- | --- |
+| [Architecture](https://docs.sonos.com/docs/connected-home-architecture) | Sonos documentation; no software licence stated | LAN API availability |
+| [Control](https://docs.sonos.com/docs/control) | Sonos documentation; no software licence stated | Group addressing and command/event distinction |
+| [Discover](https://docs.sonos.com/docs/discover) | Sonos documentation; no software licence stated | Household, group and player identities |
+| [Subscribe](https://docs.sonos.com/docs/subscribe) | Sonos documentation; no software licence stated | Cloud subscription renewal and group changes |
+| [Play audio (cloud queue)](https://docs.sonos.com/docs/cloud-queue-play-audio) | Sonos documentation; no software licence stated | Cloud queue context |
+| [Connected Home Security](https://docs.sonos.com/docs/connected-home-security) | Sonos documentation; no software licence stated | Required S2 TLS suites |
+| [aiosonos](https://github.com/music-assistant/aiosonos) | Apache-2.0 | Heartbeat, command deadlines, event dispatch and coordinator changes |
+| [sonos-websocket](https://github.com/jjlawren/sonos-websocket) | MIT | Closed/reset connection handling |
+| [node-sonos](https://github.com/sonn-audio/node-sonos) (formerly lox-audioserver) | AGPL-3.0 | Heartbeat, pending commands, reconnection and group refresh |
+
+Each source above was read for behaviour; nothing copied. The public Sonos
+pages describe cloud subscriptions and do not specify a local WebSocket idle
+lifetime. Their three-day subscription limit is not evidence of a local
+connection timeout. The client acknowledges both local subscriptions before
+using the connection and renews them every 24 hours, on an expiry event, and
+after reconnecting. Group-moved events and responses trigger a fresh local-info
+lookup and subscriptions to the resolved group. Commands address the group ID,
+not an individual player ID. The exact owned UPnP URI remains the audio identity
+authority.
+
+The reader retains partial frames and treats a control frame or temporary lack
+of data as no application message yet. Commands retain their three-second
+answer deadline. A client ping is sent after 30 seconds with no outgoing data;
+a matching pong must arrive within three seconds. The first reconnect is
+immediate; consecutive unsuccessful attempts wait 1, 2, 4, 8 and then 16 seconds.
+An accepted position resets that failure streak. The last fitted line remains
+available for at most three seconds from its last observation, with
+`position_source_reason=reconnecting`; this is extrapolation, not a fabricated
+speaker observation. Persistent failure still selects the whole-second source.
+
+The check uses the room's worker, including its idle/event-reading path. It
+reports ping, pong and close frames, connection age, negotiated TLS, offered S2
+suites, and separate line fits for each item/seek segment. Local-info sockets
+are closed before opening the WebSocket. The check holds at most one TLS socket
+and one WebSocket; the capture reports measured held/peak connection counts in
+`connections.json`. These counts describe that tool, not other clients.
+
+The loopback fake permits three simultaneous connections: a room source, check
+and capture. This does not establish the connection limit of physical speakers.
+The node-sonos README's one-player-per-client-instance rule describes its client
+object; it is not evidence of a speaker-wide one-connection limit. Each tool
+closes only its own socket and sends no playback, topology or connection-reset
+command. For initial owner measurements, run one observer at a time while the
+room plays and retain the room journal; a hardware concurrency result requires
+those observations.
+
+Owner verification after deploying the committed fix (root on the YeneY
+container; replace speaker addresses and unit names). Run each command as its
+own step. Keep both rooms playing throughout, and introduce a track change and
+a seek during each check so that multiple fit segments are recorded:
+
+```sh
+SINCE=$(date --iso-8601=seconds)
+/opt/yeney/yeney --position-source-check --ip '<Port IP>' --seconds 180 > /tmp/yeney-Port-180s-check.txt 2>&1
+/opt/yeney/yeney --position-source-check --ip '<Study IP>' --seconds 180 > /tmp/yeney-Study-180s-check.txt 2>&1
+python3 /opt/yeney/scripts/sonos-local-api-capture.py --ip '<Port IP>' --seconds 180 > /tmp/yeney-Port-180s-capture.txt 2>&1
+python3 /opt/yeney/scripts/sonos-local-api-capture.py --ip '<Study IP>' --seconds 180 > /tmp/yeney-Study-180s-capture.txt 2>&1
+timeout 900 journalctl -u '<Port unit>' -u '<Study unit>' --since "$SINCE" --follow --no-pager > /tmp/yeney-15min-lifecycle-journal.txt
+```
+
+The capture archives are written under `/tmp`. Retain each archive's
+`websocket-controls.jsonl`, `connection-ending.json` and `connections.json`.
+The final command intentionally ends after 15 minutes with timeout status 124.
+Expected: no `position source=upnp` during playing, no periodic connection
+failure, and a line-fit restart at each item change or seek. A 60-second speaker
+ping is a test model until the owner's control-frame capture confirms it.
+
+The connection audit covers these separate readers and callers:
+
+| Place | Silence or partial-frame handling |
+| --- | --- |
+| Production TLS HTTP setup | Bounded discovery/upgrade reads remain setup operations; their failure prevents readiness |
+| Production WebSocket reader | Incremental nonblocking input; ping/pong returns without requiring another frame; TLS/TCP end is explicit |
+| Room wait branch and command branch | Both use that reader; only command/subscription deadlines turn an absent answer into failure |
+| Subscription setup/renewal | Both acknowledgements required; every pending command has its own deadline and is failed on connection end |
+| Binary check | Uses the same room worker, rather than a separate request/receive loop |
+| Capture reader | Incremental TLS/frame buffer; control frames, connection endings and partial data retained in the archive |
+| Paired timing probe | Its separate blocking reader is called only while an explicit status command awaits a reply; its existing three-second command bound remains |
+| Imitation speaker | Reads client frames until a complete frame arrives; handles client pings/pongs/close separately from commands; shutdown closes its sockets to release readers |
+
 Use the owner's captured local API messages alongside the Sonos developer documentation:
 [playbackStatus](https://docs.sonos.com/reference/playback-playbackstatus),
 [playbackError](https://docs.sonos.com/reference/playback-playbackerror),

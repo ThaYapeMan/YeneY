@@ -47,10 +47,13 @@ class Messages:
         self.buffer = bytearray()
         self.fragments = bytearray()
         self.outgoing = bytearray()
+        self.started = time.monotonic()
+        self.controls = []
         connection.setblocking(False)
 
     def receive(self, timeout):
         end = time.monotonic() + timeout
+        control_seen = False
         while True:
             if self.outgoing:
                 try:
@@ -71,11 +74,22 @@ class Messages:
                         body = self.buffer[offset:offset+size]
                         del self.buffer[:offset+size]
                         opcode = first & 15
-                        if opcode == 8: raise EOFError('websocket close')
+                        if opcode in (8, 9, 10):
+                            record = dict(elapsed=time.monotonic()-self.started,
+                                          control={8: 'close', 9: 'ping', 10: 'pong'}[opcode],
+                                          direction='received', payload_bytes=len(body))
+                            if opcode == 8:
+                                record.update(code=int.from_bytes(body[:2], 'big') if len(body) >= 2 else 1005,
+                                              reason=bytes(body[2:]).decode('utf-8', errors='replace'))
+                            self.controls.append(record)
+                            control_seen = True
+                        if opcode == 8: raise EOFError(f'websocket close code={record["code"]} reason={record["reason"]}')
                         if opcode == 9:
                             if len(body) > 125: raise RuntimeError('oversize ping')
                             mask = os.urandom(4)
                             self.outgoing.extend(bytes([0x8a, 0x80 | len(body)]) + mask + bytes(c ^ mask[i%4] for i,c in enumerate(body)))
+                            self.controls.append(dict(elapsed=time.monotonic()-self.started, control='pong',
+                                                      direction='queued', payload_bytes=len(body)))
                             continue
                         if opcode == 10: continue
                         if opcode not in (0, 1): raise RuntimeError('unsupported opcode')
@@ -88,6 +102,7 @@ class Messages:
                         continue
             remaining = end - time.monotonic()
             if remaining <= 0: return None
+            if control_seen and not self.buffer and not self.connection.pending(): return None
             if not self.connection.pending() and not select.select([self.connection], [], [], remaining)[0]: return None
             try:
                 data = self.connection.recv(16384)
@@ -106,6 +121,19 @@ def capture(host, port, seconds, destination=None):
     info_body = b''
     response = None
     reader = None
+    connections = dict(scope='this-capture', held=0, peak_tls=0, opened=0, peak_websocket=0,
+                       external_connections='not-observed')
+
+    class CountedSocket(ssl.SSLSocket):
+        counted = False
+
+        def close(self):
+            if self.counted:
+                connections['held'] -= 1
+                self.counted = False
+            return super().close()
+
+    context.sslsocket_class = CountedSocket
 
     def remember(value, context=None, scalar_ids=False):
         if isinstance(value, dict):
@@ -123,7 +151,12 @@ def capture(host, port, seconds, destination=None):
             identities.setdefault(value, f'REDACTED_{context.upper()}_{len(identities)+1}')
 
     def connect():
-        return context.wrap_socket(socket.create_connection((host, port), timeout=3), server_hostname=host)
+        connection = context.wrap_socket(socket.create_connection((host, port), timeout=3), server_hostname=host)
+        connection.counted = True
+        connections['held'] += 1
+        connections['opened'] += 1
+        connections['peak_tls'] = max(connections['peak_tls'], connections['held'])
+        return connection
 
     try:
         with connect() as connection:
@@ -148,6 +181,8 @@ def capture(host, port, seconds, destination=None):
         remember(info)
         client = probe.SonosSocket.__new__(probe.SonosSocket)
         client.socket = connect()
+        connections['peak_websocket'] = 1
+        files['tls.txt'] = (f'protocol={client.socket.version()} cipher={client.socket.cipher()[0]}\n').encode()
         try:
             key = base64.b64encode(os.urandom(16)).decode()
             client.socket.sendall((f'GET /websocket/api HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n'
@@ -200,7 +235,12 @@ def capture(host, port, seconds, destination=None):
         files['local-info.http'] = bytes(raw)
         if reader and (reader.buffer or reader.fragments):
             files['partial-websocket.bin'] = bytes(reader.fragments + reader.buffer)
+        if reader:
+            files['websocket-controls.jsonl'] = ('\n'.join(json.dumps(value) for value in reader.controls)+'\n').encode()
+            files['connection-ending.json'] = json.dumps(dict(elapsed=time.monotonic()-reader.started,
+                                                             ending=ending)).encode()
         files['ending.txt'] = (ending + '\n').encode()
+        files['connections.json'] = json.dumps(connections).encode()
     files['README.txt'] = (b'Read-only capture: local/info, upgrade, two subscriptions, one getPlaybackStatus, then events.\n'
                            b'Identifiers replaced consistently before writing. Header spelling/order, body text, chunk extensions and trailers retained.\n'
                            b'Chunk sizes and Content-Length are recalculated after redaction; extra chunks may hold longer placeholders.\n')
@@ -281,7 +321,10 @@ def main():
     parser.add_argument('--seconds', type=float, default=60)
     args = parser.parse_args()
     if not 1 <= args.seconds <= 3600: parser.error('--seconds must be 1..3600')
-    print(capture(args.ip, args.port, args.seconds))
+    result = capture(args.ip, args.port, args.seconds)
+    with tarfile.open(result) as archive:
+        print('connections ' + archive.extractfile('connections.json').read().decode())
+    print(result)
 
 
 if __name__ == '__main__': main()

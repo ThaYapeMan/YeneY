@@ -214,6 +214,7 @@ test-run: timing-probe-field-test timing-probe-settings-test timing-probe-test t
 	$(MAKE) -C third_party/yeney-core test
 	YENEY_TIMING_03=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
 	YENEY_TIMING_03=1 YENEY_POSITION_SOURCE=upnp YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
+	YENEY_WS_LIFECYCLE=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
 	YENEY_TIMING_03D_CONTRACT=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
 	YENEY_TIMING_03D=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py
 
@@ -683,8 +684,11 @@ $(QUEUE_ROOM_OBJS): position_settings.h speaker_position.h speaker_websocket.h
 speaker-websocket-fixture: tests/speaker_websocket_fixture.cpp speaker_websocket.cpp speaker_websocket.h speaker_position.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. tests/speaker_websocket_fixture.cpp speaker_websocket.cpp -lssl -lcrypto -pthread -o $@
 
+websocket-timer-fixture: tests/websocket_timer_fixture.cpp speaker_websocket.cpp speaker_websocket.h speaker_position.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. tests/websocket_timer_fixture.cpp -lssl -lcrypto -pthread -o $@
+
 .PHONY: speaker-position-test
-speaker-position-test: speaker-position-fit-test speaker-websocket-fixture yeney
+speaker-position-test: speaker-position-fit-test speaker-websocket-fixture websocket-timer-fixture yeney
 	./speaker-position-fit-test
 	YENEY_WS_FIXTURE=./speaker-websocket-fixture python3 tests/speaker_websocket_test.py
 	python3 tests/local_api_compat_test.py
@@ -693,6 +697,7 @@ speaker-position-test: speaker-position-fit-test speaker-websocket-fixture yeney
 	python3 tests/local_api_capture_interrupt_test.py
 	python3 tests/speaker_capture_states_test.py
 	python3 tests/sonos_timing_probe_test.py
+	python3 tests/websocket_lifecycle_test.py
 
 $(QUEUE_ROOM_OBJS) core_sonos.o: third_party/yeney-core/core/decoder.h
 

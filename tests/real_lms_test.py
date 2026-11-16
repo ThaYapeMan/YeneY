@@ -246,7 +246,7 @@ assert not scale_mb or os.environ.get('YENEY_FULLQ_EXPERIMENT') == 'scale'
 fixture_count = 4 if scale_mb else 12 if os.environ.get('YENEY_FULLQ') == '1' else 8
 for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
-    seconds = 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
+    seconds = 360 if os.environ.get('YENEY_WS_LIFECYCLE') == '1' and i < 2 else 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
     if scale_mb:
         seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
     source=bytearray(wav(rate,seconds,noise=True))
@@ -545,6 +545,10 @@ try:
         assert all('reason=speaker-' in line for line in text.splitlines() if 'queue LMS mutation ' in line),text[-8000:]
     if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':
         from podcast_real_lms import run
+        run(globals())
+        raise SystemExit(0)
+    if os.environ.get('YENEY_WS_LIFECYCLE') == '1':
+        from websocket_room_lifecycle import run
         run(globals())
         raise SystemExit(0)
     if os.environ.get('YENEY_TIMING_03D_CONTRACT') == '1':
