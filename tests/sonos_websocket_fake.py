@@ -74,6 +74,9 @@ class LocalApi:
                         if mode == 'extensions': wire += b'X-Extra: ignored\r\n'
                         wire += b'\r\n'
                         if mode == 'truncated': wire = b'100\r\nx'
+                        if mode == 'id-chunks':
+                            wire = b''.join(f'{len(body[at:at+7]):x};part=yes\r\n'.encode() + body[at:at+7] + b'\r\n'
+                                            for at in range(0, len(body), 7)) + b'0\r\nX-Extra: retained\r\n\r\n'
                     if mode == 'mixed-case': headers = headers.swapcase()
                     wire = headers.encode() + b'\r\n' + wire
                     if mode == 'split-tcp':

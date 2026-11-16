@@ -9,6 +9,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import socket
 import ssl
@@ -60,7 +61,8 @@ def capture(host, port, seconds, destination=None):
     response = http.client.HTTPResponse(Buffer(bytes(raw)))
     response.begin()
     if response.status != 200: raise RuntimeError(f'local/info HTTP {response.status}')
-    info = json.loads(response.read(65537))
+    info_body = response.read(65537)
+    info = json.loads(info_body)
     remember(info)
     client = probe.SonosSocket.__new__(probe.SonosSocket)
     client.socket = connect()
@@ -105,14 +107,50 @@ def capture(host, port, seconds, destination=None):
         files['messages.jsonl'] = b'\n'.join(events) + b'\n'
     finally:
         client.close()
+    files['local-info.json'] = info_body
     files['README.txt'] = (b'Read-only capture: local/info, upgrade, two subscriptions, one getPlaybackStatus, then events.\n'
-                           b'Identifiers replaced consistently across all files. HTTP framing lengths describe original wire bytes.\n')
+                           b'Identifiers replaced consistently before writing. Header spelling/order, body text, chunk extensions and trailers retained.\n'
+                           b'Chunk sizes and Content-Length are recalculated after redaction; extra chunks may hold longer placeholders.\n')
+
+    def redact(data):
+        for original, replacement in sorted(identities.items(), key=lambda pair: -len(pair[0])):
+            data = data.replace(json.dumps(original, ensure_ascii=True)[1:-1].encode(), replacement.encode())
+            data = data.replace(original.encode(), replacement.encode())
+        return data
+
+    def redacted_info():
+        headers, wire = bytes(raw).split(b'\r\n\r\n', 1)
+        body = redact(info_body)
+        if response.chunked:
+            # Reassemble before replacing: an identifier may cross chunk boundaries.
+            chunks, at, cursor = [], 0, 0
+            while True:
+                end = wire.index(b'\r\n', at)
+                line = wire[at:end]
+                size_text, separator, extension = line.partition(b';')
+                size = int(size_text, 16)
+                at = end + 2
+                if not size:
+                    if cursor < len(body):
+                        tail = body[cursor:]
+                        chunks.append(f'{len(tail):x}\r\n'.encode() + tail + b'\r\n')
+                    chunks.append(redact(line + b'\r\n' + wire[at:]))
+                    break
+                payload = body[cursor:cursor+size]
+                cursor += len(payload)
+                if payload:
+                    chunks.append(f'{len(payload):x}'.encode() + separator + redact(extension) + b'\r\n' + payload + b'\r\n')
+                at += size + 2
+            body = b''.join(chunks)
+        else:
+            headers = re.sub(rb'(?im)^(content-length:[ \t]*)[0-9]+',
+                             lambda match: match[1] + str(len(body)).encode(), headers)
+        return redact(headers) + b'\r\n\r\n' + body
     destination = Path(destination or f'/tmp/sonos-local-api-capture-{time.strftime("%Y%m%d-%H%M%S")}.tar.gz')
     # Write only redacted data; originals never reach disk.
     with tarfile.open(destination, 'w:gz') as archive:
         for name, data in files.items():
-            for original, replacement in sorted(identities.items(), key=lambda pair: -len(pair[0])):
-                data = data.replace(original.encode(), replacement.encode())
+            data = redacted_info() if name == 'local-info.http' else redact(data)
             entry = tarfile.TarInfo(name); entry.size = len(data); entry.mode = 0o600
             archive.addfile(entry, io.BytesIO(data))
     return destination

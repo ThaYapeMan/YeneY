@@ -796,5 +796,7 @@ changes invalidate the interpretation of a single straight line.
 Room status includes position_source_reason. New failed connection attempts
 remind the journal at most once per 600 seconds, including after a long fallback.
 The owner-only `scripts/sonos-local-api-capture.py --ip <speaker> --seconds 60`
-records redacted protocol evidence in /tmp on the owner's machine. HTTP lengths
-in that capture refer to the original wire bytes before identifier replacement.
+records redacted protocol evidence in /tmp on the owner's machine. Identifiers
+are replaced after reassembling HTTP chunks; chunk lengths and Content-Length
+are updated so the redacted capture remains parseable. Extensions and trailers
+are retained, with a decoded JSON companion for future fixtures.
