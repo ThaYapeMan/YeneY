@@ -56,6 +56,17 @@ def run(c):
     api.item_override = None
     c['select_item'](1)
     time.sleep(.6)
+    quality_lines = log().count('speaker quality ')
+    rendered_rate = status()['rendered_rate']
+    api.emit_metadata(dict(nextItem=dict(track=dict(quality=dict(bitDepth=24, sampleRate=192000, lossless=True))),
+                               container=dict(id=dict(objectId='yeney:loopback-1')),
+                           currentItem=dict(track=dict(quality=dict(bitDepth=16, sampleRate=48000, lossless=False)))))
+    wait(lambda: 'bitDepth=16 sampleRate=48000 lossless=false' in status().get('speaker_quality',''), .5, 'diagnostic quality status')
+    assert status()['rendered_rate'] == rendered_rate and sonos.transport_state == 'PLAYING'
+    api.emit_metadata(dict(container=dict(id=dict(objectId='yeney:loopback-1')), currentItem=dict(track=dict(quality=api.quality))))
+    wait(lambda: 'bitDepth=24 sampleRate=44100 lossless=true' in status().get('speaker_quality',''), .5, 'restored diagnostic quality status')
+    assert log().count('speaker quality ') == quality_lines
+    print('PASS G7 quality-only metadata refreshes status without a new item log or render change', flush=True)
     for _ in range(2):
         api.emit_error(dict(errorCode='ERROR_PLAYBACK_FAILED', reason='contract error', itemId='2', httpStatus=403))
         time.sleep(.1)

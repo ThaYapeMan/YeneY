@@ -164,7 +164,7 @@ struct QueueRoom::Impl {
     void speakerCommand(const std::string &command, const std::string &reason);
     void externalStop(const std::string &reason);
     std::shared_ptr<WebsocketSpeakerPosition> websocketPosition;
-    uint64_t websocketRevision = 0;
+    uint64_t websocketRevision = 0, websocketDiagnosticRevision = 0;
     bool itemDisagreementLogged = false;
     std::map<std::string, double> websocketExactLengths;
     UpnpSpeakerPosition upnpPosition;

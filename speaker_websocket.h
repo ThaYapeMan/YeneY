@@ -17,6 +17,7 @@ public:
     std::string failure() const;
     uint64_t failureCount() const;
     uint64_t revision() const;
+    uint64_t diagnosticRevision() const;
     std::string rawState() const;
     std::string quality() const;
     std::string playbackError() const;

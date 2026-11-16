@@ -42,10 +42,13 @@ class LocalApi:
         self.senders = {}
         self.emit_status = lambda body: self.broadcast('playbackStatus', body)
         self.emit_error = lambda body: self.broadcast('playbackError', body)
+        self.emit_metadata = lambda body: self.broadcast('metadataStatus', body)
         self.command_error = None
         self.quality = dict(bitDepth=24, sampleRate=44100, lossless=True, immersive=False)
         self.silent = False
         self.partial_frame = False
+        self.answer_gate = None
+        self.status_captured = threading.Event()
         self.buffering_seconds = .3
         self.buffering_until = 0
         self.info_variant = None
@@ -204,7 +207,7 @@ class LocalApi:
                                 if api.events_enabled and stamp[0] != previous_stamp[0] and 'playbackMetadata:1' in subscribed:
                                     metadata = {} if api.shape == 'tidy' else dict(container=dict(id=dict(objectId='yeney:loopback-1')),
                                         currentItem=dict(track=dict(name='Fixture', durationMillis=180000,
-                                            quality=api.quality)), nextItem={})
+                                            quality=api.quality)), nextItem=dict(track=dict(name='Next fixture', durationMillis=180000, quality=api.quality)))
                                     send({'namespace': 'playbackMetadata:1', 'command': 'metadataStatus'}, metadata)
                             except OSError:
                                 return
@@ -257,6 +260,10 @@ class LocalApi:
                             body = status()
                             if outlier: body['positionMillis'] += 400
                         time.sleep(delay)
+                        gate = api.answer_gate
+                        if gate is not None:
+                            api.status_captured.set()
+                            gate.wait(3)
                         send(header, body)
                 except (OSError, ValueError):
                     pass
@@ -277,7 +284,7 @@ class LocalApi:
     def broadcast(self, name, body):
         for send, status in list(self.senders.values()):
             try:
-                send({'namespace': 'playback:1', 'command': name}, dict(body))
+                send({'namespace': 'playbackMetadata:1' if name == 'metadataStatus' else 'playback:1', 'command': name}, dict(body))
                 if name == 'playbackError':
                     current = status()
                     current.update(previousItemId=current.get('itemId', ''), previousPositionMillis=current['positionMillis'])

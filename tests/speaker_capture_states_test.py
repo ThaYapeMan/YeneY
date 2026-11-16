@@ -54,6 +54,17 @@ def main():
             api.emit_status(dict(playbackState='PLAYBACK_STATE_PAUSED', itemId='2', positionMillis=held))
         unchanged = wait(lambda f: float(f[0]) > float(paused[0])+.1)
         assert unchanged[5] == revision, (paused, unchanged)
+        before_quality = api.polls
+        api.emit_metadata(dict(nextItem=dict(track=dict(quality=dict(bitDepth=24, sampleRate=192000, lossless=True))),
+                               container=dict(id=dict(objectId='yeney:loopback-1')),
+                               currentItem=dict(track=dict(quality=dict(bitDepth=16, sampleRate=48000, lossless=False)))))
+        metadata = wait(lambda f: f[7] == 'bitDepth=16 sampleRate=48000 lossless=false')
+        assert metadata[5] == revision, ('quality changed playback notification', revision, metadata)
+        time.sleep(.15)
+        assert api.polls == before_quality, 'quality-only metadata caused an immediate status poll'
+        api.emit_metadata(dict(container=dict(id=dict(objectId='yeney:loopback-1')), currentItem=dict(track=dict(quality=api.quality))))
+        wait(lambda f: f[7] == 'bitDepth=24 sampleRate=44100 lossless=true')
+        print('PASS G7 quality-only metadata updates diagnostics without playback notification or an immediate poll', flush=True)
         api.rtt_ms = 100
         api.emit_status(dict(playbackState='PLAYBACK_STATE_PAUSED', itemId='2', positionMillis=held-40,
                              previousItemId='2', previousPositionMillis=held))
@@ -65,6 +76,29 @@ def main():
         wait(lambda f: f[2] == '2' and f[4] == 'PAUSED')
         api.rtt_ms = 10
         print('PASS G3 repeated event changes nothing; contradicting command answer wins', flush=True)
+        api.events_enabled = False
+        api.rtt_ms = 100
+        api.status_captured.clear()
+        gate = threading.Event()
+        api.answer_gate = gate
+        assert api.status_captured.wait(3), 'old poll body captured'
+        target = (int(held)//1000+1)*1000
+        seconds = target//1000
+        with owner.lock:
+            owner.position['RelTime'] = f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
+        api.emit_status(dict(playbackState='PLAYBACK_STATE_PAUSED', itemId='2', positionMillis=target,
+                             previousItemId='2', previousPositionMillis=held))
+        observed = wait(lambda f: f[4] == 'PAUSED' and abs(float(f[1])-target) < 1)
+        api.answer_gate = None
+        gate.set()
+        until = time.monotonic()+.3
+        while time.monotonic() < until:
+            current = wait(lambda f: float(f[0]) > float(observed[0]))
+            assert abs(float(current[1])-target) < 1, ('stale in-flight poll rolled back event', observed, current)
+        api.rtt_ms = 10
+        api.events_enabled = True
+        held = target
+        print('PASS G3 a poll started before the event cannot roll back its arrival sample; fresh polls still confirm', flush=True)
         journal_mark = len(journal)
         owner.transport_state = 'PLAYING'
         buffered = wait(lambda f: f[4] == 'TRANSITIONING')

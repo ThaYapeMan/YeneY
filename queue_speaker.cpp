@@ -108,6 +108,11 @@ void QueueRoom::Impl::observe() {
                 logQueue("speaker finished itemId=" + sample.previousItem + " last_position_ms=" +
                     std::to_string(*sample.previousPositionMs) + " exact_promised_ms=" + std::to_string(length->second));
         }
+        const auto diagnosticRevision = websocketPosition->diagnosticRevision();
+        if (diagnosticRevision != websocketDiagnosticRevision) {
+            websocketDiagnosticRevision = diagnosticRevision;
+            publish();
+        }
         const auto revision = websocketPosition->revision();
         websocketEvent = revision != websocketRevision;
         websocketRevision = revision;

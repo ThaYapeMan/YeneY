@@ -31,6 +31,7 @@ namespace {
 class Fields {
     const std::string &text;
     size_t at = 0;
+    std::string prefix;
     void space() { while (at < text.size() && std::isspace(static_cast<unsigned char>(text[at]))) ++at; }
     char get() { if (at == text.size()) throw std::runtime_error("json truncated"); return text[at++]; }
     std::string string() {
@@ -75,7 +76,13 @@ class Fields {
                 space();
                 const auto child = object ? string() : std::string{};
                 if (object) { space(); if (get() != ':') throw std::runtime_error("json colon"); }
+                const auto saved = prefix.size();
+                if (!child.empty()) {
+                    if (!prefix.empty()) prefix += '.';
+                    prefix += child;
+                }
                 value(child, depth + 1);
+                prefix.resize(saved);
                 space();
                 const auto separator = get();
                 if (separator == end) break;
@@ -92,6 +99,10 @@ class Fields {
                 if (out.empty()) throw std::runtime_error("json scalar");
             }
             if (!key.empty()) fields.emplace(key, out);
+            // Retain only the scoped keys needed for current-item diagnostics.
+            if (prefix == "container.id.objectId" || prefix == "currentItem.track.quality.bitDepth" ||
+                prefix == "currentItem.track.quality.sampleRate" || prefix == "currentItem.track.quality.lossless")
+                fields.emplace(prefix, out);
         }
     }
 public:
@@ -503,7 +514,7 @@ struct WebsocketSpeakerPosition::Impl {
     PositionFit fit;
     std::atomic_bool stop{false}, regroup{false};
     double last = 0;
-    uint64_t failures = 0, revision = 0;
+    uint64_t failures = 0, revision = 0, diagnostics = 0;
     std::optional<SpeakerPositionSample> known, lastEvent;
     std::set<std::string> unknownStates;
     std::string quality, qualityItem, playbackError;
@@ -516,13 +527,14 @@ struct WebsocketSpeakerPosition::Impl {
         if (type == "playbackError") {
             playbackError = "errorCode=" + answer["errorCode"] + " reason=" + answer["reason"] +
                 " itemId=" + answer["itemId"] + " httpStatus=" + answer["httpStatus"];
-            journal.push_back("speaker playbackError " + playbackError); ++revision;
+            journal.push_back("speaker playbackError " + playbackError); ++diagnostics;
             return false;
         }
-        if (type == "metadataStatus" && !answer["bitDepth"].empty()) {
-            const auto item = (known ? known->item : std::string{}) + "|" + answer["objectId"];
-            const auto value = "bitDepth=" + answer["bitDepth"] + " sampleRate=" + answer["sampleRate"] + " lossless=" + answer["lossless"];
-            if (qualityItem != item || quality.empty()) { journal.push_back("speaker quality " + value); ++revision; }
+        if (type == "metadataStatus" && !answer["currentItem.track.quality.bitDepth"].empty()) {
+            const auto item = (known ? known->item : std::string{}) + "|" + answer["container.id.objectId"];
+            const auto value = "bitDepth=" + answer["currentItem.track.quality.bitDepth"] + " sampleRate=" + answer["currentItem.track.quality.sampleRate"] + " lossless=" + answer["currentItem.track.quality.lossless"];
+            if (qualityItem != item || quality != value) ++diagnostics;
+            if (qualityItem != item || quality.empty()) journal.push_back("speaker quality " + value);
             quality = value; qualityItem = item;
         }
         if (answer["playbackState"].empty()) return false;
@@ -585,6 +597,12 @@ struct WebsocketSpeakerPosition::Impl {
                         const auto &state = sample.state;
                         {
                             std::lock_guard<std::mutex> lock(mutex);
+                            // Only a request sent after an event can confirm it.
+                            // An older in-flight answer may describe the prior coordinate.
+                            if (known && known->event && sent < known->sampleTime) {
+                                next = received;
+                                break;
+                            }
                             if (rawState != sample.rawState) ++revision;
                             rawState = sample.rawState;
                             if (sample.state == "UNKNOWN" && unknownStates.insert(rawState).second)
@@ -623,6 +641,7 @@ std::string WebsocketSpeakerPosition::failure() const {
 }
 uint64_t WebsocketSpeakerPosition::failureCount() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->failures; }
 uint64_t WebsocketSpeakerPosition::revision() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->revision; }
+uint64_t WebsocketSpeakerPosition::diagnosticRevision() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->diagnostics; }
 std::string WebsocketSpeakerPosition::rawState() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->rawState; }
 std::string WebsocketSpeakerPosition::quality() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->quality; }
 std::string WebsocketSpeakerPosition::playbackError() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->playbackError; }

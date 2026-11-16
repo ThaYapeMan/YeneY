@@ -234,3 +234,16 @@ coordinate without reporting a pause, adding SOAP requests, changing source
 polling, or changing the fit. A single status report at transition start is not
 sufficient: LMS would otherwise extrapolate through the buffering interval and
 jump back at the PLAYING event.
+
+
+A poll already in flight when an event arrives cannot confirm that event: its
+body may describe the prior coordinate even though its reply arrives later.
+Keep the arrival sample and issue a fresh confirming request. A command sent
+after the event can override it, including a contradiction. This prevents an
+old position answer from turning a natural boundary into app navigation.
+
+
+Quality and playback-error journal/status updates have a separate diagnostic
+revision. They publish diagnostics without resetting the fit, waking a status
+poll, requesting LMS time, or forcing an identity query. A quality correction
+within one item updates status without adding another per-item quality line.
