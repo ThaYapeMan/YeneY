@@ -146,6 +146,11 @@ def run(c):
             sonos.local_api.disabled = True
             sonos.local_api.disconnect()
             wait(lambda: source_status('upnp', 'second'), 4, 'room runtime fallback status')
+            fallback = json.loads(status_path.read_text())['playback']
+            reason = fallback['position_source_reason']
+            assert reason and reason != 'local-api-ready', fallback
+            wait(lambda: 'queue position source=upnp reason=' + reason in log(), 3, 'fallback journal reason')
+            print('PASS E5 runtime fallback status and journal position_source_reason=' + reason, flush=True)
             sonos.local_api.disabled = False
             wait(lambda: source_status('websocket', 'ms'), 34, 'room runtime recovered status')
             print('PASS T2 per-room runtime websocket/ms -> upnp/second -> websocket/ms status', flush=True)
