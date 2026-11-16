@@ -1,4 +1,5 @@
 #include "bridge_version.h"
+#include "speaker_websocket.h"
 #include "volume_worker.h"
 // yeney.cpp -- bridges a Sonos zone player into an LMS session
 //
@@ -985,6 +986,24 @@ int main(int argc, char** argv)
     if (findFlag(argc, argv, "--version")) {
         printf("%s\n", bridge::firmwareVersion());
         return EXIT_SUCCESS;
+    }
+    if (findFlag(argc, argv, "--position-source-check")) {
+        auto option = [&](const std::string &name) -> const char * {
+            if (auto value = findOption(argc, argv, name)) return value;
+            for (int n = 1; n + 1 < argc; ++n) if (argv[n] == name) return argv[n+1];
+            return nullptr;
+        };
+        const auto ip = option("--ip");
+        if (!ip) { fprintf(stderr, "--position-source-check requires --ip\n"); return 1; }
+        double seconds = 30;
+        try {
+            if (const auto value = option("--seconds")) {
+                size_t used = 0; seconds = std::stod(value, &used);
+                if (used != std::strlen(value)) throw std::runtime_error("invalid seconds");
+            }
+            if (!std::isfinite(seconds) || seconds < 1 || seconds > 3600) throw std::runtime_error("seconds must be 1..3600");
+        } catch (const std::exception &e) { fprintf(stderr, "%s\n", e.what()); return 1; }
+        return bridge::positionSourceCheck(ip, seconds, std::cout);
     }
     warnLegacyEnvironment();
     bridge::warnDebugSettings();

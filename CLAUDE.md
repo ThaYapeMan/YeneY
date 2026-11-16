@@ -776,3 +776,25 @@ fault-injection link. The corrected fixture passes D6 without changing any
 assertion. The three-attempt limit prohibits a fourth full make test in this
 round. Preserve the original nonzero full-gate result and run the remaining
 commands separately; that continuation does not constitute full-gate acceptance.
+
+## Decisions — TIMING-03c
+
+The local API HTTP reader accepts chunked (including extensions and trailers),
+Content-Length and close-delimited bodies with a 64 KiB decoded body limit and
+16 KiB header/trailer limits. Header names and token values are case-insensitive;
+the WebSocket accept digest remains exact. Socket timeouts and production
+polling, fit, retry and navigation rules are unchanged. The fake defaults to the
+16 November Port response framing (firmware 98.0-82170).
+
+`yeney --position-source-check --ip <speaker> --seconds 30` uses the production
+TLS, HTTP, WebSocket, subscription, command and status parser. It sends only
+subscriptions and getPlaybackStatus, without constructing a room or contacting
+LMS. Its 5/20 Hz comparison is diagnostic only. Output reports RTT quantiles,
+slow-answer share and a least-squares playing-position residual; seeks and track
+changes invalidate the interpretation of a single straight line.
+
+Room status includes position_source_reason. New failed connection attempts
+remind the journal at most once per 600 seconds, including after a long fallback.
+The owner-only `scripts/sonos-local-api-capture.py --ip <speaker> --seconds 60`
+records redacted protocol evidence in /tmp on the owner's machine. HTTP lengths
+in that capture refer to the original wire bytes before identifier replacement.

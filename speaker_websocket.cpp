@@ -3,6 +3,7 @@
 #include <openssl/ssl.h>
 #include <openssl/rand.h>
 #include <openssl/sha.h>
+#include <openssl/err.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <poll.h>
@@ -17,6 +18,9 @@
 #include <stdexcept>
 #include <vector>
 #include <cstring>
+#include <sstream>
+#include <iostream>
+#include <limits>
 namespace bridge {
 double positionMonotonic() {
     return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -108,6 +112,49 @@ std::string base64(const unsigned char *bytes, size_t size) {
     EVP_EncodeBlock(reinterpret_cast<unsigned char *>(&result[0]), bytes, int(size));
     return result;
 }
+std::string lower(std::string s) {
+    for (auto &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
+    return s;
+}
+std::string trim(std::string s) {
+    const auto first = s.find_first_not_of(" \t");
+    return first == std::string::npos ? "" : s.substr(first, s.find_last_not_of(" \t") - first + 1);
+}
+struct HttpHeaders {
+    std::map<std::string, std::string> fields;
+    unsigned status = 0;
+    explicit HttpHeaders(const std::string &raw) {
+        const auto end = raw.find("\r\n");
+        std::istringstream line(raw.substr(0, end));
+        std::string version, code;
+        line >> version >> code;
+        if ((lower(version) != "http/1.1" && lower(version) != "http/1.0") || code.size() != 3 ||
+            code.find_first_not_of("0123456789") != std::string::npos)
+            throw std::runtime_error("invalid HTTP status line");
+        status = unsigned(std::stoul(code));
+        size_t at = end + 2;
+        while (at < raw.size() - 2) {
+            const auto next = raw.find("\r\n", at), colon = raw.find(':', at);
+            if (colon == std::string::npos || colon >= next || colon == at)
+                throw std::runtime_error("invalid HTTP header");
+            const auto name = lower(raw.substr(at, colon - at));
+            const auto value = trim(raw.substr(colon + 1, next - colon - 1));
+            if (fields.count(name)) fields[name] += "," + value;
+            else fields[name] = value;
+            at = next + 2;
+        }
+    }
+    std::string get(const std::string &name) const {
+        const auto i = fields.find(name);
+        return i == fields.end() ? "" : i->second;
+    }
+    bool token(const std::string &name, const std::string &wanted) const {
+        std::istringstream values(get(name));
+        std::string value;
+        while (std::getline(values, value, ',')) if (lower(trim(value)) == lower(wanted)) return true;
+        return false;
+    }
+};
 class Tls {
     int fd = -1;
     SSL_CTX *context = nullptr;
@@ -168,26 +215,92 @@ public:
     std::string info(const std::string &host) {
         connect(host);
         send("GET /api/v1/players/local/info HTTP/1.1\r\nHost: " + (host.find(':') == std::string::npos ? host + ":1443" : host) + "\r\nX-Sonos-Api-Key: 123e4567-e89b-12d3-a456-426655440000\r\nConnection: close\r\n\r\n");
-        auto h = headers();
-        if (h.find(" 200 ") == std::string::npos) throw std::runtime_error("local info HTTP status");
-        auto at = h.find("Content-Length:");
-        if (at == std::string::npos) at = h.find("content-length:");
-        if (at == std::string::npos) throw std::runtime_error("local info missing length");
-        const auto size = std::stoul(h.substr(at + 15));
-        if (size > 65536) throw std::runtime_error("local info too large");
-        return read(size);
+        HttpHeaders h(headers());
+        while (h.status >= 100 && h.status < 200) h = HttpHeaders(headers());
+        if (h.status != 200) throw std::runtime_error("local info HTTP status");
+        const size_t cap = 65536;
+        std::string body;
+        if (h.fields.count("transfer-encoding")) {
+            if (lower(h.get("transfer-encoding")) != "chunked") throw std::runtime_error("local info unsupported transfer encoding");
+            auto line = [&] {
+                std::string value;
+                while (value.size() < 16384) {
+                    value += read(1);
+                    if (value.size() >= 2 && value.substr(value.size() - 2) == "\r\n") return value.substr(0, value.size() - 2);
+                }
+                throw std::runtime_error("local info chunk line too large");
+            };
+            try {
+                for (;;) {
+                    auto text = line();
+                    text = text.substr(0, text.find(';'));
+                    if (text.empty() || text.find_first_not_of("0123456789abcdefABCDEF") != std::string::npos)
+                        throw std::runtime_error("local info invalid chunk size");
+                    size_t used = 0;
+                    unsigned long long size;
+                    try { size = std::stoull(text, &used, 16); }
+                    catch (...) { throw std::runtime_error("local info too large"); }
+                    if (size > cap - body.size()) throw std::runtime_error("local info too large");
+                    if (!size) {
+                        size_t trailers = 0;
+                        for (;;) {
+                            auto trailer = line();
+                            trailers += trailer.size() + 2;
+                            if (trailers > 16384) throw std::runtime_error("local info trailers too large");
+                            if (trailer.empty()) return body;
+                            if (trailer.find(':') == std::string::npos) throw std::runtime_error("local info invalid trailer");
+                        }
+                    }
+                    body += read(size);
+                    if (read(2) != "\r\n") throw std::runtime_error("local info invalid chunk delimiter");
+                }
+            } catch (const std::runtime_error &e) {
+                if (std::string(e.what()) == "socket read") throw std::runtime_error("local info truncated chunk");
+                throw;
+            }
+        }
+        if (h.fields.count("content-length")) {
+            auto value = h.get("content-length");
+            std::istringstream lengths(value);
+            std::string length;
+            value.clear();
+            while (std::getline(lengths, length, ',')) {
+                length = trim(length);
+                if (length.empty() || length.find_first_not_of("0123456789") != std::string::npos ||
+                    (!value.empty() && length != value)) throw std::runtime_error("local info invalid length");
+                value = length;
+            }
+            if (value.empty() || value.find_first_not_of("0123456789") != std::string::npos) throw std::runtime_error("local info invalid length");
+            unsigned long long size;
+            try { size = std::stoull(value); } catch (...) { throw std::runtime_error("local info too large"); }
+            if (size > cap) throw std::runtime_error("local info too large");
+            try { return read(size); } catch (...) { throw std::runtime_error("local info truncated body"); }
+        }
+        for (;;) {
+            char c;
+            const int n = SSL_read(ssl, &c, 1);
+            if (n <= 0) {
+                const int error = SSL_get_error(ssl, n);
+                if (error == SSL_ERROR_ZERO_RETURN || (error == SSL_ERROR_SYSCALL && n == 0) ||
+                    (error == SSL_ERROR_SSL && ERR_GET_REASON(ERR_peek_last_error()) == SSL_R_UNEXPECTED_EOF_WHILE_READING)) return body;
+                throw std::runtime_error("local info close body read");
+            }
+            if (body.size() == cap) throw std::runtime_error("local info too large");
+            body += c;
+        }
     }
     void websocket(const std::string &host) {
         connect(host);
         unsigned char nonce[16]; if (RAND_bytes(nonce, sizeof nonce) != 1) throw std::runtime_error("random");
         const auto key = base64(nonce, sizeof nonce);
         send("GET /websocket/api HTTP/1.1\r\nHost: " + (host.find(':') == std::string::npos ? host + ":1443" : host) + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Protocol: v1.api.smartspeaker.audio\r\nX-Sonos-Api-Key: 123e4567-e89b-12d3-a456-426655440000\r\n\r\n");
-        const auto h = headers();
+        const HttpHeaders h(headers());
         unsigned char digest[SHA_DIGEST_LENGTH];
         const auto input = key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
         SHA1(reinterpret_cast<const unsigned char *>(input.data()), input.size(), digest);
-        if (h.find(" 101 ") == std::string::npos || h.find(base64(digest, sizeof digest)) == std::string::npos ||
-            h.find("v1.api.smartspeaker.audio") == std::string::npos) throw std::runtime_error("websocket handshake");
+        if (h.status != 101 || !h.token("upgrade", "websocket") || !h.token("connection", "upgrade") ||
+            h.get("sec-websocket-accept") != base64(digest, sizeof digest) ||
+            !h.token("sec-websocket-protocol", "v1.api.smartspeaker.audio")) throw std::runtime_error("websocket handshake");
     }
     void frame(const std::string &body, unsigned opcode = 1) {
         if (body.size() > 65535) throw std::runtime_error("websocket send size");
@@ -222,6 +335,140 @@ public:
         }
     }
 };
+class LocalSession {
+    std::string group, household;
+    unsigned serial = 0;
+public:
+    Tls connection;
+    void open(const std::string &host, const std::function<void(const std::string &)> &step) {
+        Tls lookup;
+        const Fields info(lookup.info(host));
+        group = info["groupId"]; household = info["householdId"];
+        if (group.empty() || household.empty()) throw std::runtime_error("local info missing identity");
+        auto endpoint = host;
+        const auto url = info["websocketUrl"];
+        if (!url.empty()) {
+            const std::string prefix = "wss://", suffix = "/websocket/api";
+            if (url.rfind(prefix, 0) != 0 || url.size() <= prefix.size() + suffix.size() ||
+                url.substr(url.size() - suffix.size()) != suffix)
+                throw std::runtime_error("invalid coordinator websocket URL");
+            endpoint = url.substr(prefix.size(), url.size() - prefix.size() - suffix.size());
+        }
+        if (endpoint != host && endpoint != host + ":1443") {
+            Tls coordinatorLookup;
+            const Fields coordinatorInfo(coordinatorLookup.info(endpoint));
+            if (coordinatorInfo["householdId"] != household || coordinatorInfo["groupId"].empty())
+                throw std::runtime_error("coordinator local info identity");
+            group = coordinatorInfo["groupId"];
+        }
+        step("local/info OK");
+        connection.websocket(endpoint);
+        step("WebSocket upgrade OK");
+        command("playback:1", "subscribe"); command("playbackMetadata:1", "subscribe");
+    }
+    std::string command(const std::string &space, const std::string &name) {
+        const auto id = std::to_string(++serial);
+        connection.frame("[{\"namespace\":" + quote(space) + ",\"command\":" + quote(name) +
+            ",\"householdId\":" + quote(household) + ",\"groupId\":" + quote(group) +
+            ",\"cmdId\":" + quote(id) + "},{}]");
+        return id;
+    }
+    Fields message() {
+        Fields answer(connection.message());
+        if (answer["type"] == "error" || !answer["errorCode"].empty()) throw std::runtime_error("command error");
+        return answer;
+    }
+    static SpeakerPositionSample sample(const Fields &answer, double sent, double received) {
+        const auto state = answer["playbackState"], pos = answer["positionMillis"];
+        if (state.empty() || pos.empty()) throw std::runtime_error("playback status missing fields");
+        size_t used = 0;
+        double position;
+        try { position = std::stod(pos, &used); }
+        catch (...) { throw std::runtime_error("invalid position"); }
+        if (used != pos.size() || !std::isfinite(position) || position < 0) throw std::runtime_error("invalid position");
+        return {answer["itemId"], state, position, (sent + received) / 2, (received - sent) * 1000};
+    }
+};
+
+}
+int positionSourceCheck(const std::string &host, double seconds, std::ostream &out) {
+    sigset_t blocked, previous;
+    sigemptyset(&blocked); sigaddset(&blocked, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &blocked, &previous);
+    struct Restore { sigset_t mask; ~Restore() { pthread_sigmask(SIG_SETMASK, &mask, nullptr); } } restore{previous};
+    std::string step = "local/info";
+    try {
+        LocalSession session;
+        session.open(host, [&](const std::string &message) {
+            out << message << std::endl;
+            step = message == "local/info OK" ? "WebSocket upgrade" : "subscriptions";
+        });
+        bool playback = false, metadata = false, selected = false;
+        double lastAccepted = 0;
+        auto receive = [&] {
+            auto answer = session.message();
+            if (answer["cmdId"] == "1") { playback = true; out << "playback subscription OK\n"; }
+            if (answer["cmdId"] == "2") { metadata = true; out << "metadata subscription OK\n"; }
+            return answer;
+        };
+        const auto subscriptionDeadline = positionMonotonic() + 3;
+        while (!playback || !metadata) {
+            if (positionMonotonic() > subscriptionDeadline) throw std::runtime_error("subscription timeout");
+            receive();
+        }
+        step = "getPlaybackStatus";
+        PositionFit fit;
+        for (const int hz : {5, 20}) {
+            std::vector<double> rtts;
+            std::vector<std::pair<double, double>> points;
+            unsigned errors = 0, slow = 0;
+            const double end = positionMonotonic() + seconds / 2;
+            std::exception_ptr failure;
+            try {
+                while (positionMonotonic() < end) {
+                    const double sent = positionMonotonic();
+                    const auto id = session.command("playback:1", "getPlaybackStatus");
+                    for (;;) {
+                        if (positionMonotonic() - sent > 3) throw std::runtime_error("no answer for 3 s");
+                        const auto answer = receive();
+                        if (answer["cmdId"] != id) continue;
+                        const auto sample = LocalSession::sample(answer, sent, positionMonotonic());
+                        rtts.push_back(sample.rttMs);
+                        if (sample.rttMs > 200) ++slow;
+                        if (fit.add(sample)) { selected = true; lastAccepted = positionMonotonic(); }
+                        if (sample.state == "PLAYING") points.emplace_back(sample.sampleTime, sample.positionMs);
+                        break;
+                    }
+                    std::this_thread::sleep_until(std::chrono::steady_clock::time_point(
+                        std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(sent + 1.0 / hz))));
+                }
+            } catch (...) { ++errors; failure = std::current_exception(); }
+            const auto metric = [&](double fraction) { return rtts.empty() ? std::numeric_limits<double>::quiet_NaN() :
+                rtts[std::min(rtts.size()-1, size_t(std::ceil(rtts.size()*fraction))-1)]; };
+            std::sort(rtts.begin(), rtts.end());
+            out << "getPlaybackStatus " << (failure ? "FAIL" : "OK") << " rate=" << hz << "Hz answers=" << rtts.size() << " errors=" << errors
+                << " rtt_ms median=" << (rtts.empty() ? metric(.5) : (rtts[(rtts.size()-1)/2] + rtts[rtts.size()/2])/2) << " p95=" << metric(.95)
+                << " max=" << metric(1) << " discarded_slow_share=" << (rtts.empty() ? 0 : double(slow)/rtts.size());
+            if (points.size() >= 2) {
+                double x = 0, y = 0, xx = 0, xy = 0;
+                const double origin = points.front().first;
+                for (auto p : points) { const auto t = p.first-origin; x += t; y += p.second; xx += t*t; xy += t*p.second; }
+                const double n = points.size(), denominator = n*xx-x*x;
+                const double slope = denominator > 0 ? (n*xy-x*y)/denominator : 0, intercept = (y-slope*x)/n;
+                double sum = 0, maximum = 0;
+                for (auto p : points) { double residual = p.second-intercept-slope*(p.first-origin); sum += residual*residual; maximum = std::max(maximum, std::abs(residual)); }
+                out << " playing_line_slope_ms_s=" << slope << " residual_ms rms=" << std::sqrt(sum/n) << " max=" << maximum;
+            } else out << " residual_ms=unavailable (speaker not playing)";
+            out << std::endl;
+            if (failure) std::rethrow_exception(failure);
+        }
+        selected = selected && positionMonotonic() - lastAccepted <= 3;
+        out << "selected source=" << (selected ? "websocket" : "upnp") << std::endl;
+        return selected ? 0 : 1;
+    } catch (const std::exception &e) {
+        out << step << " FAIL reason=" << e.what() << "\nselected source=upnp\n";
+        return 1;
+    }
 }
 struct WebsocketSpeakerPosition::Impl {
     std::string host, error = "connecting";
@@ -229,6 +476,7 @@ struct WebsocketSpeakerPosition::Impl {
     PositionFit fit;
     std::atomic_bool stop{false}, regroup{false};
     double last = 0;
+    uint64_t failures = 0;
     std::thread worker;
     explicit Impl(std::string h) : host(std::move(h)), worker([this] { run(); }) {}
     ~Impl() { stop = true; worker.join(); }
@@ -239,63 +487,32 @@ struct WebsocketSpeakerPosition::Impl {
         pthread_sigmask(SIG_BLOCK, &blocked, nullptr);
         while (!stop) {
             try {
-                Tls lookup;
-                const Fields info(lookup.info(host));
-                auto group = info["groupId"], household = info["householdId"];
-                if (group.empty() || household.empty()) throw std::runtime_error("local info missing identity");
-                auto endpoint = host;
-                const auto url = info["websocketUrl"];
-                if (!url.empty()) {
-                    const std::string prefix = "wss://", suffix = "/websocket/api";
-                    if (url.rfind(prefix, 0) != 0 || url.size() <= prefix.size() + suffix.size() ||
-                        url.substr(url.size() - suffix.size()) != suffix)
-                        throw std::runtime_error("invalid coordinator websocket URL");
-                    endpoint = url.substr(prefix.size(), url.size() - prefix.size() - suffix.size());
-                }
-                if (endpoint != host && endpoint != host + ":1443") {
-                    Tls coordinatorLookup;
-                    const Fields coordinatorInfo(coordinatorLookup.info(endpoint));
-                    if (coordinatorInfo["householdId"] != household || coordinatorInfo["groupId"].empty())
-                        throw std::runtime_error("coordinator local info identity");
-                    group = coordinatorInfo["groupId"];
-                }
-                Tls connection; connection.websocket(endpoint);
-                unsigned serial = 0;
-                auto command = [&](const std::string &space, const std::string &name) {
-                    const auto id = std::to_string(++serial);
-                    connection.frame("[{\"namespace\":" + quote(space) + ",\"command\":" + quote(name) +
-                        ",\"householdId\":" + quote(household) + ",\"groupId\":" + quote(group) +
-                        ",\"cmdId\":" + quote(id) + "},{}]");
-                    return id;
-                };
-                command("playback:1", "subscribe"); command("playbackMetadata:1", "subscribe");
+                LocalSession session;
+                session.open(host, [](const std::string &) {});
+                auto &connection = session.connection;
                 double next = 0;
                 while (!stop && !regroup.exchange(false)) {
                     if (positionMonotonic() < next) {
                         if (connection.readable()) {
-                            const Fields event(connection.message());
-                            if (event["type"] == "error" || !event["errorCode"].empty()) throw std::runtime_error("command error");
+                            const auto event = session.message();
                             if (event["command"] == "playbackStatus" || event["command"] == "metadataStatus") next = 0;
                         } else std::this_thread::sleep_for(std::chrono::milliseconds(10));
                         continue;
                     }
                     const auto sent = positionMonotonic();
-                    const auto id = command("playback:1", "getPlaybackStatus");
+                    const auto id = session.command("playback:1", "getPlaybackStatus");
                     bool immediate = false;
                     for (;;) {
                         if (stop) return;
                         if (positionMonotonic() - sent > 3) throw std::runtime_error("no answer for 3 s");
-                        const Fields answer(connection.message());
-                        if (answer["type"] == "error" || !answer["errorCode"].empty()) throw std::runtime_error("command error");
+                        const auto answer = session.message();
                         if (answer["cmdId"] != id) { immediate = true; continue; }
                         const auto received = positionMonotonic();
-                        const auto state = answer["playbackState"], pos = answer["positionMillis"];
-                        if (state.empty() || pos.empty()) throw std::runtime_error("playback status missing fields");
-                        size_t used = 0; const double position = std::stod(pos, &used);
-                        if (used != pos.size()) throw std::runtime_error("invalid position");
+                        const auto sample = LocalSession::sample(answer, sent, received);
+                        const auto &state = sample.state;
                         {
                             std::lock_guard<std::mutex> lock(mutex);
-                            if (fit.add({answer["itemId"], state, position, (sent + received) / 2, (received - sent) * 1000})) {
+                            if (fit.add(sample)) {
                                 last = received; error.clear();
                             } else if ((received - sent) * 1000 <= 200) immediate = true;
                         }
@@ -304,7 +521,7 @@ struct WebsocketSpeakerPosition::Impl {
                     }
                 }
             } catch (const std::exception &e) {
-                { std::lock_guard<std::mutex> lock(mutex); error = e.what(); fit.reset(); }
+                { std::lock_guard<std::mutex> lock(mutex); error = e.what(); ++failures; fit.reset(); }
                 const auto retry = positionMonotonic() + 30;
                 while (!stop && !regroup.exchange(false) && positionMonotonic() < retry)
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -318,6 +535,11 @@ std::optional<SpeakerPositionSample> WebsocketSpeakerPosition::position(double n
     std::lock_guard<std::mutex> lock(impl->mutex);
     return now - impl->last <= 3 && impl->error.empty() ? impl->fit.position(now) : std::nullopt;
 }
-std::string WebsocketSpeakerPosition::failure() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->error; }
+std::string WebsocketSpeakerPosition::failure() const {
+    std::lock_guard<std::mutex> lock(impl->mutex);
+    if (impl->error.empty() && positionMonotonic() - impl->last > 3) return "position sample older than 3 s";
+    return impl->error;
+}
+uint64_t WebsocketSpeakerPosition::failureCount() const { std::lock_guard<std::mutex> lock(impl->mutex); return impl->failures; }
 void WebsocketSpeakerPosition::groupChanged() { impl->regroup = true; }
 } // namespace bridge

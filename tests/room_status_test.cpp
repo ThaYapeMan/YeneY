@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "room_status.h"
+#include "position_failure_log.h"
 #include <cassert>
 #include <iostream>
 int main() {
@@ -23,6 +24,20 @@ int main() {
     assert(json.find(bridge::RoomStatus::quote(value.title))!=std::string::npos);
     assert(status.status().title==value.title);
     assert(json.find("generation")==std::string::npos&&json.find("epoch")==std::string::npos);
+    bridge::PositionFailureLog reminders;
+    assert(!reminders.due(0, 0));
+    assert(reminders.due(1, 1));
+    assert(!reminders.due(601, 1)); // No new failed retry.
+    assert(!reminders.due(30, 2));
+    assert(!reminders.due(600.99, 20));
+    assert(reminders.due(601, 21));
+    assert(!reminders.due(602, 22));
+    value.positionSource="upnp"; value.positionPrecision="second";
+    value.positionSourceReason="local info truncated chunk";
+    status.publish(value);
+    json=bridge::RoomStatus::json(status.status());
+    assert(json.find("\"position_source_reason\":\"local info truncated chunk\"")!=std::string::npos);
+    std::cout << "PASS E5 fallback status reason and failed-retry journal limiter: first failure, new retries only, 600 s boundary\n";
     value.state="STOPPED";value.owned=false;value.currentUri.clear();value.ownedUris.clear();value.lastFault="SOAP rejected";
     status.publish(value);
     json=bridge::RoomStatus::json(status.status());

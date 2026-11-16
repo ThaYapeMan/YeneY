@@ -3,6 +3,7 @@
 #include "speaker_position.h"
 #include <functional>
 #include <memory>
+#include <iosfwd>
 namespace bridge {
 class WebsocketSpeakerPosition : public SpeakerPosition {
     struct Impl;
@@ -14,7 +15,9 @@ public:
     const char *precision() const override { return "ms"; }
     std::optional<SpeakerPositionSample> position(double now) const override;
     std::string failure() const;
+    uint64_t failureCount() const;
     void groupChanged();
 };
 double positionMonotonic();
+int positionSourceCheck(const std::string &host, double seconds, std::ostream &out);
 } // namespace bridge

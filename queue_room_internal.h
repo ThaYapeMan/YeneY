@@ -2,6 +2,7 @@
 #pragma once
 #include "core_queue_sink.h"
 #include "speaker_websocket.h"
+#include "position_failure_log.h"
 #include "position_settings.h"
 #include "lms_icon.h"
 #include "queue_path_sink.h"
@@ -165,6 +166,8 @@ struct QueueRoom::Impl {
     std::shared_ptr<WebsocketSpeakerPosition> websocketPosition;
     UpnpSpeakerPosition upnpPosition;
     PositionSources positionSources;
+    PositionFailureLog positionFailureLog;
+    std::string activePositionReason;
     std::string activePositionSource, activePositionPrecision = "second", lastWebsocketItem;
     std::map<std::string, std::string> cachedPosition, cachedTransport, cachedMedia;
     bool cachedMediaUri = false;

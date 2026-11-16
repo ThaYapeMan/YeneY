@@ -682,9 +682,12 @@ speaker-websocket-fixture: tests/speaker_websocket_fixture.cpp speaker_websocket
 	g++ -std=c++17 -O2 -Wall -Wextra -I. tests/speaker_websocket_fixture.cpp speaker_websocket.cpp -lssl -lcrypto -pthread -o $@
 
 .PHONY: speaker-position-test
-speaker-position-test: speaker-position-fit-test speaker-websocket-fixture
+speaker-position-test: speaker-position-fit-test speaker-websocket-fixture yeney
 	./speaker-position-fit-test
 	YENEY_WS_FIXTURE=./speaker-websocket-fixture python3 tests/speaker_websocket_test.py
+	python3 tests/local_api_compat_test.py
+	YENEY_COMPAT_FIXTURE=./speaker-websocket-fixture python3 tests/local_api_compat_test.py
+	python3 tests/local_api_capture_test.py
 	python3 tests/sonos_timing_probe_test.py
 
 $(QUEUE_ROOM_OBJS) core_sonos.o: third_party/yeney-core/core/decoder.h
@@ -704,3 +707,5 @@ test-run test-fast-run: native-pcm-test
 .PHONY: native-pcm-test
 native-pcm-test: native-pcm-fixture
 	python3 tests/native_pcm_test.py
+
+queue_speaker.o room-status-test: position_failure_log.h

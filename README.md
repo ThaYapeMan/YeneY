@@ -817,6 +817,15 @@ when attaching. Converted hi-res audio and AAC/MP3 with unprovable landings use 
 single speaker switch with `landed-frame-unknown`; an exact PCM mismatch uses
 `landed-pcm-mismatch` and preserves the retained WAV until that switch.
 
+Check the production position client without playing anything or contacting LMS:
+`yeney --position-source-check --ip <speaker-ip> --seconds 30`. This read-only
+check prints discovery, upgrade and subscription results, the selected source,
+and 5/20 Hz RTT and position-residual statistics. It can run beside a room service.
+Fallback room status includes `position_source_reason`; failed retries remind the
+journal at most once per ten minutes. For redacted device evidence, run
+`python3 scripts/sonos-local-api-capture.py --ip <speaker-ip> --seconds 60`
+and attach the printed tarball. Change track and pause during that capture.
+
 Queue mode can read the speaker's millisecond position from the Sonos local
 WebSocket API on port 1443. This read-only interface uses a public application
 key and the speaker's self-signed TLS certificate; it needs no Sonos account.

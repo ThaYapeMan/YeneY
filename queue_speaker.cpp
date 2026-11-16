@@ -78,13 +78,20 @@ void QueueRoom::Impl::observe() {
     if (rendererObservationConfirmed) rendererObservationAfter = 0;
     const std::string source = selectedPosition.first ? selectedPosition.first->name() : "upnp";
     const bool positionSourceChanged = activePositionSource != source;
+    const std::string reason = precise ? "local-api-ready" : websocketPosition ? websocketPosition->failure() : "configured";
+    const bool reasonChanged = activePositionReason != reason;
+    activePositionReason = reason;
+    const double reasonNow = positionMonotonic();
+    if (!precise && websocketPosition && positionFailureLog.due(reasonNow, websocketPosition->failureCount()) && !positionSourceChanged) {
+        logQueue("position source=" + source + " reason=" + reason);
+    }
+    if (reasonChanged && !positionSourceChanged) publish();
     if (positionSourceChanged) {
         activePositionSource = source;
         activePositionPrecision = selectedPosition.first ? selectedPosition.first->precision() : "second";
         queue.positionClock(0, {});
         previousPrecisePosition.reset();
-        logQueue("position source=" + source + " reason=" +
-            (precise ? "local-api-ready" : websocketPosition ? websocketPosition->failure() : "configured"));
+        logQueue("position source=" + source + " reason=" + reason);
         publish();
     }
     const bool event = eventDirty->exchange(false);

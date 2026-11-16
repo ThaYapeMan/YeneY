@@ -20,6 +20,7 @@ void QueueRoom::Impl::publish() {
     v.state = state;
     v.positionSource = activePositionSource.empty() ? "upnp" : activePositionSource;
     v.positionPrecision = activePositionPrecision;
+    v.positionSourceReason = activePositionReason;
     v.owned = ownership.active() && !externalReleased;
     v.occurrence = current;
     v.lastFault = fault;

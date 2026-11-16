@@ -168,3 +168,24 @@ had roughly one second of LMS lag. These container-local measurements establish
 timing behavior after the core changes, not a new device comparison or
 deployment. The core suite passes. Full-gate acceptance was not achieved
 within the three-attempt limit; subsequent validation is reported separately.
+
+
+## Local API wire compatibility (16 November)
+
+The Port on 98.0-82170 returns chunked local/info with `Content-type`,
+`Transfer-encoding` and `Connection: close`. Requiring Content-Length prevented
+selection before any WebSocket connection. The bounded production reader now
+supports all three body delimiters and case-insensitive HTTP header/token
+reading, including the upgrade. The fake defaults to that captured shape.
+
+The binary's `--position-source-check --ip <speaker> --seconds 30` shares the
+production session and parser, testing 5 Hz for half the duration and 20 Hz for
+the other half. Only subscriptions and getPlaybackStatus are sent. A fit sample
+accepted within three seconds is required for a successful WebSocket selection.
+Playing residuals are measured against a fitted straight line, so keep playback
+steady during this check. Real hardware performance must be measured by the
+owner; loopback success does not establish speaker capacity at 20 Hz.
+
+Status publishes the source reason even when the source does not change. Each
+new failed connection attempt is eligible for a journal reminder, limited to one
+per ten minutes. Polling cadence, fit, navigation and core pin remain unchanged.
