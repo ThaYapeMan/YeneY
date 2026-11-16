@@ -9,12 +9,17 @@ import subprocess
 import sys
 import tempfile
 import time
+import json
+from test_capacity import capacity
 
 cache = Path(os.environ.get('YENEY_TEST_CACHE', Path.home()/'.cache/yeney-test')).expanduser().resolve()
 logs = cache/'runs'
 logs.mkdir(parents=True, exist_ok=True)
 run = logs/(time.strftime('%Y%m%d-%H%M%S')+'-'+str(os.getpid()))
 run.mkdir()
+run_capacity = capacity()
+(run/'capacity.json').write_text(json.dumps(run_capacity, indent=2)+'\n')
+print('Test capacity: '+json.dumps(run_capacity, sort_keys=True), flush=True)
 parent = Path((os.environ.get('TMPDIR') or '/var/tmp'))
 parent.mkdir(parents=True, exist_ok=True)
 code = 1
