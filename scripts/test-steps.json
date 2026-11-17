@@ -1,0 +1,6422 @@
+{
+  "version": 2,
+  "build_sets": {
+    "test-fast-run": [
+      "yeney",
+      "queue-native-decoder-test",
+      "seek-worker-test",
+      "consumption-diagnostic-test",
+      "queue-declaration-test",
+      "queue-window-test",
+      "volume-test",
+      "stream-metrics-lifetime-test",
+      "stream-pacing-encoder-test",
+      "encoded-backpressure-test",
+      "stream-pacing-test",
+      "stream-metrics-test",
+      "queue-source-test",
+      "room-status-test",
+      "queue-position-test",
+      "playback-mode-test",
+      "queue-ownership-test",
+      "queue-actions-test",
+      "queue-metadata-test",
+      "queue-route-test",
+      "queue-item-store-test",
+      "core-queue-sink-test",
+      "timing-tap-test",
+      "timing-contract-test",
+      "cold-position-test",
+      "field-cold-test",
+      "oct11-acquisition-test",
+      "oct12-boundary-test",
+      "lms-position-test",
+      "timing-probe-test",
+      "timing-probe-field-test",
+      "timing-probe-resets-test",
+      "lead-test",
+      "range-test",
+      "range-history-test",
+      "encoded-buffer-test",
+      "speaker-state-test",
+      "upnp-test",
+      "xml-sanitize-test",
+      "stream-content-test",
+      "podcast-sink-test",
+      "position-test",
+      "encoder-test",
+      "resume-state-test"
+    ],
+    "full-queue-pressure": [
+      "yeney"
+    ],
+    "native-pcm-test": [
+      "native-pcm-fixture"
+    ],
+    "test-run": [
+      "queue-native-decoder-test",
+      "timing-probe-field-test",
+      "timing-probe-settings-test",
+      "timing-probe-test",
+      "timing-probe-resets-test",
+      "timing-probe-http-test",
+      "lead-test",
+      "range-history-test",
+      "range-test",
+      "encoded-buffer-test",
+      "stream-content-test",
+      "http-server-test",
+      "speaker-state-test",
+      "yeney",
+      "position-test",
+      "encoder-test",
+      "resume-state-test",
+      "streamer-test",
+      "upnp-test",
+      "own-control-test",
+      "timing-contract-test",
+      "timing-tap-test",
+      "lms-position-test",
+      "cold-position-test",
+      "field-cold-test",
+      "oct11-acquisition-test",
+      "oct12-boundary-test",
+      "queue-item-store-test",
+      "queue-declaration-test",
+      "core-queue-sink-test",
+      "yeney-queue-dryrun",
+      "queue-route-test",
+      "queue-metadata-test",
+      "queue-actions-test",
+      "queue-ownership-test",
+      "playback-mode-test",
+      "queue-position-test",
+      "stream-metrics-test",
+      "stream-pacing-test",
+      "encoded-backpressure-test",
+      "stream-pacing-encoder-test",
+      "stream-metrics-lifetime-test",
+      "xml-sanitize-test",
+      "room-status-test",
+      "queue-source-test",
+      "lms-icon-test",
+      "lms-icon-connection-test",
+      "volume-test",
+      "podcast-sink-test",
+      "podcast-metadata-fixture",
+      "queue-window-test",
+      "consumption-diagnostic-test",
+      "seek-worker-test"
+    ],
+    "native-mp4-test": [
+      "native-mp4-fixture"
+    ],
+    "speaker-position-test": [
+      "speaker-position-fit-test",
+      "speaker-websocket-fixture",
+      "websocket-timer-fixture",
+      "yeney"
+    ],
+    "navigation-targeted": [
+      "yeney"
+    ],
+    "full-queue-pressure-soak": [
+      "yeney"
+    ],
+    "navigation-soak": [
+      "yeney"
+    ]
+  },
+  "steps": [
+    {
+      "name": "t0001",
+      "target": "full-queue-pressure-soak",
+      "command": "YENEY_POSITION_SOURCE=websocket YENEY_FAKE_WEBSOCKET=1 YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_SOAK_SEED=314159 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "full-queue-pressure-soak"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 416.19897989201127,
+      "modes": [
+        "full"
+      ],
+      "label": "full-queue-pressure-soak-001",
+      "time_judging": true,
+      "reference": {
+        "wall": 416.19897989201127,
+        "cpu": 98.593806,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0002",
+      "target": "full-queue-pressure",
+      "command": "$(MAKE) -C third_party/yeney-core mp4-position-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "full-queue-pressure"
+      },
+      "phase": "prepare",
+      "reason": "Build-only nested target, completed before parallel groups.",
+      "seconds": 0.004810076032299548,
+      "modes": [
+        "full"
+      ],
+      "label": "full-queue-pressure-001",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.004810076032299548,
+        "cpu": 0.004701,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0003",
+      "target": "full-queue-pressure",
+      "command": "for run in 1 2 3; do \\\n    printf 'D1 final-binary run=%s/3\\n' \"$$run\"; \\\n    source=websocket; fake=1; if test $$run = 3; then source=upnp; fake=0; fi; \\\n    YENEY_POSITION_SOURCE=$$source YENEY_FAKE_WEBSOCKET=$$fake YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py || exit $$?; \\\ndone",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "full-queue-pressure"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 219.63352056697477,
+      "modes": [
+        "full"
+      ],
+      "label": "full-queue-pressure-002",
+      "time_judging": true,
+      "reference": {
+        "wall": 219.63352056697477,
+        "cpu": 57.604566,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0004",
+      "target": "full-queue-pressure",
+      "command": "YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_CODEC=alac python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "full-queue-pressure"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 68.60022415901767,
+      "modes": [
+        "full"
+      ],
+      "label": "full-queue-pressure-003",
+      "time_judging": true,
+      "reference": {
+        "wall": 68.60022415901767,
+        "cpu": 18.620212000000002,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0005",
+      "target": "full-queue-pressure",
+      "command": "YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_CODEC=converted-flac python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "full-queue-pressure"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 80.66872033599066,
+      "modes": [
+        "full"
+      ],
+      "label": "full-queue-pressure-004",
+      "time_judging": true,
+      "reference": {
+        "wall": 80.66872033599066,
+        "cpu": 39.806821,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0006",
+      "target": "navigation-targeted",
+      "command": "python3 tests/navigation_suite.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "navigation-targeted"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 1650.7743755860138,
+      "modes": [
+        "full"
+      ],
+      "label": "navigation-targeted-001",
+      "time_judging": true,
+      "reference": {
+        "wall": 1650.7743755860138,
+        "cpu": 857.588595,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0007",
+      "target": "navigation-soak",
+      "command": "python3 tests/navigation_suite.py --soak",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "navigation-soak"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 702.6926915809745,
+      "modes": [
+        "full"
+      ],
+      "label": "navigation-soak-001",
+      "time_judging": true,
+      "reference": {
+        "wall": 702.6926915809745,
+        "cpu": 170.975963,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0008",
+      "target": "speaker-position-test",
+      "command": "./speaker-position-fit-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.002319650026038289,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-001",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.002319650026038289,
+        "cpu": 0.0022199999999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0009",
+      "target": "speaker-position-test",
+      "command": "YENEY_WS_FIXTURE=./speaker-websocket-fixture python3 tests/speaker_websocket_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 8.079907189996447,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-002",
+      "time_judging": true,
+      "reference": {
+        "wall": 8.079907189996447,
+        "cpu": 0.33623,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0010",
+      "target": "speaker-position-test",
+      "command": "python3 tests/local_api_compat_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 18.08827053999994,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-003",
+      "time_judging": true,
+      "reference": {
+        "wall": 18.08827053999994,
+        "cpu": 0.7545389999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0011",
+      "target": "speaker-position-test",
+      "command": "YENEY_COMPAT_FIXTURE=./speaker-websocket-fixture python3 tests/local_api_compat_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 3.077196417027153,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-004",
+      "time_judging": true,
+      "reference": {
+        "wall": 3.077196417027153,
+        "cpu": 0.345668,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0012",
+      "target": "speaker-position-test",
+      "command": "python3 tests/local_api_capture_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 4.077057535992935,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-005",
+      "time_judging": true,
+      "reference": {
+        "wall": 4.077057535992935,
+        "cpu": 0.17812599999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0013",
+      "target": "speaker-position-test",
+      "command": "python3 tests/local_api_capture_interrupt_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 9.087848199007567,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-006",
+      "time_judging": true,
+      "reference": {
+        "wall": 9.087848199007567,
+        "cpu": 0.306344,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0014",
+      "target": "speaker-position-test",
+      "command": "python3 tests/speaker_capture_states_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 8.079376351030078,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-007",
+      "time_judging": true,
+      "reference": {
+        "wall": 8.079376351030078,
+        "cpu": 0.390762,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0015",
+      "target": "speaker-position-test",
+      "command": "python3 tests/sonos_timing_probe_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 4.600969557010103,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-008",
+      "time_judging": true,
+      "reference": {
+        "wall": 4.600969557010103,
+        "cpu": 0.238699,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0016",
+      "target": "speaker-position-test",
+      "command": "python3 tests/websocket_lifecycle_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 37.61972675099969,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "speaker-position-test-009",
+      "time_judging": true,
+      "reference": {
+        "wall": 37.61972675099969,
+        "cpu": 1.277912,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0017",
+      "target": "native-mp4-test",
+      "command": "python3 tests/native_mp4_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "native-mp4-test",
+        "fast": "native-mp4-test"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 0.559059874038212,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "native-mp4-test-001",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.559059874038212,
+        "cpu": 0.061966999999999994,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0018",
+      "target": "native-pcm-test",
+      "command": "python3 tests/native_pcm_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "native-pcm-test",
+        "fast": "native-pcm-test"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 2.5715865730307996,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "native-pcm-test-001",
+      "time_judging": true,
+      "reference": {
+        "wall": 2.5715865730307996,
+        "cpu": 0.09320099999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0019",
+      "target": "main",
+      "command": "./speaker-position-fit-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.0018633209983818233,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-001",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.0018633209983818233,
+        "cpu": 0.0017569999999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0020",
+      "target": "main",
+      "command": "./queue-native-decoder-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 20.286954488023184,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-002",
+      "time_judging": true,
+      "reference": {
+        "wall": 20.286954488023184,
+        "cpu": 34.426872,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0021",
+      "target": "main",
+      "command": "./seek-worker-test mismatch",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.004827786993701011,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-003",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.004827786993701011,
+        "cpu": 0.004651,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0022",
+      "target": "main",
+      "command": "./seek-worker-test trim",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.003920392016880214,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-004",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.003920392016880214,
+        "cpu": 0.003688,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0023",
+      "target": "main",
+      "command": "./seek-worker-test warmup",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.004722331999801099,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-005",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.004722331999801099,
+        "cpu": 0.004417,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0024",
+      "target": "main",
+      "command": "./seek-worker-test warmup-short",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.004108330002054572,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-006",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.004108330002054572,
+        "cpu": 0.003948999999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0025",
+      "target": "main",
+      "command": "./seek-worker-test unknown",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.004253177961800247,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-007",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.004253177961800247,
+        "cpu": 0.00404,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0026",
+      "target": "main",
+      "command": "./seek-worker-test unknown-origin",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.0052590599516406655,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-008",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.0052590599516406655,
+        "cpu": 0.005012,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0027",
+      "target": "main",
+      "command": "./seek-worker-test worker",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.0036768229911103845,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-009",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.0036768229911103845,
+        "cpu": 0.0034409999999999996,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0028",
+      "target": "main",
+      "command": "python3 tests/worker_fault_binary_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 10.384791193995625,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-010",
+      "time_judging": true,
+      "reference": {
+        "wall": 10.384791193995625,
+        "cpu": 8.948469000000001,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0029",
+      "target": "main",
+      "command": "./consumption-diagnostic-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 2.252779881004244,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-011",
+      "time_judging": true,
+      "reference": {
+        "wall": 2.252779881004244,
+        "cpu": 0.0028079999999999997,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0030",
+      "target": "main",
+      "command": "./queue-declaration-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.004840323003008962,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-012",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.004840323003008962,
+        "cpu": 0.0048389999999999996,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0031",
+      "target": "main",
+      "command": "./queue-window-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.020362937008030713,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-013",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.020362937008030713,
+        "cpu": 0.019323,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0032",
+      "target": "main",
+      "command": "./volume-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.001792708004359156,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-014",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.001792708004359156,
+        "cpu": 0.001559,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0033",
+      "target": "main",
+      "command": "python3 tests/volume_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 37.401849515968934,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-015",
+      "time_judging": true,
+      "reference": {
+        "wall": 37.401849515968934,
+        "cpu": 2.202409,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0034",
+      "target": "main",
+      "command": "python3 tests/player_name_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 5.273226820980199,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-016",
+      "time_judging": true,
+      "reference": {
+        "wall": 5.273226820980199,
+        "cpu": 0.706086,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0035",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_NAME_ONLY=1 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 6.70753324899124,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-017",
+      "time_judging": true,
+      "reference": {
+        "wall": 6.70753324899124,
+        "cpu": 4.889468,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0036",
+      "target": "main",
+      "command": "./stream-metrics-lifetime-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.005198248953092843,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-018",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.005198248953092843,
+        "cpu": 0.005202,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0037",
+      "target": "main",
+      "command": "./stream-metrics-lifetime-test worker",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.017380528966896236,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-019",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.017380528966896236,
+        "cpu": 0.0178,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0038",
+      "target": "main",
+      "command": "YENEY_STREAM_PACING=sonos YENEY_START_LEAD_MS=1000 ./stream-pacing-encoder-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.007054616988170892,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-020",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.007054616988170892,
+        "cpu": 0.010218,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0039",
+      "target": "main",
+      "command": "./encoded-backpressure-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.2386988719808869,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-021",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.2386988719808869,
+        "cpu": 0.005603,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0040",
+      "target": "main",
+      "command": "./stream-pacing-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 8.229466081946157,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-022",
+      "time_judging": true,
+      "reference": {
+        "wall": 8.229466081946157,
+        "cpu": 8.228536,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0041",
+      "target": "main",
+      "command": "python3 tests/stream_pacing_setting_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.031205524981487542,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-023",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.031205524981487542,
+        "cpu": 0.031616,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0042",
+      "target": "main",
+      "command": "./stream-metrics-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.00214051001239568,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-024",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.00214051001239568,
+        "cpu": 0.002003,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0043",
+      "target": "main",
+      "command": "python3 tests/stream_pacing_suite_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 0.12250976701034233,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-025",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.12250976701034233,
+        "cpu": 0.11269799999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0044",
+      "target": "main",
+      "command": "python3 tests/remote_selection_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0759780160151422,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-026",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0759780160151422,
+        "cpu": 0.07581199999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0045",
+      "target": "main",
+      "command": "python3 tests/queue_device_suite_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 45.71474018401932,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-027",
+      "time_judging": true,
+      "reference": {
+        "wall": 45.71474018401932,
+        "cpu": 10.189672,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0046",
+      "target": "main",
+      "command": "python3 tests/queue_device_cli_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 61.151173744990956,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-028",
+      "time_judging": true,
+      "reference": {
+        "wall": 61.151173744990956,
+        "cpu": 2.5846679999999997,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0047",
+      "target": "main",
+      "command": "python3 tests/queue_protocol_setting_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.0653201499953866,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-029",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0653201499953866,
+        "cpu": 0.065638,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0048",
+      "target": "main",
+      "command": "YENEY_ACCEPTANCE_BINARY=$(CURDIR)/yeney python3 tests/queue_binary_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 106.51720502000535,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-030",
+      "time_judging": true,
+      "reference": {
+        "wall": 106.51720502000535,
+        "cpu": 8.115870999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0049",
+      "target": "main",
+      "command": "python3 tests/queue_takeover_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 45.8615302410326,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-031",
+      "time_judging": true,
+      "reference": {
+        "wall": 45.8615302410326,
+        "cpu": 3.711002,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0050",
+      "target": "main",
+      "command": "python3 tests/queue_group_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 18.484643275965936,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-032",
+      "time_judging": true,
+      "reference": {
+        "wall": 18.484643275965936,
+        "cpu": 2.0678,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0051",
+      "target": "main",
+      "command": "python3 tests/queue_title_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 3.3800446759560145,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-033",
+      "time_judging": true,
+      "reference": {
+        "wall": 3.3800446759560145,
+        "cpu": 0.911789,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0052",
+      "target": "main",
+      "command": "python3 tests/length_fixture_policy_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.3332755079609342,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-034",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.3332755079609342,
+        "cpu": 0.334074,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0053",
+      "target": "main",
+      "command": "python3 tests/length_binary_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 8.274801274994388,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-035",
+      "time_judging": true,
+      "reference": {
+        "wall": 8.274801274994388,
+        "cpu": 1.3674089999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0054",
+      "target": "main",
+      "command": "python3 tests/podcast_metadata_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 2.548462274018675,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-036",
+      "time_judging": true,
+      "reference": {
+        "wall": 2.548462274018675,
+        "cpu": 0.051560999999999996,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0055",
+      "target": "main",
+      "command": "./queue-source-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.001869585015811026,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-037",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.001869585015811026,
+        "cpu": 0.001727,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0056",
+      "target": "main",
+      "command": "./room-status-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.001911982020828873,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-038",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.001911982020828873,
+        "cpu": 0.0017859999999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0057",
+      "target": "main",
+      "command": "./queue-position-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0018586739897727966,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-039",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0018586739897727966,
+        "cpu": 0.0017239999999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0058",
+      "target": "main",
+      "command": "./playback-mode-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.001817786949686706,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-040",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.001817786949686706,
+        "cpu": 0.001713,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0059",
+      "target": "main",
+      "command": "python3 tests/playback_mode_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 0.6439668270177208,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-041",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.6439668270177208,
+        "cpu": 0.10098299999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0060",
+      "target": "main",
+      "command": "./queue-ownership-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.00207115599187091,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-042",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.00207115599187091,
+        "cpu": 0.001936,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0061",
+      "target": "main",
+      "command": "./queue-actions-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0019324809545651078,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-043",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0019324809545651078,
+        "cpu": 0.001807,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0062",
+      "target": "main",
+      "command": "./queue-metadata-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0025671629700809717,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-044",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0025671629700809717,
+        "cpu": 0.002356,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0063",
+      "target": "main",
+      "command": "python3 tests/artwork_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 10.777289059013128,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-045",
+      "time_judging": true,
+      "reference": {
+        "wall": 10.777289059013128,
+        "cpu": 2.1735789999999997,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0064",
+      "target": "main",
+      "command": "python3 tests/xml_metadata_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 6.87640328501584,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-046",
+      "time_judging": true,
+      "reference": {
+        "wall": 6.87640328501584,
+        "cpu": 1.854593,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0065",
+      "target": "main",
+      "command": "./queue-route-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.4901900500408374,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-047",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.4901900500408374,
+        "cpu": 0.020947999999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0066",
+      "target": "main",
+      "command": "./queue-item-store-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.24996511498466134,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-048",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.24996511498466134,
+        "cpu": 0.03076,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0067",
+      "target": "main",
+      "command": "./core-queue-sink-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.03711910604033619,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-049",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.03711910604033619,
+        "cpu": 0.037777,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0068",
+      "target": "main",
+      "command": "YENEY_TIMING_PROBE=1 YENEY_TIMING_PUBLISH=1 ./timing-tap-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.0021116069983690977,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-050",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.0021116069983690977,
+        "cpu": 0.002019,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0069",
+      "target": "main",
+      "command": "./timing-contract-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 2.0079545750049874,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-051",
+      "time_judging": false,
+      "reference": {
+        "wall": 2.0079545750049874,
+        "cpu": 2.0230740000000003,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0070",
+      "target": "main",
+      "command": "./cold-position-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.04248734301654622,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-052",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.04248734301654622,
+        "cpu": 0.025034999999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0071",
+      "target": "main",
+      "command": "./field-cold-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Captured or synthetic clock replay; wall time only stamps a fresh persistence file, not a precision verdict.",
+      "seconds": 0.03536373999668285,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-053",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.03536373999668285,
+        "cpu": 0.035132,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0072",
+      "target": "main",
+      "command": "./oct11-acquisition-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Captured or synthetic clock replay; wall time only stamps a fresh persistence file, not a precision verdict.",
+      "seconds": 0.06724606000352651,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-054",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.06724606000352651,
+        "cpu": 0.06505999999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0073",
+      "target": "main",
+      "command": "./oct12-boundary-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Captured or synthetic clock replay; wall time only stamps a fresh persistence file, not a precision verdict.",
+      "seconds": 0.36532659601652995,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-055",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.36532659601652995,
+        "cpu": 0.177196,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0074",
+      "target": "main",
+      "command": "YENEY_TIMING_PRIOR=0 ./field-cold-test prior-setting",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Captured or synthetic clock replay; wall time only stamps a fresh persistence file, not a precision verdict.",
+      "seconds": 0.004463838005904108,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-056",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.004463838005904108,
+        "cpu": 0.002228,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0075",
+      "target": "main",
+      "command": "YENEY_TIMING_PRIOR=1 ./field-cold-test prior-setting",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Captured or synthetic clock replay; wall time only stamps a fresh persistence file, not a precision verdict.",
+      "seconds": 0.0042373830219730735,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-057",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0042373830219730735,
+        "cpu": 0.002084,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0076",
+      "target": "main",
+      "command": "./lms-position-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.04972125502536073,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-058",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.04972125502536073,
+        "cpu": 0.049463,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0077",
+      "target": "main",
+      "command": "python3 tests/lms_position_check_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.1315353200188838,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-059",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.1315353200188838,
+        "cpu": 0.128712,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0078",
+      "target": "main",
+      "command": "python3 tests/timing_contract_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 0.08384095499059185,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-060",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.08384095499059185,
+        "cpu": 0.084772,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0079",
+      "target": "main",
+      "command": "./timing-probe-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.04351270501501858,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-061",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.04351270501501858,
+        "cpu": 0.043287,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0080",
+      "target": "main",
+      "command": "./timing-probe-field-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.10576443199533969,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-062",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.10576443199533969,
+        "cpu": 0.105584,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0081",
+      "target": "main",
+      "command": "python3 tests/timing_probe_settings_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 0.0569865420111455,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-063",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.0569865420111455,
+        "cpu": 0.058900999999999995,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0082",
+      "target": "main",
+      "command": "YENEY_TIMING_STALE_S=10 ./timing-probe-resets-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.002024104993324727,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-064",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.002024104993324727,
+        "cpu": 0.001931,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0083",
+      "target": "main",
+      "command": "python3 tests/timing_probe_http_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 34.83887738798512,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-065",
+      "time_judging": true,
+      "reference": {
+        "wall": 34.83887738798512,
+        "cpu": 0.44862399999999997,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0084",
+      "target": "main",
+      "command": "python3 tests/timing_probe_raw_http_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 11.54881863197079,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-066",
+      "time_judging": true,
+      "reference": {
+        "wall": 11.54881863197079,
+        "cpu": 0.19530699999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0085",
+      "target": "main",
+      "command": "python3 tests/stream_debug_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 0.3600156469619833,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-067",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.3600156469619833,
+        "cpu": 0.348181,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0086",
+      "target": "main",
+      "command": "python3 tests/lead_setting_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.034688979969359934,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-068",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.034688979969359934,
+        "cpu": 0.035373,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0087",
+      "target": "main",
+      "command": "YENEY_START_LEAD_MS=2000 ./lead-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 1.204185371985659,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-069",
+      "time_judging": true,
+      "reference": {
+        "wall": 1.204185371985659,
+        "cpu": 0.038685,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0088",
+      "target": "main",
+      "command": "YENEY_START_LEAD_MS=0 ./lead-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 1.204436207015533,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-070",
+      "time_judging": true,
+      "reference": {
+        "wall": 1.204436207015533,
+        "cpu": 0.034159,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0089",
+      "target": "main",
+      "command": "YENEY_START_LEAD_MS=2000 ./range-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 2.4892129360232502,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-071",
+      "time_judging": true,
+      "reference": {
+        "wall": 2.4892129360232502,
+        "cpu": 0.063081,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0090",
+      "target": "main",
+      "command": "python3 tests/start_lead_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 7.54658806900261,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-072",
+      "time_judging": true,
+      "reference": {
+        "wall": 7.54658806900261,
+        "cpu": 0.58604,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0091",
+      "target": "main",
+      "command": "./range-history-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0019026999943889678,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-073",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0019026999943889678,
+        "cpu": 0.001738,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0092",
+      "target": "main",
+      "command": "./range-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 4.238775948993862,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-074",
+      "time_judging": true,
+      "reference": {
+        "wall": 4.238775948993862,
+        "cpu": 0.121639,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0093",
+      "target": "main",
+      "command": "./encoded-buffer-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.02214767999248579,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-075",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.02214767999248579,
+        "cpu": 0.00195,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0094",
+      "target": "main",
+      "command": "python3 tests/encoded_overwrite_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 1.3888373239897192,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-076",
+      "time_judging": false,
+      "reference": {
+        "wall": 1.3888373239897192,
+        "cpu": 1.3939949999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0095",
+      "target": "main",
+      "command": "python3 tests/http_server_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 6.918146262993105,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-077",
+      "time_judging": true,
+      "reference": {
+        "wall": 6.918146262993105,
+        "cpu": 0.050481,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0096",
+      "target": "main",
+      "command": "./speaker-state-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Uses live steady_clock timestamps for the GENA self-edit fence; conservative isolation from host load.",
+      "seconds": 0.0017381859943270683,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-078",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.0017381859943270683,
+        "cpu": 0.0016129999999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0097",
+      "target": "main",
+      "command": "./upnp-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0026898260111920536,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-079",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0026898260111920536,
+        "cpu": 0.0025,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0098",
+      "target": "main",
+      "command": "./xml-sanitize-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0020640009897761047,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-080",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0020640009897761047,
+        "cpu": 0.0019399999999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0099",
+      "target": "main",
+      "command": "./stream-content-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.001964887953363359,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-081",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.001964887953363359,
+        "cpu": 0.001852,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0100",
+      "target": "main",
+      "command": "python3 tests/title_format_setting_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.17503085103817284,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-082",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.17503085103817284,
+        "cpu": 0.175149,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0101",
+      "target": "main",
+      "command": "python3 tests/stream_content_setting_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.18668092199368402,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-083",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.18668092199368402,
+        "cpu": 0.18681399999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0102",
+      "target": "main",
+      "command": "python3 tests/list_rooms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 0.5730467090033926,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-084",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.5730467090033926,
+        "cpu": 0.075206,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0103",
+      "target": "main",
+      "command": "python3 tests/lms_icon_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 15.146600712032523,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-085",
+      "time_judging": true,
+      "reference": {
+        "wall": 15.146600712032523,
+        "cpu": 0.638662,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0104",
+      "target": "main",
+      "command": "python3 tests/room_state_lookup_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 1.073569315019995,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-086",
+      "time_judging": true,
+      "reference": {
+        "wall": 1.073569315019995,
+        "cpu": 0.49802099999999994,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0105",
+      "target": "main",
+      "command": "python3 tests/installer_state_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.997866895981133,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-087",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.997866895981133,
+        "cpu": 0.906982,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0106",
+      "target": "main",
+      "command": "python3 tests/debug_settings_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.22002746898215264,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-088",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.22002746898215264,
+        "cpu": 0.21995900000000002,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0107",
+      "target": "main",
+      "command": "python3 tests/script_references_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.10613995901076123,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-089",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.10613995901076123,
+        "cpu": 0.09242,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0108",
+      "target": "main",
+      "command": "python3 tests/consumer_policy_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.1846740180044435,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-090",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.1846740180044435,
+        "cpu": 0.184913,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0109",
+      "target": "main",
+      "command": "python3 tests/test_run_storage.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 0.33362260699504986,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-091",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.33362260699504986,
+        "cpu": 0.32922399999999996,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0110",
+      "target": "main",
+      "command": "python3 tests/installer_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 3.295577891985886,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-092",
+      "time_judging": true,
+      "reference": {
+        "wall": 3.295577891985886,
+        "cpu": 2.891329,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0111",
+      "target": "main",
+      "command": "python3 tests/upnp_mock_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 130.7608561119996,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-093",
+      "time_judging": true,
+      "reference": {
+        "wall": 130.7608561119996,
+        "cpu": 38.515357,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0112",
+      "target": "main",
+      "command": "python3 tests/own_display_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 12.598535177996382,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-094",
+      "time_judging": false,
+      "reference": {
+        "wall": 12.598535177996382,
+        "cpu": 8.549487,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0113",
+      "target": "main",
+      "command": "./podcast-sink-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.4957722899853252,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-095",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.4957722899853252,
+        "cpu": 0.48993899999999996,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0114",
+      "target": "main",
+      "command": "./position-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0012717359932139516,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-096",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0012717359932139516,
+        "cpu": 0.001154,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0115",
+      "target": "main",
+      "command": "python3 tests/position_reconnect_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.8104997180053033,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-097",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.8104997180053033,
+        "cpu": 0.8102729999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0116",
+      "target": "main",
+      "command": "python3 tests/send_error_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 6.584858691028785,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-098",
+      "time_judging": true,
+      "reference": {
+        "wall": 6.584858691028785,
+        "cpu": 0.083403,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0117",
+      "target": "main",
+      "command": "./streamer-test session",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.05493696598568931,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-099",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.05493696598568931,
+        "cpu": 0.00788,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0118",
+      "target": "main",
+      "command": "./streamer-test position",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.12795434601139277,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-100",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.12795434601139277,
+        "cpu": 0.009198999999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0119",
+      "target": "main",
+      "command": "./streamer-test shutdown",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.033984204987064004,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-101",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.033984204987064004,
+        "cpu": 0.00433,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0120",
+      "target": "main",
+      "command": "./encoder-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 0.15405386401107535,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-102",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.15405386401107535,
+        "cpu": 0.02123,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0121",
+      "target": "main",
+      "command": "./resume-state-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.0018905510078184307,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "test-run-103",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0018905510078184307,
+        "cpu": 0.0017239999999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0122",
+      "target": "main",
+      "command": "YENEY_PAUSE=pause ./streamer-test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 82.71768043597694,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-104",
+      "time_judging": true,
+      "reference": {
+        "wall": 82.71768043597694,
+        "cpu": 0.883928,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0123",
+      "target": "main",
+      "command": "env -u YENEY_PAUSE ./streamer-test stop",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Real-clock deadline, pacing, asynchronous completion or elapsed-time assertion.",
+      "seconds": 6.275519115035422,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-105",
+      "time_judging": true,
+      "reference": {
+        "wall": 6.275519115035422,
+        "cpu": 0.036553,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0124",
+      "target": "main",
+      "command": "python3 tests/http_streamer_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 0.43495375296333805,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-106",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.43495375296333805,
+        "cpu": 0.038523999999999996,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0125",
+      "target": "main",
+      "command": "python3 tests/device_resume_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 23.286739532952197,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-107",
+      "time_judging": false,
+      "reference": {
+        "wall": 23.286739532952197,
+        "cpu": 2.644782,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0126",
+      "target": "main",
+      "command": "python3 tests/yeney_timeline_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 5.443113415967673,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-108",
+      "time_judging": true,
+      "reference": {
+        "wall": 5.443113415967673,
+        "cpu": 5.191699,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0127",
+      "target": "main",
+      "command": "python3 tests/lms_discovery_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 0.4624577850336209,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-109",
+      "time_judging": true,
+      "reference": {
+        "wall": 0.4624577850336209,
+        "cpu": 0.462315,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0128",
+      "target": "main",
+      "command": "python3 tests/device_test_script_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 4.370285374985542,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-110",
+      "time_judging": true,
+      "reference": {
+        "wall": 4.370285374985542,
+        "cpu": 3.8899529999999998,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0129",
+      "target": "main",
+      "command": "python3 tests/pause_mode_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.0897697460022755,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-111",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.0897697460022755,
+        "cpu": 0.08978399999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0130",
+      "target": "main",
+      "command": "python3 tests/audio_mode_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.08308879000833258,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-112",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.08308879000833258,
+        "cpu": 0.083448,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0131",
+      "target": "main",
+      "command": "python3 tests/obsolete_player_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "serial",
+      "reason": "Deterministic configuration/byte checks compile a private fixture; finish this serial work before groups start.",
+      "seconds": 0.2358837149804458,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-113",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.2358837149804458,
+        "cpu": 0.234614,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0132",
+      "target": "main",
+      "command": "python3 tests/core_sonos_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
+      "seconds": 2.7846767329610884,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-114",
+      "time_judging": true,
+      "reference": {
+        "wall": 2.7846767329610884,
+        "cpu": 2.766727,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0133",
+      "target": "main",
+      "command": "python3 tests/player_engine_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 28.04979313298827,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-115",
+      "time_judging": true,
+      "reference": {
+        "wall": 28.04979313298827,
+        "cpu": 1.857137,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0134",
+      "target": "main",
+      "command": "python3 tests/queue_dryrun_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 62.96686319197761,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-116",
+      "time_judging": true,
+      "reference": {
+        "wall": 62.96686319197761,
+        "cpu": 1.111019,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0135",
+      "target": "main",
+      "command": "python3 tests/queue_suite_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 176.62005361297633,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-117",
+      "time_judging": true,
+      "reference": {
+        "wall": 176.62005361297633,
+        "cpu": 10.915129,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0136",
+      "target": "main",
+      "command": "$(MAKE) -C third_party/yeney-core decimator-fixture",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "prepare",
+      "reason": "Build-only nested target, completed before parallel groups.",
+      "seconds": 0.005105238989926875,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-118",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.005105238989926875,
+        "cpu": 0.004980999999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0137",
+      "target": "main",
+      "command": "python3 tests/podcast_device_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Deterministic values, bytes or simulated timestamps; no live-time verdict.",
+      "seconds": 0.07965963101014495,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-119",
+      "time_judging": false,
+      "reference": {
+        "wall": 0.07965963101014495,
+        "cpu": 0.079497,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0138",
+      "target": "main",
+      "command": "python3 tests/podcast_binary_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live waits or elapsed-time checks; conservative quiet classification.",
+      "seconds": 82.35175122099463,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-120",
+      "time_judging": true,
+      "reference": {
+        "wall": 82.35175122099463,
+        "cpu": 8.685777,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0139",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_PODCAST_ONLY=1 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 245.53895624598954,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-121",
+      "time_judging": true,
+      "reference": {
+        "wall": 245.53895624598954,
+        "cpu": 31.43617,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0140",
+      "target": "main",
+      "command": "python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 232.7064822629909,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-122",
+      "time_judging": true,
+      "reference": {
+        "wall": 232.7064822629909,
+        "cpu": 27.532268,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0141",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_LAZY_ONLY=1 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 31.145885108038783,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-123",
+      "time_judging": true,
+      "reference": {
+        "wall": 31.145885108038783,
+        "cpu": 9.58127,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0142",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_NAV_ONLY=1 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 107.84241399198072,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-124",
+      "time_judging": true,
+      "reference": {
+        "wall": 107.84241399198072,
+        "cpu": 14.701175000000001,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0143",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F1 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 21.774930031970143,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-125",
+      "time_judging": true,
+      "reference": {
+        "wall": 21.774930031970143,
+        "cpu": 7.977261,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0144",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F2 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 12.112727176048793,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-126",
+      "time_judging": true,
+      "reference": {
+        "wall": 12.112727176048793,
+        "cpu": 6.00808,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0145",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_NAV_INVARIANTS=1 YENEY_NAV_CASE=F3 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 13.129326579975896,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-127",
+      "time_judging": true,
+      "reference": {
+        "wall": 13.129326579975896,
+        "cpu": 6.688047999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0146",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_IDENTITY_ONLY=1 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 5.255164572037756,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-128",
+      "time_judging": true,
+      "reference": {
+        "wall": 5.255164572037756,
+        "cpu": 4.822507,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0147",
+      "target": "main",
+      "command": "YENEY_REAL_LMS_VOLUME_ONLY=1 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 8.153288205969147,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-129",
+      "time_judging": true,
+      "reference": {
+        "wall": 8.153288205969147,
+        "cpu": 5.117174,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0148",
+      "target": "main",
+      "command": "python3 third_party/yeney-core/tests/decimator_quality.py --sox \"$${YENEY_REAL_LMS_HOME:-$${YENEY_TEST_CACHE}/real-lms-9.1.1}/Bin/x86_64-linux/sox\"",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 3.5567371340002865,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-130",
+      "time_judging": true,
+      "reference": {
+        "wall": 3.5567371340002865,
+        "cpu": 3.549082,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0149",
+      "target": "main",
+      "command": "$(MAKE) -C third_party/yeney-core test",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Nested core suite includes conversion speed, pacing, real clocks and its private fixture builds.",
+      "seconds": 205.60269563499605,
+      "modes": [
+        "full"
+      ],
+      "additional_prerequisites": [
+        "core-tests"
+      ],
+      "label": "test-run-131",
+      "time_judging": true,
+      "reference": {
+        "wall": 205.60269563499605,
+        "cpu": 101.33381800000001,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0150",
+      "target": "main",
+      "command": "YENEY_TIMING_03=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 434.7988550119917,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-132",
+      "time_judging": true,
+      "reference": {
+        "wall": 434.7988550119917,
+        "cpu": 44.491462999999996,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0151",
+      "target": "main",
+      "command": "YENEY_TIMING_03=1 YENEY_POSITION_SOURCE=upnp YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 438.2487296619802,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-133",
+      "time_judging": true,
+      "reference": {
+        "wall": 438.2487296619802,
+        "cpu": 38.439851000000004,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0152",
+      "target": "main",
+      "command": "YENEY_WS_LIFECYCLE=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 309.28492159297457,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-134",
+      "time_judging": true,
+      "reference": {
+        "wall": 309.28492159297457,
+        "cpu": 32.952094,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0153",
+      "target": "main",
+      "command": "YENEY_TIMING_03D_CONTRACT=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 12.04894637799589,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-135",
+      "time_judging": true,
+      "reference": {
+        "wall": 12.04894637799589,
+        "cpu": 6.003284000000001,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0154",
+      "target": "main",
+      "command": "YENEY_TIMING_03D=1 YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_FULLQ_QUOTA_MIB=256 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 33.029574429034255,
+      "modes": [
+        "full"
+      ],
+      "label": "test-run-136",
+      "time_judging": true,
+      "reference": {
+        "wall": 33.029574429034255,
+        "cpu": 10.184840999999999,
+        "cores": 12,
+        "commit": "64c56731f407978e91cb0e8a65d1221d3a139daa"
+      }
+    },
+    {
+      "name": "t0155",
+      "target": "main",
+      "command": "YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "fast": "test-fast-run"
+      },
+      "phase": "quiet",
+      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "seconds": 1,
+      "modes": [
+        "fast"
+      ],
+      "label": "test-fast-run-056",
+      "time_judging": true
+    },
+    {
+      "name": "parallel-runner-contract",
+      "target": "runner-contract",
+      "command": "python3 tests/test_parallel_runner.py",
+      "environment": {},
+      "prerequisites": {},
+      "phase": "quiet",
+      "reason": "Exercises namespaces and real process interruption with no competing groups.",
+      "seconds": 5,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "time_judging": true
+    }
+  ],
+  "orders": {
+    "full": [
+      "t0001",
+      "t0002",
+      "t0003",
+      "t0004",
+      "t0005",
+      "t0006",
+      "t0007",
+      "t0008",
+      "t0009",
+      "t0010",
+      "t0011",
+      "t0012",
+      "t0013",
+      "t0014",
+      "t0015",
+      "t0016",
+      "t0017",
+      "t0018",
+      "t0019",
+      "t0020",
+      "t0021",
+      "t0022",
+      "t0023",
+      "t0024",
+      "t0025",
+      "t0026",
+      "t0027",
+      "t0028",
+      "t0029",
+      "t0030",
+      "t0031",
+      "t0032",
+      "t0033",
+      "t0034",
+      "t0035",
+      "t0036",
+      "t0037",
+      "t0038",
+      "t0039",
+      "t0040",
+      "t0041",
+      "t0042",
+      "t0043",
+      "t0044",
+      "t0045",
+      "t0046",
+      "t0047",
+      "t0048",
+      "t0049",
+      "t0050",
+      "t0051",
+      "t0052",
+      "t0053",
+      "t0054",
+      "t0055",
+      "t0056",
+      "t0057",
+      "t0058",
+      "t0059",
+      "t0060",
+      "t0061",
+      "t0062",
+      "t0063",
+      "t0064",
+      "t0065",
+      "t0066",
+      "t0067",
+      "t0068",
+      "t0069",
+      "t0070",
+      "t0071",
+      "t0072",
+      "t0073",
+      "t0074",
+      "t0075",
+      "t0076",
+      "t0077",
+      "t0078",
+      "t0079",
+      "t0080",
+      "t0081",
+      "t0082",
+      "t0083",
+      "t0084",
+      "t0085",
+      "t0086",
+      "t0087",
+      "t0088",
+      "t0089",
+      "t0090",
+      "t0091",
+      "t0092",
+      "t0093",
+      "t0094",
+      "t0095",
+      "t0096",
+      "t0097",
+      "t0098",
+      "t0099",
+      "t0100",
+      "t0101",
+      "t0102",
+      "t0103",
+      "t0104",
+      "t0105",
+      "t0106",
+      "t0107",
+      "t0108",
+      "t0109",
+      "t0110",
+      "t0111",
+      "t0112",
+      "t0113",
+      "t0114",
+      "t0115",
+      "t0116",
+      "t0117",
+      "t0118",
+      "t0119",
+      "t0120",
+      "t0121",
+      "t0122",
+      "t0123",
+      "t0124",
+      "t0125",
+      "t0126",
+      "t0127",
+      "t0128",
+      "t0129",
+      "t0130",
+      "t0131",
+      "t0132",
+      "t0133",
+      "t0134",
+      "t0135",
+      "t0136",
+      "t0137",
+      "t0138",
+      "t0139",
+      "t0140",
+      "t0141",
+      "t0142",
+      "t0143",
+      "t0144",
+      "t0145",
+      "t0146",
+      "t0147",
+      "t0148",
+      "t0149",
+      "t0150",
+      "t0151",
+      "t0152",
+      "t0153",
+      "t0154",
+      "parallel-runner-contract"
+    ],
+    "fast": [
+      "t0008",
+      "t0009",
+      "t0010",
+      "t0011",
+      "t0012",
+      "t0013",
+      "t0014",
+      "t0015",
+      "t0016",
+      "t0017",
+      "t0018",
+      "t0019",
+      "t0020",
+      "t0021",
+      "t0022",
+      "t0023",
+      "t0024",
+      "t0025",
+      "t0026",
+      "t0027",
+      "t0029",
+      "t0030",
+      "t0031",
+      "t0032",
+      "t0036",
+      "t0037",
+      "t0038",
+      "t0039",
+      "t0040",
+      "t0042",
+      "t0055",
+      "t0056",
+      "t0057",
+      "t0058",
+      "t0060",
+      "t0061",
+      "t0062",
+      "t0065",
+      "t0066",
+      "t0067",
+      "t0068",
+      "t0069",
+      "t0070",
+      "t0071",
+      "t0072",
+      "t0073",
+      "t0074",
+      "t0075",
+      "t0076",
+      "t0079",
+      "t0080",
+      "t0082",
+      "t0087",
+      "t0088",
+      "t0089",
+      "t0091",
+      "t0092",
+      "t0093",
+      "t0096",
+      "t0097",
+      "t0098",
+      "t0099",
+      "t0113",
+      "t0114",
+      "t0120",
+      "t0121",
+      "t0155",
+      "parallel-runner-contract"
+    ]
+  },
+  "external_build_sets": {
+    "core-tests": {
+      "directory": "third_party/yeney-core",
+      "targets": [
+        "decimator-fixture",
+        "mp3-origin-test",
+        "test-shm-player",
+        "pcm-origin-test",
+        "test-speaker",
+        "clock-unit",
+        "shm-unit",
+        "all",
+        "unit-test",
+        "test-player",
+        "decoder-test",
+        "demux-sanitized",
+        "decimator-unit",
+        "content-position-test",
+        "mp4-position-test"
+      ]
+    }
+  },
+  "profile": {
+    "source_commit": "64c56731f407978e91cb0e8a65d1221d3a139daa",
+    "cores": 12,
+    "wall": 6558.256659270031
+  }
+}

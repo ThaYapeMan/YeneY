@@ -729,6 +729,56 @@ including user seeks and track boundaries; steady progression is poll-only.
 
 ### Building and testing
 
+The full gate uses `scripts/test-steps.json` as its only runtime step list.
+`make test-serial` runs that list in the original order;
+`YENEY_TEST_JOBS=1 make test` uses the same serial path. `make test` otherwise
+uses one isolated group per available core; `YENEY_TEST_JOBS` overrides their number. The fast
+gate remains serial: on 12 cores it took 220.5 seconds versus 249.5 seconds
+with isolated parallel scheduling (the previous recipe took 213.8 seconds).
+
+Shared binaries and core fixtures are built once before groups start. Pure
+configuration tests that compile private fixtures run in a serial preparation
+phase. Each parallel group has private loopback networking, IPC, shared memory,
+`HOME`, `TMPDIR`, XDG directories and writable caches. The numeric user ID stays
+the same. Bubblewrap is required. Groups have no route beyond loopback and read
+the installed LMS and Perl dependencies from the shared cache without writing
+there. Fixed `/tmp` and `/var/tmp` paths map to group-owned cache directories.
+
+Checks that judge elapsed time, alignment, pacing, latency, speed or live soak
+models run alone after every group has finished. The runner waits for the
+container's cgroup processor use over 30 seconds to be below 15 percent of its
+available cores and verifies conversion fitness of at least 20 times real time
+before a full run and again before its quiet phase. Capacity is read afresh
+from process affinity, effective cgroup cpusets and cgroup quotas. Host core
+counts, load averages and host idle counters are not admission criteria.
+Never start a gate while another round, pytest or a `make test` works in the
+checkout, or while the consumer project's gate runs on the container.
+
+`python3 scripts/test-runner.py --list` prints stable step names and commands.
+Run one check serially on the existing binary with
+`python3 scripts/test-runner.py --step NAME --no-build`. Failure output gives
+a replay command that restores the manifest, test environment and isolation,
+with a binary checksum, the group and the log path. Other groups
+finish unless `YENEY_TEST_FAIL_FAST=1`. An interrupt terminates groups and their
+descendants. Missing, duplicate, skipped or failed entries fail completeness;
+the full gate also requires positive production `require_v1=True` evidence.
+
+The terminal prints compact results in manifest order. The complete ordered
+transcript remains in `combined.log`, with per-step logs and metrics in one
+directory per group under the run directory printed at startup. Set
+`YENEY_TEST_VERBOSE=1` for verbose output. The normal five-run retention policy
+remains in effect. Scratch audio is removed; diagnostic text is retained.
+
+To add a check, append a new stable name to the appropriate mode orders and add
+its command, environment, mode membership, build-set references, phase and
+reason to the manifest. Add a compilation rule to the Makefile if needed and
+list its target in the referenced manifest build set. Do not add a second test
+recipe. Commands retain Makefile-style dollar escaping. Mark `time_judging`
+true and `phase` as `quiet` for a live-clock verdict; explain the reason. If
+uncertain, use `quiet`. Simulated timestamp replays can use `parallel`; a
+non-timing check that compiles a private fixture uses `serial`. Keep existing
+names when inserting new checks.
+
 ```sh
 make
 make test
@@ -739,8 +789,8 @@ Persistent test installations use `$YENEY_TEST_CACHE` (default `~/.cache/yeney-t
 per-run scratch uses `$TMPDIR` (default `/var/tmp`) and is removed on exit.
 Only the last five transcript runs are retained in the cache. The cross-repository
 SHM consumer requires the sibling `../LampaStream` checkout or an explicit
-`LAMPASTREAM_CHECKOUT`; only `LAMPASTREAM_CONSUMER=off` opts out with a loud
-NOT RUN summary. See [test storage](DEVICE-VERIFICATION.md#local-automated-test-storage-and-consumer-coverage).
+`LAMPASTREAM_CHECKOUT`; only `LAMPASTREAM_CONSUMER=off` remains available to the standalone core policy
+tests; the full gate rejects a skipped consumer. See [test storage](DEVICE-VERIFICATION.md#local-automated-test-storage-and-consumer-coverage).
 Test tools also require `flac`, `ffmpeg`, and `clang-format` (set `CLANG_FORMAT`
 to its executable path when needed). Physical
 tests on real Sonos speakers use `scripts/device-test.sh`; see
