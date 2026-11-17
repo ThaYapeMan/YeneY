@@ -316,7 +316,7 @@ def main():
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--manifest', type=Path, default=ROOT/'scripts/test-steps.json')
     parser.add_argument('--plain-split', action='store_true', default=os.environ.get('YENEY_TEST_SCHEDULE') == 'plain')
-    parser.add_argument('--lanes', type=int, default=os.environ.get('YENEY_TEST_LANES', '4'),
+    parser.add_argument('--lanes', type=int, default=os.environ.get('YENEY_TEST_LANES', '5'),
                         help='Number of isolated timing lanes (1 runs the quiet phase serially)')
     parser.add_argument('--stop-file', type=Path, default=os.environ.get('YENEY_TEST_STOP_FILE'),
                         help='Interrupt the run when this file appears')

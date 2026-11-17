@@ -823,7 +823,8 @@ there. Fixed `/tmp` and `/var/tmp` paths map to group-owned cache directories.
 Checks that judge elapsed time, alignment, pacing, latency, speed or live soak
 models run after the ordinary groups have finished. The parallel gate balances
 these checks across isolated lanes, placing the longest checks first. Each
-lane and the runner have disjoint physical cores. The targeted navigation
+lane and the runner have disjoint physical cores. The default is five lanes
+when there are enough physical cores. The targeted navigation
 matrix is partitioned by position source and media group in the lanes.
 Each failed lane check runs again alone after admission. A passing second
 opinion records a load-sensitive verdict and preserves both logs. Pin future
