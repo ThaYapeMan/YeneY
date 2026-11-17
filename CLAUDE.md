@@ -821,7 +821,14 @@ the installed LMS and Perl dependencies from the shared cache without writing
 there. Fixed `/tmp` and `/var/tmp` paths map to group-owned cache directories.
 
 Checks that judge elapsed time, alignment, pacing, latency, speed or live soak
-models run alone after every group has finished. The runner waits for the
+models run after the ordinary groups have finished. The parallel gate balances
+these checks across isolated lanes, placing the longest checks first. Each
+lane and the runner have disjoint physical cores. The targeted navigation
+matrix is partitioned by position source and media group in the lanes.
+Each failed lane check runs again alone after admission. A passing second
+opinion records a load-sensitive verdict and preserves both logs. Pin future
+runs of that check to the standalone phase in the manifest with the evidence.
+The runner waits for the
 container's cgroup processor use over 30 seconds to be below 15 percent of its
 available cores and verifies conversion fitness of at least 20 times real time
 before a full run and again before its quiet phase. Capacity is read afresh

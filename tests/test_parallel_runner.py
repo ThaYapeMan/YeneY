@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNNER = ROOT/'scripts/test-runner.py'
@@ -178,6 +179,45 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(log.strip(), 'kept')
         self.assertIn('failed=[\'dummy-0\']', result.stdout)
         print('P6.12 PASS failure command restores manifest, environment, namespace and binary guard')
+
+    def test_13_lane_verdicts_and_affinity(self):
+        sys.path.insert(0, str(RUNNER.parent))
+        self.addCleanup(sys.path.pop, 0)
+        spec = importlib.util.spec_from_file_location('runner', RUNNER)
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        steps = [
+            dict(name='sensitive', command='echo lane-position; exit 7'),
+            dict(name='failure', command='echo genuine-failure; exit 8'),
+        ]
+        admit = []
+        original = runner.run_group
+
+        def run_group(group, directory, name, isolated, **kwargs):
+            if isolated:
+                assert not set(kwargs['cores']) & os.sched_getaffinity(0)
+            elif group[0]['name'] == 'sensitive':
+                group = [dict(group[0], command='echo alone-position')]
+            return original(group, directory, name, isolated, **kwargs)
+
+        run = self.base/'lane-run'
+        run.mkdir()
+        with patch.object(runner, 'run_group', run_group):
+            results = runner.run_lanes(steps, run, 2, lambda: admit.append(True))
+        layout = json.loads((run/'lanes.json').read_text())
+        reserved = set(layout['runner_cores'])
+        for lane in layout['lanes']:
+            self.assertTrue(reserved.isdisjoint(lane['cores']))
+            reserved.update(lane['cores'])
+        sensitive, failure = (next(row for row in results if row['name'] == step['name']) for step in steps)
+        self.assertEqual(admit, [True, True])
+        self.assertTrue(runner.completeness(steps[:1], [sensitive]))
+        self.assertFalse(runner.completeness(steps, results))
+        self.assertIn('load-sensitive', runner.lane_verdict(sensitive))
+        self.assertIn('lane-position', Path(sensitive['lane_attempt']['log']).read_text())
+        self.assertIn('alone-position', Path(sensitive['log']).read_text())
+        self.assertEqual(failure['exit'], 8)
+        self.assertEqual(failure['lane_attempt']['exit'], 8)
 
 if __name__ == '__main__':
     unittest.main()

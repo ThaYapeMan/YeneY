@@ -279,6 +279,8 @@ python3() {
 }
 journalctl() { printf '%s' "$JOURNAL"; }
 sleep 60 & AUTO_MONITOR_PID=$!
+fixture_monitor_pid=$AUTO_MONITOR_PID
+trap 'kill "$fixture_monitor_pid" 2>/dev/null; wait "$fixture_monitor_pid" 2>/dev/null' EXIT
 auto_end 7
 auto_summary
 exit "$AUTO_FAILED"
@@ -498,6 +500,8 @@ python3() {
 }
 journalctl() { :; }; mark() { :; }
 sleep 60 & AUTO_MONITOR_PID=$!
+fixture_monitor_pid=$AUTO_MONITOR_PID
+trap 'kill "$fixture_monitor_pid" 2>/dev/null; wait "$fixture_monitor_pid" 2>/dev/null' EXIT
 auto_end 1
 auto_summary
 exit "$AUTO_FAILED"

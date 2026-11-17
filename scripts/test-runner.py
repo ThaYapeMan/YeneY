@@ -138,7 +138,7 @@ def namespace(group, env):
     return args
 
 
-def execute(step, group, isolated):
+def execute(step, group, isolated, cores=None, retry=False):
     name = step['name']
     log = group/(name+'.log')
     env = dict(os.environ, **step.get('environment', {}))
@@ -155,6 +155,8 @@ def execute(step, group, isolated):
     metrics = group/(name+'.usage')
     inner = [sys.executable, str(ROOT/'scripts/test-step-time.py'), str(metrics), '/bin/sh', '-c', command(step)]
     args = (namespace(group, env) if isolated else []) + inner
+    if cores:
+        args = ['taskset', '--cpu-list', ','.join(map(str, cores)), *args]
     verbose = os.environ.get('YENEY_TEST_VERBOSE') == '1'
     if verbose:
         print(f'START {name} group={group.name} log={log}', flush=True)
@@ -183,7 +185,7 @@ def execute(step, group, isolated):
     (group/(name+'.json')).write_text(json.dumps(result, indent=2)+'\n')
     if verbose:
         print(f'END {name} group={group.name} exit={child.returncode} wall={result["wall"]:.3f} cpu={result["cpu"]:.3f}', flush=True)
-    if child.returncode and os.environ.get('YENEY_TEST_FAIL_FAST') == '1':
+    if child.returncode and not retry and os.environ.get('YENEY_TEST_FAIL_FAST') == '1':
         stop_children()
     return result
 
@@ -196,14 +198,14 @@ def group_directory(run, name):
     return group
 
 
-def run_group(steps, run, name, isolated, stop_on_failure=False):
+def run_group(steps, run, name, isolated, stop_on_failure=False, cores=None, retry=False):
     started = time.monotonic()
     group = group_directory(run, name)
     results = []
     for step in steps:
         if CANCEL.is_set():
             break
-        results.append(execute(step, group, isolated))
+        results.append(execute(step, group, isolated, cores, retry))
         if stop_on_failure and results[-1]['exit']:
             break
     if isolated:
@@ -233,6 +235,61 @@ def plan(steps, jobs, balanced):
     return groups
 
 
+def run_lanes(steps, run, count, admit):
+    affinity = os.sched_getaffinity(0)
+    physical = {}
+    for cpu in sorted(affinity):
+        siblings = Path(f'/sys/devices/system/cpu/cpu{cpu}/topology/thread_siblings_list').read_text().strip()
+        physical.setdefault(siblings, []).append(cpu)
+    lanes = [step for step in steps if not step.get('run_alone')]
+    alone = [step for step in steps if step.get('run_alone')]
+    count = min(count, len(physical) - 1, len(lanes))
+    if count < 2:
+        return run_group(steps, run, 'quiet', False)
+    available = sorted(physical.values(), key=len, reverse=True)
+    runner_cores = available.pop()
+    lane_cores = [[] for _ in range(count)]
+    for siblings in available:
+        min(lane_cores, key=len).extend(siblings)
+    assignments = list(zip(plan(lanes, count, True), lane_cores))
+    (run/'lanes.json').write_text(json.dumps(dict(runner_cores=runner_cores, lanes=[
+        dict(cores=cores, steps=[step['name'] for step in group]) for group, cores in assignments
+    ]), indent=2)+'\n')
+    os.sched_setaffinity(0, runner_cores)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=count) as pool:
+            futures = [pool.submit(run_group, group, run, f'lane-{i}', True, cores=cores, retry=True)
+                       for i, (group, cores) in enumerate(assignments, 1)]
+            first_results = [row for future in futures for row in future.result()]
+    finally:
+        os.sched_setaffinity(0, affinity)
+
+    results = {row['name']: row for row in first_results}
+    for step in steps:
+        first = results.get(step['name'])
+        if first is not None and not first['exit']:
+            continue
+        if CANCEL.is_set():
+            raise KeyboardInterrupt
+        admit()
+        group = 'second-opinion' if first is not None else 'run-alone'
+        result = run_group([step], run, group, False)[0]
+        if first is not None:
+            result['lane_attempt'] = first
+            if not result['exit']:
+                result['load_sensitive'] = True
+        results[step['name']] = result
+    return list(results.values())
+
+
+def lane_verdict(result):
+    if 'lane_attempt' not in result:
+        return ''
+    label = 'load-sensitive' if result.get('load_sensitive') else 'second opinion failed'
+    return f"{label}: {result['name']} lane_log={result['lane_attempt']['log']} alone_log={result['log']}"
+
+
+
 def completeness(steps, results):
     expected = [s['name'] for s in steps]
     actual = [s['name'] for s in results]
@@ -259,8 +316,12 @@ def main():
     parser.add_argument('--build-only', action='store_true')
     parser.add_argument('--manifest', type=Path, default=ROOT/'scripts/test-steps.json')
     parser.add_argument('--plain-split', action='store_true', default=os.environ.get('YENEY_TEST_SCHEDULE') == 'plain')
+    parser.add_argument('--lanes', type=int, default=os.environ.get('YENEY_TEST_LANES', '4'),
+                        help='Number of isolated timing lanes (1 runs the quiet phase serially)')
     parser.add_argument('--plan', type=Path, help='Explicit parallel plan; completeness still uses the full manifest')
     args = parser.parse_args()
+    if args.lanes < 1:
+        parser.error('lane count must be positive')
     if args.environment_file:
         os.environ.update(json.loads(args.environment_file.read_text()))
     full_gate = args.mode == 'full' and not args.step and not args.selection and args.manifest.resolve() == (ROOT/'scripts/test-steps.json').resolve()
@@ -284,6 +345,8 @@ def main():
     if len({s['name'] for s in steps}) != len(steps):
         parser.error('duplicate step in serial order')
     if args.step:
+        by_name.update((part['name'], dict(step, **part))
+                       for step in manifest['steps'] for part in step.get('lane_parts', []))
         if args.step not in by_name:
             parser.error('unknown step '+args.step)
         steps = [by_name[args.step]]
@@ -303,7 +366,7 @@ def main():
     run = Path(os.environ.get('YENEY_ACTIVE_TEST_RUN', Path(os.environ.get('YENEY_TEST_CACHE', Path.home()/'.cache/yeney-test'))/'runner'/str(time.time_ns()))).resolve()
     run.mkdir(parents=True, exist_ok=True)
     print('Test progress: '+str(run), flush=True)
-    context = {key: value for key, value in os.environ.items() if (key.startswith('YENEY_') or key.startswith('LAMPASTREAM_') or key in ('HOME', 'LANG', 'LC_ALL', 'TZ')) and key not in ('YENEY_ACTIVE_TEST_RUN', 'YENEY_TEST_JOBS', 'YENEY_TEST_FAIL_FAST', 'YENEY_TEST_VERBOSE', 'YENEY_TEST_SCHEDULE')}
+    context = {key: value for key, value in os.environ.items() if (key.startswith('YENEY_') or key.startswith('LAMPASTREAM_') or key in ('HOME', 'LANG', 'LC_ALL', 'TZ')) and key not in ('YENEY_ACTIVE_TEST_RUN', 'YENEY_TEST_JOBS', 'YENEY_TEST_LANES', 'YENEY_TEST_FAIL_FAST', 'YENEY_TEST_VERBOSE', 'YENEY_TEST_SCHEDULE')}
     context_path = run/'run-environment.json'
     context_path.write_text(json.dumps(context, indent=2)+'\n')
     context_path.chmod(0o600)
@@ -368,8 +431,11 @@ def main():
             quiet_steps = [s for s in steps if s['phase'] == 'quiet']
             if quiet_steps:
                 quiet(run, fitness=full_gate)
-            # The quiet machine runs one check at a time, with no group remaining.
-            results += run_group(quiet_steps, run, 'quiet', False)
+            lane_steps = [dict(step, **part) for step in quiet_steps
+                          for part in step.get('lane_parts', [{}])] if args.lanes > 1 else quiet_steps
+            results += run_lanes(lane_steps, run, args.lanes, lambda: quiet(run, fitness=full_gate))
+            if args.lanes > 1:
+                steps = [dict(step, **part) for step in steps for part in step.get('lane_parts', [{}])]
     except KeyboardInterrupt:
         stop_children()
         print('INTERRUPTED: all groups terminated', flush=True)
@@ -380,6 +446,9 @@ def main():
         if build_result:
             combined.write('=== build ===\n'+Path(build_result['log']).read_text(errors='replace'))
         for r in results:
+            if verdict := lane_verdict(r):
+                combined.write('\n'+verdict+'\n')
+                combined.write(Path(r['lane_attempt']['log']).read_text(errors='replace'))
             combined.write(f'\n=== {r["name"]} ({r["group"]}) ===\nCOMMAND {r["command"]}\n')
             combined.write(Path(r['log']).read_text(errors='replace'))
     # Console replay is deterministic even when completion order is different.
@@ -388,6 +457,8 @@ def main():
     else:
         for result in results:
             print(f'STEP {result["name"]} group={result["group"]} exit={result["exit"]} wall={result["wall"]:.3f} cpu={result["cpu"]:.3f}', flush=True)
+            if verdict := lane_verdict(result):
+                print(verdict, flush=True)
             if result['exit']:
                 print(Path(result['log']).read_text(errors='replace'), end='')
         print('Combined console: '+str(run/'combined.log'), flush=True)
@@ -404,7 +475,7 @@ def main():
     for r in results:
         if r['exit']:
             rerun = shlex.join([sys.executable, str(ROOT/'scripts/run-tests.py'), sys.executable, str(ROOT/'scripts/test-runner.py'), '--mode', args.mode, '--manifest', str(args.manifest.resolve()), '--environment-file', str(context_path), '--step', r['name'], '--no-build'])
-            if r['group'].startswith('group-'):
+            if r['group'].startswith(('group-', 'lane-')):
                 rerun += ' --isolate-step'
             if binary_hash:
                 rerun += ' --binary-sha256 '+binary_hash

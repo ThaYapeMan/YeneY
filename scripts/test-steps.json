@@ -349,6 +349,28 @@
       ],
       "label": "navigation-targeted-001",
       "time_judging": true,
+      "lane_parts": [
+        {
+          "name": "t0006-websocket-base",
+          "command": "python3 tests/navigation_suite.py --source websocket --part base",
+          "seconds": 261.73
+        },
+        {
+          "name": "t0006-websocket-encoded",
+          "command": "python3 tests/navigation_suite.py --source websocket --part encoded",
+          "seconds": 563.238
+        },
+        {
+          "name": "t0006-upnp-base",
+          "command": "python3 tests/navigation_suite.py --source upnp --part base",
+          "seconds": 257.39
+        },
+        {
+          "name": "t0006-upnp-encoded",
+          "command": "python3 tests/navigation_suite.py --source upnp --part encoded",
+          "seconds": 557.073
+        }
+      ],
       "reference": {
         "wall": 1650.7743755860138,
         "cpu": 857.588595,
@@ -1217,14 +1239,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 10.384791193995625,
       "modes": [
         "full"
       ],
       "label": "test-run-010",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 10.384791193995625,
         "cpu": 8.948469000000001,
@@ -1453,14 +1475,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 5.273226820980199,
       "modes": [
         "full"
       ],
       "label": "test-run-016",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 5.273226820980199,
         "cpu": 0.706086,
@@ -1884,6 +1906,7 @@
         "full": "test-run"
       },
       "phase": "quiet",
+      "run_alone": true,
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 45.71474018401932,
       "modes": [
@@ -2111,14 +2134,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 3.3800446759560145,
       "modes": [
         "full"
       ],
       "label": "test-run-033",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 3.3800446759560145,
         "cpu": 0.911789,
@@ -2225,14 +2248,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 2.548462274018675,
       "modes": [
         "full"
       ],
       "label": "test-run-036",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 2.548462274018675,
         "cpu": 0.051560999999999996,
@@ -2581,14 +2604,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 10.777289059013128,
       "modes": [
         "full"
       ],
       "label": "test-run-045",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 10.777289059013128,
         "cpu": 2.1735789999999997,
@@ -2619,14 +2642,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 6.87640328501584,
       "modes": [
         "full"
       ],
       "label": "test-run-046",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 6.87640328501584,
         "cpu": 1.854593,
@@ -3447,14 +3470,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 0.3600156469619833,
       "modes": [
         "full"
       ],
       "label": "test-run-067",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 0.3600156469619833,
         "cpu": 0.348181,
@@ -4189,14 +4212,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 1.073569315019995,
       "modes": [
         "full"
       ],
       "label": "test-run-086",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 1.073569315019995,
         "cpu": 0.49802099999999994,
@@ -4456,6 +4479,7 @@
         "full": "test-run"
       },
       "phase": "quiet",
+      "run_alone": true,
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 130.7608561119996,
       "modes": [
@@ -5033,14 +5057,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 5.443113415967673,
       "modes": [
         "full"
       ],
       "label": "test-run-108",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 5.443113415967673,
         "cpu": 5.191699,
@@ -5071,14 +5095,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 0.4624577850336209,
       "modes": [
         "full"
       ],
       "label": "test-run-109",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 0.4624577850336209,
         "cpu": 0.462315,
@@ -5109,14 +5133,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 4.370285374985542,
       "modes": [
         "full"
       ],
       "label": "test-run-110",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 4.370285374985542,
         "cpu": 3.8899529999999998,
@@ -5261,14 +5285,14 @@
       "prerequisites": {
         "full": "test-run"
       },
-      "phase": "quiet",
+      "phase": "prepare",
       "reason": "Compiles a test-only fixture; no compiler runs in parallel groups.",
       "seconds": 2.7846767329610884,
       "modes": [
         "full"
       ],
       "label": "test-run-114",
-      "time_judging": true,
+      "time_judging": false,
       "reference": {
         "wall": 2.7846767329610884,
         "cpu": 2.766727,
@@ -5908,6 +5932,7 @@
         "full": "test-run"
       },
       "phase": "quiet",
+      "run_alone": true,
       "reason": "Nested core suite includes conversion speed, pacing, real clocks and its private fixture builds.",
       "seconds": 205.60269563499605,
       "modes": [
@@ -6154,6 +6179,7 @@
       "environment": {},
       "prerequisites": {},
       "phase": "quiet",
+      "run_alone": true,
       "reason": "Exercises namespaces and real process interruption with no competing groups.",
       "seconds": 5,
       "modes": [
