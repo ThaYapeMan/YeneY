@@ -34,6 +34,7 @@ class LocalApi:
         self.disabled = False
         self.variant = 'chunked'
         self.shape = 'capture'
+        self.position_variant = ''
         self.events_enabled = True
         self.answer_profile = os.environ.get('YENEY_FAKE_ANSWER_PROFILE')
         self.events_enabled = os.environ.get('YENEY_FAKE_IGNORE_EVENTS') != '1'
@@ -210,6 +211,8 @@ class LocalApi:
                                     availablePlaybackActions=dict(_objectType='playbackAction', **{key: True for key in
                                         ('canPlay','canSkip','canSkipBack','canSkipToPrevious','canSeek','canPause','canStop','canRepeat','canRepeatOne','canCrossfade','canShuffle')}),
                                     sourceIsLanSwappable=True)
+                        if api.position_variant == 'missing-position':
+                            body.pop('positionMillis')
                         return body
 
                 api.senders[self.connection] = (send, status)
@@ -241,7 +244,7 @@ class LocalApi:
                                     if changed:
                                         seek = stamp[:2] == previous_stamp[:2] and stamp[2] != previous_stamp[2]
                                         item_change = current.get('itemId') != previous.get('itemId')
-                                        last_previous[:] = [previous.get('itemId', ''), previous.get('positionMillis', 0) if seek or item_change else current['positionMillis']]
+                                        last_previous[:] = [previous.get('itemId', ''), previous.get('positionMillis', 0) if seek or item_change else current.get('positionMillis', last_previous[1])]
                                         current.update(previousItemId=last_previous[0], previousPositionMillis=last_previous[1])
                                         send({'namespace': 'playback:1', 'command': 'playbackStatus'}, current)
                                 if api.events_enabled and stamp[0] != previous_stamp[0] and 'playbackMetadata:1' in subscribed:
@@ -341,7 +344,7 @@ class LocalApi:
                 send({'namespace': 'playbackMetadata:1' if name == 'metadataStatus' else 'playback:1', 'command': name}, dict(body))
                 if name == 'playbackError':
                     current = status()
-                    current.update(previousItemId=current.get('itemId', ''), previousPositionMillis=current['positionMillis'])
+                    current.update(previousItemId=current.get('itemId', ''), previousPositionMillis=current.get('positionMillis'))
                     send({'namespace': 'playback:1', 'command': 'playbackStatus'}, current)
             except OSError: pass
 

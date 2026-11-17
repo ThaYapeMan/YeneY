@@ -6251,6 +6251,102 @@
       "command": "python3 tests/navigation_suite.py --source upnp --shortened-seed 610131 --measure-shortened",
       "reason": "Real LMS clock and producer transitions after deterministic early seeks into unproduced audio.",
       "seconds": 730
+    },
+    {
+      "target": "main",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "modes": [
+        "full"
+      ],
+      "time_judging": true,
+      "name": "room-final-end",
+      "label": "room-final-end",
+      "command": "YENEY_ROOM_TRANSITION_CASE=final-end YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket python3 tests/real_lms_test.py",
+      "seconds": 42,
+      "reason": "Exact item end and idle transport acknowledgement with a positionless renderer reply."
+    },
+    {
+      "target": "main",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "modes": [
+        "full"
+      ],
+      "time_judging": true,
+      "name": "room-poll-status",
+      "label": "room-poll-status",
+      "command": "YENEY_ROOM_TRANSITION_CASE=status YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket python3 tests/real_lms_test.py",
+      "seconds": 12,
+      "reason": "Transport recovery visible in the live status table and room status file."
+    },
+    {
+      "target": "main",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "modes": [
+        "full"
+      ],
+      "time_judging": true,
+      "name": "room-persistent-position",
+      "label": "room-persistent-position",
+      "command": "YENEY_ROOM_TRANSITION_CASE=persistent YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket python3 tests/real_lms_test.py",
+      "seconds": 30,
+      "reason": "Live clock gaps and journal delivery across stop, play, pause, track change, and seek."
     }
   ],
   "orders": {
@@ -6411,7 +6507,10 @@
       "t0154",
       "parallel-runner-contract",
       "shortened-row-websocket",
-      "shortened-row-upnp"
+      "shortened-row-upnp",
+      "room-final-end",
+      "room-poll-status",
+      "room-persistent-position"
     ],
     "fast": [
       "t0008",

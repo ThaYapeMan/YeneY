@@ -74,18 +74,23 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         print('P6.4 PASS same shared-memory name in different groups')
 
-    def test_05_interrupt_descendants(self):
+    def interrupt_descendants(self, stop_file=None):
         marker = 'yeney-runner-child-'+str(time.time_ns())
         code = "import subprocess,time,pathlib,os; subprocess.Popen(['"+sys.executable+"','-c','import time; time.sleep(60)', '"+marker+"'],start_new_session=True); pathlib.Path(os.environ['TMPDIR'],'ready').touch(); time.sleep(60)"
         import shlex
         args, env = self.invocation([sys.executable+' -c '+shlex.quote(code)])
+        if stop_file:
+            args += ['--stop-file', str(stop_file)]
         proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         try:
             end = time.monotonic()+10
             while not list(self.base.rglob('ready')) and time.monotonic()<end:
                 time.sleep(.02)
             self.assertTrue(list(self.base.rglob('ready')))
-            proc.send_signal(signal.SIGINT)
+            if stop_file:
+                stop_file.touch()
+            else:
+                proc.send_signal(signal.SIGINT)
             output = proc.communicate(timeout=15)[0]
             self.assertEqual(proc.returncode, 130, output)
             remaining = []
@@ -100,6 +105,9 @@ class RunnerTests(unittest.TestCase):
             if proc.poll() is None:
                 proc.kill(); proc.wait()
         print('P6.5 PASS interrupt leaves no child, including a separate child session')
+
+    def test_05_interrupt_descendants(self):
+        self.interrupt_descendants()
 
     def test_06_serial_order(self):
         result = self.run_steps(['echo first', 'echo second', 'echo third'], jobs=1)
@@ -218,6 +226,11 @@ class RunnerTests(unittest.TestCase):
         self.assertIn('alone-position', Path(sensitive['log']).read_text())
         self.assertEqual(failure['exit'], 8)
         self.assertEqual(failure['lane_attempt']['exit'], 8)
+    def test_14_stop_file_interrupts_descendants(self):
+        self.interrupt_descendants(self.base/'stop')
+        print('PASS runner stop file uses the interrupt cleanup path')
+
+
 
 if __name__ == '__main__':
     unittest.main()

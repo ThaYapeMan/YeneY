@@ -339,12 +339,22 @@ bool OwnSpeakerControl::positionInfo(uint32_t& ms, std::string* text) {
         update.title = metadata.child("item")->value("title");
     apply(update); return cached();
 }
+void OwnSpeakerControl::observeTransportPoll(uint64_t revision, const XmlNode &response) {
+    StateUpdate update;
+    update.startedRevision = revision;
+    update.available = response.child("CurrentTransportState") && response.child("CurrentTransportStatus");
+    if (*update.available) {
+        update.state = response.value("CurrentTransportState");
+        update.status = response.value("CurrentTransportStatus");
+    }
+    apply(update);
+}
 bool OwnSpeakerControl::readTransportInfo(TransportInfo& info) {
-    StateUpdate update; update.startedRevision = state.snapshot().revision;
+    const auto revision = transportRevision();
     const auto result = call("GetTransportInfo", {{"InstanceID", "0"}});
-    update.available = result.ok && result.response.child("CurrentTransportState") && result.response.child("CurrentTransportStatus");
-    if (*update.available) { update.state = result.response.value("CurrentTransportState"); update.status = result.response.value("CurrentTransportStatus"); }
-    apply(update); info = state.snapshot().transport; return info.available;
+    observeTransportPoll(revision, result.ok ? result.response : XmlNode{});
+    info = state.snapshot().transport;
+    return info.available;
 }
 void OwnSpeakerControl::poll() {
     {

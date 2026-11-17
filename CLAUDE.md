@@ -843,7 +843,8 @@ Run one check serially on the existing binary with
 a replay command that restores the manifest, test environment and isolation,
 with a binary checksum, the group and the log path. Other groups
 finish unless `YENEY_TEST_FAIL_FAST=1`. An interrupt terminates groups and their
-descendants. Missing, duplicate, skipped or failed entries fail completeness;
+descendants. A detached run can watch a designated stop file and use the
+same cleanup when the file appears. Missing, duplicate, skipped or failed entries fail completeness;
 the full gate also requires positive production `require_v1=True` evidence.
 
 The terminal prints compact results in manifest order. The complete ordered

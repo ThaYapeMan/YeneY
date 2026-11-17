@@ -49,9 +49,22 @@ std::optional<yeney::FlacSourceInfo> QueueRoom::Impl::sourceInfo(uint64_t occurr
 void QueueRoom::Impl::relayEvents(bool enabled) {
     // Keep the fence across relay/stream handoffs: a delayed queue edit must
     // not look like a foreign-source takeover to the continuous stream path.
-    speaker->queueEvents([dirty = eventDirty, changes = speakerChanges, ws = std::weak_ptr<WebsocketSpeakerPosition>(websocketPosition), enabled](const upnp::GenaEvent &event) {
-        if (event.service == upnp::Service::ZoneGroupTopology)
-            if (auto source = ws.lock()) source->groupChanged();
+    speaker->queueEvents([dirty = eventDirty, changes = speakerChanges,
+                          ws = std::weak_ptr<WebsocketSpeakerPosition>(websocketPosition),
+                          controller = speaker.get(), enabled](const upnp::GenaEvent &event) {
+        if (event.service == upnp::Service::ZoneGroupTopology) {
+            auto source = ws.lock();
+            if (source) {
+                const auto current = controller->speaker();
+                const auto next = std::find_if(event.topology.begin(), event.topology.end(),
+                    [&](const auto &candidate) { return candidate.uuid == current.uuid; });
+                if (next != event.topology.end() &&
+                    (next->ip != current.ip || next->coordinator != current.coordinator ||
+                     !std::is_permutation(next->members.begin(), next->members.end(),
+                                          current.members.begin(), current.members.end())))
+                    source->groupChanged();
+            }
+        }
         if (event.service == upnp::Service::AVTransport) {
             if (!changes->event(event)) return false;
             if (enabled) *dirty = true;

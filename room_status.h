@@ -13,7 +13,7 @@ namespace bridge {
 struct ModeStatus {
     std::string requested = "stream", active = "stream", state = "active", reason = "default-stream";
     std::string path;
-    std::string positionSourceReason;
+    std::string positionSourceReason, transportStatus;
     std::string speakerRawState, speakerQuality, speakerPlaybackError;
     std::string positionSource = "upnp", positionPrecision = "second";
     bool owned = false;
@@ -77,6 +77,7 @@ public:
                 << ",\"speaker_playback_error\":" << q(v.speakerPlaybackError)
                 << ",\"speaker_quality\":" << q(v.speakerQuality)
                 << ",\"position_source_reason\":" << q(v.positionSourceReason)
+                << ",\"transport_status\":" << q(v.transportStatus)
                 << ",\"occurrence\":" << v.occurrence << ",\"owned\":" << (v.owned ? "true" : "false")
                 << ",\"rendered_rate\":" << v.renderedRate << ",\"current_owned_item\":" << q(queueUriLog(v.currentUri))
                 << ",\"last_fault\":" << q(queueUriLog(v.lastFault)) << ",\"owned_item_uris\":[";

@@ -28,6 +28,7 @@ struct SpeakerPositionSample {
     std::string rawState = {};
     std::string previousItem = {};
     std::optional<double> previousPositionMs = {};
+    bool held = false;
 };
 class SpeakerPosition {
 public:

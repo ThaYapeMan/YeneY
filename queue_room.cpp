@@ -132,7 +132,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
     if (colon != std::string::npos)
         host.resize(colon);
     if (positionSetting(room.name) != "upnp")
-        websocketPosition = std::make_shared<WebsocketSpeakerPosition>(room.ip);
+        websocketPosition = std::make_shared<WebsocketSpeakerPosition>(room.ip, false, logQueue);
     if (websocketPosition) positionSources.add(websocketPosition);
     positionSources.add(upnpPosition);
     route.registerWith(*http);

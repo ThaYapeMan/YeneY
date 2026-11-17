@@ -37,6 +37,8 @@ public:
     std::vector<Speaker> discoverRoomDetails(const std::string& = {}) override;
     Speaker speaker() const override;
     bool refreshTopology();
+    uint64_t transportRevision() const { return state.snapshot().revision; }
+    void observeTransportPoll(uint64_t revision, const XmlNode &response);
     bool playStream(const std::string&, const std::string&, const std::string& = {},
                     const std::string& artist = {}, const std::string& album = {}) override;
     bool play() override;

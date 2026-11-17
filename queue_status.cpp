@@ -18,6 +18,7 @@ void QueueRoom::Impl::publish() {
     v.reason = pathReason;
     v.path = pathReason == "remote-source" ? "stream" : "relay";
     v.state = state;
+    v.transportStatus = transportStatus;
     v.positionSource = activePositionSource.empty() ? "upnp" : activePositionSource;
     v.positionPrecision = activePositionPrecision;
     v.positionSourceReason = activePositionReason;

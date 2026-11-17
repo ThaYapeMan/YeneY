@@ -9,7 +9,8 @@ class WebsocketSpeakerPosition : public SpeakerPosition {
     struct Impl;
     std::unique_ptr<Impl> impl;
 public:
-    WebsocketSpeakerPosition(std::string host, bool diagnostic = false);
+    WebsocketSpeakerPosition(std::string host, bool diagnostic = false,
+                             std::function<void(const std::string &)> journal = {});
     ~WebsocketSpeakerPosition();
     const char *name() const override { return "websocket"; }
     const char *precision() const override { return "ms"; }

@@ -70,8 +70,15 @@ void QueueRoom::Impl::observe() {
     };
     const auto now = std::chrono::steady_clock::now();
     const auto selectedPosition = positionSources.select(positionMonotonic());
-    const auto precise = selectedPosition.first && std::string(selectedPosition.first->precision()) == "ms" ?
+    auto precise = selectedPosition.first && std::string(selectedPosition.first->precision()) == "ms" ?
         selectedPosition.second : std::nullopt;
+    if (precise && precise->held) {
+        if (mapSpeakerState(precise->rawState) != "STOPPED") {
+            requestStatus();
+            return;
+        }
+        precise.reset();
+    }
     if (precise && rendererObservationAfter && precise->observedAt < rendererObservationAfter)
         return;
     const bool rendererObservationConfirmed = precise && rendererObservationAfter;
@@ -96,7 +103,6 @@ void QueueRoom::Impl::observe() {
     }
     bool websocketEvent = false;
     if (websocketPosition) {
-        for (const auto &line : websocketPosition->takeJournal()) logQueue(line);
         for (const auto &sample : websocketPosition->takeEvents()) {
             logQueue("speaker event itemId=" + sample.item + " position_ms=" + std::to_string(sample.positionMs) +
                 " previousItemId=" + sample.previousItem + " previousPositionMillis=" +
@@ -125,7 +131,7 @@ void QueueRoom::Impl::observe() {
     const bool event = eventDirty->exchange(false) || websocketEvent;
     if (!event && now < nextPoll)
         return;
-    nextPoll = now + std::chrono::milliseconds(precise ? 20 : now < fastUntil ? 100 : pollMs);
+    nextPoll = now + std::chrono::milliseconds(precise && state != "STOPPED" ? 20 : now < fastUntil ? 100 : pollMs);
     const bool identityPoll = !precise || event || cachedPosition.empty() || now >= nextIdentityPoll ||
         precise->item != lastWebsocketItem ||
         (precise && previousPrecisePosition && precise->state != previousPrecisePosition->state);
@@ -138,7 +144,9 @@ void QueueRoom::Impl::observe() {
          {"RelativeTimePosition", p.value("RelTime")}});
     if (pending()) return;
     const auto transportStarted = std::chrono::steady_clock::now();
+    const auto transportRevision = speaker->transportRevision();
     const auto info = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}}).response;
+    speaker->observeTransportPoll(transportRevision, info);
     const auto transportFields = speakerChanges->poll(transportStarted,
         {{"TransportState", info.value("CurrentTransportState")},
          {"TransportStatus", info.value("CurrentTransportStatus")}});
@@ -199,6 +207,7 @@ void QueueRoom::Impl::observe() {
     if (reportedStatus != transportStatus) {
         transportStatus = reportedStatus;
         logQueue("TransportStatus=" + transportStatus + " uri=" + transportSourceLog(uri));
+        publish();
     }
     auto it = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.uri == uri; });
     if (sourceAway) {
@@ -281,7 +290,7 @@ void QueueRoom::Impl::observe() {
     previousPrecisePosition = precise;
     const auto playbackAdvance = lastPositionAt == std::chrono::steady_clock::time_point{} ? 0 :
         std::chrono::duration_cast<std::chrono::seconds>(now - lastPositionAt).count();
-    if (positionValid && it != items.end() && it == previousItem &&
+    if ((positionValid || precise) && it != items.end() && it == previousItem &&
         (transport == "PLAYING" || (precise && speakerTransitioning(precise->state))) && !lmsNavigation && !navigationSelecting &&
         (precise ? preciseSeek : (reportedElapsed < lastElapsed || reportedElapsed > lastElapsed + 2 + uint64_t(playbackAdvance)))) {
         const auto owner = it->owner ? it->owner : it->stream;
@@ -309,7 +318,7 @@ void QueueRoom::Impl::observe() {
             }
         }
     }
-    if (positionValid) lastPositionAt = now;
+    if (positionValid || precise) lastPositionAt = now;
     const auto endEvidence = it == previousItem ? std::max(lastElapsed, reportedElapsed) : lastElapsed;
     uint64_t realEnd = finalItem ? previousItem->frames : 0;
     if (finalItem && !cancelledCurrent && previousItem->item->descriptor().kind == queue_audio::PromiseKind::UpperBound &&
@@ -334,6 +343,8 @@ void QueueRoom::Impl::observe() {
     const bool nearEnd = finalItem &&
         (!estimatedEpisode || (episodeComplete && episodePlayed >= episodeProduced)) &&
         realEnd <= (endEvidence + (estimatedEpisode ? 1 : 2)) * previousItem->item->descriptor().rate;
+    const bool naturalEnd = nearEnd && transport == "STOPPED";
+    if (naturalEnd && state == "STOPPED") return;
     if (transport == "STOPPED" && state != "STOPPED") {
         logQueue("end decision=" + std::string(nearEnd ? "natural" : estimatedEpisode && episodeProduced > episodePlayed ? "fault-unplayed-audio" : "external-stop") +
                  " occurrence=" + std::to_string(current) + " final=" + std::to_string(finalItem) +
@@ -374,9 +385,12 @@ void QueueRoom::Impl::observe() {
         waitingForPlay = false;
     if (waitingForPlay && transport == "STOPPED")
         return;
-    unsigned h = 0, m = 0, s = 0;
-    if (sscanf(position.at("RelativeTimePosition").c_str(), "%u:%u:%u", &h, &m, &s) != 3)
+    if (!positionValid && !precise && !naturalEnd) {
+        // A positionless UPnP transition leaves the previous clock in place.
+        requestStatus();
+        fastPoll();
         return;
+    }
     const auto playback = precise && speakerTransitioning(precise->state) ? (state == "PAUSED" ? yeney::PlaybackState::Paused : yeney::PlaybackState::Playing)
                           : transport == "PLAYING"           ? yeney::PlaybackState::Playing
                           : transport == "PAUSED_PLAYBACK" ? yeney::PlaybackState::Paused
@@ -395,7 +409,7 @@ void QueueRoom::Impl::observe() {
         fastPoll();
         if (current && transport == "PLAYING" && queue.queueItemProduced(current)) trackFaults.clear();
     }
-    if (transport == "STOPPED" && nearEnd) {
+    if (naturalEnd) {
         expectedState = "STOPPED";
         remoteNaturalSuccessor = estimatedEpisode && selectedIndex >= 0 &&
             size_t(selectedIndex+1) < playlist.entries.size();
@@ -438,9 +452,9 @@ void QueueRoom::Impl::observe() {
                 pauseTime = int64_t(snapshot.timeMs) + int64_t(it->segmentOffset * 1000 / rate + elapsedMs) - *before;
         } catch (const std::exception &) { logQueue("pause position baseline unavailable"); }
     }
-    queue.speakerPosition(current, transport == "STOPPED" && nearEnd && estimatedEpisode ? realEnd :
+    queue.speakerPosition(current, naturalEnd ? realEnd :
                           elapsedMs * it->item->descriptor().rate / 1000, playback);
-    if (precise) {
+    if (precise && !naturalEnd) {
         const auto owner = queue.audibleOccurrence();
         const auto baseline = queue.audibleElapsedMs(owner);
         if (baseline) {

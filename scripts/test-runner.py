@@ -19,7 +19,7 @@ from test_capacity import capacity
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTIVE = set()
-LOCK = threading.Lock()
+LOCK = threading.RLock()
 CANCEL = threading.Event()
 
 
@@ -318,6 +318,8 @@ def main():
     parser.add_argument('--plain-split', action='store_true', default=os.environ.get('YENEY_TEST_SCHEDULE') == 'plain')
     parser.add_argument('--lanes', type=int, default=os.environ.get('YENEY_TEST_LANES', '4'),
                         help='Number of isolated timing lanes (1 runs the quiet phase serially)')
+    parser.add_argument('--stop-file', type=Path, default=os.environ.get('YENEY_TEST_STOP_FILE'),
+                        help='Interrupt the run when this file appears')
     parser.add_argument('--plan', type=Path, help='Explicit parallel plan; completeness still uses the full manifest')
     args = parser.parse_args()
     if args.lanes < 1:
@@ -362,11 +364,23 @@ def main():
         return 0
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, interrupted)
+    if args.stop_file:
+        stop_file = args.stop_file.resolve()
+        if stop_file.exists():
+            parser.error('stop file already exists: ' + str(stop_file))
+
+        def check_stop_file(number, frame):
+            if stop_file.exists():
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                interrupted(number, frame)
+
+        signal.signal(signal.SIGALRM, check_stop_file)
+        signal.setitimer(signal.ITIMER_REAL, .2, .2)
     CANCEL.clear()
     run = Path(os.environ.get('YENEY_ACTIVE_TEST_RUN', Path(os.environ.get('YENEY_TEST_CACHE', Path.home()/'.cache/yeney-test'))/'runner'/str(time.time_ns()))).resolve()
     run.mkdir(parents=True, exist_ok=True)
     print('Test progress: '+str(run), flush=True)
-    context = {key: value for key, value in os.environ.items() if (key.startswith('YENEY_') or key.startswith('LAMPASTREAM_') or key in ('HOME', 'LANG', 'LC_ALL', 'TZ')) and key not in ('YENEY_ACTIVE_TEST_RUN', 'YENEY_TEST_JOBS', 'YENEY_TEST_LANES', 'YENEY_TEST_FAIL_FAST', 'YENEY_TEST_VERBOSE', 'YENEY_TEST_SCHEDULE')}
+    context = {key: value for key, value in os.environ.items() if (key.startswith('YENEY_') or key.startswith('LAMPASTREAM_') or key in ('HOME', 'LANG', 'LC_ALL', 'TZ')) and key not in ('YENEY_ACTIVE_TEST_RUN', 'YENEY_TEST_JOBS', 'YENEY_TEST_LANES', 'YENEY_TEST_STOP_FILE', 'YENEY_TEST_FAIL_FAST', 'YENEY_TEST_VERBOSE', 'YENEY_TEST_SCHEDULE')}
     context_path = run/'run-environment.json'
     context_path.write_text(json.dumps(context, indent=2)+'\n')
     context_path.chmod(0o600)

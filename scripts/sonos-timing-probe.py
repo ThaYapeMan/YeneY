@@ -138,9 +138,10 @@ class SonosSocket:
                 raise RuntimeError('Sonos command error')
             if str(h.get('cmdId')) == str(self.serial):
                 received = time.monotonic()
+                position = body.get('positionMillis')
                 return {'kind': 'websocket', 'sent': sent, 'received': received, 'midpoint': (sent + received) / 2,
-                        'position_ms': float(body['positionMillis']), 'item': str(body.get('itemId', '')),
-                        'state': body['playbackState']}
+                        'position_ms': None if position is None else float(position),
+                        'item': str(body.get('itemId', '')), 'state': body.get('playbackState', 'UNKNOWN')}
 
 
 def upnp_position(host, port):
@@ -161,9 +162,13 @@ def upnp_position(host, port):
     finally:
         connection.close()
     fields = {node.tag.split('}')[-1]: node.text or '' for node in ET.fromstring(text).iter()}
-    h, m, s = map(float, fields['RelTime'].split(':'))
+    position = None
+    reltime = fields.get('RelTime')
+    if reltime and reltime != 'NOT_IMPLEMENTED':
+        h, m, s = map(float, reltime.split(':'))
+        position = (h * 3600 + m * 60 + s) * 1000
     return {'kind': 'upnp', 'sent': sent, 'received': received, 'midpoint': (sent + received) / 2,
-            'position_ms': (h * 3600 + m * 60 + s) * 1000, 'item': fields.get('TrackURI', ''), 'state': ''}
+            'position_ms': position, 'item': fields.get('TrackURI', ''), 'state': ''}
 
 
 class LmsClock:
@@ -193,8 +198,9 @@ def project(sample, at):
 
 
 def reltime_summary(rows):
-    ws = [r for r in rows if r['kind'] == 'websocket' and r['received'] - r['sent'] <= .2]
-    upnp = [r for r in rows if r['kind'] == 'upnp']
+    ws = [r for r in rows if r['kind'] == 'websocket' and r['position_ms'] is not None
+          and r['received'] - r['sent'] <= .2]
+    upnp = [r for r in rows if r['kind'] == 'upnp' and r['position_ms'] is not None]
     if not ws or not upnp:
         print('RelTime samples insufficient')
         return
@@ -234,6 +240,28 @@ def reltime_summary(rows):
               f'p95_ms={percentile(values, .95):.3f} max_ms={max(values) if values else float("nan"):.3f}')
 
 
+def position_gaps(rows, finished):
+    for kind in ('websocket', 'upnp'):
+        gaps, count, start = [], 0, None
+        for row in rows:
+            if row['kind'] != kind:
+                continue
+            if row['position_ms'] is None:
+                count += 1
+                if start is None:
+                    start = row['midpoint']
+            elif start is not None:
+                gaps.append((start, row['midpoint'], False))
+                start = None
+        if start is not None:
+            gaps.append((start, finished, True))
+        print(f'{kind} no_position_samples={count} gaps={len(gaps)}')
+        for start, end, open_gap in gaps:
+            print(f'{kind} no position start_mono={start:.9f} duration_s={end-start:.6f} '
+                  f'ended={"run" if open_gap else "position"}')
+
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', choices=('websocket', 'both'), default='websocket')
@@ -249,8 +277,8 @@ def main():
     if args.source == 'both' and (not args.lms_host or not args.player_mac):
         parser.error('--source both requires --lms-host and --player-mac')
     output = args.output or Path.cwd() / ('sonos-timing-' + time.strftime('%Y%m%d-%H%M%S') + '.tsv')
-    ws = SonosSocket(args.speaker, args.port)
-    lms = LmsClock(args.lms_host, args.lms_port, args.player_mac) if args.source == 'both' else None
+    ws = lms = thread = None
+    exit_code = 0
     rows, pairs, errors = [], [], []
     stop = threading.Event()
     started = time.monotonic()
@@ -265,9 +293,12 @@ def main():
             due += .1
             stop.wait(max(0, due - time.monotonic()))
 
-    thread = threading.Thread(target=reltime_worker)
-    thread.start()
     try:
+        ws = SonosSocket(args.speaker, args.port)
+        if args.source == 'both':
+            lms = LmsClock(args.lms_host, args.lms_port, args.player_mac)
+        thread = threading.Thread(target=reltime_worker)
+        thread.start()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             due = started
             while time.monotonic() - started < args.duration:
@@ -278,28 +309,46 @@ def main():
                 if other:
                     cli = other.result()
                     rows.append(cli)
-                    if sample['received'] - sample['sent'] <= .2 and cli['received'] - cli['sent'] <= .2:
+                    if (sample['position_ms'] is not None and sample['received'] - sample['sent'] <= .2
+                            and cli['received'] - cli['sent'] <= .2):
                         pairs.append((cli['midpoint'], project(sample, cli['midpoint']) - cli['position_ms']))
                 due += .25 if lms else .2
                 stop.wait(max(0, due - time.monotonic()))
+    except KeyboardInterrupt:
+        exit_code = 130
+    except (OSError, EOFError, RuntimeError, ValueError, KeyError) as error:
+        errors.append(str(error))
+        exit_code = 1
     finally:
         stop.set()
-        thread.join()
-        ws.close()
+        if thread:
+            thread.join()
+        finished = time.monotonic()
+        if ws:
+            ws.close()
         if lms:
             lms.close()
+        rows.sort(key=lambda row: row['midpoint'])
+        states = [row for row in rows if row['kind'] == 'websocket']
+        for row in rows:
+            if row['kind'] == 'upnp' and row['position_ms'] is None:
+                nearest = min(states, key=lambda sample: abs(sample['midpoint'] - row['midpoint']), default=None)
+                row['state'] = nearest['state'] if nearest else 'UNKNOWN'
         with output.open('w') as file:
             file.write('kind\tsent_mono\treceived_mono\tmidpoint_mono\trtt_ms\tposition_ms\titem\tstate\n')
-            for row in sorted(rows, key=lambda r: r['midpoint']):
+            for row in rows:
+                position = 'no position' if row['position_ms'] is None else f"{row['position_ms']:.3f}"
                 file.write('\t'.join([row['kind'], f"{row['sent']:.9f}", f"{row['received']:.9f}",
                                       f"{row['midpoint']:.9f}", f"{(row['received']-row['sent'])*1000:.3f}",
-                                      f"{row['position_ms']:.3f}", row['item'].replace('\t', ' ').replace('\n', ' '), row['state']]) + '\n')
+                                      position, row['item'].replace('\t', ' ').replace('\n', ' '), row['state']]) + '\n')
         print('positionMillis - LMS time ?: ' + summary(pairs))
         reltime_summary(rows)
+        position_gaps(rows, finished)
         print(f'errors={len(errors)} raw_tsv={output.resolve()}')
         if errors:
             print('first_error=' + errors[0])
+    return exit_code
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

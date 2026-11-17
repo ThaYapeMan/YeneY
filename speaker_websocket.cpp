@@ -689,37 +689,66 @@ struct WebsocketSpeakerPosition::Impl {
     std::vector<SpeakerPositionSample> observedSamples;
     double last = 0;
     uint64_t failures = 0, revision = 0, diagnostics = 0;
-    std::optional<SpeakerPositionSample> known, lastEvent;
+    std::optional<SpeakerPositionSample> known, lastEvent, heldPosition;
+    bool missingPosition = false;
     std::set<std::string> unknownStates;
     std::string quality, qualityItem, playbackError;
     std::vector<SpeakerPositionSample> eventSamples;
     std::vector<std::string> journal;
     std::string rawState;
+    std::function<void(const std::string &)> journalSink;
+    void emit(const std::string &line) {
+        if (journalSink) journalSink(line);
+        else journal.push_back(line);
+    }
+    void holdPosition(const std::string &state, double now) {
+        if (!missingPosition) {
+            heldPosition = fit.position(now);
+            if (heldPosition) {
+                heldPosition->state = "TRANSITIONING";
+                heldPosition->held = true;
+            }
+            fit.reset();
+            missingPosition = true;
+            ++revision;
+            emit("speaker position unavailable state=" + state);
+        }
+        if (heldPosition) heldPosition->rawState = state;
+        rawState = state;
+        last = now;
+        reconnecting = false;
+        error.clear();
+    }
     bool information(const Fields &answer, double now) {
         const auto type = answer["type"].empty() ? answer["command"] : answer["type"];
         std::lock_guard<std::mutex> lock(mutex);
-        if (diagnostic && !type.empty() && answer["cmdId"].empty()) journal.push_back("events type=" + type + " count=1");
+        if (diagnostic && !type.empty() && answer["cmdId"].empty()) emit("events type=" + type + " count=1");
         if (type == "playbackError") {
             playbackError = "errorCode=" + answer["errorCode"] + " reason=" + answer["reason"] +
                 " itemId=" + answer["itemId"] + " httpStatus=" + answer["httpStatus"];
-            journal.push_back("speaker playbackError " + playbackError); ++diagnostics;
+            emit("speaker playbackError " + playbackError); ++diagnostics;
             return false;
         }
         if (type == "metadataStatus" && !answer["currentItem.track.quality.bitDepth"].empty()) {
             const auto item = (known ? known->item : std::string{}) + "|" + answer["container.id.objectId"];
             const auto value = "bitDepth=" + answer["currentItem.track.quality.bitDepth"] + " sampleRate=" + answer["currentItem.track.quality.sampleRate"] + " lossless=" + answer["currentItem.track.quality.lossless"];
             if (qualityItem != item || quality != value) ++diagnostics;
-            if (qualityItem != item || quality.empty()) journal.push_back("speaker quality " + value);
+            if (qualityItem != item || quality.empty()) emit("speaker quality " + value);
             quality = value; qualityItem = item;
         }
         if (answer["playbackState"].empty()) return false;
+        if (answer["positionMillis"].empty()) {
+            const bool entered = !missingPosition;
+            holdPosition(answer["playbackState"], now);
+            return entered;
+        }
         auto sample = LocalSession::sample(answer, now, now);
         sample.event = true;
         eventSamples.push_back(sample);
         if (rawState != sample.rawState) ++revision;
         rawState = sample.rawState;
         if (sample.state == "UNKNOWN" && unknownStates.insert(rawState).second)
-            journal.push_back("speaker unknown playbackState=" + rawState);
+            emit("speaker unknown playbackState=" + rawState);
         const bool repeated = lastEvent && sample.item == lastEvent->item && sample.rawState == lastEvent->rawState &&
             sample.positionMs == lastEvent->positionMs && sample.previousItem == lastEvent->previousItem &&
             sample.previousPositionMs == lastEvent->previousPositionMs;
@@ -732,13 +761,21 @@ struct WebsocketSpeakerPosition::Impl {
             if (std::abs(sample.positionMs-expected) <= 150) return false;
         }
         if (explicitSeek)
-            journal.push_back("speaker seek itemId=" + sample.item + " from_ms=" + std::to_string(*sample.previousPositionMs) + " to_ms=" + std::to_string(sample.positionMs));
+            emit("speaker seek itemId=" + sample.item + " from_ms=" + std::to_string(*sample.previousPositionMs) + " to_ms=" + std::to_string(sample.positionMs));
         sample.event = true;
-        fit.add(sample); known = sample; last = now; error.clear(); ++revision;
+        if (fit.add(sample)) {
+            known = sample;
+            last = now;
+            error.clear();
+            heldPosition.reset();
+            missingPosition = false;
+            ++revision;
+        }
         return true;
     }
     std::thread worker;
-    explicit Impl(std::string h, bool d) : host(std::move(h)), diagnostic(d), worker([this] { run(); }) {}
+    explicit Impl(std::string h, bool d, std::function<void(const std::string &)> sink)
+        : host(std::move(h)), diagnostic(d), journalSink(std::move(sink)), worker([this] { run(); }) {}
     ~Impl() { stop = true; if (worker.joinable()) worker.join(); }
     void run() {
         sigset_t blocked;
@@ -747,11 +784,12 @@ struct WebsocketSpeakerPosition::Impl {
         pthread_sigmask(SIG_BLOCK, &blocked, nullptr);
         unsigned consecutiveFailures = 0;
         while (!stop) {
+            std::optional<LocalSession> activeSession(std::in_place, counts);
             try {
-                LocalSession session(counts);
+                auto &session = *activeSession;
                 { std::lock_guard<std::mutex> lock(mutex); reconnecting = true; }
                 session.open(host, [this](const std::string &line) {
-                    std::lock_guard<std::mutex> lock(mutex); journal.push_back(line);
+                    std::lock_guard<std::mutex> lock(mutex); emit(line);
                 });
                 auto &connection = session.connection;
                 double next = 0;
@@ -768,7 +806,10 @@ struct WebsocketSpeakerPosition::Impl {
                     const auto id = session.command("playback:1", "getPlaybackStatus");
                     bool immediate = false;
                     for (;;) {
-                        if (stop && !diagnostic) return;
+                        if (stop && !diagnostic) {
+                            session.failPending("room shutdown");
+                            return;
+                        }
                         if (positionMonotonic() - sent > 3) {
                             session.failPending("no answer for 3 s");
                             throw std::runtime_error("no answer for 3 s");
@@ -776,6 +817,14 @@ struct WebsocketSpeakerPosition::Impl {
                         const auto answer = session.message();
                         if (answer["cmdId"] != id) { immediate = information(answer, positionMonotonic()) || immediate; continue; }
                         const auto received = positionMonotonic();
+                        if (!answer["playbackState"].empty() && answer["positionMillis"].empty()) {
+                            std::lock_guard<std::mutex> lock(mutex);
+                            if (!known || !known->event || sent >= known->sampleTime)
+                                holdPosition(answer["playbackState"], received);
+                            consecutiveFailures = 0;
+                            next = received + .05;
+                            break;
+                        }
                         const auto sample = LocalSession::sample(answer, sent, received);
                         const auto &state = sample.state;
                         {
@@ -787,17 +836,27 @@ struct WebsocketSpeakerPosition::Impl {
                                 next = received;
                                 break;
                             }
+                            // A valid status reply proves the connection is live
+                            // even if its RTT cannot improve the fitted line.
+                            last = received;
+                            reconnecting = false;
+                            consecutiveFailures = 0;
+                            error.clear();
+                            if (sample.rttMs > 200 && known &&
+                                (known->item != sample.item || known->state != sample.state))
+                                holdPosition(sample.rawState, received);
                             if (rawState != sample.rawState) ++revision;
                             rawState = sample.rawState;
                             if (sample.state == "UNKNOWN" && unknownStates.insert(rawState).second)
-                                journal.push_back("speaker unknown playbackState=" + rawState);
+                                emit("speaker unknown playbackState=" + rawState);
                             // A command answer confirms or overrides the event clock.
                             if (known && known->event && sample.rttMs <= 200) fit.reset();
                             if (fit.add(sample)) {
                                 if (known && sample.item != known->item) ++revision;
+                                if (missingPosition) ++revision;
                                 known = sample;
-                                last = received; error.clear();
-                                reconnecting = false; consecutiveFailures = 0;
+                                heldPosition.reset();
+                                missingPosition = false;
                             } else if ((received - sent) * 1000 <= 200) immediate = true;
                         }
                         const auto hz = diagnosticHz.load();
@@ -805,11 +864,14 @@ struct WebsocketSpeakerPosition::Impl {
                         break;
                     }
                 }
+                session.failPending(stop ? "room shutdown" : "speaker group changed");
             } catch (const std::exception &e) {
+                activeSession->failPending(e.what());
+                activeSession.reset();
                 {
                     std::lock_guard<std::mutex> lock(mutex);
                     error = e.what(); ++failures; reconnecting = true;
-                    journal.push_back("speaker reconnecting reason=" + error + " fitted_line_hold_s=3");
+                    emit("speaker reconnecting reason=" + error + " fitted_line_hold_s=3");
                 }
                 // A diagnostic reports a failed initial setup once. A session
                 // that was already healthy still exercises normal reconnection.
@@ -823,15 +885,18 @@ struct WebsocketSpeakerPosition::Impl {
         }
     }
 };
-WebsocketSpeakerPosition::WebsocketSpeakerPosition(std::string host, bool diagnostic) : impl(new Impl(std::move(host), diagnostic)) {}
+WebsocketSpeakerPosition::WebsocketSpeakerPosition(std::string host, bool diagnostic,
+                                                     std::function<void(const std::string &)> journal)
+    : impl(new Impl(std::move(host), diagnostic, std::move(journal))) {}
 WebsocketSpeakerPosition::~WebsocketSpeakerPosition() = default;
 std::optional<SpeakerPositionSample> WebsocketSpeakerPosition::position(double now) const {
     std::lock_guard<std::mutex> lock(impl->mutex);
-    return now - impl->last <= 3 ? impl->fit.position(now) : std::nullopt;
+    if (now - impl->last > 3) return {};
+    return impl->missingPosition ? impl->heldPosition : impl->fit.position(now);
 }
 std::string WebsocketSpeakerPosition::failure() const {
     std::lock_guard<std::mutex> lock(impl->mutex);
-    if (positionMonotonic() - impl->last <= 3 && impl->fit.position(positionMonotonic())) return {};
+    if (positionMonotonic() - impl->last <= 3 && (impl->heldPosition || impl->fit.position(positionMonotonic()))) return {};
     if (impl->error.empty() && positionMonotonic() - impl->last > 3) return "position sample older than 3 s";
     return impl->error;
 }

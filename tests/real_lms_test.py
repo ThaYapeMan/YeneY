@@ -552,6 +552,10 @@ try:
         from podcast_real_lms import run
         run(globals())
         raise SystemExit(0)
+    if os.environ.get('YENEY_ROOM_TRANSITION_CASE'):
+        from websocket_room_lifecycle import run_transition
+        run_transition(globals(), os.environ['YENEY_ROOM_TRANSITION_CASE'])
+        raise SystemExit(0)
     if os.environ.get('YENEY_WS_LIFECYCLE') == '1':
         from websocket_room_lifecycle import run
         run(globals())

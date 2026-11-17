@@ -355,7 +355,9 @@ class Handler(BaseHTTPRequestHandler):
             return {}, None
         if action == 'GetMediaInfo': return {'CurrentURI': s.uri, 'NrTracks': str(len(s.items))}, None
         if action == 'GetTransportSettings': return {'PlayMode': s.play_mode}, None
-        if action == 'GetPositionInfo': return dict(s.position, RelTime=s.position['RelTime']), None
+        if action == 'GetPositionInfo':
+            reltime = 'NOT_IMPLEMENTED' if getattr(s, 'position_variant', '') == 'not-implemented' else s.position['RelTime']
+            return dict(s.position, RelTime=reltime), None
         if action == 'GetTransportInfo': return {'CurrentTransportState': s.transport_state}, None
         if action == 'GetCrossfadeMode': return {'CrossfadeMode': int(s.crossfade)}, None
         if action == 'SetCrossfadeMode':

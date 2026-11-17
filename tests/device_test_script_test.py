@@ -258,6 +258,23 @@ with tempfile.TemporaryDirectory(prefix='sonos-uri-fixture-') as directory:
     print(result.stdout, end='')
 print('PASS: bridge speaker URI log changes only, independent of title, shared by both adapters')
 
+# The monitor fixture remains alive until the production cleanup requests
+# termination. An explicit wakeup lets the test reap it without a signal.
+monitor_fixture = r'''
+[[ -p "$OUT/monitor-wakeup" ]] || mkfifo "$OUT/monitor-wakeup"
+exec {fixture_monitor_fd}<>"$OUT/monitor-wakeup"
+read -r -t 60 -u "$fixture_monitor_fd" & AUTO_MONITOR_PID=$!
+fixture_monitor_pid=$AUTO_MONITOR_PID
+kill() {
+    if [[ $1 == "$fixture_monitor_pid" ]]; then
+        printf '\n' >&"$fixture_monitor_fd"
+    else
+        builtin kill "$@"
+    fi
+}
+trap 'kill "$fixture_monitor_pid"; wait "$fixture_monitor_pid" 2>/dev/null' EXIT
+'''
+
 # Production scenario completion must reject both SOAP status and journal errors.
 with tempfile.TemporaryDirectory(prefix='sonos-auto-end-') as directory:
     env = {**os.environ, 'OUT': directory, 'AUTO': '1'}
@@ -278,9 +295,7 @@ python3() {
     fi
 }
 journalctl() { printf '%s' "$JOURNAL"; }
-sleep 60 & AUTO_MONITOR_PID=$!
-fixture_monitor_pid=$AUTO_MONITOR_PID
-trap 'kill "$fixture_monitor_pid" 2>/dev/null; wait "$fixture_monitor_pid" 2>/dev/null' EXIT
+''' + monitor_fixture + r'''
 auto_end 7
 auto_summary
 exit "$AUTO_FAILED"
@@ -499,9 +514,7 @@ python3() {
     else command python3 "$REAL_HELPER" "${@:2}"; fi
 }
 journalctl() { :; }; mark() { :; }
-sleep 60 & AUTO_MONITOR_PID=$!
-fixture_monitor_pid=$AUTO_MONITOR_PID
-trap 'kill "$fixture_monitor_pid" 2>/dev/null; wait "$fixture_monitor_pid" 2>/dev/null' EXIT
+''' + monitor_fixture + r'''
 auto_end 1
 auto_summary
 exit "$AUTO_FAILED"
