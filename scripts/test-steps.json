@@ -152,7 +152,8 @@
         "full": "full-queue-pressure-soak"
       },
       "phase": "quiet",
-      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "run_alone": true,
+      "reason": "Load-sensitive in SEEK-03. The five-lane run timed out waiting for the renderer target after step 87. The same seed completed alone in 415.640 s.",
       "seconds": 416.19897989201127,
       "modes": [
         "full"
