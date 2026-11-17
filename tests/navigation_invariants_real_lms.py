@@ -155,15 +155,13 @@ def run(c):
             assert healthy().count(f'reason=speaker-rewind command=time {first_seek}') == 1, healthy()
         elif case == 'R-natural':
             rate = int.from_bytes(prefix[24:28], 'little')
-            final_second = (partial_size - 44) // (6 * rate) - 2
-            wait(lambda: float(cli('time ?', mac)[-1]) >= first_seek + .2, 5, 'shortened row audible')
-            with sonos.lock:
-                sonos.position['RelTime'] = f'00:{final_second//60:02}:{final_second%60:02}'
-            wait(lambda: 'decision=stat' in healthy(), 8, 'renderer final position observed before boundary')
+            end_ms = (partial_size - 44) / (6 * rate) * 1000
             suffix = fetch(partial)
             assert len(suffix) == partial_size and suffix[44:] == natural_pcm(0)[full_size - partial_size:], 'shortened WAV exact suffix'
             wait(lambda: declared(row(1)), 10, 'successor declared before boundary')
             fetch(row(1), True)
+            wait(lambda: sonos.transport_state == 'PLAYING' and sonos.position.milliseconds() >= end_ms - 100,
+                 20, 'renderer reached shortened WAV end')
             started = time.monotonic()
             audible(1)
             target = 1
@@ -200,7 +198,9 @@ def run(c):
                 aligned = (when - started) * 1000
                 break
             time.sleep(.01)
-        wait(lambda: abs(clock_sample()[1]) <= 500, 5, 'LMS clock follows selected row')
+        precise_source = os.environ.get('YENEY_POSITION_SOURCE') == 'websocket'
+        tolerance = 30 if precise_source else 1250  # The UPnP answer has whole-second resolution.
+        wait(lambda: abs(clock_sample()[1]) <= tolerance, 5, 'LMS clock follows selected row')
         if os.environ.get('YENEY_SEEK_RESTART_TIMING') == '1':
             import statistics
             samples = []
@@ -217,7 +217,7 @@ def run(c):
             print(f'MEASURE {case} alignment_ms={aligned} median_ms={median:.3f} jumps_over_100_ms={jumps}', flush=True)
             (base / f'{case}-clock.tsv').write_text('monotonic_s\tlms_minus_renderer_ms\n' +
                 ''.join(f'{when:.6f}\t{error:.3f}\n' for when, error in samples))
-            if os.environ.get('YENEY_POSITION_SOURCE') == 'websocket':
+            if precise_source:
                 assert aligned is not None and aligned <= 300, (case, aligned)
                 assert abs(median) <= 10 and jumps == 0, (case, median, jumps)
         body = fetch(row(target))

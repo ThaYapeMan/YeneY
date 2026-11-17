@@ -250,7 +250,8 @@ for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44
     path=base/f'input-{i}.wav'
     seconds = 360 if os.environ.get('YENEY_WS_LIFECYCLE') == '1' and i < 2 else 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
     if os.environ.get('YENEY_SEEK_RESTART_TIMING') == '1' and i < 2:
-        seconds = 100
+        if i or os.environ.get('YENEY_NAV_CASE') != 'R-natural':
+            seconds = 100
     if scale_mb:
         seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
     source=bytearray(wav(rate,seconds,noise=True))
