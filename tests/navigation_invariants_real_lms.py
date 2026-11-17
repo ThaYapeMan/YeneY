@@ -25,13 +25,13 @@ def run(c):
         if not path.exists(): return False
         status = json.loads(path.read_text()).get('playback', {})
         return status.get('title') == f'Title & {index}' and status.get('state') == 'PLAYING'
-    def fetch(item, prefix=False):
+    def fetch(item, prefix=False, limit=None):
         url = urlsplit(item['uri'])
         conn = http.client.HTTPConnection(url.netloc, timeout=8)
         try:
             conn.request('GET', url.path)
             r = conn.getresponse()
-            body = r.read(44 + 4096) if prefix else r.read()
+            body = r.read(44 + 4096) if prefix else r.read(limit)
             assert r.status == 200 and len(body) > 44 and body[:4] == b'RIFF'
             return body
         finally:
@@ -82,9 +82,11 @@ def run(c):
                 settled = (opening, time.monotonic())
             return time.monotonic() - settled[1] >= .2
         wait(decoder_ready, 10, 'stream opening settled before controller seek')
-    cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
+    history = case in ('R-history-lms', 'R-history-app')
+    initial = 1 if history else 0
+    cli('playlistcontrol cmd:load track_id:' + ','.join(ids) + (' play_index:1' if history else ''), mac)
     wait(lambda: len(items()) == len(ids), 15, 'eight-item initial window')
-    select(0)
+    select(initial)
     mark = len(log())
     if case == 'D6':
         fetch(row(0), True)
@@ -98,6 +100,152 @@ def run(c):
         assert 'terminate' not in log()
         assert cli('version ?')[-1].startswith('9.1.1')
         print('PASS D6 programming exception inside worker: room released, process alive, LMS available; independent worker isolation covered by seek-worker-test', flush=True)
+        return
+    if case.startswith('R-'):
+        gate = c['tap'].http_gate
+        prefix = fetch(row(initial), True)
+        full_size = int.from_bytes(prefix[4:8], 'little') + 8
+        wait(gate.held.is_set, 5, 'natural producer held below seek point')
+        natural_ready()
+        seed = os.environ.get('YENEY_SEEK_RESTART_SEED')
+        rng = random.Random(f'{seed}:{case}')
+        first_seek = rng.randint(12, 14) if seed else 12
+        far_seek, forward_seek = first_seek + 8, first_seek + 4
+        backward_seek = first_seek - 8
+        cli(f'time {first_seek}', mac)
+        wait(lambda: 'reason=seek-partial edits=2' in log()[mark:], 15, 'shortened row installed')
+        partial = row(initial)
+        assert 'decision=fallback reason=prefix-unavailable' in log()[mark:], log()[mark:]
+        partial_size = int.from_bytes(fetch(partial, True)[4:8], 'little') + 8
+        assert partial_size < full_size
+        if case in ('R-far', 'R-producing'):
+            wait(gate.following_held.is_set, 5, 'shortened producer held')
+        if case in ('R-forward', 'R-app'):
+            rate = int.from_bytes(prefix[24:28], 'little')
+            fetch(partial, limit=44 + (5 * rate + 4096) * 6)
+        commands = {'R-time': 'time 0', 'R-index': 'playlist index 0', 'R-backward': f'time {backward_seek}',
+                    'R-forward': f'time {forward_seek}', 'R-far': f'time {far_seek}', 'R-producing': 'time 0'}
+        mark, actions = len(log()), len(sonos.requests)
+
+        def healthy():
+            recent = log()[mark:]
+            assert not any(fault in recent for fault in ('relay fault=', 'worker fault=', 'end decision=fault', 'end decision=external-stop', 'reason=room-fault')), recent
+            assert c['bridge'].poll() is None, recent
+            return recent
+
+        def playing(index=0):
+            healthy()
+            return sonos.transport_state == 'PLAYING' and row(index)['uri'] == sonos.position['TrackURI']
+
+        target = 0
+        started = time.monotonic()
+        if case in commands:
+            cli(commands[case], mac)
+            wait(lambda: 'window lms-nav' in healthy() and playing(), 15, 'shortened row navigation committed')
+        elif case == 'R-app':
+            cli(f'time {forward_seek}', mac)
+            wait(lambda: 'decision=in-item' in healthy() and playing(), 10, 'offset advanced within shortened row')
+            assert row(initial)['uri'] == partial['uri'], healthy()
+            wait(lambda: float(cli('time ?', mac)[-1]) >= forward_seek + .2, 5, 'forward seek is audible')
+            mark, actions = len(log()), len(sonos.requests)
+            started = time.monotonic()
+            with sonos.lock:
+                sonos.position['RelTime'] = '00:00:00'
+            wait(lambda: 'decision=paired reason=speaker-rewind' in healthy(), 8, 'app rewind paired on same row')
+            assert healthy().count(f'reason=speaker-rewind command=time {first_seek}') == 1, healthy()
+        elif case == 'R-natural':
+            rate = int.from_bytes(prefix[24:28], 'little')
+            final_second = (partial_size - 44) // (6 * rate) - 2
+            wait(lambda: float(cli('time ?', mac)[-1]) >= first_seek + .2, 5, 'shortened row audible')
+            with sonos.lock:
+                sonos.position['RelTime'] = f'00:{final_second//60:02}:{final_second%60:02}'
+            wait(lambda: 'decision=stat' in healthy(), 8, 'renderer final position observed before boundary')
+            suffix = fetch(partial)
+            assert len(suffix) == partial_size and suffix[44:] == natural_pcm(0)[full_size - partial_size:], 'shortened WAV exact suffix'
+            wait(lambda: declared(row(1)), 10, 'successor declared before boundary')
+            fetch(row(1), True)
+            started = time.monotonic()
+            audible(1)
+            target = 1
+            wait(lambda: bridge_at(1) and playing(1), 10, 'natural successor')
+        else:
+            assert case in ('R-history-lms', 'R-history-app'), case
+            for target in (0, 1):
+                if target == initial:
+                    wait(lambda: row(initial)['uri'] != partial['uri'], 10, 'deferred frame-zero row installed')
+                started = time.monotonic()
+                if case == 'R-history-app':
+                    audible(target)
+                else:
+                    cli(f'playlist index {target}', mac)
+                wait(lambda: bridge_at(target) and playing(target), 12, 'history target')
+        replaced = row(target)['uri'] != partial['uri']
+        assert replaced == (case not in ('R-forward', 'R-app')), healthy()
+        origin = {'R-app': first_seek, 'R-forward': first_seek,
+                  'R-backward': backward_seek, 'R-far': far_seek}.get(case, 0)
+
+        def clock_sample():
+            sent = time.monotonic()
+            lms_ms = float(cli('time ?', mac)[-1]) * 1000
+            midpoint = (sent + time.monotonic()) / 2
+            with sonos.lock:
+                true_ms = origin * 1000 + sonos.position.milliseconds() - (time.monotonic() - midpoint) * 1000
+            return midpoint, lms_ms - true_ms
+
+        aligned = None
+        deadline = started + 2
+        while time.monotonic() < deadline:
+            when, error = clock_sample()
+            if abs(error) <= 30:
+                aligned = (when - started) * 1000
+                break
+            time.sleep(.01)
+        wait(lambda: abs(clock_sample()[1]) <= 500, 5, 'LMS clock follows selected row')
+        if os.environ.get('YENEY_SEEK_RESTART_TIMING') == '1':
+            import statistics
+            samples = []
+            due = time.monotonic()
+            end = due + 60
+            while time.monotonic() < end:
+                healthy()
+                samples.append(clock_sample())
+                due += .25
+                time.sleep(max(0, due - time.monotonic()))
+            errors = [value for _, value in samples]
+            median = statistics.median(errors)
+            jumps = sum(abs(b - a) > 100 for a, b in zip(errors, errors[1:]))
+            print(f'MEASURE {case} alignment_ms={aligned} median_ms={median:.3f} jumps_over_100_ms={jumps}', flush=True)
+            (base / f'{case}-clock.tsv').write_text('monotonic_s\tlms_minus_renderer_ms\n' +
+                ''.join(f'{when:.6f}\t{error:.3f}\n' for when, error in samples))
+            if os.environ.get('YENEY_POSITION_SOURCE') == 'websocket':
+                assert aligned is not None and aligned <= 300, (case, aligned)
+                assert abs(median) <= 10 and jumps == 0, (case, median, jumps)
+        body = fetch(row(target))
+        if case in ('R-time', 'R-index', 'R-producing', 'R-history-lms', 'R-history-app'):
+            assert len(body) == full_size and body[44:] == natural_pcm(target)
+        assert playing(target)
+        if case in ('R-natural', 'R-forward', 'R-app'):
+            assert len(body) == (len(natural_pcm(1)) + 44 if target else partial_size)
+        if case == 'R-natural':
+            assert 'kind=natural' in healthy() and 'queue LMS mutation' not in healthy(), healthy()
+        mutations = [name for name, *_ in sonos.requests[actions:]
+                     if name in ('Seek', 'Play', 'Stop', 'AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue')]
+        if case in commands:
+            assert mutations.count('Seek') == 1 and 'Play' not in mutations and 'Stop' not in mutations, mutations
+            edits = sum(name in ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue') for name in mutations)
+            assert edits == (0 if case == 'R-forward' else 2), mutations
+        if case == 'R-app':
+            assert not mutations, mutations
+        healthy()
+        with gate.lock:
+            deliveries = list(gate.deliveries)
+        for request, size, seconds in deliveries:
+            print(f'MEASURE {case} LMS HTTP request={request} bytes={size} elapsed_s={seconds:.6f} '
+                  f'delivery_MB_per_s={size / seconds / 1e6:.3f}', flush=True)
+        print(f'PASS {case} full_bytes={full_size} shortened_bytes={partial_size} '
+              f'alignment_ms={aligned} speaker_commands={mutations}', flush=True)
+        cli('stop', mac)
+        wait(lambda: not items(), 10, 'explicit stop release')
         return
     if case.startswith('S') and case != 'SOAK' or case == 'D1':
         if case in ('S2', 'S3'):

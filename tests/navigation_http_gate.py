@@ -2,19 +2,23 @@
 """Keep the second natural LMS audio response unfinished until selection."""
 import http.client
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class NavigationHTTPGate:
-    def __init__(self, hold_request=2):
+    def __init__(self, hold_request=2, hold_following=False):
         self.held = threading.Event()
         self.release = threading.Event()
+        self.following_held = threading.Event()
+        self.following_release = threading.Event()
         self.corrupt_next = threading.Event()
         self.corruptions = 0
         self.retained_verified = threading.Event()
         self.on_corruption = lambda: None
         self.lock = threading.Lock()
         self.requests = 0
+        self.deliveries = []
         self.prefix_bytes = 0
         self.prefix_limit = 512 * 1024
         gate = self
@@ -31,6 +35,8 @@ class NavigationHTTPGate:
                     number = gate.requests
                 if number > hold_request:
                     gate.release.set()
+                if number > hold_request + 1:
+                    gate.following_release.set()
                 upstream = http.client.HTTPConnection('127.0.0.1', 9000, timeout=10)
                 try:
                     upstream.request('GET', self.path, headers=dict(self.headers))
@@ -41,6 +47,7 @@ class NavigationHTTPGate:
                             self.send_header(name, response.getheader(name))
                     self.send_header('Connection', 'close')
                     self.end_headers()
+                    began = time.monotonic()
                     first = response.read(gate.prefix_limit)
                     if gate.corrupt_next.is_set():
                         gate.corrupt_next.clear()
@@ -58,8 +65,16 @@ class NavigationHTTPGate:
                         gate.held.set()
                         if not gate.release.wait(20):
                             raise AssertionError('unfinished decode-ahead was never selected')
+                    if hold_following and number == hold_request + 1:
+                        gate.following_held.set()
+                        if not gate.following_release.wait(20):
+                            raise AssertionError('shortened producer was never superseded')
+                    delivered = len(first)
                     while data := response.read(65536):
                         self.wfile.write(data)
+                        delivered += len(data)
+                    with gate.lock:
+                        gate.deliveries.append((number, delivered, time.monotonic() - began))
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # LMS q closes the superseded natural producer.
                 finally:
@@ -73,6 +88,7 @@ class NavigationHTTPGate:
 
     def close(self):
         self.release.set()
+        self.following_release.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join()

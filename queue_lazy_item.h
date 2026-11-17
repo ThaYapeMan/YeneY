@@ -21,6 +21,11 @@ class LazyItem {
     unsigned issuedCommands = 0;
     std::vector<upnp::StreamRequest *> readers;
 public:
+    class DeclarationMismatch : public std::invalid_argument {
+    public:
+        using std::invalid_argument::invalid_argument;
+    };
+
     LazyItem(std::shared_ptr<Item> declared, std::function<void()> enqueue, bool deferred = false)
         : declaration(std::move(declared)), activate(std::move(enqueue)) {
         if ((!deferred && (!declaration || !declaration->contentLength())) || !activate)
@@ -49,7 +54,7 @@ public:
             item->descriptor().rate != declaration->descriptor().rate ||
             item->descriptor().kind != declaration->descriptor().kind ||
             item->contentLength() != declaredLength)))
-            throw std::invalid_argument("lazy producer differs from declared WAV");
+            throw DeclarationMismatch("lazy producer differs from declared WAV");
         if (cancelled) return false; // late producer cannot resurrect an abandoned window
         if (produced && produced != item) throw std::logic_error("lazy producer already bound");
         if (!declaration) { declaredLength = item->contentLength(); declaration = item; }
@@ -73,7 +78,7 @@ public:
             item->descriptor().rate != declaration->descriptor().rate ||
             item->descriptor().kind != declaration->descriptor().kind ||
             item->contentLength() != declaredLength)))
-            throw std::invalid_argument("replacement differs from immutable WAV");
+            throw DeclarationMismatch("replacement differs from immutable WAV");
         if (!declaration) { declaredLength = item->contentLength(); declaration = item; }
         produced = std::move(item);
         cancelled = false;

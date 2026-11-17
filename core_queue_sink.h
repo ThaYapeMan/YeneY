@@ -71,6 +71,7 @@ class CoreQueueSink : public yeney::Sink {
     std::optional<uint32_t> speakerElapsed;
     std::function<std::optional<uint32_t>()> preciseElapsed;
     uint64_t preciseOccurrence = 0;
+    uint64_t interruptedAudible = 0;
     uint64_t describedLast = 0, active = 0, audibleId = 0, audibleFrame = 0, submitted = 0;
     uint64_t continuationSerial = UINT64_MAX / 2, producingSegment = 0;
     uint64_t speakerItemFrame = 0;

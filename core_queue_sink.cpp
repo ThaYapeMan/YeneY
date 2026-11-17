@@ -333,44 +333,51 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
         std::shared_ptr<Item> item;
         uint64_t pairedFrom = 0, pairedStart = 0;
         bool pairedZero = false;
+        unsigned pairedOriginMs = 0;
         std::string seekReason = landed ? "prefix-unavailable" : "landed-frame-unknown";
         if (!estimated.estimated && estimated.sourceToken &&
             (!estimated.originMs || landed || estimated.source.sourceFrames)) {
             std::lock_guard<std::mutex> lock(mutex);
-            for (const auto &entry : records) {
+            const auto audible = records.find(audibleId ? audibleId : interruptedAudible);
+            auto pair = [&](const auto &entry) {
                 const auto &candidate = entry.second;
                 const bool frameZero = !estimated.originMs ||
                     (estimated.source.sourceFrames && candidate.source.sourceFrames == estimated.source.sourceFrames &&
                      (!landed || !*landed));
-                if (entry.first == id || candidate.parent || !candidate.item || candidate.item->evicted() || candidate.originMs ||
+                if (entry.first == id || candidate.parent || !candidate.item || candidate.item->evicted() ||
+                    (candidate.originMs && (frameZero || audible == records.end() || candidate.item != audible->second.item)) ||
                     candidate.sourceToken != estimated.sourceToken || candidate.sourceUrl != estimated.sourceUrl ||
                     candidate.source.rate != estimated.source.rate ||
                     (frameZero && candidate.source.sourceFrames != estimated.source.sourceFrames) ||
                     (!frameZero && (!landed || *landed < candidate.wavOrigin ||
                         candidate.item->producedFrames() < *landed - candidate.wavOrigin + warmup + 4096)) ||
                     candidate.item->descriptor().kind != PromiseKind::Exact ||
-                    candidate.incomplete == "outside queue window" || !candidate.fault.empty()) continue;
+                    candidate.incomplete == "outside queue window" || !candidate.fault.empty()) return false;
                 if (!frameZero) {
                     auto origin = records.find(entry.first);
                     while (origin != records.end() && origin->second.pairedFrom)
                         origin = records.find(origin->second.pairedFrom);
                     if (origin == records.end() || !origin->second.landedFrame) {
                         seekReason = "landed-frame-unknown";
-                        continue;
+                        return false;
                     }
                 }
                 try {
                     const auto length = candidate.item->contentLength();
-                    if (!length) continue;
-                    if (candidate.item->finished() && candidate.item->producedFrames() != (*length - 44) / 6) continue;
+                    if (!length) return false;
+                    if (candidate.item->finished() && candidate.item->producedFrames() != (*length - 44) / 6) return false;
                     item = candidate.item;
                     pairedFrom = entry.first;
                     pairedZero = frameZero;
                     pairedStart = frameZero ? 0 : *landed - candidate.wavOrigin + warmup;
+                    pairedOriginMs = candidate.originMs;
                     records[id].wavOrigin = candidate.wavOrigin;
-                    break;
-                } catch (const std::exception &) { continue; }
-            }
+                    return true;
+                } catch (const std::exception &) { return false; }
+            };
+            if (audible == records.end() || !pair(*audible))
+                for (const auto &entry : records)
+                    if (pair(entry)) break;
         }
         if (!item) item = store.create(descriptor);
         if (estimated.originMs) {
@@ -386,8 +393,8 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             if (pairedZero) records[id].warmupFrames = 0;
             records[id].verificationFrames = pairedZero ? std::min<uint64_t>(4096, item->producedFrames()) : 4096;
             if (pairedZero) records[id].seekPositionMs = 0;
-            records[id].originMs = 0;
-            records[id].sourceOriginMs = 0;
+            records[id].originMs = pairedOriginMs;
+            records[id].sourceOriginMs = pairedOriginMs;
             records[id].promised = item->descriptor().promisedFrames;
             records[id].publication = "paired";
         }
@@ -1125,19 +1132,22 @@ void CoreQueueSink::stop() { pause(); }
 void CoreQueueSink::flush() {
     const bool retainInterrupted = retainInterruptedFlush.exchange(false);
     const auto through = latestProducer.load();
+    uint64_t retainedAudible;
     {
         std::lock_guard<std::mutex> lock(mutex);
         audibleSignals.clear();
         speakerStates.clear();
         speakerElapsed.reset();
         speakerState.reset();
+        interruptedAudible = retainInterrupted ? (audibleId ? audibleId : interruptedAudible) : 0;
+        retainedAudible = interruptedAudible;
         audibleId = 0;
         cachedReanchor = false;
         audibleSource = 0;
         prefixPending = false;
         mismatchSince = -1;
     }
-    enqueue([this, retainInterrupted, through] {
+    enqueue([this, retainInterrupted, through, retainedAudible] {
         std::vector<std::shared_ptr<Item>> items;
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -1160,7 +1170,8 @@ void CoreQueueSink::flush() {
             if (retainInterrupted && retainedHistory) {
                 std::lock_guard<std::mutex> lock(mutex);
                 const auto reusable = std::any_of(records.begin(), records.end(), [&](const auto &entry) {
-                    return entry.second.item == i && entry.second.sourceToken && !entry.second.originMs &&
+                    return entry.second.item == i && entry.second.sourceToken &&
+                        (!entry.second.originMs || entry.first == retainedAudible) &&
                         entry.second.fault.empty() && entry.second.incomplete == "flushed";
                 });
                 if (reusable) {

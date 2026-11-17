@@ -42,9 +42,11 @@ class Tap:
         self.listener=socket.socket();self.listener.bind(('127.0.0.1',0));self.listener.listen(2);self.listener.settimeout(.1)
         self.port=self.listener.getsockname()[1];self.closed=False;self.sockets=[];self.records=[];self.errors=[]
         self.http_gate = None
-        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and os.environ.get('YENEY_NAV_CASE') in ('A2', 'S2', 'S3', 'B1', 'B2', 'F3', 'D1'):
+        nav_case = os.environ.get('YENEY_NAV_CASE', '')
+        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and (nav_case.startswith('R-') or nav_case in ('A2', 'S2', 'S3', 'B1', 'B2', 'F3', 'D1')):
             from navigation_http_gate import NavigationHTTPGate
-            self.http_gate = NavigationHTTPGate(hold_request=0 if os.environ.get('YENEY_NAV_CASE') == 'D1' else 2 if os.environ.get('YENEY_NAV_CASE') == 'A2' else 1)
+            self.http_gate = NavigationHTTPGate(hold_request=0 if nav_case == 'D1' else 2 if nav_case == 'A2' else 1,
+                                                hold_following=nav_case in ('R-far', 'R-producing'))
             if os.environ.get('YENEY_NAV_MEDIA') and os.environ.get('YENEY_NAV_CASE') == 'S2':
                 self.http_gate.prefix_limit = (8 if os.environ.get('YENEY_NAV_MEDIA', '').startswith('converted') else 2) * 1024 * 1024
         self.worker=threading.Thread(target=self.run);self.worker.start()
@@ -247,6 +249,8 @@ fixture_count = 4 if scale_mb else 12 if os.environ.get('YENEY_FULLQ') == '1' el
 for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
     seconds = 360 if os.environ.get('YENEY_WS_LIFECYCLE') == '1' and i < 2 else 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
+    if os.environ.get('YENEY_SEEK_RESTART_TIMING') == '1' and i < 2:
+        seconds = 100
     if scale_mb:
         seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
     source=bytearray(wav(rate,seconds,noise=True))
@@ -891,7 +895,7 @@ finally:
     active_error=sys.exc_info()[1]
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1':
         for line in (base/'bridge.log').read_text().splitlines():
-            if any(key in line for key in ('queue window seek ', 'worker fault=', 'relay fault=', 'terminate', 'what():')):
+            if any(key in line for key in ('queue window seek ', 'queue window replace ', 'worker fault=', 'relay fault=', 'terminate', 'what():')):
                 print('EVIDENCE ' + line, flush=True)
     if failures and (active_error is None or isinstance(active_error,SystemExit) and active_error.code in (None,0)):
         raise failures[0]

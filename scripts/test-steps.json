@@ -6187,6 +6187,70 @@
         "fast"
       ],
       "time_judging": true
+    },
+    {
+      "target": "navigation-soak",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "navigation-soak"
+      },
+      "phase": "quiet",
+      "modes": [
+        "full"
+      ],
+      "time_judging": true,
+      "name": "shortened-row-websocket",
+      "label": "shortened-row-websocket",
+      "command": "python3 tests/navigation_suite.py --source websocket --shortened-seed 610103 --measure-shortened",
+      "reason": "Real LMS clock and producer transitions after deterministic early seeks into unproduced audio.",
+      "seconds": 730
+    },
+    {
+      "target": "navigation-soak",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "navigation-soak"
+      },
+      "phase": "quiet",
+      "modes": [
+        "full"
+      ],
+      "time_judging": true,
+      "name": "shortened-row-upnp",
+      "label": "shortened-row-upnp",
+      "command": "python3 tests/navigation_suite.py --source upnp --shortened-seed 610131 --measure-shortened",
+      "reason": "Real LMS clock and producer transitions after deterministic early seeks into unproduced audio.",
+      "seconds": 730
     }
   ],
   "orders": {
@@ -6345,7 +6409,9 @@
       "t0152",
       "t0153",
       "t0154",
-      "parallel-runner-contract"
+      "parallel-runner-contract",
+      "shortened-row-websocket",
+      "shortened-row-upnp"
     ],
     "fast": [
       "t0008",
