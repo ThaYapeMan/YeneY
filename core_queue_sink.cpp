@@ -253,6 +253,9 @@ void CoreQueueSink::sourceIdentity(uint64_t id, uint64_t token, const std::strin
         record.sourceToken = token;
         record.sourceUrl = url;
         record.originMs = originMs;
+        // A local suffix starts at its LMS source offset. Its fitted speaker
+        // clock must include that offset before STAT subtracts it.
+        if (!record.estimated) record.sourceOriginMs = originMs;
         record.gain = gain;
     });
 }
