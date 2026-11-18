@@ -281,7 +281,6 @@ def main():
     exit_code = 0
     rows, pairs, errors = [], [], []
     stop = threading.Event()
-    started = time.monotonic()
 
     def reltime_worker():
         due = started
@@ -297,6 +296,7 @@ def main():
         ws = SonosSocket(args.speaker, args.port)
         if args.source == 'both':
             lms = LmsClock(args.lms_host, args.lms_port, args.player_mac)
+        started = time.monotonic()
         thread = threading.Thread(target=reltime_worker)
         thread.start()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
