@@ -261,6 +261,36 @@ public:
         lazyRows.insert_or_assign(token, row);
     }
 
+    uint64_t navigationFirst() const { return firstNavigationOccurrence; }
+    uint64_t navigationToken() const { return navigationRowToken; }
+    const std::optional<Entry> &navigationTarget() const { return preparedNavigation; }
+
+    void beginNavigation(uint64_t first) {
+        firstNavigationOccurrence = first;
+        preparedNavigation.reset();
+    }
+
+    void selectNavigationRow(uint64_t token) { navigationRowToken = token; }
+
+    bool prepareNavigation(uint64_t token, Entry item) {
+        if (token != navigationRowToken || item.stream < firstNavigationOccurrence) return false;
+        firstNavigationOccurrence = item.stream;
+        preparedNavigation = std::move(item);
+        return true;
+    }
+
+    void clearNavigationTarget() { preparedNavigation.reset(); }
+
+    bool reproduceNavigation(Entry &row) {
+        const auto &item = preparedNavigation.value();
+        if (!declaredLazyRow(navigationRowToken).publish(item.item)) return false;
+        row.stream = item.stream;
+        row.item = item.item;
+        row.frames = item.frames;
+        row.originMs = item.originMs;
+        return true;
+    }
+
     const std::vector<Entry> &layout() const { return committedRows; }
 
     void commitLayout(std::vector<Entry> rows) { committedRows.swap(rows); }
@@ -316,6 +346,9 @@ private:
         }
     }
 
+    uint64_t firstNavigationOccurrence = 0;
+    uint64_t navigationRowToken = 0;
+    std::optional<Entry> preparedNavigation;
     std::vector<Entry> committedRows;
     std::map<unsigned, Selection> selections;
     std::deque<unsigned> selectionOrder;

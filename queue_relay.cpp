@@ -70,7 +70,7 @@ void QueueRoom::Impl::release(bool stop) {
     refreshUpcoming = false;
     lmsNavigation = false;
     navigationDeadline = {};
-    navigationItem.reset();
+    rowOwner.clearNavigationTarget();
     publishedWindowIndex.reset();
     auto cleanupOwned = std::move(owned);
     owned.clear();
@@ -220,8 +220,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
                 finitePause = false;
                 pausedFlushRetained = false;
                 handoffAt = {};
-                navigationFirst = next;
-                navigationItem.reset();
+                rowOwner.beginNavigation(next);
                 navigationDeadline = std::chrono::steady_clock::now() +
                     std::chrono::milliseconds(queue_audio::QueueWindow::settleMs);
                 stoppedPlay = true; // The next s describes snapshot.index itself.
@@ -311,7 +310,7 @@ void QueueRoom::Impl::append() {
         if (std::any_of(items.begin(), items.end(),
                         [&](const auto &i) { return i.stream == record.source.occurrence || i.owner == record.source.occurrence; }))
             continue;
-        if (lmsNavigation && owner < navigationFirst)
+        if (lmsNavigation && owner < rowOwner.navigationFirst())
             continue; // A superseded producer cannot enlarge the controller's navigation window.
         if (record.source.rate > queue.maxSampleRate())
             throw TrackFault("queue-rate-unsupported rate=" + std::to_string(record.source.rate) +
@@ -335,7 +334,7 @@ void QueueRoom::Impl::append() {
                 const auto selection = rowOwner.selectionAt(index);
                 const auto speakerSelection = selection && selection->token == *token &&
                     selection->phase == Selection::Producing && speakerNavCommands[*token];
-                if (!lmsNavigation || owner < navigationFirst || *token != navigationToken || speakerSelection) {
+                if (!lmsNavigation || owner < rowOwner.navigationFirst() || *token != rowOwner.navigationToken() || speakerSelection) {
                     auto cached = std::find_if(items.begin(), items.end(), [&](const auto &i) {
                         const auto identity = rowOwner.sourceToken(i.owner ? i.owner : i.stream);
                         return i.item && !i.segmentOffset && identity &&
@@ -357,10 +356,10 @@ void QueueRoom::Impl::append() {
                         // After LMS Previous, natural decode-ahead may revisit
                         // a retained upcoming parent. Bind its new producer
                         // clock to the existing URI instead of appending it.
-                        if (lmsNavigation && *token == navigationToken && speakerSelection) {
+                        if (lmsNavigation && *token == rowOwner.navigationToken() && speakerSelection) {
                             lmsNavigation = navigationSelecting = false;
                             navigationDeadline = {};
-                            navigationItem.reset();
+                            rowOwner.clearNavigationTarget();
                             logQueue("window pairing lms_index=" + std::to_string(index) +
                                 " decision=paired lms_commands=1");
                         }
@@ -428,12 +427,12 @@ void QueueRoom::Impl::append() {
         std::vector<std::string> expected;
         for (const auto &i : items) expected.push_back(i.uri);
         const auto selection = rowOwner.selectionAt(navigationFrom);
-        const bool retainedRewind = lmsNavigation && owner >= navigationFirst && !record.parent &&
-            record.sourceToken == navigationToken &&
-            selection && selection->token == navigationToken && selection->rewindMs &&
+        const bool retainedRewind = lmsNavigation && owner >= rowOwner.navigationFirst() && !record.parent &&
+            record.sourceToken == rowOwner.navigationToken() &&
+            selection && selection->token == rowOwner.navigationToken() && selection->rewindMs &&
             std::any_of(items.begin(), items.end(), [&](const auto &entry) { return entry.item == record.item; });
-        const bool ownedNavigation = lmsNavigation && owner >= navigationFirst && !record.parent &&
-            record.sourceToken == navigationToken && ownership.active();
+        const bool ownedNavigation = lmsNavigation && owner >= rowOwner.navigationFirst() && !record.parent &&
+            record.sourceToken == rowOwner.navigationToken() && ownership.active();
         upnp::QueueSnapshot before;
         if (!retainedRewind && !ownedNavigation) {
             before = coordinator.browse();
@@ -488,15 +487,12 @@ void QueueRoom::Impl::append() {
                                     " occurrence=" + std::to_string(record.source.occurrence));
         upnp::SoapResult result;
         const auto didl = upnp::queueDidl(metadata);
-        if (lmsNavigation && owner >= navigationFirst && !record.parent) {
+        if (lmsNavigation && owner >= rowOwner.navigationFirst() && !record.parent) {
             std::lock_guard<std::mutex> lock(sourceMutex);
             const auto identity = rowOwner.sourceToken(owner);
-            if (identity && *identity == navigationToken) {
-                // Admission can race the CLI selection. The generation is a
-                // lower bound; the occurrence token identifies its producer.
-                navigationFirst = owner;
-                navigationItem = Entry{record.source.occurrence, metadata.url, record.item, track.url,
-                                      metadata.frames, metadata.title, 0, 0, didl, record.originMs};
+            if (identity && rowOwner.prepareNavigation(*identity,
+                {record.source.occurrence, metadata.url, record.item, track.url,
+                 metadata.frames, metadata.title, 0, 0, didl, record.originMs})) {
                 windowDirty = true;
                 nextWindowPoll = {};
                 return;
@@ -637,7 +633,7 @@ void QueueRoom::Impl::run() {
                         if (snapshot.mode == "stop") {
                             const auto fresh = reader.read(host, mac);
                             if (fresh.mode == "stop") {
-                                command('Z', navigationFirst); // Confirmed user stop cancels owned requests.
+                                command('Z', rowOwner.navigationFirst()); // Confirmed user stop cancels owned requests.
                                 if (snapshot.entries.empty() && fresh.entries.empty())
                                     logQueue("window rebuild reason=clear lms_commands=0");
                             }
@@ -658,7 +654,7 @@ void QueueRoom::Impl::run() {
                             } else logQueue("window snapshot rejected reason=unconfirmed-clear");
                         }
                     } catch (const std::exception &) { logQueue("window snapshot unavailable reason=cli-read"); }
-                    command('Z', navigationFirst);
+                    command('Z', rowOwner.navigationFirst());
                 }
             }
             if (deferredStop != std::chrono::steady_clock::time_point{} &&

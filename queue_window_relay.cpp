@@ -3,6 +3,8 @@
 namespace bridge {
 void QueueRoom::Impl::reconcileWindow() {
     const auto &items = rowOwner.layout();
+    const auto navigationToken = rowOwner.navigationToken();
+    const auto &navigationItem = rowOwner.navigationTarget();
     if (!started || faulted || externalReleased || sourceAway || !current || selecting) return;
     if (lmsNavigation && !navigationItem) return;
     const auto now = std::chrono::steady_clock::now();
@@ -107,7 +109,7 @@ void QueueRoom::Impl::reconcileWindow() {
         !selected->rewindMs;
     if (lmsNavigation && navigationFrom == audible->index && !speakerSelection) {
         const auto records = queue.snapshot();
-        const auto producer = std::find_if(records.begin(), records.end(), [this](const auto &r) {
+        const auto producer = std::find_if(records.begin(), records.end(), [&navigationItem](const auto &r) {
             return r.source.occurrence == navigationItem->stream;
         });
         auto &target = entries[navigationToken];
@@ -161,7 +163,7 @@ void QueueRoom::Impl::reconcileWindow() {
                 speakerNavCommands.erase(navigationToken);
                 replacementReasons.erase(navigationToken);
                 lmsNavigation = navigationSelecting = false;
-                navigationItem.reset();
+                rowOwner.clearNavigationTarget();
                 publishedWindowIndex = audible->index;
                 playlist = std::move(snapshot);
                 publishedWindowPolicy = window.policy();
@@ -186,7 +188,7 @@ void QueueRoom::Impl::reconcileWindow() {
         bool published = false, declarationMismatch = false;
         if (target.size() == 1 && !target.front().item && lazy) {
             try {
-                published = lazy->publish(navigationItem->item);
+                published = rowOwner.reproduceNavigation(target.front());
             } catch (const queue_audio::LazyItem::DeclarationMismatch &) {
                 declarationMismatch = true;
             }
@@ -194,10 +196,6 @@ void QueueRoom::Impl::reconcileWindow() {
         if (published) {
             // The controller supplied this producer. Keep a waiting PCM GET on
             // its existing route instead of cancelling and selecting it again.
-            target.front().stream = navigationItem->stream;
-            target.front().item = navigationItem->item;
-            target.front().frames = navigationItem->frames;
-            target.front().originMs = navigationItem->originMs;
             if (navigationItem->uri != target.front().uri) owned.erase(navigationItem->uri);
             rowOwner.retireSelection(audible->index);
             bound = true;
@@ -402,10 +400,10 @@ void QueueRoom::Impl::reconcileWindow() {
     bool overlap = false;
     try {
         if (lmsNavigation && anchor == navigationToken && !superseded) {
-            auto old = std::find_if(before.begin(), before.end(), [this](const auto &parent) {
+            auto old = std::find_if(before.begin(), before.end(), [navigationToken](const auto &parent) {
                 return parent.token == navigationToken;
             });
-            const auto target = std::find_if(wanted.begin(), wanted.end(), [this](const auto &parent) {
+            const auto target = std::find_if(wanted.begin(), wanted.end(), [navigationToken](const auto &parent) {
                 return parent.token == navigationToken;
             });
             if (old != before.end() && target != wanted.end() && old->uris != target->uris) {
@@ -491,7 +489,7 @@ void QueueRoom::Impl::reconcileWindow() {
             std::lock_guard<std::mutex> lock(sourceMutex);
             token = rowOwner.sourceToken(owner).value();
         }
-        releaseWindowParent(token, navigationFirst);
+        releaseWindowParent(token, rowOwner.navigationFirst());
         owned.erase(entry.uri);
     }
     std::vector<Entry> reordered;
@@ -562,7 +560,7 @@ void QueueRoom::Impl::reconcileWindow() {
         replacementReasons.erase(navigationToken);
         rowOwner.retireSelection(audible->index);
         lmsNavigation = navigationSelecting = false;
-        navigationItem.reset();
+        rowOwner.clearNavigationTarget();
     } else if (publishedWindowIndex && *publishedWindowIndex != audible->index) {
         unsigned history = 0;
         for (const auto &parent : wanted) {

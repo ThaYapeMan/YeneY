@@ -339,7 +339,7 @@ void QueueRoom::Impl::selectPath() {
             selectedSourceIndex = selectedIndex;
             const auto slot = selectedIndex < 0 ? std::nullopt : window.atIndex(unsigned(selectedIndex));
             selectedToken = slot ? slot->token : 0;
-            if (navigationSelecting) navigationToken = selectedToken;
+            if (navigationSelecting) rowOwner.selectNavigationRow(selectedToken);
         }
         selectionKnown = true;
         if (!selectedNewPlay && selectedLocal != paths.isRelay()) {

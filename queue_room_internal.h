@@ -83,9 +83,6 @@ struct QueueRoom::Impl {
     unsigned navigationFrom = 0;
     uint64_t queueEdits = 0, navigationEdits = 0;
     std::optional<unsigned> publishedWindowIndex;
-    uint64_t navigationFirst = 0;
-    uint64_t navigationToken = 0;
-    std::optional<Entry> navigationItem;
     std::chrono::steady_clock::time_point navigationDeadline{};
     using Selection = queue_audio::QueueRowOwner::Selection;
     void advanceSelections();
