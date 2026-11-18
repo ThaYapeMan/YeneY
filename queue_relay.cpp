@@ -61,9 +61,8 @@ upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
 void QueueRoom::Impl::releaseWindowParent(uint64_t token, uint64_t before) {
     if (before == UINT64_MAX) speakerNavFirst.erase(token);
     std::lock_guard<std::mutex> lock(sourceMutex);
-    for (const auto &source : sourceTokens)
-        if (source.second == token && source.first < before && source.first < UINT64_MAX / 2)
-            queue.releaseParent(source.first);
+    for (const auto source : rowOwner.earlierSources(token, before))
+        queue.releaseParent(source);
 }
 void QueueRoom::Impl::release(bool stop) {
     generationRebuildEdits.reset();
@@ -84,8 +83,8 @@ void QueueRoom::Impl::release(bool stop) {
     {
         std::lock_guard<std::mutex> lock(sourceMutex);
         for (auto parent : parents) {
-            const auto token = sourceTokens.find(parent);
-            if (token != sourceTokens.end()) tokens.insert(token->second);
+            const auto token = rowOwner.sourceToken(parent);
+            if (token) tokens.insert(*token);
         }
     }
     for (auto token : tokens) releaseWindowParent(token);
@@ -207,11 +206,11 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
                 navigationFrom = publishedWindowIndex.value_or(playlist.index);
                 for (const auto &entry : items) if (entry.stream == current) {
                     const auto owner = entry.owner ? entry.owner : entry.stream;
-                    const auto index = sourceIndices.find(owner);
-                    if (index != sourceIndices.end()) {
-                        const auto selection = selections.find(index->second);
+                    const auto index = rowOwner.sourceIndex(owner);
+                    if (index) {
+                        const auto selection = selections.find(*index);
                         if (selection == selections.end() || selection->second.phase != Selection::Producing)
-                            navigationFrom = index->second;
+                            navigationFrom = *index;
                     }
                 }
                 navigationEdits = queueEdits;
@@ -295,13 +294,13 @@ void QueueRoom::Impl::append() {
             continue;
         if (!record.parent) {
             std::lock_guard<std::mutex> lock(sourceMutex);
-            const auto token = sourceTokens.find(owner);
-            if (token != sourceTokens.end()) {
-                const auto first = speakerNavFirst.find(token->second);
+            const auto token = rowOwner.sourceToken(owner);
+            if (token) {
+                const auto first = speakerNavFirst.find(*token);
                 if (first != speakerNavFirst.end() && owner < first->second)
                     continue; // Our selection cancels decode-ahead; only its paired producer may bind.
             }
-            if (token != sourceTokens.end() && !window.find(token->second)) {
+            if (token && !window.find(*token)) {
                 queue.releaseParent(owner);
                 continue; // An LMS edit removed this producer before publication.
             }
@@ -328,17 +327,18 @@ void QueueRoom::Impl::append() {
             { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
         if (!record.parent) {
             std::unique_lock<std::mutex> lock(sourceMutex);
-            const auto token = sourceTokens.find(owner);
-            if (token != sourceTokens.end()) {
-                const auto lazy = rowOwner.lazyRow(token->second);
-                const auto selection = selections.find(sourceIndices.at(owner));
-                const auto speakerSelection = selection != selections.end() && selection->second.token == token->second &&
-                    selection->second.phase == Selection::Producing && speakerNavCommands[token->second];
-                if (!lmsNavigation || owner < navigationFirst || token->second != navigationToken || speakerSelection) {
+            const auto token = rowOwner.sourceToken(owner);
+            if (token) {
+                const auto lazy = rowOwner.lazyRow(*token);
+                const auto index = rowOwner.sourceIndex(owner).value();
+                const auto selection = selections.find(index);
+                const auto speakerSelection = selection != selections.end() && selection->second.token == *token &&
+                    selection->second.phase == Selection::Producing && speakerNavCommands[*token];
+                if (!lmsNavigation || owner < navigationFirst || *token != navigationToken || speakerSelection) {
                     auto cached = std::find_if(items.begin(), items.end(), [&](const auto &i) {
-                        const auto identity = sourceTokens.find(i.owner ? i.owner : i.stream);
-                        return i.item && !i.segmentOffset && identity != sourceTokens.end() &&
-                               identity->second == token->second;
+                        const auto identity = rowOwner.sourceToken(i.owner ? i.owner : i.stream);
+                        return i.item && !i.segmentOffset && identity &&
+                               *identity == *token;
                     });
                     if (cached != items.end() && cached->item->evicted()) {
                         // Eviction can follow the last HTTP response before
@@ -356,17 +356,17 @@ void QueueRoom::Impl::append() {
                         // After LMS Previous, natural decode-ahead may revisit
                         // a retained upcoming parent. Bind its new producer
                         // clock to the existing URI instead of appending it.
-                        if (lmsNavigation && token->second == navigationToken && speakerSelection) {
+                        if (lmsNavigation && *token == navigationToken && speakerSelection) {
                             lmsNavigation = navigationSelecting = false;
                             navigationDeadline = {};
                             navigationItem.reset();
-                            logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                            logQueue("window pairing lms_index=" + std::to_string(index) +
                                 " decision=paired lms_commands=1");
                         }
                         if (!cached->owner) cached->owner = cached->stream;
                         if (current == cached->stream) current = record.source.occurrence;
                         cached->stream = record.source.occurrence;
-                        selectionPublished(sourceIndices.at(owner));
+                        selectionPublished(index);
                         windowDirty = true;
                         if (clockChanged) {
                             lock.unlock();
@@ -376,12 +376,12 @@ void QueueRoom::Impl::append() {
                     }
                 }
                 auto entry = std::find_if(items.begin(), items.end(), [&](const auto &i) {
-                    return !i.item && sourceTokens[i.stream] == token->second;
+                    return !i.item && rowOwner.sourceToken(i.stream).value_or(0) == *token;
                 });
                 if (!lmsNavigation && lazy && entry != items.end()) {
                     if (!lazy->publish(record.item)) {
                         queue.releaseParent(owner);
-                        selections.erase(sourceIndices.at(owner));
+                        selections.erase(index);
                         continue;
                     }
                     entry->stream = record.source.occurrence;
@@ -389,21 +389,21 @@ void QueueRoom::Impl::append() {
                     entry->frames = (*length - 44) / 6;
                     entry->originMs = record.originMs;
                     {
-                        const auto reason = replacementReasons.find(token->second);
+                        const auto reason = replacementReasons.find(*token);
                         if (reason != replacementReasons.end()) {
-                            const auto commands = std::to_string(speakerNavCommands[token->second]);
+                            const auto commands = std::to_string(speakerNavCommands[*token]);
                             if (reason->second != "evicted")
-                                logQueue("window target re-produced lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                                logQueue("window target re-produced lms_index=" + std::to_string(index) +
                                     " origin_ms=" + std::to_string(record.originMs) + " lms_commands=" + commands + " reason=" + reason->second);
-                            logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                            logQueue("window pairing lms_index=" + std::to_string(index) +
                                 " decision=re-produced reason=" + reason->second + " lms_commands=" + commands);
                             replacementReasons.erase(reason);
-                        } else if (speakerSelection) logQueue("window pairing lms_index=" + std::to_string(sourceIndices.at(owner)) +
+                        } else if (speakerSelection) logQueue("window pairing lms_index=" + std::to_string(index) +
                             " decision=paired lms_commands=1");
                     }
-                    logQueue("lazy bound lms_index=" + std::to_string(sourceIndices[owner]) +
-                        " lms_commands=" + std::to_string(speakerNavCommands[token->second]));
-                    selectionPublished(sourceIndices.at(owner));
+                    logQueue("lazy bound lms_index=" + std::to_string(index) +
+                        " lms_commands=" + std::to_string(speakerNavCommands[*token]));
+                    selectionPublished(index);
                     windowDirty = true;
                     continue;
                 }
@@ -412,10 +412,10 @@ void QueueRoom::Impl::append() {
         queue_audio::PlaylistEntry track;
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
-            auto found = sourceTracks.find(record.parent ? record.parent : record.source.occurrence);
-            if (found == sourceTracks.end())
+            const auto found = rowOwner.sourceTrack(record.parent ? record.parent : record.source.occurrence);
+            if (!found)
                 throw std::runtime_error("queue-stream-metadata-missing");
-            track = found->second;
+            track = *found;
             remote[record.source.occurrence] = false;
         }
         if (!ownership.active()) {
@@ -469,7 +469,7 @@ void QueueRoom::Impl::append() {
                      " " + changes);
         if (!record.parent && !lmsNavigation) {
             std::optional<queue_audio::QueueWindow::Slot> slot;
-            { std::lock_guard<std::mutex> lock(sourceMutex); slot = window.find(sourceTokens.at(owner)); }
+            { std::lock_guard<std::mutex> lock(sourceMutex); slot = window.find(rowOwner.sourceToken(owner).value()); }
             if (slot) {
                 auto row = makeRow(*slot);
                 rowOwner.declaredLazyRow(slot->token).publish(record.item);
@@ -494,8 +494,8 @@ void QueueRoom::Impl::append() {
         const auto didl = upnp::queueDidl(metadata);
         if (lmsNavigation && owner >= navigationFirst && !record.parent) {
             std::lock_guard<std::mutex> lock(sourceMutex);
-            const auto identity = sourceTokens.find(owner);
-            if (identity != sourceTokens.end() && identity->second == navigationToken) {
+            const auto identity = rowOwner.sourceToken(owner);
+            if (identity && *identity == navigationToken) {
                 // Admission can race the CLI selection. The generation is a
                 // lower bound; the occurrence token identifies its producer.
                 navigationFirst = owner;
@@ -588,16 +588,16 @@ bool QueueRoom::Impl::discardEvicted(Entry &entry) {
     if (!entry.item || !entry.item->evicted()) return false;
     std::lock_guard<std::mutex> lock(sourceMutex);
     const auto owner = entry.owner ? entry.owner : entry.stream;
-    const auto identity = sourceTokens.find(owner);
-    if (identity == sourceTokens.end()) return false;
-    const auto token = identity->second;
+    const auto identity = rowOwner.sourceToken(owner);
+    if (!identity) return false;
+    const auto token = *identity;
     const auto lazy = rowOwner.lazyRow(token);
     if (!lazy) return false;
     replacementReasons[token] = "evicted";
     lazy->reset(entry.item);
     entry.stream = UINT64_MAX - token;
     entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
-    logQueue("cache evicted lms_index=" + std::to_string(sourceIndices.at(owner)));
+    logQueue("cache evicted lms_index=" + std::to_string(rowOwner.sourceIndex(owner).value()));
     return true;
 }
 void QueueRoom::Impl::trimHistory() {

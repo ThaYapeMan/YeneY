@@ -104,8 +104,10 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
                       const auto &entry = items[ordinal - 1];
                       const auto owner = entry.owner ? entry.owner : entry.stream;
                       std::lock_guard<std::mutex> lock(sourceMutex);
-                      if (sourceTokens.count(owner) && sourceIndices.count(owner))
-                          speakerChanges->expectTrack(sourceIndices.at(owner), sourceTokens.at(owner), entry.uri,
+                      const auto token = rowOwner.sourceToken(owner);
+                      const auto index = rowOwner.sourceIndex(owner);
+                      if (token && index)
+                          speakerChanges->expectTrack(*index, *token, entry.uri,
                               ordinal, unsigned(items.size()), "x-rincon-queue:" + room.uuid + "#0", !started);
                   }
               }
@@ -138,17 +140,17 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
     route.registerWith(*http);
     relayEvents(true);
     paths.describeSource = [this](uint64_t id) {
+        const auto source = rowOwner.sourceForStart();
+        const auto &track = source->track;
         std::lock_guard<std::mutex> lock(sourceMutex);
-        sourceTracks[id] = selectedTrack;
+        rowOwner.recordSource(id, *source);
         // Paired producers bypass append's new-row path. Publish their known
         // relay classification before decoding, including FIR lookahead.
-        if (!remotePlaybackSource(selectedTrack.id, selectedTrack.remote, selectedTrack.url))
+        if (!remotePlaybackSource(track.id, track.remote, track.url))
             remote[id] = false;
-        if (selectedSourceIndex >= 0) sourceIndices[id] = unsigned(selectedSourceIndex);
-        if (selectedToken) sourceTokens[id] = selectedToken;
-        queue.sourceIdentity(id, selectedToken, selectedTrack.url, selectedTrack.startOffsetMs, selectedCommand.value);
-        if (remotePlaybackSource(selectedTrack.id, selectedTrack.remote, selectedTrack.url) && selectedTrack.finiteRemote())
-            queue.estimate(id, selectedTrack.duration, selectedTrack.startOffsetMs);
+        queue.sourceIdentity(id, source->token, track.url, track.startOffsetMs, source->gain);
+        if (remotePlaybackSource(track.id, track.remote, track.url) && track.finiteRemote())
+            queue.estimate(id, track.duration, track.startOffsetMs);
     };
     logQueue("settings poll_ms=" + std::to_string(pollMs));
     queue.useSpeakerClock();
@@ -229,8 +231,8 @@ std::unique_ptr<yeney::Decoder> QueueRoom::decoder(const yeney::DecoderConfig &c
     const auto occurrence = impl->queue.latestOccurrence();
     {
         std::lock_guard<std::mutex> lock(impl->sourceMutex);
-        auto found = impl->sourceTracks.find(occurrence);
-        if (found != impl->sourceTracks.end()) source = found->second;
+        const auto found = impl->rowOwner.sourceTrack(occurrence);
+        if (found) source = *found;
         host = impl->nativeHost.empty() ? impl->host : impl->nativeHost;
     }
     const auto extension = source.url.substr(source.url.find_last_of('.') + 1);

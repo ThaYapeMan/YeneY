@@ -35,8 +35,8 @@ void QueueRoom::Impl::reconcileWindow() {
             });
             if (audible == items.end()) return;
             std::lock_guard<std::mutex> sourceLock(sourceMutex);
-            const auto identity = sourceTokens.find(audible->owner ? audible->owner : audible->stream);
-            if (identity == sourceTokens.end() || identity->second != selection.second.token) return;
+            const auto identity = rowOwner.sourceToken(audible->owner ? audible->owner : audible->stream);
+            if (!identity || *identity != selection.second.token) return;
         }
     }
     const auto previous = publishedWindowPolicy;
@@ -52,14 +52,14 @@ void QueueRoom::Impl::reconcileWindow() {
         std::lock_guard<std::mutex> lock(sourceMutex);
         for (const auto &entry : items) {
             const auto owner = entry.owner ? entry.owner : entry.stream;
-            const auto token = sourceTokens.find(owner);
-            if (token == sourceTokens.end()) return; // No speculative identity matching.
-            if (before.empty() || before.back().token != token->second)
-                before.push_back({token->second, {}});
+            const auto token = rowOwner.sourceToken(owner);
+            if (!token) return; // No speculative identity matching.
+            if (before.empty() || before.back().token != *token)
+                before.push_back({*token, {}});
             before.back().uris.push_back(entry.uri);
-            entries[token->second].push_back(entry);
-            if (entry.stream == current) anchor = token->second;
-            if (const auto slot = window.find(token->second)) sourceIndices[owner] = slot->index;
+            entries[*token].push_back(entry);
+            if (entry.stream == current) anchor = *token;
+            if (const auto slot = window.find(*token)) rowOwner.locate(owner, slot->index);
         }
     }
     // An app burst may select another row while the preceding fresh producer
@@ -77,8 +77,8 @@ void QueueRoom::Impl::reconcileWindow() {
              {"RelativeTimePosition", position.value("RelTime")}});
         std::lock_guard<std::mutex> sourceLock(sourceMutex);
         for (const auto &entry : items) if (entry.uri == evidence.at("CurrentTrackURI")) {
-            const auto token = sourceTokens.find(entry.owner ? entry.owner : entry.stream);
-            if (token != sourceTokens.end()) anchor = token->second;
+            const auto token = rowOwner.sourceToken(entry.owner ? entry.owner : entry.stream);
+            if (token) anchor = *token;
         }
     }
     const auto audible = lmsNavigation ? window.find(navigationToken) : window.find(anchor);
@@ -497,7 +497,7 @@ void QueueRoom::Impl::reconcileWindow() {
         uint64_t token;
         {
             std::lock_guard<std::mutex> lock(sourceMutex);
-            token = sourceTokens.at(owner);
+            token = rowOwner.sourceToken(owner).value();
         }
         releaseWindowParent(token, navigationFirst);
         owned.erase(entry.uri);
@@ -658,9 +658,9 @@ void QueueRoom::Impl::arbitrateSelection(uint64_t token, const std::string &reas
             auto first = queue.latestOccurrence() + 1;
             std::lock_guard<std::mutex> sourceLock(sourceMutex);
             for (const auto &record : queue.snapshot()) {
-                const auto identity = sourceTokens.find(record.source.occurrence);
+                const auto identity = rowOwner.sourceToken(record.source.occurrence);
                 if (!record.parent && record.incomplete.empty() && record.fault.empty() &&
-                    identity != sourceTokens.end() && identity->second == token)
+                    identity && *identity == token)
                     first = std::min(first, record.source.occurrence);
             }
             selections[slot->index] = Selection{Selection::Producing, token, first};
@@ -800,8 +800,7 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
     const auto id = UINT64_MAX - slot.token;
     {
         std::lock_guard<std::mutex> lock(sourceMutex);
-        sourceTokens[id] = slot.token;
-        sourceIndices[id] = slot.index;
+        rowOwner.registerPlaceholder(id, slot.index, slot.token);
     }
     rowOwner.registerLazyRow(slot.token, lazy);
     Entry result{id, metadata.url, {}, slot.track.url, 0, metadata.title, 0, 0, upnp::queueDidl(metadata)};

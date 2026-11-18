@@ -251,13 +251,13 @@ void QueueRoom::Impl::observe() {
     const auto checked = it != items.end() ? it : previousItem;
     if (current && it != items.end() && it->stream != current && transport == "PLAYING") {
         const auto owner = it->owner ? it->owner : it->stream;
-        const auto identity = sourceTokens.find(owner);
-        const auto slot = identity == sourceTokens.end() ? std::optional<queue_audio::QueueWindow::Slot>{} : window.find(identity->second);
+        const auto identity = rowOwner.sourceToken(owner);
+        const auto slot = !identity ? std::optional<queue_audio::QueueWindow::Slot>{} : window.find(*identity);
         const auto previousOwner = previousItem == items.end() ? 0 :
             previousItem->owner ? previousItem->owner : previousItem->stream;
-        const auto previousIndex = sourceIndices.find(previousOwner);
+        const auto previousIndex = rowOwner.sourceIndex(previousOwner);
         const bool naturalBoundary = previousItem != items.end() && previousItem->item &&
-            previousIndex != sourceIndices.end() && slot && slot->index == previousIndex->second + 1 &&
+            previousIndex && slot && slot->index == *previousIndex + 1 &&
             previousItem->frames <= (lastElapsed + 3) * previousItem->item->descriptor().rate;
         if (slot && !naturalBoundary) arbitrateSelection(slot->token, "speaker-nav");
     }
@@ -306,13 +306,13 @@ void QueueRoom::Impl::observe() {
         (transport == "PLAYING" || (precise && speakerTransitioning(precise->state))) && !lmsNavigation && !navigationSelecting &&
         (precise ? preciseSeek : (reportedElapsed < lastElapsed || reportedElapsed > lastElapsed + 2 + uint64_t(playbackAdvance)))) {
         const auto owner = it->owner ? it->owner : it->stream;
-        const auto index = sourceIndices.find(owner);
-        const auto token = sourceTokens.find(owner);
+        const auto index = rowOwner.sourceIndex(owner);
+        const auto token = rowOwner.sourceToken(owner);
         const auto records = queue.snapshot();
         const auto producer = std::find_if(records.begin(), records.end(), [&](const auto &r) {
             return r.source.occurrence == it->stream;
         });
-        if (index != sourceIndices.end() && token != sourceTokens.end() && producer != records.end()) {
+        if (index && token && producer != records.end()) {
             const auto offset = producer->seekPositionMs;
             // A finite remote WAV starts at its saved source origin even
             // though its informational duration still describes the full item.
@@ -320,12 +320,12 @@ void QueueRoom::Impl::observe() {
             const auto positionMs = uint64_t(originMs) +
                 it->segmentOffset * 1000 / it->item->descriptor().rate + reportedMs;
             const bool rewind = positionMs < offset;
-            logQueue("speaker-seek lms_index=" + std::to_string(index->second) +
+            logQueue("speaker-seek lms_index=" + std::to_string(*index) +
                 " position_ms=" + std::to_string(positionMs) + " lms_offset_ms=" + std::to_string(offset) +
                 " decision=" + (rewind ? "time-command" : "stat") + " lms_commands=" + (rewind ? "1" : "0"));
             if (rewind) {
-                selections[index->second] = Selection{Selection::Queued, token->second, 0, {}, positionMs / 1000 * 1000};
-                selectionOrder.push_back(index->second);
+                selections[*index] = Selection{Selection::Queued, *token, 0, {}, positionMs / 1000 * 1000};
+                selectionOrder.push_back(*index);
                 advanceSelections();
             }
         }
@@ -432,11 +432,11 @@ void QueueRoom::Impl::observe() {
     {
         std::lock_guard<std::mutex> lock(sourceMutex);
         const auto owner = it->owner ? it->owner : it->stream;
-        const auto index = sourceIndices.find(owner);
-        const auto token = sourceTokens.find(owner);
-        if (index != sourceIndices.end() && token != sourceTokens.end()) {
-            const auto selection = selections.find(index->second);
-            if (selection != selections.end() && selection->second.token == token->second) {
+        const auto index = rowOwner.sourceIndex(owner);
+        const auto token = rowOwner.sourceToken(owner);
+        if (index && token) {
+            const auto selection = selections.find(*index);
+            if (selection != selections.end() && selection->second.token == *token) {
                 selection->second.observed = current;
                 if (selection->second.phase == Selection::Published) {
                     const auto confirmed = selection->second.first;

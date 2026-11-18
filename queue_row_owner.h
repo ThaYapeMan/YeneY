@@ -3,6 +3,7 @@
 
 #include "core_queue_sink.h"
 #include "queue_lazy_item.h"
+#include "queue_playlist.h"
 #include <algorithm>
 #include <atomic>
 #include <map>
@@ -11,6 +12,13 @@ namespace queue_audio {
 
 class QueueRowOwner {
 public:
+    struct StartSource {
+        PlaylistEntry track;
+        int index = -1;
+        uint64_t token = 0;
+        uint32_t gain = 0;
+    };
+
     struct Admission {
         uint64_t token;
         std::string sourceUrl;
@@ -51,6 +59,16 @@ public:
             token, sourceUrl, serial, cancelledThrough.load(), firstOccurrence});
     }
 
+    void commitSource(StartSource source, uint64_t serial, uint64_t firstOccurrence) {
+        if (firstOccurrence && source.token)
+            admit(source.token, source.track.url, serial, firstOccurrence);
+        std::atomic_store(&activeSource, std::make_shared<const StartSource>(std::move(source)));
+    }
+
+    std::shared_ptr<const StartSource> sourceForStart() const {
+        return std::atomic_load(&activeSource);
+    }
+
     bool drainDeclarations(const std::vector<QueueRecord> &records) {
         for (auto entry = admissions.begin(); entry != admissions.end();) {
             const auto &admission = entry->second;
@@ -70,6 +88,52 @@ public:
     }
 
     void clearAdmissions() { admissions.clear(); }
+
+    void recordSource(uint64_t occurrence, const StartSource &source) {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        auto &record = sources[occurrence];
+        record.track = source.track;
+        if (source.index >= 0) record.index = unsigned(source.index);
+        if (source.token) record.token = source.token;
+    }
+
+    void locate(uint64_t occurrence, unsigned index) {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        sources[occurrence].index = index;
+    }
+
+    void registerPlaceholder(uint64_t occurrence, unsigned index, uint64_t token) {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        auto &record = sources[occurrence];
+        record.index = index;
+        record.token = token;
+    }
+
+    std::optional<PlaylistEntry> sourceTrack(uint64_t occurrence) const {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        const auto record = sources.find(occurrence);
+        return record == sources.end() ? std::nullopt : record->second.track;
+    }
+
+    std::optional<unsigned> sourceIndex(uint64_t occurrence) const {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        const auto record = sources.find(occurrence);
+        return record == sources.end() ? std::nullopt : record->second.index;
+    }
+
+    std::optional<uint64_t> sourceToken(uint64_t occurrence) const {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        const auto record = sources.find(occurrence);
+        return record == sources.end() ? std::nullopt : record->second.token;
+    }
+
+    std::vector<uint64_t> earlierSources(uint64_t token, uint64_t before) const {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        std::vector<uint64_t> matching;
+        for (auto entry = sources.begin(); entry != sources.end() && entry->first < before; ++entry)
+            if (entry->second.token == token) matching.push_back(entry->first);
+        return matching;
+    }
 
     // The worker owns the token-to-route lookup. A route retains its own
     // binding until outstanding HTTP requests have returned.
@@ -91,10 +155,18 @@ public:
     }
 
 private:
+    std::shared_ptr<const StartSource> activeSource = std::make_shared<const StartSource>();
     std::atomic<uint64_t> request{0};
     std::shared_ptr<std::atomic<uint64_t>> commandStart;
     std::atomic<uint64_t> cancelledThrough{0};
     std::map<uint64_t, Admission> admissions;
+    struct Source {
+        std::optional<PlaylistEntry> track;
+        std::optional<unsigned> index;
+        std::optional<uint64_t> token;
+    };
+    mutable std::mutex sourceMutex;
+    std::map<uint64_t, Source> sources;
     std::map<uint64_t, std::shared_ptr<LazyItem>> lazyRows;
 };
 

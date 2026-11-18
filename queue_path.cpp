@@ -8,10 +8,10 @@ std::optional<yeney::FlacSourceInfo> QueueRoom::Impl::sourceInfo(uint64_t occurr
     std::string id;
     {
         std::lock_guard<std::mutex> lock(sourceMutex);
-        auto found = sourceTracks.find(occurrence);
-        if (found == sourceTracks.end())
+        const auto found = rowOwner.sourceTrack(occurrence);
+        if (!found)
             return info;
-        id = found->second.id;
+        id = found->id;
         if (id.empty() || id.find_first_not_of("0123456789") != std::string::npos)
             return info;
         if (info) {
@@ -253,8 +253,8 @@ void QueueRoom::Impl::selectPath() {
                 speakerNavCommands[selection->second.token]) {
                 std::lock_guard<std::mutex> sourceLock(sourceMutex);
                 const auto pending = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
-                    const auto identity = sourceTokens.find(entry.owner ? entry.owner : entry.stream);
-                    return !entry.item && identity != sourceTokens.end() && identity->second == selection->second.token;
+                    const auto identity = rowOwner.sourceToken(entry.owner ? entry.owner : entry.stream);
+                    return !entry.item && identity && *identity == selection->second.token;
                 });
                 if (pending != items.end()) lmsNavigation = navigationSelecting = false;
             }
@@ -320,9 +320,9 @@ void QueueRoom::Impl::selectPath() {
             {
                 std::lock_guard<std::mutex> lock(sourceMutex);
                 for (const auto &entry : items) if (entry.stream == current && entry.sourceUrl == track.url) {
-                    const auto index = sourceIndices.find(entry.owner ? entry.owner : entry.stream);
+                    const auto index = rowOwner.sourceIndex(entry.owner ? entry.owner : entry.stream);
                     sameAudible = navigationSelecting ? selectedIndex == int(navigationFrom) :
-                        index != sourceIndices.end() && selectedIndex == int(index->second);
+                        index && selectedIndex == int(*index);
                 }
             }
             // Decode-ahead can already describe a different producer. Seek
@@ -384,8 +384,8 @@ void QueueRoom::Impl::selectPath() {
             selecting = false;
             return;
         }
-        if (selectedLocal && selectedToken)
-            rowOwner.admit(selectedToken, selectedTrack.url, selectedRequest, first);
+        rowOwner.commitSource({selectedTrack, selectedSourceIndex, selectedToken, selectedCommand.value},
+                              selectedRequest, first);
         paths.select(selectedLocal, switching, selectedCommand);
         selectionDeferred = false;
     }

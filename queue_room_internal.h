@@ -59,9 +59,6 @@ struct QueueRoom::Impl {
     std::chrono::steady_clock::time_point metadataWaitUntil{};
     queue_audio::PlaylistEntry selectedTrack;
     int selectedSourceIndex = -1;
-    std::map<uint64_t, queue_audio::PlaylistEntry> sourceTracks;
-    std::map<uint64_t, unsigned> sourceIndices;
-    std::map<uint64_t, uint64_t> sourceTokens;
     uint64_t selectedToken = 0;
     queue_audio::QueueWindow window;
     queue_audio::QueueWindow::Policy publishedWindowPolicy;
