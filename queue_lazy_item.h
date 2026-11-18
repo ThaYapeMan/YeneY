@@ -20,8 +20,9 @@ class LazyItem {
     };
     std::optional<WavDeclaration> declaration;
     std::shared_ptr<Item> produced;
+    uint64_t publishedOccurrence = 0;
     std::function<void()> activate;
-    std::mutex mutex;
+    const std::shared_ptr<std::mutex> mutex;
     std::condition_variable changed;
     bool requested = false, cancelled = false, activationClaimed = false;
     unsigned issuedCommands = 0;
@@ -43,6 +44,7 @@ class LazyItem {
 
     void discardBinding() {
         produced.reset();
+        publishedOccurrence = 0;
         requested = cancelled = activationClaimed = false;
         issuedCommands = 0;
     }
@@ -52,8 +54,9 @@ public:
         using std::invalid_argument::invalid_argument;
     };
 
-    LazyItem(std::shared_ptr<Item> declared, std::function<void()> enqueue, bool deferred = false)
-        : activate(std::move(enqueue)) {
+    LazyItem(std::shared_ptr<Item> declared, std::function<void()> enqueue, bool deferred = false,
+             std::shared_ptr<std::mutex> ownerMutex = std::make_shared<std::mutex>())
+        : activate(std::move(enqueue)), mutex(std::move(ownerMutex)) {
         if (declared) sealDeclaration(*declared);
         if ((!deferred && (!declaration || !declaration->length)) || !activate)
             throw std::invalid_argument("lazy item needs an immutable declaration and selector");
@@ -61,7 +64,7 @@ public:
     // The room worker must claim immediately before an LMS mutation. Enqueueing
     // from HTTP alone is not authority: the request may have left meanwhile.
     bool claimActivation() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(*mutex);
         if (cancelled || produced || !requested || readers.empty() || activationClaimed) return false;
         const bool connected = std::any_of(readers.begin(), readers.end(), [](auto *request) {
             return !request->aborted() && !request->peerClosed();
@@ -74,65 +77,76 @@ public:
         activationClaimed = true;
         return true;
     }
-    bool publish(std::shared_ptr<Item> item) {
-        std::lock_guard<std::mutex> lock(mutex);
+    bool publish(std::shared_ptr<Item> item, uint64_t occurrence = 0) {
+        std::lock_guard<std::mutex> lock(*mutex);
         checkDeclaration(item, "lazy producer differs from declared WAV");
         if (cancelled) return false; // late producer cannot resurrect an abandoned window
         if (produced && produced != item) throw std::logic_error("lazy producer already bound");
         sealDeclaration(*item);
         produced = std::move(item);
+        publishedOccurrence = occurrence;
         changed.notify_all();
         return true;
     }
-    void reset(const std::shared_ptr<Item> &expected) {
-        std::lock_guard<std::mutex> lock(mutex);
+    void reset(const std::shared_ptr<Item> &expected, std::optional<uint64_t> occurrence = {}) {
+        std::lock_guard<std::mutex> lock(*mutex);
         // HTTP may already have observed eviction and queued a new activation.
         // Retire only the binding the room observed, never that newer request.
-        if (produced != expected) return;
+        if (produced != expected || (occurrence && publishedOccurrence != *occurrence)) return;
         discardBinding();
         changed.notify_all();
     }
-    void replace(std::shared_ptr<Item> item) {
-        std::lock_guard<std::mutex> lock(mutex);
+    bool replace(const std::shared_ptr<Item> &expected, uint64_t expectedOccurrence,
+                 std::shared_ptr<Item> item, uint64_t occurrence) {
+        std::lock_guard<std::mutex> lock(*mutex);
+        if (produced && (produced != expected || publishedOccurrence != expectedOccurrence)) return false;
         checkDeclaration(item, "replacement differs from immutable WAV");
         sealDeclaration(*item);
         produced = std::move(item);
+        publishedOccurrence = occurrence;
         cancelled = false;
         changed.notify_all();
+        return true;
+    }
+
+    void alias(const std::shared_ptr<Item> &expected, uint64_t prior, uint64_t occurrence) {
+        std::lock_guard<std::mutex> lock(*mutex);
+        if (produced == expected && publishedOccurrence == prior)
+            publishedOccurrence = occurrence;
     }
     std::shared_ptr<Item> ready() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(*mutex);
         return cancelled || (produced && produced->evicted()) ? nullptr : produced;
     }
     std::shared_ptr<Item> readyAudio() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(*mutex);
         return cancelled ? nullptr : Item::retainAudio(produced);
     }
     bool abandoned() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(*mutex);
         return cancelled;
     }
     bool waiting() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(*mutex);
         return !cancelled && !produced && !readers.empty();
     }
     unsigned commandCount() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(*mutex);
         return issuedCommands;
     }
     void commandIssued() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(*mutex);
         ++issuedCommands;
     }
     void cancel() {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::lock_guard<std::mutex> lock(*mutex);
         cancelled = true;
         changed.notify_all();
     }
     std::shared_ptr<Item> resolve(upnp::StreamRequest &request,
                                  std::chrono::milliseconds budget = std::chrono::seconds(15)) {
         const auto deadline = std::chrono::steady_clock::now() + budget;
-        std::unique_lock<std::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(*mutex);
         if (produced && produced->evicted()) discardBinding();
         if (cancelled || request.aborted() || request.peerClosed()) return {};
         readers.push_back(&request);

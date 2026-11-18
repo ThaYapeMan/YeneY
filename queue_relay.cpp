@@ -467,7 +467,7 @@ void QueueRoom::Impl::append() {
             { std::lock_guard<std::mutex> lock(sourceMutex); slot = window.find(rowOwner.sourceToken(owner).value()); }
             if (slot) {
                 auto row = makeRow(*slot);
-                rowOwner.declaredLazyRow(slot->token).publish(record.item);
+                rowOwner.declaredLazyRow(slot->token).publish(record.item, record.source.occurrence);
                 metadata.url = row.uri;
                 metadata.session = session + "-" + std::to_string(slot->token);
                 if (!record.estimated && std::isfinite(slot->track.duration) && slot->track.duration > 0)

@@ -140,18 +140,20 @@ void audioBinding() {
     }
     queue_audio::Store store("Room", config);
     QueueRowOwner owner;
-    const auto row = std::make_shared<queue_audio::LazyItem>(nullptr, [] {}, true);
+    const auto row = owner.prepareLazyRow([] {});
     owner.registerLazyRow(token(0), row);
     auto first = produce(store, "first", 1);
     auto other = produce(store, "other", 2);
-    assert(row->publish(first));
+    assert(row->publish(first, 1));
     const auto metadata = row->ready();
     auto response = row->readyAudio();
     assert(response == first && metadata == first);
+    row->alias(first, 1, 2);
     auto wrongLength = store.create({"wrong-length", 44100, frames.size() + 1, 2});
+    assert(!row->replace(first, 1, wrongLength, 3));
     bool rejected = false;
     try {
-        row->replace(wrongLength);
+        row->replace(first, 2, wrongLength, 3);
     } catch (const queue_audio::LazyItem::DeclarationMismatch &) {
         rejected = true;
     }
@@ -172,7 +174,8 @@ void audioBinding() {
     };
 
     auto replacement = produce(store, "replacement", 3);
-    row->replace(replacement);
+    assert(row->replace(first, 2, replacement, 3));
+    assert(!row->replace(first, 1, first, 2));
     assert(other->evicted() && !first->evicted());
     assert(row->readyAudio() == replacement && response == first);
     assert(read(response) == read(replacement));

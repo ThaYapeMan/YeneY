@@ -207,8 +207,7 @@ void QueueRoom::Impl::reconcileWindow() {
         } else if (target.size() == 1 && target.front().item &&
             target.front().item == navigationItem->item && !target.front().originMs &&
             !navigationItem->originMs && target.front().sourceUrl == navigationItem->sourceUrl) {
-            if (!target.front().owner) target.front().owner = target.front().stream;
-            target.front().stream = navigationItem->stream;
+            rowOwner.rebindClock(target.front(), navigationItem->stream);
             if (navigationItem->uri != target.front().uri) owned.erase(navigationItem->uri);
             reused = true;
         } else {
@@ -220,7 +219,7 @@ void QueueRoom::Impl::reconcileWindow() {
             if (!declarationMismatch && target.size() == 1 && lazy &&
                 target.front().originMs == navigationItem->originMs) {
                 try {
-                    lazy->replace(replacement.item);
+                    if (!rowOwner.replaceNavigationWav(target.front(), replacement)) return;
                     replacement.uri = target.front().uri;
                     replacement.didl = target.front().didl;
                     if (navigationItem->uri != replacement.uri) owned.erase(navigationItem->uri);
@@ -235,7 +234,7 @@ void QueueRoom::Impl::reconcileWindow() {
                         " decision=fallback reason=immutable-wav-mismatch");
                 retired.insert(retired.end(), target.begin(), target.end());
                 if (lazy) retiredLazy.push_back(lazy);
-                const auto row = makeRow(*audible, replacement.item);
+                const auto row = makeRow(*audible, &replacement);
                 owned.erase(replacement.uri);
                 replacement.uri = row.uri;
                 replacement.didl = row.didl;
@@ -736,13 +735,13 @@ void QueueRoom::Impl::activateLazy(uint64_t token) {
 }
 
 QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::Slot &slot,
-                                             const std::shared_ptr<queue_audio::Item> &produced) {
-    const auto lazy = std::make_shared<queue_audio::LazyItem>(nullptr, [this, token = slot.token] {
+                                             const Entry *produced) {
+    const auto lazy = rowOwner.prepareLazyRow([this, token = slot.token] {
         std::lock_guard<std::mutex> lock(mutex);
         if (closing) return;
         commands.push_back({'L', token});
         this->changed.notify_all();
-    }, true);
+    });
     upnp::QueueMetadata metadata;
     metadata.url = speaker->controllerUri() + route.publishDeferred(1, "lazy-" + std::to_string(slot.token) + "-" + std::to_string(++lazySerial),
         [lazy, token = slot.token](upnp::StreamRequest &request) {
@@ -761,12 +760,12 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
     metadata.frames = uint64_t(slot.track.duration);
     metadata.deferred = true;
     if (produced) {
-        metadata.size = produced->contentLength().value();
+        metadata.size = produced->item->contentLength().value();
         metadata.frames = (metadata.size - 44) / 6;
-        metadata.rate = produced->descriptor().rate;
+        metadata.rate = produced->item->descriptor().rate;
         metadata.deferred = false;
-        metadata.preciseDuration = produced->descriptor().kind == queue_audio::PromiseKind::UpperBound;
-        if (!lazy->publish(produced)) throw std::logic_error("partial row declaration rejected");
+        metadata.preciseDuration = produced->item->descriptor().kind == queue_audio::PromiseKind::UpperBound;
+        if (!lazy->publish(produced->item, produced->stream)) throw std::logic_error("partial row declaration rejected");
     }
     upnp::sanitizeXmlFields({{"title", &metadata.title}, {"artist", &metadata.artist},
         {"album", &metadata.album}, {"artwork", &metadata.artwork}});

@@ -263,6 +263,10 @@ public:
         return row == lazyRows.end() ? nullptr : row->second;
     }
 
+    std::shared_ptr<LazyItem> prepareLazyRow(std::function<void()> activate) const {
+        return std::make_shared<LazyItem>(nullptr, std::move(activate), true, lazyMutex);
+    }
+
     LazyItem &declaredLazyRow(uint64_t token) const { return *lazyRows.at(token); }
 
     void registerLazyRow(uint64_t token, const std::shared_ptr<LazyItem> &row) {
@@ -296,12 +300,27 @@ public:
 
     bool reproduceNavigation(Entry &row) {
         const auto &item = preparedNavigation.value();
-        if (!declaredLazyRow(navigationRowToken).publish(item.item)) return false;
+        if (!declaredLazyRow(navigationRowToken).publish(item.item, item.stream)) return false;
         row.stream = item.stream;
         row.item = item.item;
         row.frames = item.frames;
         row.originMs = item.originMs;
         return true;
+    }
+
+    bool replaceNavigationWav(const Entry &expected, const Entry &replacement) {
+        return declaredLazyRow(navigationRowToken).replace(expected.item, expected.stream,
+                                                          replacement.item, replacement.stream);
+    }
+
+    void rebindClock(Entry &entry, uint64_t occurrence) {
+        const auto token = sourceToken(entry.owner ? entry.owner : entry.stream);
+        if (token) {
+            const auto row = lazyRow(*token);
+            if (row) row->alias(entry.item, entry.stream, occurrence);
+        }
+        if (!entry.owner) entry.owner = entry.stream;
+        entry.stream = occurrence;
     }
 
     const std::vector<Entry> &layout() const { return committedRows; }
@@ -313,14 +332,12 @@ public:
     }
 
     void rebindClock(size_t row, uint64_t occurrence) {
-        auto &entry = committedRows.at(row);
-        if (!entry.owner) entry.owner = entry.stream;
-        entry.stream = occurrence;
+        rebindClock(committedRows.at(row), occurrence);
     }
 
     bool reproduce(size_t row, uint64_t token, const QueueRecord &record, uint64_t frames) {
         auto &entry = committedRows.at(row);
-        if (!declaredLazyRow(token).publish(record.item)) return false;
+        if (!declaredLazyRow(token).publish(record.item, record.source.occurrence)) return false;
         entry.stream = record.source.occurrence;
         entry.item = record.item;
         entry.frames = frames;
@@ -335,7 +352,7 @@ public:
     bool invalidateAudio(uint64_t token, Entry &entry) {
         const auto row = lazyRow(token);
         if (!row) return false;
-        row->reset(entry.item);
+        row->reset(entry.item, entry.stream);
         entry.stream = UINT64_MAX - token;
         entry.item.reset();
         entry.owner = 0;
@@ -388,6 +405,7 @@ private:
     mutable std::mutex sourceMutex;
     std::map<uint64_t, Source> sources;
     std::map<uint64_t, std::shared_ptr<LazyItem>> lazyRows;
+    const std::shared_ptr<std::mutex> lazyMutex = std::make_shared<std::mutex>();
 };
 
 } // namespace queue_audio
