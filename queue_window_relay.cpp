@@ -712,17 +712,9 @@ void QueueRoom::Impl::advanceSelections() {
         // selection cancels it; never restart a half-admitted codec header.
         const auto latest = queue.latestOccurrence();
         const auto records = queue.snapshot();
-        for (auto admission = producerAdmissions.begin(); admission != producerAdmissions.end();) {
-            const auto declaring = std::find_if(records.begin(), records.end(), [&](const auto &record) {
-                return record.source.occurrence >= admission->second && record.sourceToken == admission->first;
-            });
-            if (declaring == records.end() || (declaring->incomplete.empty() && declaring->fault.empty() &&
-                (!declaring->item || (declaring->pairedFrom &&
-                 declaring->actual - declaring->attachOffset < declaring->verificationFrames)))) {
-                selectionOrder.push_front(index);
-                return;
-            }
-            admission = producerAdmissions.erase(admission);
+        if (!rowOwner.drainDeclarations(records)) {
+            selectionOrder.push_front(index);
+            return;
         }
         const auto producer = std::find_if(records.begin(), records.end(), [&](const auto &record) {
             return record.source.occurrence == latest && record.sourceToken == selection->second.token &&

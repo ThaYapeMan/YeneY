@@ -97,7 +97,7 @@ void QueueRoom::Impl::release(bool stop) {
         pendingCommandRequest.reset();
     }
     selectionOrder.clear();
-    producerAdmissions.clear();
+    rowOwner.clearAdmissions();
     speakerNavCommands.clear();
     speakerNavFirst.clear();
     replacementReasons.clear();
@@ -198,7 +198,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         return;
     }
     if (c == 'q') {
-        producerAdmissions.clear();
+        rowOwner.clearAdmissions();
         if (!navigationTimeout && started && !externalReleased && !sourceAway) {
             // A controller navigation starts a fresh producer (q+s), unlike
             // decode-ahead's natural s. Wait for the paired start; its status
@@ -286,7 +286,7 @@ void QueueRoom::Impl::append() {
             continue; // LMS cancelled this render, not a speaker rejection.
         if (record.item && record.item->evicted())
             continue; // Cache loss is served by the row's new lazy producer.
-        if (!record.storageFault && !record.fault.empty() && owner <= cancelledSourceThrough)
+        if (!record.storageFault && !record.fault.empty() && rowOwner.sourceFaultSuperseded(owner))
             continue; // A later LMS q retired this source fault before publication.
         if (!record.fault.empty())
             { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }

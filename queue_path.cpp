@@ -81,14 +81,14 @@ void QueueRoom::Impl::received(const yeney::Command &c) {
         if (!selectionDeferred.exchange(true)) {
             std::lock_guard<std::mutex> lock(mutex);
             requestedCommand = c;
-            commands.push_back({'I', ++selectionRequest});
+            commands.push_back({'I', rowOwner.nextRequest()});
             changed.notify_all();
         }
     } else {
         if (c.letter == 'q') {
             bool unopened = false;
             const auto latest = queue.latestOccurrence();
-            cancelledSourceThrough = latest;
+            rowOwner.cancelSourceThrough(latest);
             if (paths.isRelay() && latest && nativeInputOccurrence != latest) {
                 const auto records = queue.snapshot();
                 const auto producer = std::find_if(records.begin(), records.end(), [latest](const auto &record) {
@@ -106,9 +106,9 @@ void QueueRoom::Impl::received(const yeney::Command &c) {
                 logQueue("producer cancellation occurrence=" + std::to_string(latest) +
                          " admission_delay_ms=" + std::to_string(queue_audio::QueueWindow::settleMs));
             }
-            ++selectionRequest;
+            rowOwner.nextRequest();
             if (pendingCommandRequest) {
-                pendingCommandRequest->store(selectionRequest.load() + 1);
+                pendingCommandRequest->store(rowOwner.currentRequest() + 1);
                 pendingCommandRequest.reset();
             }
             paths.cancelSelection();
@@ -123,7 +123,7 @@ void QueueRoom::Impl::received(const yeney::Command &c) {
 }
 void QueueRoom::Impl::beginSelection(uint64_t request) {
     std::lock_guard<std::mutex> lock(mutex);
-    if (request != selectionRequest)
+    if (request != rowOwner.currentRequest())
         return;
     if (stoppedPlay && stopAcknowledged) roomStopped = false;
     selectedRequest = request;
@@ -140,7 +140,7 @@ void QueueRoom::Impl::beginSelection(uint64_t request) {
     remoteNaturalSuccessor = false;
 }
 void QueueRoom::Impl::selectPath() {
-    if (!selecting || selectedRequest != selectionRequest)
+    if (!selecting || selectedRequest != rowOwner.currentRequest())
         return;
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -269,7 +269,7 @@ void QueueRoom::Impl::selectPath() {
         } catch (const std::exception &e) {
             logQueue("source metadata unavailable; using stream: " + std::string(e.what()));
         }
-        if (selectedRequest != selectionRequest) {
+        if (selectedRequest != rowOwner.currentRequest()) {
             selecting = false;
             return;
         }
@@ -308,7 +308,7 @@ void QueueRoom::Impl::selectPath() {
                 if (track.album.empty() && roomPodcastSettings()[2].enabled) track.album = known->second.album;
             }
         }
-        if (selectedRequest != selectionRequest) { selecting = false;return; }
+        if (selectedRequest != rowOwner.currentRequest()) { selecting = false;return; }
         selectedLocal = !remotePlaybackSource(track.id, track.remote, track.url) || track.finiteRemote();
         // Retain the status clock for diagnostics only. Remote promises never
         // subtract this possibly previous-run value.
@@ -382,12 +382,12 @@ void QueueRoom::Impl::selectPath() {
     if (selectedLocal) {
         const auto first = queue.latestOccurrence() + 1;
         command('s', first);
-        if (selectedToken) producerAdmissions[selectedToken] = first;
+        if (selectedToken) rowOwner.admit(selectedToken, selectedTrack.url, selectedRequest, first);
     }
     // Core resets only at a class boundary, without HELO or an LMS command.
     {
         std::lock_guard<std::mutex> lock(mutex);
-        if (selectedRequest != selectionRequest) {
+        if (selectedRequest != rowOwner.currentRequest()) {
             selecting = false;
             return;
         }

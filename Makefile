@@ -311,7 +311,7 @@ yeney.o queue_room.o sonos-position.o core_sonos.o sonos-status.o sbencoder.o: r
 
 yeney.o upnp/own_speaker_control.o sbstreamer.o: debug_settings.h
 
-$(QUEUE_ROOM_OBJS): queue_room_internal.h queue_room.h core_queue_sink.h queue_path_sink.h queue_playlist.h queue_source.h queue_speaker_changes.h transport_source.h stream_metrics.h
+$(QUEUE_ROOM_OBJS): queue_room_internal.h queue_row_owner.h queue_room.h core_queue_sink.h queue_path_sink.h queue_playlist.h queue_source.h queue_speaker_changes.h transport_source.h stream_metrics.h
 
 yeney.o sonos-status.o: stream_display.h
 yeney.o $(QUEUE_ROOM_OBJS): queue_lms_commands.h

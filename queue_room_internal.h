@@ -11,6 +11,7 @@
 #include "queue_room.h"
 #include "queue_lms_commands.h"
 #include "queue_route.h"
+#include "queue_row_owner.h"
 #include "queue_lazy_item.h"
 #include "queue_source.h"
 #include "queue_speaker_changes.h"
@@ -42,7 +43,6 @@ struct QueueRoom::Impl {
     upnp::Speaker room;
     std::string host, mac, session, nativeHost;
     std::atomic<uint64_t> nativeInputOccurrence{0};
-    std::atomic<uint64_t> cancelledSourceThrough{0};
     std::chrono::steady_clock::time_point cancelledHeaderUntil{};
     std::function<std::string()> streamUrl;
     std::shared_ptr<upnp::OwnSpeakerControl> speaker;
@@ -54,7 +54,7 @@ struct QueueRoom::Impl {
     bool selecting = false, selectionKnown = false, selectedLocal = true, stoppedPlay = true;
     bool selectedNewPlay = true;
     yeney::Command selectedCommand{'s', 0, false}, requestedCommand{'s', 0, false};
-    std::atomic<uint64_t> selectionRequest{0};
+    queue_audio::QueueRowOwner rowOwner;
     uint64_t selectedRequest = 0;
     uint64_t metadataWaitRequest = 0;
     std::chrono::steady_clock::time_point metadataWaitUntil{};
@@ -115,7 +115,6 @@ struct QueueRoom::Impl {
     std::map<unsigned, Selection> selections;
     std::shared_ptr<std::atomic<uint64_t>> pendingCommandRequest;
     std::deque<unsigned> selectionOrder;
-    std::map<uint64_t, uint64_t> producerAdmissions;
     void advanceSelections();
     void selectionPublished(unsigned index);
     uint64_t lazySerial = 0;
