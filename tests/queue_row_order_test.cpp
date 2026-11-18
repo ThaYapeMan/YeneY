@@ -129,13 +129,14 @@ void snapshotOrder() {
     std::cout << "PASS short and empty snapshots cannot clear an active navigation\n";
 }
 
-void audioBinding() {
-    struct TemporaryDirectory {
-        std::string path = testTempRoot() + "/yeney-row-order-XXXXXX";
-        TemporaryDirectory() { assert(mkdtemp(path.data())); }
-        ~TemporaryDirectory() { std::filesystem::remove_all(path); }
-    } temporary;
+struct TemporaryDirectory {
+    std::string path = testTempRoot() + "/yeney-row-order-XXXXXX";
+    TemporaryDirectory() { assert(mkdtemp(path.data())); }
+    ~TemporaryDirectory() { std::filesystem::remove_all(path); }
+};
 
+void audioBinding() {
+    TemporaryDirectory temporary;
     queue_audio::Config config;
     config.root = temporary.path;
     config.ramBytes = 4096 * 6;
@@ -217,9 +218,54 @@ void audioBinding() {
     std::cout << "PASS HTTP body retains the admitted generation across replacement and quota pressure\n";
 }
 
-enum class Operation { App, Rewind, Issue, Start, LateStart, Cancel, Publish, Observe, End };
+enum class Operation {
+    App, Rewind, Issue, Start, LateStart, Cancel, Publish, Observe, End,
+    Progress, Complete, Fault, HttpOpen, Body, HttpClose, EvictionPressure,
+    LmsNavigation, SeekInside, SeekPast, Restart, NaturalEnd
+};
 constexpr unsigned operationCount = 9;
 constexpr unsigned alphabetSize = operationCount * rowCount;
+
+constexpr unsigned lifecycleAlphabetSize = 21 * rowCount;
+
+struct AudioFixture {
+    TemporaryDirectory temporary;
+    queue_audio::Store store;
+    std::array<std::shared_ptr<queue_audio::Item>, rowCount> assets;
+    std::array<std::vector<char>, rowCount> bytes;
+
+    AudioFixture() : store("RowReplay", {temporary.path}) {
+        for (unsigned index = 0; index < rowCount; ++index) {
+            auto item = store.create({std::to_string(index), 44100, 8, token(index)});
+            std::array<yeney::Frame, 8> frames{};
+            for (auto &frame : frames) frame.left = int32_t(token(index) * 65536);
+            item->append(frames.data(), frames.size(), false);
+            item->finish();
+            assets[index] = item;
+            bytes[index] = read(*item);
+        }
+    }
+
+    static std::vector<char> read(const queue_audio::Item &item) {
+        std::vector<char> result(item.contentLength().value());
+        auto reader = item.reader();
+        size_t offset = 0;
+        while (offset < result.size()) {
+            const auto copied = reader.read(result.data() + offset, result.size() - offset,
+                                            std::chrono::milliseconds(0));
+            assert(copied);
+            offset += copied;
+        }
+        return result;
+    }
+};
+
+struct Lifecycle {
+    const AudioFixture &fixture;
+    std::array<std::optional<QueueRecord>, rowCount> productions;
+    std::array<std::shared_ptr<queue_audio::Item>, rowCount> responses;
+    std::optional<unsigned> navigation;
+};
 
 class Replay {
     QueueRowOwner owner;
@@ -229,11 +275,98 @@ class Replay {
     uint64_t latestAccepted = 0;
     unsigned latestIndex = 0;
 
+    std::unique_ptr<Lifecycle> lifecycle;
+
+    void acceptStart(unsigned index, bool navigation = false) {
+        previousRequest = latestAccepted;
+        latestAccepted = owner.nextRequest();
+        latestIndex = index;
+        assert(owner.commitSource(source(index), latestAccepted, nextOccurrence, navigation));
+        owner.recordSource(nextOccurrence, owner.sourceForStart());
+        if (lifecycle) {
+            QueueRecord record;
+            record.source.occurrence = nextOccurrence;
+            record.sourceToken = token(index);
+            record.sourceUrl = source(index).track.url;
+            lifecycle->productions[index] = std::move(record);
+        }
+        ++nextOccurrence;
+    }
+
+    void cancel() {
+        owner.cancelSourceThrough(nextOccurrence - 1);
+        owner.cancelRequest();
+        owner.clearAdmissions();
+        previousRequest = latestAccepted;
+        if (lifecycle) {
+            for (auto &record : lifecycle->productions) {
+                if (record && !record->productionComplete) record->incomplete = "flushed";
+            }
+            lifecycle->navigation.reset();
+            owner.clearNavigationTarget();
+        }
+    }
+
+    void advanceProduction(unsigned index, bool complete) {
+        auto &producer = lifecycle->productions[index];
+        if (!producer) return;
+        auto &record = *producer;
+        if (record.productionComplete && !complete) return;
+        record.item = lifecycle->fixture.assets[index];
+        record.actual = complete ? 8 : 4;
+        record.productionComplete = complete;
+        using Production = QueueRowOwner::Production;
+        const auto outcome = owner.producerOutcome(record);
+        if (outcome != Production::Writing && outcome != Production::Complete) return;
+
+        const auto &previous = owner.layout().at(index);
+        if (lifecycle->navigation == index) {
+            auto target = previous;
+            target.item = record.item;
+            target.stream = record.source.occurrence;
+            target.frames = 8;
+            if (!owner.prepareNavigation(token(index), target)) return;
+            assert(owner.sourceIndex(target.stream) == index);
+            assert(owner.navigationTarget()->uri == previous.uri);
+            assert(owner.navigationTarget()->stream == target.stream);
+            if (!previous.item) assert(owner.reproduceNavigation(target));
+            else {
+                target = previous;
+                owner.rebindClock(target, record.source.occurrence);
+            }
+            auto layout = owner.layout();
+            layout[index] = std::move(target);
+            owner.commitLayout(std::move(layout));
+            lifecycle->navigation.reset();
+            owner.clearNavigationTarget();
+        } else if (!previous.item) {
+            assert(owner.reproduce(index, token(index), record, 8));
+        } else if (previous.stream != record.source.occurrence) {
+            assert(previous.item == record.item);
+            owner.rebindClock(index, record.source.occurrence);
+        }
+    }
+
     void enqueue(unsigned index, std::optional<uint64_t> rewind) {
         if (!owner.selectionAt(index)) owner.enqueueSelection(index, token(index), rewind);
     }
 
 public:
+    explicit Replay(const AudioFixture *fixture = nullptr) {
+        if (!fixture) return;
+        lifecycle = std::make_unique<Lifecycle>(Lifecycle{*fixture, {}, {}, {}});
+        std::vector<QueueRowOwner::Entry> layout;
+        for (unsigned index = 0; index < rowCount; ++index) {
+            const auto number = token(index);
+            const auto placeholder = UINT64_MAX - number;
+            owner.registerPlaceholder(placeholder, index, number);
+            owner.registerLazyRow(number, owner.prepareLazyRow([] {}));
+            layout.push_back({placeholder, "/row-" + std::to_string(number) + ".wav",
+                              {}, source(index).track.url, 0, {}, 0, 0, {}, 0});
+        }
+        owner.commitLayout(std::move(layout));
+    }
+
     void apply(unsigned symbol) {
         const auto operation = Operation(symbol / rowCount);
         const auto index = symbol % rowCount;
@@ -260,11 +393,7 @@ public:
             }
             break;
         case Operation::Start:
-            previousRequest = latestAccepted;
-            latestAccepted = owner.nextRequest();
-            latestIndex = index;
-            assert(owner.commitSource(source(index), latestAccepted, nextOccurrence));
-            owner.recordSource(nextOccurrence++, owner.sourceForStart());
+            acceptStart(index);
             break;
         case Operation::LateStart:
             if (!previousRequest) break;
@@ -272,10 +401,7 @@ public:
             assert(owner.sourceForStart() == before);
             break;
         case Operation::Cancel:
-            owner.cancelSourceThrough(nextOccurrence - 1);
-            owner.cancelRequest();
-            owner.clearAdmissions();
-            previousRequest = latestAccepted;
+            cancel();
             break;
         case Operation::Publish:
             owner.acknowledgePublication(index);
@@ -286,8 +412,75 @@ public:
         case Operation::End:
             owner.retireSelection(index);
             break;
+        case Operation::Progress:
+            advanceProduction(index, false);
+            break;
+        case Operation::Complete:
+            advanceProduction(index, true);
+            break;
+        case Operation::Fault:
+            if (auto &record = lifecycle->productions[index]) {
+                const auto previous = owner.layout()[index].stream;
+                record->fault = "source failed";
+                using Production = QueueRowOwner::Production;
+                const auto result = owner.producerOutcome(*record);
+                assert(result == Production::Cancelled || result == Production::Faulted);
+                assert(owner.layout()[index].stream == previous);
+            }
+            break;
+        case Operation::HttpOpen:
+            lifecycle->responses[index] = owner.lazyRow(token(index))->readyAudio();
+            break;
+        case Operation::Body:
+            if (const auto &response = lifecycle->responses[index])
+                assert(AudioFixture::read(*response) == lifecycle->fixture.bytes[index]);
+            break;
+        case Operation::HttpClose:
+            lifecycle->responses[index].reset();
+            break;
+        case Operation::EvictionPressure:
+            if (const auto &entry = owner.layout()[index]; entry.item && entry.item->evicted())
+                assert(owner.invalidateAudio(token(index), index));
+            break;
+        case Operation::LmsNavigation:
+        case Operation::Restart:
+            cancel();
+            owner.beginNavigation(nextOccurrence);
+            lifecycle->navigation = index;
+            acceptStart(index, true);
+            break;
+        case Operation::SeekInside:
+        case Operation::SeekPast:
+            if (const auto &row = owner.layout()[index]; row.item) {
+                QueueRecord probe;
+                probe.item = row.item;
+                probe.landedFrame = 0;
+                probe.pairedFrom = operation == Operation::SeekInside ? row.stream : 0;
+                assert(QueueRowOwner::seekWithin(row, probe, row.originMs).has_value() ==
+                       (operation == Operation::SeekInside));
+            }
+            break;
+        case Operation::NaturalEnd:
+            owner.retireSelection(index);
+            if (latestAccepted && latestIndex == index) acceptStart((index + 1) % rowCount);
+            break;
         }
 
+        if (lifecycle) {
+            for (unsigned row = 0; row < rowCount; ++row) {
+                const auto &entry = owner.layout()[row];
+                assert(entry.uri == "/row-" + std::to_string(token(row)) + ".wav");
+                assert(entry.item == owner.lazyRow(token(row))->ready());
+                if (entry.item) {
+                    assert(entry.item == lifecycle->fixture.assets[row]);
+                    assert(entry.item->contentLength() == lifecycle->fixture.bytes[row].size());
+                }
+                if (const auto &response = lifecycle->responses[row]) {
+                    assert(response == lifecycle->fixture.assets[row]);
+                    assert(!response->evicted());
+                }
+            }
+        }
         unsigned producing = 0;
         for (const auto &[selectedIndex, selection] : owner.selectionSnapshot()) {
             assert(selectedIndex < rowCount);
@@ -335,6 +528,38 @@ void seeded() {
         std::cout << "PASS three-row admission and selection seed=" << seed << " events=2000\n";
     }
 }
+void lifecycleOrders(const AudioFixture &fixture, std::array<unsigned, 4> &sequence,
+                     size_t count, uint64_t &checked, unsigned shard) {
+    Replay replay(&fixture);
+    for (size_t offset = 0; offset < count; ++offset) replay.apply(sequence[offset]);
+    if (count || !shard) ++checked;
+    if (count == sequence.size()) return;
+    for (unsigned symbol = 0; symbol < lifecycleAlphabetSize; ++symbol) {
+        if (!count && symbol % rowCount != shard) continue;
+        sequence[count] = symbol;
+        lifecycleOrders(fixture, sequence, count + 1, checked, shard);
+    }
+}
+
+void lifecycleExhaustive(unsigned shard) {
+    AudioFixture fixture;
+    std::array<unsigned, 4> sequence{};
+    uint64_t checked = 0;
+    lifecycleOrders(fixture, sequence, 0, checked, shard);
+    std::cout << "PASS lifecycle orders N=" << sequence.size() << " alphabet=" << lifecycleAlphabetSize
+              << " shard=" << shard << " orders=" << checked << '\n';
+}
+
+void lifecycleSeeded() {
+    AudioFixture fixture;
+    for (uint32_t seed : {314159u, 8675309u, 271828u}) {
+        std::mt19937 generator(seed);
+        Replay replay(&fixture);
+        for (unsigned event = 0; event < 2000; ++event)
+            replay.apply(generator() % lifecycleAlphabetSize);
+        std::cout << "PASS three-row lifecycle seed=" << seed << " events=2000\n";
+    }
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -348,5 +573,9 @@ int main(int argc, char **argv) {
     else if (name == "audio-binding") audioBinding();
     else if (name == "exhaustive") exhaustive();
     else if (name == "seeded") seeded();
+    else if (name == "lifecycle-exhaustive-0") lifecycleExhaustive(0);
+    else if (name == "lifecycle-exhaustive-1") lifecycleExhaustive(1);
+    else if (name == "lifecycle-exhaustive-2") lifecycleExhaustive(2);
+    else if (name == "lifecycle-seeded") lifecycleSeeded();
     else return 2;
 }

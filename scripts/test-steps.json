@@ -134,6 +134,74 @@
   },
   "steps": [
     {
+      "name": "queue-row-order-lifecycle-exhaustive-0",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test lifecycle-exhaustive-0",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-lifecycle-exhaustive-0",
+      "time_judging": false
+    },
+    {
+      "name": "queue-row-order-lifecycle-exhaustive-1",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test lifecycle-exhaustive-1",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-lifecycle-exhaustive-1",
+      "time_judging": false
+    },
+    {
+      "name": "queue-row-order-lifecycle-exhaustive-2",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test lifecycle-exhaustive-2",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-lifecycle-exhaustive-2",
+      "time_judging": false
+    },
+    {
+      "name": "queue-row-order-lifecycle-seeded",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test lifecycle-seeded",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-lifecycle-seeded",
+      "time_judging": false
+    },
+    {
       "name": "queue-row-order-snapshot-order",
       "target": "queue-row-order-test",
       "command": "./queue-row-order-test snapshot-order",
@@ -6952,6 +7020,10 @@
       "queue-row-order-cancelled-fault",
       "queue-row-order-exhaustive",
       "queue-row-order-seeded",
+      "queue-row-order-lifecycle-exhaustive-0",
+      "queue-row-order-lifecycle-exhaustive-1",
+      "queue-row-order-lifecycle-exhaustive-2",
+      "queue-row-order-lifecycle-seeded",
       "pressure-disconnect-order",
       "t0001",
       "t0002",
@@ -7147,6 +7219,10 @@
       "queue-row-order-cancelled-fault",
       "queue-row-order-exhaustive",
       "queue-row-order-seeded",
+      "queue-row-order-lifecycle-exhaustive-0",
+      "queue-row-order-lifecycle-exhaustive-1",
+      "queue-row-order-lifecycle-exhaustive-2",
+      "queue-row-order-lifecycle-seeded",
       "t0008",
       "t0009",
       "t0010",
