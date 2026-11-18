@@ -61,9 +61,7 @@ void QueueRoom::Impl::observe() {
     }
     // Producer admission and live lazy requests take priority over routine
     // SOAP polling. Writes still retain their topology/ownership fences.
-    if (!selecting && (lmsNavigation || std::any_of(selections.begin(), selections.end(), [](const auto &selection) {
-            return selection.second.phase != Selection::Published;
-        }))) return;
+    if (!selecting && (lmsNavigation || rowOwner.waitingForSelectionPublication())) return;
     const auto pending = [this] {
         std::lock_guard<std::mutex> lock(mutex);
         return !commands.empty();
@@ -324,8 +322,7 @@ void QueueRoom::Impl::observe() {
                 " position_ms=" + std::to_string(positionMs) + " lms_offset_ms=" + std::to_string(offset) +
                 " decision=" + (rewind ? "time-command" : "stat") + " lms_commands=" + (rewind ? "1" : "0"));
             if (rewind) {
-                selections[*index] = Selection{Selection::Queued, *token, 0, {}, positionMs / 1000 * 1000};
-                selectionOrder.push_back(*index);
+                rowOwner.enqueueSelection(*index, *token, positionMs / 1000 * 1000);
                 advanceSelections();
             }
         }
@@ -434,20 +431,7 @@ void QueueRoom::Impl::observe() {
         const auto owner = it->owner ? it->owner : it->stream;
         const auto index = rowOwner.sourceIndex(owner);
         const auto token = rowOwner.sourceToken(owner);
-        if (index && token) {
-            const auto selection = selections.find(*index);
-            if (selection != selections.end() && selection->second.token == *token) {
-                selection->second.observed = current;
-                if (selection->second.phase == Selection::Published) {
-                    const auto confirmed = selection->second.first;
-                    for (auto old = selections.begin(); old != selections.end();) {
-                        if (old->second.phase == Selection::Published && old->second.first <= confirmed)
-                            old = selections.erase(old);
-                        else ++old;
-                    }
-                }
-            }
-        }
+        if (index && token) rowOwner.acknowledgeObservation(*index, *token, current);
     }
     if (current != previous) windowDirty = true; // Refill lookahead on the audible boundary itself.
     state = playback == yeney::PlaybackState::Playing  ? "PLAYING"

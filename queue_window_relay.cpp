@@ -27,7 +27,7 @@ void QueueRoom::Impl::reconcileWindow() {
     if (!lmsNavigation) {
         // A published declaration does not mean the old audible anchor is
         // current. Let a fresh speaker poll adopt the selected row first.
-        for (const auto &selection : selections) {
+        for (const auto &selection : rowOwner.selectionSnapshot()) {
             if (selection.second.phase != Selection::Published) return;
             if (selection.first != snapshot.index) continue;
             const auto audible = std::find_if(items.begin(), items.end(), [this](const auto &entry) {
@@ -98,12 +98,12 @@ void QueueRoom::Impl::reconcileWindow() {
         windowDirty = false;
         return;
     }
-    const auto selected = selections.find(audible->index);
-    const bool rewindEcho = lmsNavigation && selected != selections.end() &&
-        selected->second.token == navigationToken && selected->second.rewindMs.has_value();
-    const bool speakerSelection = selected != selections.end() &&
-        selected->second.token == navigationToken && selected->second.phase == Selection::Producing &&
-        !selected->second.rewindMs;
+    const auto selected = rowOwner.selectionAt(audible->index);
+    const bool rewindEcho = lmsNavigation && selected &&
+        selected->token == navigationToken && selected->rewindMs.has_value();
+    const bool speakerSelection = selected &&
+        selected->token == navigationToken && selected->phase == Selection::Producing &&
+        !selected->rewindMs;
     if (lmsNavigation && navigationFrom == audible->index && !speakerSelection) {
         const auto records = queue.snapshot();
         const auto producer = std::find_if(records.begin(), records.end(), [this](const auto &r) {
@@ -111,12 +111,12 @@ void QueueRoom::Impl::reconcileWindow() {
         });
         auto &target = entries[navigationToken];
         if (producer != records.end() && producer->seekPositionMs) {
-            const auto selection = selections.find(audible->index);
+            const auto selection = rowOwner.selectionAt(audible->index);
             const bool rewind = rewindEcho;
             // The admission status can precede LMS installing the new HTTP
             // stream's seek clock. Use the post-decode status while LMS still
             // waits for playback; it names this same audible occurrence.
-            const auto seekMs = rewind ? uint32_t(*selection->second.rewindMs) :
+            const auto seekMs = rewind ? uint32_t(*selection->rewindMs) :
                 snapshot.waitingToPlay && snapshot.index == audible->index ?
                     snapshot.timeMs : producer->seekPositionMs;
             if (producer->pairedFrom && producer->landedFrame && target.size() == 1 &&
@@ -138,8 +138,7 @@ void QueueRoom::Impl::reconcileWindow() {
                 if (navigationItem->uri != retained->uri) owned.erase(navigationItem->uri);
                 const auto rendererMs = seekMs - retained->originMs;
                 queue.reanchorSpeaker(current, retained->originMs, seekMs);
-                const bool superseded = std::any_of(selectionOrder.begin(), selectionOrder.end(),
-                    [this](unsigned index) { return selections.count(index) && selections.at(index).token != navigationToken; });
+                const bool superseded = rowOwner.queuedSelectionForOtherRow(navigationToken);
                 if (!superseded && !rewind) {
                     actions.seekTime(rendererMs);
                     rendererSeekPosition = RendererSeekPosition{rendererMs, positionMonotonic()};
@@ -156,9 +155,9 @@ void QueueRoom::Impl::reconcileWindow() {
                 if (rewindEcho) requestStatus();
                 if (rewindEcho) logQueue("window pairing lms_index=" + std::to_string(audible->index) +
                     " decision=paired reason=speaker-rewind elapsed_ms=" + std::to_string(
-                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - selected->second.issued).count()) +
+                    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - selected->issued).count()) +
                     " lms_commands=0");
-                selections.erase(audible->index);
+                rowOwner.retireSelection(audible->index);
                 speakerNavCommands.erase(navigationToken);
                 replacementReasons.erase(navigationToken);
                 lmsNavigation = navigationSelecting = false;
@@ -200,7 +199,7 @@ void QueueRoom::Impl::reconcileWindow() {
             target.front().frames = navigationItem->frames;
             target.front().originMs = navigationItem->originMs;
             if (navigationItem->uri != target.front().uri) owned.erase(navigationItem->uri);
-            selections.erase(audible->index);
+            rowOwner.retireSelection(audible->index);
             bound = true;
             if (const auto reason = replacementReasons.find(navigationToken); reason != replacementReasons.end() && reason->second != "evicted") {
                 logQueue("window target re-produced lms_index=" + std::to_string(audible->index) +
@@ -251,11 +250,7 @@ void QueueRoom::Impl::reconcileWindow() {
                     " lms_commands=" + std::to_string(speakerNavCommands[navigationToken]) + " reason=" + replacementReasons.at(navigationToken));
         }
     }
-    const auto superseded = lmsNavigation && std::any_of(selectionOrder.begin(), selectionOrder.end(),
-        [this](unsigned index) {
-            const auto selection = selections.find(index);
-            return selection != selections.end() && selection->second.token != navigationToken;
-        });
+    const auto superseded = lmsNavigation && rowOwner.queuedSelectionForOtherRow(navigationToken);
     if (lmsNavigation) {
         const auto outgoing = std::find_if(items.begin(), items.end(), [this](const auto &entry) {
             return entry.stream == current;
@@ -524,12 +519,12 @@ void QueueRoom::Impl::reconcileWindow() {
         if (target == items.end()) throw std::logic_error("navigation target missing");
         if (!superseded) {
             current = target->stream;
-            const auto selection = selections.find(audible->index);
+            const auto selection = rowOwner.selectionAt(audible->index);
             // The index/token-keyed Selection owns a rewind echo. Its elapsed
             // position can already have advanced and is not new seek authority.
             const bool rewindAtTarget = rewindEcho;
             if (!selectedTarget && !rewindEcho && !rewindAtTarget) actions.seekTrack(unsigned(target - items.begin()) + 1);
-            lastElapsed = rewindAtTarget ? *selection->second.rewindMs / 1000 : 0;
+            lastElapsed = rewindAtTarget ? *selection->rewindMs / 1000 : 0;
             expectedState = "PLAYING";
             if (!rewindEcho) {
                 if (state != "PLAYING") actions.play();
@@ -562,10 +557,10 @@ void QueueRoom::Impl::reconcileWindow() {
         if (rewindEcho) requestStatus();
         if (rewindEcho) logQueue("window pairing lms_index=" + std::to_string(audible->index) +
             " decision=paired reason=speaker-rewind elapsed_ms=" + std::to_string(
-            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - selected->second.issued).count()) +
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - selected->issued).count()) +
             " lms_commands=0");
         replacementReasons.erase(navigationToken);
-        selections.erase(audible->index);
+        rowOwner.retireSelection(audible->index);
         lmsNavigation = navigationSelecting = false;
         navigationItem.reset();
     } else if (publishedWindowIndex && *publishedWindowIndex != audible->index) {
@@ -598,7 +593,7 @@ bool QueueRoom::Impl::acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot) {
     const auto known = playlist.entries.size();
     const auto busy = [this] {
         std::lock_guard<std::mutex> lock(mutex);
-        return selecting || lmsNavigation || navigationSelecting || !selections.empty() ||
+        return selecting || lmsNavigation || navigationSelecting || rowOwner.hasSelections() ||
             selectionDeferred.load() || !commands.empty() || windowDirty ||
             navigationDeadline != std::chrono::steady_clock::time_point{} ||
             std::chrono::steady_clock::now() < ownUntil;
@@ -638,8 +633,8 @@ bool QueueRoom::Impl::acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot) {
 void QueueRoom::Impl::arbitrateSelection(uint64_t token, const std::string &reason) {
     const auto slot = window.find(token);
     if (!slot) return;
-    const auto existing = selections.find(slot->index);
-    if (existing != selections.end() && existing->second.token == token) {
+    const auto existing = rowOwner.selectionAt(slot->index);
+    if (existing && existing->token == token) {
         logQueue("selection bind lms_index=" + std::to_string(slot->index) + " reason=owned-selection lms_commands=0");
         return;
     }
@@ -660,28 +655,17 @@ void QueueRoom::Impl::arbitrateSelection(uint64_t token, const std::string &reas
                     identity && *identity == token)
                     first = std::min(first, record.source.occurrence);
             }
-            selections[slot->index] = Selection{Selection::Producing, token, first};
+            rowOwner.bindSelection(slot->index, token, first);
         }
         logQueue("selection bind lms_index=" + std::to_string(slot->index) + " reason=already-selected lms_commands=0");
         return;
     }
-    selections[slot->index] = Selection{Selection::Queued, token, 0};
-    selectionOrder.push_back(slot->index);
+    rowOwner.enqueueSelection(slot->index, token);
     logQueue("selection queued lms_index=" + std::to_string(slot->index) + " reason=" + reason);
     advanceSelections();
 }
 void QueueRoom::Impl::selectionPublished(unsigned index) {
-    const auto selection = selections.find(index);
-    if (selection == selections.end() || selection->second.phase != Selection::Producing) return;
-    if (selection->second.observed) {
-        const auto confirmed = selection->second.first;
-        for (auto old = selections.begin(); old != selections.end();) {
-            if (old->first == index || (old->second.phase == Selection::Published && old->second.first <= confirmed))
-                old = selections.erase(old);
-            else ++old;
-        }
-    } else selection->second.phase = Selection::Published;
-    fastPoll();
+    if (rowOwner.acknowledgePublication(index)) fastPoll();
 }
 void QueueRoom::Impl::advanceSelections() {
     {
@@ -690,53 +674,49 @@ void QueueRoom::Impl::advanceSelections() {
     }
     // LMS has one producer. Drain each live declaration before selecting the
     // next index, so a rapid burst cannot cancel an earlier HTTP promise.
-    for (auto selection = selections.begin(); selection != selections.end();) {
-        const auto lazy = rowOwner.lazyRow(selection->second.token);
-        if (selection->second.phase != Selection::Published && lazy && lazy->abandoned()) {
-            logQueue("selection retired reason=reader-left lms_index=" + std::to_string(selection->first));
-            selection = selections.erase(selection);
-        } else ++selection;
+    for (const auto &[index, selection] : rowOwner.selectionSnapshot()) {
+        const auto lazy = rowOwner.lazyRow(selection.token);
+        if (selection.phase != Selection::Published && lazy && lazy->abandoned()) {
+            logQueue("selection retired reason=reader-left lms_index=" + std::to_string(index));
+            rowOwner.retireSelection(index);
+        }
     }
-    for (const auto &selection : selections)
-        if (selection.second.phase == Selection::Producing) return;
-    while (!selectionOrder.empty()) {
-        const auto index = selectionOrder.front();
-        selectionOrder.pop_front();
-        const auto selection = selections.find(index);
-        if (selection == selections.end()) continue;
+    if (rowOwner.hasProducingSelection()) return;
+    while (const auto next = rowOwner.dequeueSelection()) {
+        const auto index = *next;
+        const auto selection = rowOwner.selectionAt(index);
+        if (!selection) continue;
         // A natural start for this same occurrence may arrive before LMS's
         // playlist index advances. Parse its declaration before our one app
         // selection cancels it; never restart a half-admitted codec header.
         const auto latest = queue.latestOccurrence();
         const auto records = queue.snapshot();
         if (!rowOwner.drainDeclarations(records)) {
-            selectionOrder.push_front(index);
+            rowOwner.deferSelection(index);
             return;
         }
         const auto producer = std::find_if(records.begin(), records.end(), [&](const auto &record) {
-            return record.source.occurrence == latest && record.sourceToken == selection->second.token &&
+            return record.source.occurrence == latest && record.sourceToken == selection->token &&
                    record.incomplete.empty() && record.fault.empty();
         });
         if (producer != records.end() && (!producer->item ||
             (producer->pairedFrom && producer->actual - producer->attachOffset < producer->verificationFrames))) {
-            selectionOrder.push_front(index);
+            rowOwner.deferSelection(index);
             return;
         }
-        selection->second.phase = Selection::Producing;
-        selection->second.first = queue.latestOccurrence() + 1;
+        Selection issued;
         {
             std::lock_guard<std::mutex> lock(mutex);
-            selection->second.commandRequest = rowOwner.expectCommandStart();
+            issued = rowOwner.issueSelection(index, queue.latestOccurrence() + 1, std::chrono::steady_clock::now());
         }
-        speakerNavFirst[selection->second.token] = selection->second.first;
-        if (selection->second.rewindMs) {
-            selection->second.issued = std::chrono::steady_clock::now();
-            roomLmsCommand(host, mac, "time " + std::to_string(*selection->second.rewindMs / 1000),
+        speakerNavFirst[issued.token] = issued.first;
+        if (issued.rewindMs) {
+            roomLmsCommand(host, mac, "time " + std::to_string(*issued.rewindMs / 1000),
                            "speaker-rewind", logQueue);
             logQueue("selection issued lms_index=" + std::to_string(index) + " reason=speaker-rewind lms_commands=1");
             return;
         }
-        const auto lazy = rowOwner.lazyRow(selection->second.token);
+        const auto lazy = rowOwner.lazyRow(issued.token);
         roomLmsCommand(host, mac, "playlist index " + std::to_string(index),
                        lazy && lazy->waiting() ?
                            "lazy-pcm-get" : "speaker-nav", logQueue);
@@ -744,7 +724,7 @@ void QueueRoom::Impl::advanceSelections() {
             lazy->commandIssued();
             logQueue("lazy activated lms_index=" + std::to_string(index) + " lms_commands=1");
         }
-        speakerNavCommands[selection->second.token] = 1;
+        speakerNavCommands[issued.token] = 1;
         logQueue("selection issued lms_index=" + std::to_string(index) + " lms_commands=1");
         return;
     }

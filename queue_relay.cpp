@@ -89,12 +89,11 @@ void QueueRoom::Impl::release(bool stop) {
     }
     for (auto token : tokens) releaseWindowParent(token);
     rowOwner.retireLazyRows();
-    selections.clear();
+    rowOwner.clearSelections();
     {
         std::lock_guard<std::mutex> lock(mutex);
         rowOwner.retireCommandStart();
     }
-    selectionOrder.clear();
     rowOwner.clearAdmissions();
     speakerNavCommands.clear();
     speakerNavFirst.clear();
@@ -208,8 +207,8 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
                     const auto owner = entry.owner ? entry.owner : entry.stream;
                     const auto index = rowOwner.sourceIndex(owner);
                     if (index) {
-                        const auto selection = selections.find(*index);
-                        if (selection == selections.end() || selection->second.phase != Selection::Producing)
+                        const auto selection = rowOwner.selectionAt(*index);
+                        if (!selection || selection->phase != Selection::Producing)
                             navigationFrom = *index;
                     }
                 }
@@ -331,9 +330,9 @@ void QueueRoom::Impl::append() {
             if (token) {
                 const auto lazy = rowOwner.lazyRow(*token);
                 const auto index = rowOwner.sourceIndex(owner).value();
-                const auto selection = selections.find(index);
-                const auto speakerSelection = selection != selections.end() && selection->second.token == *token &&
-                    selection->second.phase == Selection::Producing && speakerNavCommands[*token];
+                const auto selection = rowOwner.selectionAt(index);
+                const auto speakerSelection = selection && selection->token == *token &&
+                    selection->phase == Selection::Producing && speakerNavCommands[*token];
                 if (!lmsNavigation || owner < navigationFirst || *token != navigationToken || speakerSelection) {
                     auto cached = std::find_if(items.begin(), items.end(), [&](const auto &i) {
                         const auto identity = rowOwner.sourceToken(i.owner ? i.owner : i.stream);
@@ -381,7 +380,7 @@ void QueueRoom::Impl::append() {
                 if (!lmsNavigation && lazy && entry != items.end()) {
                     if (!lazy->publish(record.item)) {
                         queue.releaseParent(owner);
-                        selections.erase(index);
+                        rowOwner.retireSelection(index);
                         continue;
                     }
                     entry->stream = record.source.occurrence;
@@ -431,10 +430,10 @@ void QueueRoom::Impl::append() {
         }
         std::vector<std::string> expected;
         for (const auto &i : items) expected.push_back(i.uri);
-        const auto selection = selections.find(navigationFrom);
+        const auto selection = rowOwner.selectionAt(navigationFrom);
         const bool retainedRewind = lmsNavigation && owner >= navigationFirst && !record.parent &&
             record.sourceToken == navigationToken &&
-            selection != selections.end() && selection->second.token == navigationToken && selection->second.rewindMs &&
+            selection && selection->token == navigationToken && selection->rewindMs &&
             std::any_of(items.begin(), items.end(), [&](const auto &entry) { return entry.item == record.item; });
         const bool ownedNavigation = lmsNavigation && owner >= navigationFirst && !record.parent &&
             record.sourceToken == navigationToken && ownership.active();
@@ -631,8 +630,7 @@ void QueueRoom::Impl::run() {
             if (navigationDeadline != std::chrono::steady_clock::time_point{} &&
                 std::chrono::steady_clock::now() >= navigationDeadline) {
                 navigationDeadline = {};
-                if (selecting || selectionDeferred.load() || std::any_of(selections.begin(), selections.end(),
-                    [](const auto &selection) { return selection.second.phase != Selection::Published; })) {
+                if (selecting || selectionDeferred.load() || rowOwner.waitingForSelectionPublication()) {
                     navigationDeadline = std::chrono::steady_clock::now() +
                         std::chrono::milliseconds(queue_audio::QueueWindow::settleMs);
                     try {

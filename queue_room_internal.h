@@ -88,17 +88,7 @@ struct QueueRoom::Impl {
     uint64_t navigationToken = 0;
     std::optional<Entry> navigationItem;
     std::chrono::steady_clock::time_point navigationDeadline{};
-    // Worker-owned selections are independent for each LMS index.
-    struct Selection {
-        enum Phase { Queued, Producing, Published } phase;
-        uint64_t token, first;
-        std::optional<uint64_t> observed{};
-        std::optional<uint64_t> rewindMs{};
-        std::chrono::steady_clock::time_point issued{};
-        std::shared_ptr<std::atomic<uint64_t>> commandRequest{};
-    };
-    std::map<unsigned, Selection> selections;
-    std::deque<unsigned> selectionOrder;
+    using Selection = queue_audio::QueueRowOwner::Selection;
     void advanceSelections();
     void selectionPublished(unsigned index);
     uint64_t lazySerial = 0;

@@ -164,7 +164,7 @@ void QueueRoom::Impl::selectPath() {
         try {
             auto snapshot = reader.read(host, mac);
             if (!acceptSnapshot(snapshot)) return;
-            for (const auto &pending : selections) {
+            for (const auto &pending : rowOwner.selectionSnapshot()) {
                 if (pending.second.phase != Selection::Producing ||
                     !pending.second.commandRequest || pending.second.commandRequest->load() != selectedRequest) continue;
                 const auto slot = window.find(pending.second.token);
@@ -204,17 +204,17 @@ void QueueRoom::Impl::selectPath() {
                 generationRebuildEdits = edits;
             }
             if (lmsNavigation) {
-                for (auto pending = selections.begin(); pending != selections.end();) {
+                for (const auto &[index, pending] : rowOwner.selectionSnapshot()) {
                     bool supplied = false;
-                    if (pending->first != snapshot.index && pending->second.phase == Selection::Producing) {
+                    if (index != snapshot.index && pending.phase == Selection::Producing) {
                         // The controller selected a different index before
                         // this app command's producer arrived. Retain its live
                         // declaration, but it cannot authorize treating a later
                         // controller return as the old app command's echo.
-                        if (speakerNavCommands.erase(pending->second.token))
+                        if (speakerNavCommands.erase(pending.token))
                             logQueue("selection echo retired reason=controller-index lms_index=" +
-                                std::to_string(pending->first) + " target_index=" + std::to_string(snapshot.index));
-                        const auto lazy = rowOwner.lazyRow(pending->second.token);
+                                std::to_string(index) + " target_index=" + std::to_string(snapshot.index));
+                        const auto lazy = rowOwner.lazyRow(pending.token);
                         const auto item = !lazy ? nullptr : lazy->ready();
                         if (item) {
                             try {
@@ -224,8 +224,7 @@ void QueueRoom::Impl::selectPath() {
                             } catch (const std::exception &) { /* Admission observes source faults separately. */ }
                         }
                     }
-                    if (supplied) pending = selections.erase(pending);
-                    else ++pending;
+                    if (supplied) rowOwner.retireSelection(index);
                 }
             }
             if (!selectedNewPlay && !navigationSelecting && selectedSourceIndex >= 0 &&
@@ -240,8 +239,8 @@ void QueueRoom::Impl::selectPath() {
             playlist = std::move(snapshot);
             window.reconcile(playlist);
             if (playlist.index >= window.cap()) logQueue("window rebuild reason=beyond-cap");
-            const auto selection = selections.find(playlist.index);
-            const auto pairing = selection != selections.end() && selection->second.phase == Selection::Producing;
+            const auto selection = rowOwner.selectionAt(playlist.index);
+            const auto pairing = selection && selection->phase == Selection::Producing;
             auto index = playlist.index;
             if (!navigationSelecting && !pairing && !selectedNewPlay) {
                 // Status still names the audible row during decode-ahead.
@@ -250,11 +249,11 @@ void QueueRoom::Impl::selectPath() {
                 index = playlist.successor(index);
             }
             if (navigationSelecting && pairing && playlist.mode != "stop" &&
-                speakerNavCommands[selection->second.token]) {
+                speakerNavCommands[selection->token]) {
                 std::lock_guard<std::mutex> sourceLock(sourceMutex);
                 const auto pending = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
                     const auto identity = rowOwner.sourceToken(entry.owner ? entry.owner : entry.stream);
-                    return !entry.item && identity && *identity == selection->second.token;
+                    return !entry.item && identity && *identity == selection->token;
                 });
                 if (pending != items.end()) lmsNavigation = navigationSelecting = false;
             }
@@ -308,12 +307,12 @@ void QueueRoom::Impl::selectPath() {
         selectedLocal = !remotePlaybackSource(track.id, track.remote, track.url) || track.finiteRemote();
         // Retain the status clock for diagnostics only. Remote promises never
         // subtract this possibly previous-run value.
-        const auto selection = selectedIndex < 0 ? selections.end() : selections.find(unsigned(selectedIndex));
-        if (selection != selections.end() && selection->second.phase == Selection::Producing &&
-            selection->second.rewindMs)
-            track.startOffsetMs = uint32_t(*selection->second.rewindMs);
-        else if (selection != selections.end() && selection->second.phase == Selection::Producing &&
-                 selection->second.commandRequest && selection->second.commandRequest->load() == selectedRequest)
+        const auto selection = selectedIndex < 0 ? std::nullopt : rowOwner.selectionAt(unsigned(selectedIndex));
+        if (selection && selection->phase == Selection::Producing &&
+            selection->rewindMs)
+            track.startOffsetMs = uint32_t(*selection->rewindMs);
+        else if (selection && selection->phase == Selection::Producing &&
+                 selection->commandRequest && selection->commandRequest->load() == selectedRequest)
             track.startOffsetMs = 0; // Our playlist-index response starts its selected row.
         else if (selectedNewPlay) {
             bool sameAudible = false;
