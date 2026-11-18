@@ -305,12 +305,9 @@ void QueueRoom::Impl::reconcileWindow() {
                     retired.insert(retired.end(), found->second.begin(), found->second.end());
                     entries.erase(found);
                     found = entries.end();
-                } else if (const auto lazy = rowOwner.lazyRow(slot.token); lazy && found->second.size() == 1) {
-                    auto &entry = found->second.front();
-                    lazy->reset(entry.item);
-                    if (evicted) logQueue("cache evicted lms_index=" + std::to_string(slot.index));
-                    entry.stream = UINT64_MAX - slot.token;
-                    entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
+                } else if (found->second.size() == 1 &&
+                           rowOwner.invalidateAudio(slot.token, found->second.front()) && evicted) {
+                    logQueue("cache evicted lms_index=" + std::to_string(slot.index));
                 }
 
             }

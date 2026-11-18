@@ -77,17 +77,7 @@ struct QueueRoom::Impl {
     RoomStatus status;
     std::shared_ptr<SpeakerChanges> speakerChanges = std::make_shared<SpeakerChanges>();
     std::string publishedState, publishedUri;
-    struct Entry {
-        uint64_t stream;
-        std::string uri;
-        std::shared_ptr<queue_audio::Item> item;
-        std::string sourceUrl;
-        uint64_t frames;
-        std::string title;
-        uint64_t owner = 0, segmentOffset = 0;
-        std::string didl;
-        unsigned originMs = 0;
-    };
+    using Entry = queue_audio::QueueRowOwner::Entry;
     std::vector<Entry> items;
     bool lmsNavigation = false;
     bool navigationSelecting = false;

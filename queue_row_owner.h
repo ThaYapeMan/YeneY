@@ -12,6 +12,18 @@ namespace queue_audio {
 
 class QueueRowOwner {
 public:
+    struct Entry {
+        uint64_t stream;
+        std::string uri;
+        std::shared_ptr<Item> item;
+        std::string sourceUrl;
+        uint64_t frames;
+        std::string title;
+        uint64_t owner = 0, segmentOffset = 0;
+        std::string didl;
+        unsigned originMs = 0;
+    };
+
     struct StartSource {
         PlaylistEntry track;
         int index = -1;
@@ -146,6 +158,18 @@ public:
 
     void registerLazyRow(uint64_t token, const std::shared_ptr<LazyItem> &row) {
         lazyRows.insert_or_assign(token, row);
+    }
+
+    bool invalidateAudio(uint64_t token, Entry &entry) {
+        const auto row = lazyRow(token);
+        if (!row) return false;
+        row->reset(entry.item);
+        entry.stream = UINT64_MAX - token;
+        entry.item.reset();
+        entry.owner = 0;
+        entry.frames = 0;
+        entry.originMs = 0;
+        return true;
     }
 
     void retireLazyRows() {

@@ -591,12 +591,8 @@ bool QueueRoom::Impl::discardEvicted(Entry &entry) {
     const auto identity = rowOwner.sourceToken(owner);
     if (!identity) return false;
     const auto token = *identity;
-    const auto lazy = rowOwner.lazyRow(token);
-    if (!lazy) return false;
+    if (!rowOwner.invalidateAudio(token, entry)) return false;
     replacementReasons[token] = "evicted";
-    lazy->reset(entry.item);
-    entry.stream = UINT64_MAX - token;
-    entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
     logQueue("cache evicted lms_index=" + std::to_string(rowOwner.sourceIndex(owner).value()));
     return true;
 }
