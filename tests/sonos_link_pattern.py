@@ -2,9 +2,29 @@
 """Controlled uneven link with a 1 ms floor and rate-dependent long delays."""
 import statistics
 import sys
+import csv
+from pathlib import Path
 
 
 PATTERN = 'uneven-observed'
+STUDY_REPLAY = 'study-replay'
+
+
+def study_delays_ms():
+    """Apply the recorded RTT pattern to the fake's independent playback clock."""
+    path = Path(__file__).resolve().parent/'fixtures/timing-study-replay.tsv'
+    with path.open() as source:
+        rows = list(csv.DictReader(source, delimiter='\t'))
+    result = []
+    for row in rows:
+        sent = int(row['sent_us']) / 1000
+        if sent < 39500 or row['state'] != 'PLAYING':
+            continue
+        received = int(row['received_us']) / 1000
+        sampled = int(row['position_ms']) - 64033.27
+        sampled = min(received, max(sent, sampled))
+        result.append((sampled-sent, received-sampled))
+    return result
 
 
 def delays_ms(index, interval_s):

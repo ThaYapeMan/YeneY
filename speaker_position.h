@@ -49,9 +49,51 @@ public:
         return {sources.empty() ? nullptr : sources.back(), {}};
     }
 };
+class PositionLink {
+    std::deque<std::pair<double, double>> answers;
+    size_t slow = 0;
+    unsigned consecutiveSlow = 0;
+    bool uneven = false;
+    double changedAt = -5;
+
+    static bool slowAnswer(double rtt) { return rtt > 50; }
+public:
+    bool observe(double now, double rtt) {
+        while (!answers.empty() && now - answers.front().first > 30) {
+            slow -= slowAnswer(answers.front().second);
+            answers.pop_front();
+        }
+        if (answers.empty()) consecutiveSlow = 0;
+        answers.emplace_back(now, rtt);
+        const bool delayed = slowAnswer(rtt);
+        slow += delayed;
+        consecutiveSlow = delayed ? consecutiveSlow + 1 : 0;
+        if (answers.size() < 12 || now - changedAt < 5)
+            return false;
+        if (!uneven && (consecutiveSlow >= 3 || (slow >= 3 && slow * 10 > answers.size()))) {
+            uneven = true;
+        } else if (uneven && now - answers.front().first >= 25 && slow * 50 <= answers.size()) {
+            uneven = false;
+        } else {
+            return false;
+        }
+        changedAt = now;
+        return true;
+    }
+    bool isUneven() const { return uneven; }
+    double quickLimit() const {
+        if (answers.empty()) return 50;
+        const auto quickest = std::min_element(answers.begin(), answers.end(), [](const auto &left, const auto &right) {
+            return left.second < right.second;
+        });
+        return std::min(50.0, quickest->second + 12);
+    }
+    double trustedLimit() const { return uneven ? quickLimit() : 200; }
+};
+
 class PositionFit {
     std::deque<SpeakerPositionSample> samples;
-    std::optional<SpeakerPositionSample> pending;
+    std::optional<SpeakerPositionSample> pending, lastQuick;
     static bool moving(const std::string &state) {
         return speakerPlaying(state);
     }
@@ -64,8 +106,18 @@ class PositionFit {
         return offsets.size() % 2 ? offsets[middle] : (offsets[middle - 1] + offsets[middle]) / 2;
     }
 public:
-    void reset() { samples.clear(); pending.reset(); }
-    bool add(const SpeakerPositionSample &sample) {
+    void reset() { samples.clear(); pending.reset(); lastQuick.reset(); }
+    void retainQuickAnswers(double limit) {
+        const auto quick = [limit](const auto &sample) { return sample.event || sample.rttMs <= limit; };
+        if (std::any_of(samples.begin(), samples.end(), quick))
+            samples.erase(std::remove_if(samples.begin(), samples.end(), [&](const auto &sample) {
+                return !quick(sample);
+            }), samples.end());
+        else if (lastQuick && quick(*lastQuick))
+            samples = {*lastQuick};
+        if (pending && !quick(*pending)) pending.reset();
+    }
+    bool add(const SpeakerPositionSample &sample, double quickLimit = 50) {
         if (!std::isfinite(sample.positionMs) || !std::isfinite(sample.sampleTime) ||
             !std::isfinite(sample.rttMs) || sample.rttMs < 0 || sample.rttMs > 200 || sample.positionMs < 0)
             return false;
@@ -83,6 +135,7 @@ public:
         }
         pending.reset();
         samples.push_back(sample);
+        if (sample.event || sample.rttMs <= quickLimit) lastQuick = sample;
         while (samples.size() > 1 && sample.sampleTime - samples.front().sampleTime > 2.5) samples.pop_front();
         return true;
     }
@@ -93,6 +146,13 @@ public:
         result.observedAt = samples.back().sampleTime;
         result.sampleTime = now;
         return result;
+    }
+    std::optional<double> precisionMs() const {
+        if (samples.empty() || samples.back().event) return {};
+        const auto slowest = std::max_element(samples.begin(), samples.end(), [](const auto &left, const auto &right) {
+            return left.rttMs < right.rttMs;
+        });
+        return slowest->rttMs / 2;
     }
 };
 class UpnpSpeakerPosition : public SpeakerPosition {

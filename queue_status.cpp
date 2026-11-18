@@ -22,7 +22,15 @@ void QueueRoom::Impl::publish() {
     v.positionSource = activePositionSource.empty() ? "upnp" : activePositionSource;
     v.positionPrecision = activePositionPrecision;
     v.positionSourceReason = activePositionReason;
-    if (websocketPosition) { v.speakerPlaybackError = websocketPosition->playbackError(); v.speakerRawState = websocketPosition->rawState(); v.speakerQuality = websocketPosition->quality(); }
+    if (websocketPosition) {
+        v.speakerPlaybackError = websocketPosition->playbackError();
+        v.speakerRawState = websocketPosition->rawState();
+        v.speakerQuality = websocketPosition->quality();
+        const auto link = websocketPosition->linkStatus();
+        v.positionLink = link.uneven ? "uneven" : "even";
+        if (v.positionSource == "websocket") v.positionPrecisionMs = link.precisionMs;
+        v.positionLastTrustedAnswer = link.lastTrustedAnswer;
+    }
     v.owned = ownership.active() && !externalReleased;
     v.occurrence = current;
     v.lastFault = fault;

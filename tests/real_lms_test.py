@@ -252,6 +252,8 @@ for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44
     if os.environ.get('YENEY_SEEK_RESTART_TIMING') == '1' and i < 2:
         if i or os.environ.get('YENEY_NAV_CASE') != 'R-natural':
             seconds = 100
+    if os.environ.get('YENEY_TIMING_03E_STEADY') and i < 2:
+        seconds = 180
     if scale_mb:
         seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
     source=bytearray(wav(rate,seconds,noise=True))
@@ -555,6 +557,18 @@ try:
     if os.environ.get('YENEY_ROOM_TRANSITION_CASE'):
         from websocket_room_lifecycle import run_transition
         run_transition(globals(), os.environ['YENEY_ROOM_TRANSITION_CASE'])
+        raise SystemExit(0)
+    if os.environ.get('YENEY_TIMING_03E_CHANGE'):
+        from timing_room_real_lms import run_change
+        run_change(globals(), os.environ['YENEY_TIMING_03E_CHANGE'])
+        raise SystemExit(0)
+    if os.environ.get('YENEY_TIMING_03E_SUBSCRIPTION'):
+        from timing_room_real_lms import run_subscription
+        run_subscription(globals(), os.environ['YENEY_TIMING_03E_SUBSCRIPTION'])
+        raise SystemExit(0)
+    if os.environ.get('YENEY_TIMING_03E_STEADY'):
+        from timing_room_real_lms import run_steady
+        run_steady(globals(), os.environ['YENEY_TIMING_03E_STEADY'])
         raise SystemExit(0)
     if os.environ.get('YENEY_WS_LIFECYCLE') == '1':
         from websocket_room_lifecycle import run

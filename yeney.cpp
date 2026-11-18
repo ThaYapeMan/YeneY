@@ -1003,6 +1003,8 @@ int main(int argc, char** argv)
             }
             if (!std::isfinite(seconds) || seconds < 1 || seconds > 3600) throw std::runtime_error("seconds must be 1..3600");
         } catch (const std::exception &e) { fprintf(stderr, "%s\n", e.what()); return 1; }
+        if (findFlag(argc, argv, "--link-rates"))
+            return bridge::positionLinkRateCheck(ip, seconds, std::cout);
         return bridge::positionSourceCheck(ip, seconds, std::cout);
     }
     warnLegacyEnvironment();

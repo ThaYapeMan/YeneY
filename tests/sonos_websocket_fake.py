@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from sonos_link_pattern import PATTERN, delays_ms
+from sonos_link_pattern import PATTERN, STUDY_REPLAY, delays_ms, study_delays_ms
 
 
 class LocalApi:
@@ -38,6 +38,7 @@ class LocalApi:
         self.position_variant = ''
         self.events_enabled = True
         self.answer_profile = os.environ.get('YENEY_FAKE_ANSWER_PROFILE')
+        self.study_delays = None
         self.events_enabled = os.environ.get('YENEY_FAKE_IGNORE_EVENTS') != '1'
         self.state_override = None
         self.item_override = None
@@ -302,7 +303,11 @@ class LocalApi:
                             time.sleep(delay_once)
                         if api.variant == 'interleaved': send({'command': 'metadataStatus'}, {})
                         if api.variant == 'slow-first' and api.polls == 1: time.sleep(.6)
-                        if api.answer_profile == PATTERN:
+                        if api.answer_profile == STUDY_REPLAY:
+                            if api.study_delays is None:
+                                api.study_delays = study_delays_ms()
+                            question_ms, answer_ms = api.study_delays[(api.polls-1) % len(api.study_delays)]
+                        elif api.answer_profile == PATTERN:
                             now = time.monotonic()
                             interval = now - getattr(api, '_last_poll', now)
                             api._last_poll = now
@@ -314,7 +319,7 @@ class LocalApi:
                             else:
                                 api.rtt_ms, api.spike_ms = (77, 227) if interval > .12 else (11, 50)
                                 api.spike_every = 6
-                        if api.answer_profile != PATTERN:
+                        if api.answer_profile not in (PATTERN, STUDY_REPLAY):
                             rtt_ms = api.spike_ms if api.spike_every and api.polls % api.spike_every == 0 else api.rtt_ms
                             question_ms = answer_ms = rtt_ms / 2
                         outlier = api.polls == api.outlier_poll

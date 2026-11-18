@@ -177,6 +177,9 @@ class Tls {
     SSL *ssl = nullptr;
     std::string buffered, fragments, awaitingPong;
     double connected = 0, lastSent = 0, pingSent = 0;
+    std::string measuredPing;
+    double measuredPingSent = 0;
+    std::optional<double> measuredPong;
     std::shared_ptr<ConnectionCounts> counts;
     bool websocketReady = false;
 public:
@@ -372,6 +375,13 @@ public:
         return SSL_pending(ssl) || ::poll(&p, 1, 0) > 0;
     }
     double age() const { return connected ? positionMonotonic()-connected : 0; }
+    void measurePing(double now) {
+        measuredPing = "measure-" + std::to_string(now);
+        measuredPingSent = now;
+        measuredPong.reset();
+        frame(measuredPing, 9);
+    }
+    std::optional<double> pingRtt() const { return measuredPong; }
     void maintenance(double now = positionMonotonic()) {
         if (!awaitingPong.empty() && now - pingSent >= 3)
             throw std::runtime_error("WebSocket pong missing for 3 s");
@@ -417,6 +427,10 @@ public:
                         } else if (opcode == 10) {
                             observe("websocket control=pong direction=received" + age);
                             if (body == awaitingPong) awaitingPong.clear();
+                            if (!measuredPing.empty() && body == measuredPing) {
+                                measuredPong = (positionMonotonic() - measuredPingSent) * 1000;
+                                measuredPing.clear();
+                            }
                         } else {
                             if (opcode != 0 && opcode != 1) throw std::runtime_error("websocket opcode");
                             fragments += body;
@@ -577,6 +591,77 @@ public:
 };
 
 }
+int positionLinkRateCheck(const std::string &host, double seconds, std::ostream &out) {
+    sigset_t blocked;
+    sigemptyset(&blocked);
+    sigaddset(&blocked, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &blocked, nullptr);
+    int result = 0;
+    try {
+        LocalSession session(std::make_shared<ConnectionCounts>());
+        session.open(host, [](const std::string &) {});
+        bool playing = false;
+        bool complete = true;
+        for (int hz : {5, 10, 20, 40}) {
+            for (bool interleaved : {false, true}) {
+                std::vector<double> positions, pings;
+                const auto measure = [&](double duration, bool position, bool ping) {
+                    const double end = positionMonotonic() + duration;
+                    while (positionMonotonic() < end) {
+                        const auto sent = positionMonotonic();
+                        if (ping) session.connection.measurePing(sent);
+                        const auto positionSent = positionMonotonic();
+                        auto waiting = position ? session.command("playback:1", "getPlaybackStatus") : std::string{};
+                        while (!waiting.empty() || (ping && !session.connection.pingRtt() && positionMonotonic() - sent < 1)) {
+                            session.maintenance();
+                            if (!session.connection.readable()) {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                                continue;
+                            }
+                            const auto answer = session.message();
+                            if (!waiting.empty() && answer["cmdId"] == waiting) {
+                                positions.push_back((positionMonotonic() - positionSent) * 1000);
+                                playing |= speakerPlaying(mapSpeakerState(answer["playbackState"]));
+                                waiting.clear();
+                            }
+                        }
+                        if (ping && session.connection.pingRtt()) pings.push_back(*session.connection.pingRtt());
+                        const double remaining = std::min(end, sent + 1.0 / hz) - positionMonotonic();
+                        if (remaining > 0) std::this_thread::sleep_for(std::chrono::duration<double>(remaining));
+                    }
+                };
+                if (interleaved) {
+                    measure(seconds / 8, true, true);
+                } else {
+                    measure(seconds / 16, true, false);
+                    measure(seconds / 16, false, true);
+                }
+                const auto print = [&](const char *name, std::vector<double> &samples) {
+                    out << ' ' << name << "_answers=" << samples.size();
+                    if (samples.empty()) {
+                        complete = false;
+                        out << ' ' << name << "_rtt_ms=unavailable";
+                        return;
+                    }
+                    std::sort(samples.begin(), samples.end());
+                    const auto count = samples.size();
+                    out << ' ' << name << "_median_ms=" << (samples[(count-1)/2] + samples[count/2])/2
+                        << ' ' << name << "_p95_ms=" << samples[size_t(std::ceil(count*.95))-1]
+                        << ' ' << name << "_max_ms=" << samples.back();
+                };
+                out << "link check rate_hz=" << hz << " interleaved_pings=" << (interleaved ? "yes" : "no");
+                print("position", positions);
+                print("ping", pings);
+                out << std::endl;
+            }
+        }
+        result = playing && complete ? 0 : 1;
+    } catch (const std::exception &e) {
+        out << "link check failed reason=" << e.what() << '\n';
+        result = 1;
+    }
+    return result;
+}
 int positionSourceCheck(const std::string &host, double seconds, std::ostream &out) {
     WebsocketSpeakerPosition source(host, true);
     source.diagnosticRate(5);
@@ -682,6 +767,8 @@ struct WebsocketSpeakerPosition::Impl {
     std::string host, error = "connecting";
     mutable std::mutex mutex;
     PositionFit fit;
+    PositionLink link;
+    std::optional<double> trustedAnswerAt;
     std::atomic_bool stop{false}, regroup{false};
     std::atomic_uint diagnosticHz{0};
     bool diagnostic = false, reconnecting = true;
@@ -830,6 +917,14 @@ struct WebsocketSpeakerPosition::Impl {
                         {
                             std::lock_guard<std::mutex> lock(mutex);
                             if (diagnostic) observedSamples.push_back(sample);
+                            if (!diagnostic && link.observe(received, sample.rttMs)) {
+                                emit(link.isUneven()
+                                     ? "speaker position link=uneven reason=recent-delayed-answers hold_off_s=5"
+                                     : "speaker position link=even reason=recent-quick-answers hold_off_s=5");
+                                ++revision;
+                            }
+                            const auto limit = diagnostic ? 200.0 : link.trustedLimit();
+                            if (!diagnostic && link.isUneven()) fit.retainQuickAnswers(limit);
                             // Only a request sent after an event can confirm it.
                             // An older in-flight answer may describe the prior coordinate.
                             if (known && known->event && sent < known->sampleTime) {
@@ -842,22 +937,24 @@ struct WebsocketSpeakerPosition::Impl {
                             reconnecting = false;
                             consecutiveFailures = 0;
                             error.clear();
-                            if (sample.rttMs > 200 && known &&
-                                (known->item != sample.item || known->state != sample.state))
+                            const bool trust = sample.rttMs <= limit;
+                            if (!trust && known && (known->item != sample.item ||
+                                (known->state != sample.state && !speakerPlaying(sample.state))))
                                 holdPosition(sample.rawState, received);
                             if (rawState != sample.rawState) ++revision;
                             rawState = sample.rawState;
                             if (sample.state == "UNKNOWN" && unknownStates.insert(rawState).second)
                                 emit("speaker unknown playbackState=" + rawState);
                             // A command answer confirms or overrides the event clock.
-                            if (known && known->event && sample.rttMs <= 200) fit.reset();
-                            if (fit.add(sample)) {
+                            if (known && known->event && trust) fit.reset();
+                            if (trust && fit.add(sample, link.quickLimit())) {
                                 if (known && sample.item != known->item) ++revision;
                                 if (missingPosition) ++revision;
                                 known = sample;
                                 heldPosition.reset();
                                 missingPosition = false;
-                            } else if ((received - sent) * 1000 <= 200) immediate = true;
+                                trustedAnswerAt = received;
+                            } else if (trust) immediate = true;
                         }
                         const auto hz = diagnosticHz.load();
                         next = immediate ? received : sent + (hz ? 1.0 / hz : (speakerPlaying(state) || speakerTransitioning(state)) ? .05 : 1);
@@ -893,6 +990,10 @@ std::optional<SpeakerPositionSample> WebsocketSpeakerPosition::position(double n
     std::lock_guard<std::mutex> lock(impl->mutex);
     if (now - impl->last > 3) return {};
     return impl->missingPosition ? impl->heldPosition : impl->fit.position(now);
+}
+PositionLinkStatus WebsocketSpeakerPosition::linkStatus() const {
+    std::lock_guard<std::mutex> lock(impl->mutex);
+    return {impl->link.isUneven(), impl->fit.precisionMs(), impl->trustedAnswerAt};
 }
 std::string WebsocketSpeakerPosition::failure() const {
     std::lock_guard<std::mutex> lock(impl->mutex);

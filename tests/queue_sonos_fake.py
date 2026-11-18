@@ -46,6 +46,7 @@ class Position(dict):
     def __init__(self, owner, value):
         self.owner = owner
         self.stamp = time.monotonic()
+        self.subsecond_ms = 0
         super().__init__(value)
 
     def playing_elapsed(self):
@@ -56,20 +57,27 @@ class Position(dict):
     def milliseconds(self):
         value = super().__getitem__('RelTime')
         seconds = sum(int(v)*w for v, w in zip(value.split(':'), (3600, 60, 1)))
-        return seconds * 1000 + (self.playing_elapsed() * 1000
+        return seconds * 1000 + self.subsecond_ms + (self.playing_elapsed() * 1000
             if getattr(self.owner, 'realtime', False) and self.owner.transport_state == 'PLAYING' else 0)
 
     def __getitem__(self, key):
         value = super().__getitem__(key)
         if key == 'RelTime' and getattr(self.owner, 'realtime', False) and self.owner.transport_state == 'PLAYING':
             seconds = sum(int(v)*w for v, w in zip(value.split(':'), (3600, 60, 1)))
-            seconds += int(self.playing_elapsed())
+            seconds += int(self.playing_elapsed() + self.subsecond_ms / 1000)
             return f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
         return value
 
     def __setitem__(self, key, value):
-        if key == 'RelTime': self.stamp = time.monotonic()
+        if key == 'RelTime':
+            self.stamp = time.monotonic()
+            self.subsecond_ms = 0
         super().__setitem__(key, value)
+
+    def latch_milliseconds(self, value):
+        seconds = int(value / 1000)
+        self['RelTime'] = f'{seconds//3600:02}:{seconds//60%60:02}:{seconds%60:02}'
+        self.subsecond_ms = value - seconds * 1000
 
 class Coordinator(ThreadingHTTPServer):
     daemon_threads = True

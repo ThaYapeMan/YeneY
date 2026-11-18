@@ -5,6 +5,11 @@
 #include <memory>
 #include <iosfwd>
 namespace bridge {
+struct PositionLinkStatus {
+    bool uneven = false;
+    std::optional<double> precisionMs;
+    std::optional<double> lastTrustedAnswer;
+};
 class WebsocketSpeakerPosition : public SpeakerPosition {
     struct Impl;
     std::unique_ptr<Impl> impl;
@@ -23,6 +28,7 @@ public:
     std::string quality() const;
     std::string playbackError() const;
     std::string connectionState() const;
+    PositionLinkStatus linkStatus() const;
     void diagnosticRate(unsigned hz);
     void finishDiagnostic();
     std::string connections() const;
@@ -33,4 +39,5 @@ public:
 };
 double positionMonotonic();
 int positionSourceCheck(const std::string &host, double seconds, std::ostream &out);
+int positionLinkRateCheck(const std::string &host, double seconds, std::ostream &out);
 } // namespace bridge

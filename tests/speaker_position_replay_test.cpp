@@ -108,6 +108,7 @@ void studyFit() {
 
 void portFit() {
     bridge::PositionFit fit;
+    bridge::PositionLink link;
     const double origin = 10000;
     double sent = 0;
     for (int i = 0; i < 1534; ++i) {
@@ -116,11 +117,51 @@ void portFit() {
         const double truth = origin + received * 1000;
         const Answer answer{sent, received, origin + (sent + rtt / 2) * 1000 + (i == 767 ? 110.403 : 1.169),
                             "1", "PLAYING", received, truth};
+        assert(!link.observe(received, answer.rtt()) && !link.isUneven());
         assert(fit.add(answer.sample()) == (i != 767));
         assert(std::abs(fit.position(received)->positionMs - truth) <= 1.171);
         sent = std::max(sent + .05, received);
     }
     std::cout << "Port controlled fit rejects 307.748 ms answer and retains the line\n";
+}
+
+void linkClassification() {
+    bridge::PositionLink link;
+    double now = 0;
+    for (int i = 0; i < 12; ++i, now += .05) assert(!link.observe(now, 10));
+    assert(!link.observe(now += .15, 140));
+    assert(!link.observe(now += .15, 140));
+    assert(link.observe(now += .15, 140) && link.isUneven() && link.trustedLimit() == 22);
+    for (int i = 0; i < 200; ++i) assert(!link.observe(now += .05, 10));
+    for (int i = 0; link.isUneven() && i < 420; ++i) link.observe(now += .05, 10);
+    assert(!link.isUneven());
+    std::cout << "PASS link classification enters after consecutive delays and recovers after a quiet window\n";
+}
+
+void heldLine() {
+    bridge::PositionLink link;
+    bridge::PositionFit fit;
+    for (int i = 0; i < 20; ++i) {
+        const double now = i * .05 + 1;
+        assert(!link.observe(now, 10));
+        assert(fit.add({"1", "PLAYING", 10000 + now * 1000, now, 10}));
+    }
+    for (int i = 0; i < 200; ++i) {
+        const double now = 2 + i * .15;
+        link.observe(now, 149);
+        if (link.isUneven()) fit.retainQuickAnswers(link.trustedLimit());
+        // Begin delayed traffic with two observations inside the old 200 ms
+        // limit, then verify that the uneven link rejects the entire tail.
+        if (i < 2) assert(!link.isUneven());
+        else assert(link.isUneven() && link.trustedLimit() < 149);
+        if (149 <= link.trustedLimit()) assert(fit.add({"1", "PLAYING", 10070 + now * 1000, now, 149}));
+        assert(std::abs(fit.position(now)->positionMs - (10000 + now * 1000)) < .001);
+    }
+    assert(fit.add({"2", "TRANSITIONING", 3000, 33, 0, 33, true}));
+    assert(fit.position(33.3)->positionMs == 3000);
+    assert(fit.add({"2", "PLAYING", 3000, 33.4, 0, 33.4, true}));
+    assert(std::abs(fit.position(33.7)->positionMs - 3300) < .001);
+    std::cout << "PASS slow replies leave the last trusted line and state events restart it\n";
 }
 } // namespace
 
@@ -131,5 +172,7 @@ int main(int argc, char **argv) {
     else if (mode == "changes") recordedTransitions();
     else if (mode == "study") studyFit();
     else if (mode == "port") portFit();
+    else if (mode == "classify") linkClassification();
+    else if (mode == "hold") heldLine();
     else return 2;
 }

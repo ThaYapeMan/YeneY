@@ -979,6 +979,19 @@ Check the production position client without playing anything or contacting LMS:
 `yeney --position-source-check --ip <speaker-ip> --seconds 30`. This read-only
 check prints discovery, upgrade and subscription results, the selected source,
 and 5/20 Hz RTT and position-residual statistics. It can run beside a room service.
+With `--link-rates`, the same read-only check measures 5, 10, 20 and 40 requests
+per second. It reports the median, 95th percentile and maximum RTT for status
+answers and WebSocket pongs. The baseline measures status and ping in separate
+intervals. The interleaved trial sends a ping with each position question.
+The displayed rate is the target cadence and the answer counts show how much of
+it the link sustained.
+
+The queue room reports `position_link`, `position_precision_ms` and
+`position_trusted_answer_age_ms` beside `position_source`. The precision is
+an estimate from the answer times of samples used in the fit. It is unavailable
+when the current coordinate came only from an event. An uneven link keeps the
+last fitted position advancing while answers are delayed.
+
 Fallback room status includes `position_source_reason`; failed retries remind the
 journal at most once per ten minutes. For redacted device evidence, run
 `python3 scripts/sonos-local-api-capture.py --ip <speaker-ip> --seconds 60`

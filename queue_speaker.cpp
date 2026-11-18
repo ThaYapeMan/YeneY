@@ -72,13 +72,8 @@ void QueueRoom::Impl::observe() {
     const auto selectedPosition = positionSources.select(positionMonotonic());
     auto precise = selectedPosition.first && std::string(selectedPosition.first->precision()) == "ms" ?
         selectedPosition.second : std::nullopt;
-    if (precise && precise->held) {
-        if (mapSpeakerState(precise->rawState) != "STOPPED") {
-            requestStatus();
-            return;
-        }
-        precise.reset();
-    }
+    const bool waitingForPosition = precise && precise->held && mapSpeakerState(precise->rawState) != "STOPPED";
+    if (precise && precise->held && !waitingForPosition) precise.reset();
     if (precise && rendererObservationAfter && precise->observedAt < rendererObservationAfter)
         return;
     const bool rendererObservationConfirmed = precise && rendererObservationAfter;
@@ -122,7 +117,14 @@ void QueueRoom::Impl::observe() {
         const auto revision = websocketPosition->revision();
         websocketEvent = revision != websocketRevision;
         websocketRevision = revision;
-        if (websocketEvent) { requestStatus(); publish(); }
+        if (websocketEvent || now >= nextPositionStatus) {
+            nextPositionStatus = now + std::chrono::seconds(1);
+            publish();
+        }
+    }
+    if (waitingForPosition) {
+        requestStatus();
+        return;
     }
     // LMS keeps extrapolating while the room is playing. Refresh the held
     // BUFFERING coordinate without reporting a pause; the core coalesces
@@ -159,6 +161,12 @@ void QueueRoom::Impl::observe() {
     cachedTransport = transportFields;
     cachedMedia = mediaFields;
     cachedMediaUri = media.child("CurrentURI");
+    if (precise) {
+        // The serialized identity requests can span a buffering release.
+        // Use the newer clock only for the item whose identity was observed.
+        auto fresh = selectedPosition.first->position(positionMonotonic());
+        if (fresh && !fresh->held && fresh->item == precise->item) precise = std::move(fresh);
+    }
     }
     auto position = cachedPosition;
     const auto &transportFields = cachedTransport;
@@ -193,7 +201,11 @@ void QueueRoom::Impl::observe() {
             return; // SlimProto arrived while SOAP was in flight.
     }
     const bool buffering = precise && speakerTransitioning(precise->state);
-    const auto transport = buffering ? (state == "PAUSED" ? std::string("PAUSED_PLAYBACK") : std::string("PLAYING")) : transportFields.at("TransportState");
+    const auto &polledTransport = transportFields.at("TransportState");
+    const bool announcedPlaying = precise && precise->event && speakerPlaying(precise->state) &&
+        precise->item == position.at("CurrentTrack") && polledTransport == "TRANSITIONING";
+    const auto transport = buffering ? (state == "PAUSED" ? std::string("PAUSED_PLAYBACK") : std::string("PLAYING"))
+                                     : announcedPlaying ? "PLAYING" : polledTransport;
     const auto reportedStatus = transportFields.at("TransportStatus");
     // Seek and rebuffer both pass through TRANSITIONING mid-item.
     if (pathReason == "remote-finite" && state == "PLAYING" && transport == "PAUSED_PLAYBACK") {
@@ -468,7 +480,7 @@ void QueueRoom::Impl::observe() {
             });
         }
     }
-    if (positionSourceChanged || preciseSeek || rendererPositionConfirmed || current != previous || state != old)
+    if (positionSourceChanged || websocketEvent || preciseSeek || rendererPositionConfirmed || current != previous || state != old)
         requestStatus();
     if (current != previous || state != old) {
         publish();
@@ -477,6 +489,34 @@ void QueueRoom::Impl::observe() {
     }
     if (state == "PLAYING" && handoffAt != std::chrono::steady_clock::time_point{})
         handoffComplete();
+    if (mutation == "pause 1" && precise && precise->state == "PAUSED" && pathReason == "local-source") {
+        // LMS snapshots its playing clock when it handles pause. Wait for
+        // the held coordinate to cross SlimProto before saving that clock.
+        const auto target = queue.audibleElapsedMs(queue.audibleOccurrence());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+        bool acknowledged = false;
+        while (target && !pending() && std::chrono::steady_clock::now() < deadline) {
+            requestStatus();
+            std::string reply;
+            if (!queue_audio::controlLms(host, mac, "time ?", 9090, &reply, 40)) break;
+            const auto value = queue_audio::decodeLms(reply);
+            try {
+                const auto observed = std::stod(value.substr(value.find_last_of(' ') + 1)) * 1000;
+                if (std::abs(observed - *target) <= 12) {
+                    acknowledged = true;
+                    break;
+                }
+            } catch (const std::exception &) { break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(4));
+        }
+        logQueue(std::string("precise pause clock=") + (acknowledged ? "acknowledged" : "unconfirmed"));
+        if (pending()) return;
+        const auto latest = selectedPosition.first->position(positionMonotonic());
+        if (latest && (latest->item != precise->item || speakerPlaying(latest->state))) {
+            expectedState = "PLAYING";
+            return;
+        }
+    }
     if (pauseTime) {
         // The CLI uses a different connection from SlimProto. Wait for the
         // server's read-only clock acknowledgement before it saves resumeTime.

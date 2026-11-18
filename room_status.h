@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include <atomic>
+#include <algorithm>
+#include <chrono>
+#include <optional>
 #include "volume_control.h"
 #include "queue_uri_log.h"
 #include "podcast_settings.h"
@@ -16,6 +19,8 @@ struct ModeStatus {
     std::string positionSourceReason, transportStatus;
     std::string speakerRawState, speakerQuality, speakerPlaybackError;
     std::string positionSource = "upnp", positionPrecision = "second";
+    std::string positionLink = "unavailable";
+    std::optional<double> positionPrecisionMs, positionLastTrustedAnswer;
     bool owned = false;
     uint64_t occurrence = 0;
     uint32_t renderedRate = 0;
@@ -72,6 +77,15 @@ public:
             out << ",\"path\":" << q(v.path);
         if (v.active == "queue") {
             out << ",\"position_source\":" << q(v.positionSource)
+                << ",\"position_link\":" << q(v.positionLink)
+                << ",\"position_precision_ms\":";
+            if (v.positionPrecisionMs) out << *v.positionPrecisionMs; else out << "null";
+            out << ",\"position_trusted_answer_age_ms\":";
+            if (v.positionLastTrustedAnswer) {
+                const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+                out << std::max(0.0, now - *v.positionLastTrustedAnswer) * 1000;
+            } else out << "null";
+            out
                 << ",\"position_precision\":" << q(v.positionPrecision)
                 << ",\"speaker_playback_state\":" << q(v.speakerRawState)
                 << ",\"speaker_playback_error\":" << q(v.speakerPlaybackError)

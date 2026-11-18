@@ -6459,6 +6459,318 @@
       ],
       "label": "position-link-rate",
       "time_judging": false
+    },
+    {
+      "name": "position-replay-classify",
+      "target": "speaker-position-test",
+      "command": "./speaker-position-replay-test classify",
+      "environment": {},
+      "prerequisites": {
+        "full": "speaker-position-replay",
+        "fast": "speaker-position-replay"
+      },
+      "phase": "parallel",
+      "seconds": 0.1,
+      "reason": "Classify room links across delay episodes and recover after the observation window.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "position-replay-classify",
+      "time_judging": false
+    },
+    {
+      "name": "position-replay-hold",
+      "target": "speaker-position-test",
+      "command": "./speaker-position-replay-test hold",
+      "environment": {},
+      "prerequisites": {
+        "full": "speaker-position-replay",
+        "fast": "speaker-position-replay"
+      },
+      "phase": "parallel",
+      "seconds": 0.1,
+      "reason": "Verify the retained line through a long slow-answer sequence and state events.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "position-replay-hold",
+      "time_judging": false
+    },
+    {
+      "name": "position-lms-cable-skip",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=cable/skip python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-cable-skip",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-cable-app-scrub",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=cable/app-scrub python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-cable-app-scrub",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-cable-lms-scrub",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=cable/lms-scrub python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-cable-lms-scrub",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-cable-pause",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=cable/pause python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-cable-pause",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-cable-resume",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=cable/resume python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-cable-resume",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-study-replay-skip",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=study-replay/skip python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-study-replay-skip",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-study-replay-app-scrub",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=study-replay/app-scrub python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-study-replay-app-scrub",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-study-replay-lms-scrub",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=study-replay/lms-scrub python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-study-replay-lms-scrub",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-study-replay-pause",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=study-replay/pause python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-study-replay-pause",
+      "time_judging": true
+    },
+    {
+      "name": "position-lms-study-replay-resume",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_CHANGE=study-replay/resume python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Measure one action against the independent fake position at the real LMS consumer.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-lms-study-replay-resume",
+      "time_judging": true
+    },
+    {
+      "name": "position-subscription-forward",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_SUBSCRIPTION=forward python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 20,
+      "reason": "Measure a real LMS CometD status subscription on the live clock.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-subscription-forward",
+      "time_judging": true
+    },
+    {
+      "name": "position-subscription-backward",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_SUBSCRIPTION=backward python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 20,
+      "reason": "Measure a real LMS CometD status subscription on the live clock.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-subscription-backward",
+      "time_judging": true
+    },
+    {
+      "name": "position-subscription-skip",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_SUBSCRIPTION=skip python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 20,
+      "reason": "Measure a real LMS CometD status subscription on the live clock.",
+      "modes": [
+        "full"
+      ],
+      "label": "position-subscription-skip",
+      "time_judging": true
+    },
+    {
+      "name": "position-link-diagnostic",
+      "label": "position-link-diagnostic",
+      "target": "speaker-position-test",
+      "command": "python3 tests/speaker_link_diagnostic_test.py",
+      "prerequisites": {
+        "full": "speaker-position-test",
+        "fast": "speaker-position-test"
+      },
+      "environment": {},
+      "phase": "quiet",
+      "time_judging": true,
+      "reason": "Measure the live WebSocket cadence and all eight read-only combinations.",
+      "seconds": 10,
+      "modes": [
+        "full",
+        "fast"
+      ]
+    },
+    {
+      "name": "position-lms-cable-steady",
+      "label": "position-lms-cable-steady",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_STEADY=cable python3 tests/real_lms_test.py",
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "environment": {},
+      "phase": "quiet",
+      "time_judging": true,
+      "reason": "Collect the requested 120 s of real LMS time queries, including a 60 s creep measurement.",
+      "seconds": 135,
+      "modes": [
+        "full"
+      ]
+    },
+    {
+      "name": "position-lms-study-steady",
+      "label": "position-lms-study-steady",
+      "target": "speaker-position-test",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_TIMING_03E_STEADY=study-replay python3 tests/real_lms_test.py",
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "environment": {},
+      "phase": "quiet",
+      "time_judging": true,
+      "reason": "Collect the requested 120 s of real LMS time queries, including a 60 s creep measurement.",
+      "seconds": 135,
+      "modes": [
+        "full"
+      ]
     }
   ],
   "orders": {
@@ -6628,7 +6940,25 @@
       "position-replay-study",
       "position-replay-port",
       "position-link-delay",
-      "position-link-rate"
+      "position-link-rate",
+      "position-replay-classify",
+      "position-replay-hold",
+      "position-lms-cable-skip",
+      "position-lms-cable-app-scrub",
+      "position-lms-cable-lms-scrub",
+      "position-lms-cable-pause",
+      "position-lms-cable-resume",
+      "position-lms-study-replay-skip",
+      "position-lms-study-replay-app-scrub",
+      "position-lms-study-replay-lms-scrub",
+      "position-lms-study-replay-pause",
+      "position-lms-study-replay-resume",
+      "position-subscription-forward",
+      "position-subscription-backward",
+      "position-subscription-skip",
+      "position-link-diagnostic",
+      "position-lms-cable-steady",
+      "position-lms-study-steady"
     ],
     "fast": [
       "t0008",
@@ -6704,7 +7034,10 @@
       "position-replay-study",
       "position-replay-port",
       "position-link-delay",
-      "position-link-rate"
+      "position-link-rate",
+      "position-replay-classify",
+      "position-replay-hold",
+      "position-link-diagnostic"
     ]
   },
   "external_build_sets": {

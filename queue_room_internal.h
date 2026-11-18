@@ -179,6 +179,7 @@ struct QueueRoom::Impl {
     struct RendererSeekPosition { uint64_t targetMs; double issued; };
     std::optional<RendererSeekPosition> rendererSeekPosition;
     double rendererObservationAfter = 0;
+    std::chrono::steady_clock::time_point nextPositionStatus{};
     unsigned pollMs = pollSetting();
     std::chrono::steady_clock::time_point nextPoll{}, fastUntil{};
     std::shared_ptr<std::atomic_bool> eventDirty = std::make_shared<std::atomic_bool>(false);
