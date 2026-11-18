@@ -12,7 +12,6 @@
 #include "queue_lms_commands.h"
 #include "queue_route.h"
 #include "queue_row_owner.h"
-#include "queue_lazy_item.h"
 #include "queue_source.h"
 #include "queue_speaker_changes.h"
 #include "queue_window_edits.h"
@@ -102,7 +101,6 @@ struct QueueRoom::Impl {
     uint64_t navigationToken = 0;
     std::optional<Entry> navigationItem;
     std::chrono::steady_clock::time_point navigationDeadline{};
-    std::map<uint64_t, std::shared_ptr<queue_audio::LazyItem>> lazyItems;
     // Worker-owned selections are independent for each LMS index.
     struct Selection {
         enum Phase { Queued, Producing, Published } phase;

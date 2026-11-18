@@ -2,6 +2,7 @@
 #pragma once
 
 #include "core_queue_sink.h"
+#include "queue_lazy_item.h"
 #include <algorithm>
 #include <atomic>
 #include <map>
@@ -55,10 +56,30 @@ public:
 
     void clearAdmissions() { admissions.clear(); }
 
+    // The worker owns the token-to-route lookup. A route retains its own
+    // binding until outstanding HTTP requests have returned.
+    std::shared_ptr<LazyItem> lazyRow(uint64_t token) const {
+        const auto row = lazyRows.find(token);
+        return row == lazyRows.end() ? nullptr : row->second;
+    }
+
+    LazyItem &declaredLazyRow(uint64_t token) const { return *lazyRows.at(token); }
+
+    void registerLazyRow(uint64_t token, const std::shared_ptr<LazyItem> &row) {
+        lazyRows.insert_or_assign(token, row);
+    }
+
+    void retireLazyRows() {
+        for (const auto &row : lazyRows)
+            row.second->cancel();
+        lazyRows.clear();
+    }
+
 private:
     std::atomic<uint64_t> request{0};
     std::atomic<uint64_t> cancelledThrough{0};
     std::map<uint64_t, Admission> admissions;
+    std::map<uint64_t, std::shared_ptr<LazyItem>> lazyRows;
 };
 
 } // namespace queue_audio

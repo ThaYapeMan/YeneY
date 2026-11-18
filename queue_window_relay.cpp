@@ -183,11 +183,11 @@ void QueueRoom::Impl::reconcileWindow() {
         auto &target = entries[navigationToken];
         // Pair the sink's verified same-source item at its existing URI.
         // A changed source coordinate or declaration gets a fresh URI.
-        const auto lazy = lazyItems.find(navigationToken);
+        const auto lazy = rowOwner.lazyRow(navigationToken);
         bool published = false, declarationMismatch = false;
-        if (target.size() == 1 && !target.front().item && lazy != lazyItems.end()) {
+        if (target.size() == 1 && !target.front().item && lazy) {
             try {
-                published = lazy->second->publish(navigationItem->item);
+                published = lazy->publish(navigationItem->item);
             } catch (const queue_audio::LazyItem::DeclarationMismatch &) {
                 declarationMismatch = true;
             }
@@ -220,10 +220,10 @@ void QueueRoom::Impl::reconcileWindow() {
                 target.front().originMs || navigationItem->originMs ? "seek-partial" :
                 target.front().sourceUrl != navigationItem->sourceUrl ? "source-mismatch" : "incomplete";
             auto replacement = *navigationItem;
-            if (!declarationMismatch && target.size() == 1 && lazy != lazyItems.end() &&
+            if (!declarationMismatch && target.size() == 1 && lazy &&
                 target.front().originMs == navigationItem->originMs) {
                 try {
-                    lazy->second->replace(replacement.item);
+                    lazy->replace(replacement.item);
                     replacement.uri = target.front().uri;
                     replacement.didl = target.front().didl;
                     if (navigationItem->uri != replacement.uri) owned.erase(navigationItem->uri);
@@ -237,7 +237,7 @@ void QueueRoom::Impl::reconcileWindow() {
                     logQueue("window pairing lms_index=" + std::to_string(audible->index) +
                         " decision=fallback reason=immutable-wav-mismatch");
                 retired.insert(retired.end(), target.begin(), target.end());
-                if (lazy != lazyItems.end()) retiredLazy.push_back(lazy->second);
+                if (lazy) retiredLazy.push_back(lazy);
                 const auto row = makeRow(*audible, replacement.item);
                 owned.erase(replacement.uri);
                 replacement.uri = row.uri;
@@ -301,13 +301,13 @@ void QueueRoom::Impl::reconcileWindow() {
             } else {
                 replacementReasons[slot.token] = found->second.front().originMs ? "seek-partial" : evicted ? "evicted" : "incomplete";
                 if (found->second.front().originMs) {
-                    if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end()) retiredLazy.push_back(lazy->second);
+                    if (const auto lazy = rowOwner.lazyRow(slot.token)) retiredLazy.push_back(lazy);
                     retired.insert(retired.end(), found->second.begin(), found->second.end());
                     entries.erase(found);
                     found = entries.end();
-                } else if (const auto lazy = lazyItems.find(slot.token); lazy != lazyItems.end() && found->second.size() == 1) {
+                } else if (const auto lazy = rowOwner.lazyRow(slot.token); lazy && found->second.size() == 1) {
                     auto &entry = found->second.front();
-                    lazy->second->reset(entry.item);
+                    lazy->reset(entry.item);
                     if (evicted) logQueue("cache evicted lms_index=" + std::to_string(slot.index));
                     entry.stream = UINT64_MAX - slot.token;
                     entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
@@ -511,7 +511,7 @@ void QueueRoom::Impl::reconcileWindow() {
     for (const auto &parent : before) {
         if (retained.count(parent.token)) continue;
         const auto &entry = entries.at(parent.token).front();
-        if (const auto lazy = lazyItems.find(parent.token); lazy != lazyItems.end()) lazy->second->cancel();
+        if (const auto lazy = rowOwner.lazyRow(parent.token)) lazy->cancel();
         queue.releaseParent(entry.owner ? entry.owner : entry.stream);
         releaseWindowParent(parent.token);
         // A cached target may have a newer LMS producer clock while serving
@@ -653,8 +653,8 @@ void QueueRoom::Impl::arbitrateSelection(uint64_t token, const std::string &reas
     }
     if (snapshot.entries.size() >= playlist.entries.size() && snapshot.index < snapshot.entries.size() &&
         snapshot.index == slot->index && snapshot.mode != "stop") {
-        const auto lazy = lazyItems.find(token);
-        if (lazy != lazyItems.end() && !lazy->second->ready()) {
+        const auto lazy = rowOwner.lazyRow(token);
+        if (lazy && !lazy->ready()) {
             auto first = queue.latestOccurrence() + 1;
             std::lock_guard<std::mutex> sourceLock(sourceMutex);
             for (const auto &record : queue.snapshot()) {
@@ -694,8 +694,8 @@ void QueueRoom::Impl::advanceSelections() {
     // LMS has one producer. Drain each live declaration before selecting the
     // next index, so a rapid burst cannot cancel an earlier HTTP promise.
     for (auto selection = selections.begin(); selection != selections.end();) {
-        const auto lazy = lazyItems.find(selection->second.token);
-        if (selection->second.phase != Selection::Published && lazy != lazyItems.end() && lazy->second->abandoned()) {
+        const auto lazy = rowOwner.lazyRow(selection->second.token);
+        if (selection->second.phase != Selection::Published && lazy && lazy->abandoned()) {
             logQueue("selection retired reason=reader-left lms_index=" + std::to_string(selection->first));
             selection = selections.erase(selection);
         } else ++selection;
@@ -740,11 +740,12 @@ void QueueRoom::Impl::advanceSelections() {
             logQueue("selection issued lms_index=" + std::to_string(index) + " reason=speaker-rewind lms_commands=1");
             return;
         }
+        const auto lazy = rowOwner.lazyRow(selection->second.token);
         roomLmsCommand(host, mac, "playlist index " + std::to_string(index),
-                       lazyItems.count(selection->second.token) && lazyItems.at(selection->second.token)->waiting() ?
+                       lazy && lazy->waiting() ?
                            "lazy-pcm-get" : "speaker-nav", logQueue);
-        if (const auto lazy = lazyItems.find(selection->second.token); lazy != lazyItems.end()) {
-            lazy->second->commandIssued();
+        if (lazy) {
+            lazy->commandIssued();
             logQueue("lazy activated lms_index=" + std::to_string(index) + " lms_commands=1");
         }
         speakerNavCommands[selection->second.token] = 1;
@@ -755,8 +756,8 @@ void QueueRoom::Impl::advanceSelections() {
 
 void QueueRoom::Impl::activateLazy(uint64_t token) {
     append();
-    const auto found = lazyItems.find(token);
-    if (found == lazyItems.end() || !window.find(token) || !found->second->claimActivation()) return;
+    const auto found = rowOwner.lazyRow(token);
+    if (!found || !window.find(token) || !found->claimActivation()) return;
     arbitrateSelection(token, "lazy-pcm-get");
 }
 
@@ -803,7 +804,7 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
         sourceTokens[id] = slot.token;
         sourceIndices[id] = slot.index;
     }
-    lazyItems[slot.token] = lazy;
+    rowOwner.registerLazyRow(slot.token, lazy);
     Entry result{id, metadata.url, {}, slot.track.url, 0, metadata.title, 0, 0, upnp::queueDidl(metadata)};
     owned.insert(metadata.url);
     return result;

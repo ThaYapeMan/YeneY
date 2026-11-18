@@ -218,8 +218,8 @@ void QueueRoom::Impl::selectPath() {
                         if (speakerNavCommands.erase(pending->second.token))
                             logQueue("selection echo retired reason=controller-index lms_index=" +
                                 std::to_string(pending->first) + " target_index=" + std::to_string(snapshot.index));
-                        const auto lazy = lazyItems.find(pending->second.token);
-                        const auto item = lazy == lazyItems.end() ? nullptr : lazy->second->ready();
+                        const auto lazy = rowOwner.lazyRow(pending->second.token);
+                        const auto item = !lazy ? nullptr : lazy->ready();
                         if (item) {
                             try {
                                 const auto length = item->contentLength();

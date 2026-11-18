@@ -12,14 +12,40 @@ namespace queue_audio {
 // producer. Deferred routes publish the natural declaration only after binding. Selection is queued exactly once; neither HTTP nor HEAD executes
 // an LMS command. The room callback must only enqueue work and return promptly.
 class LazyItem {
-    std::shared_ptr<Item> declaration, produced;
-    std::optional<uint64_t> declaredLength;
+    struct WavDeclaration {
+        std::string room;
+        uint32_t rate;
+        PromiseKind kind;
+        std::optional<uint64_t> length;
+    };
+    std::optional<WavDeclaration> declaration;
+    std::shared_ptr<Item> produced;
     std::function<void()> activate;
     std::mutex mutex;
     std::condition_variable changed;
     bool requested = false, cancelled = false, activationClaimed = false;
     unsigned issuedCommands = 0;
     std::vector<upnp::StreamRequest *> readers;
+
+    void checkDeclaration(const std::shared_ptr<Item> &item, const char *error) const {
+        if (!item || (declaration && (item->room() != declaration->room ||
+            item->descriptor().rate != declaration->rate ||
+            item->descriptor().kind != declaration->kind ||
+            item->contentLength() != declaration->length)))
+            throw DeclarationMismatch(error);
+    }
+
+    void sealDeclaration(const Item &item) {
+        if (!declaration)
+            declaration.emplace(WavDeclaration{item.room(), item.descriptor().rate,
+                item.descriptor().kind, item.contentLength()});
+    }
+
+    void discardBinding() {
+        produced.reset();
+        requested = cancelled = activationClaimed = false;
+        issuedCommands = 0;
+    }
 public:
     class DeclarationMismatch : public std::invalid_argument {
     public:
@@ -27,10 +53,10 @@ public:
     };
 
     LazyItem(std::shared_ptr<Item> declared, std::function<void()> enqueue, bool deferred = false)
-        : declaration(std::move(declared)), activate(std::move(enqueue)) {
-        if ((!deferred && (!declaration || !declaration->contentLength())) || !activate)
+        : activate(std::move(enqueue)) {
+        if (declared) sealDeclaration(*declared);
+        if ((!deferred && (!declaration || !declaration->length)) || !activate)
             throw std::invalid_argument("lazy item needs an immutable declaration and selector");
-        if (declaration) declaredLength = declaration->contentLength();
     }
     // The room worker must claim immediately before an LMS mutation. Enqueueing
     // from HTTP alone is not authority: the request may have left meanwhile.
@@ -50,14 +76,10 @@ public:
     }
     bool publish(std::shared_ptr<Item> item) {
         std::lock_guard<std::mutex> lock(mutex);
-        if (!item || (declaration && (item->room() != declaration->room() ||
-            item->descriptor().rate != declaration->descriptor().rate ||
-            item->descriptor().kind != declaration->descriptor().kind ||
-            item->contentLength() != declaredLength)))
-            throw DeclarationMismatch("lazy producer differs from declared WAV");
+        checkDeclaration(item, "lazy producer differs from declared WAV");
         if (cancelled) return false; // late producer cannot resurrect an abandoned window
         if (produced && produced != item) throw std::logic_error("lazy producer already bound");
-        if (!declaration) { declaredLength = item->contentLength(); declaration = item; }
+        sealDeclaration(*item);
         produced = std::move(item);
         changed.notify_all();
         return true;
@@ -67,19 +89,13 @@ public:
         // HTTP may already have observed eviction and queued a new activation.
         // Retire only the binding the room observed, never that newer request.
         if (produced != expected) return;
-        produced.reset();
-        requested = cancelled = activationClaimed = false;
-        issuedCommands = 0;
+        discardBinding();
         changed.notify_all();
     }
     void replace(std::shared_ptr<Item> item) {
         std::lock_guard<std::mutex> lock(mutex);
-        if (!item || (declaration && (item->room() != declaration->room() ||
-            item->descriptor().rate != declaration->descriptor().rate ||
-            item->descriptor().kind != declaration->descriptor().kind ||
-            item->contentLength() != declaredLength)))
-            throw DeclarationMismatch("replacement differs from immutable WAV");
-        if (!declaration) { declaredLength = item->contentLength(); declaration = item; }
+        checkDeclaration(item, "replacement differs from immutable WAV");
+        sealDeclaration(*item);
         produced = std::move(item);
         cancelled = false;
         changed.notify_all();
@@ -113,11 +129,7 @@ public:
                                  std::chrono::milliseconds budget = std::chrono::seconds(15)) {
         const auto deadline = std::chrono::steady_clock::now() + budget;
         std::unique_lock<std::mutex> lock(mutex);
-        if (produced && produced->evicted()) {
-            produced.reset();
-            requested = cancelled = activationClaimed = false;
-            issuedCommands = 0;
-        }
+        if (produced && produced->evicted()) discardBinding();
         if (cancelled || request.aborted() || request.peerClosed()) return {};
         readers.push_back(&request);
         // Every exit, including an exception from enqueue, releases its claim.
@@ -140,9 +152,7 @@ public:
                 // Acquire under the store's eviction lock before returning an
                 // admitted HTTP entity. A plain shared_ptr only keeps metadata.
                 if (auto retained = Item::retainAudio(produced)) return retained;
-                produced.reset();
-                requested = activationClaimed = false;
-                issuedCommands = 0;
+                discardBinding();
             }
             if (std::chrono::steady_clock::now() >= deadline) return {};
             if (!requested) {

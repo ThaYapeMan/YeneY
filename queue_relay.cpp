@@ -89,8 +89,7 @@ void QueueRoom::Impl::release(bool stop) {
         }
     }
     for (auto token : tokens) releaseWindowParent(token);
-    for (const auto &lazy : lazyItems) lazy.second->cancel();
-    lazyItems.clear();
+    rowOwner.retireLazyRows();
     selections.clear();
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -331,7 +330,7 @@ void QueueRoom::Impl::append() {
             std::unique_lock<std::mutex> lock(sourceMutex);
             const auto token = sourceTokens.find(owner);
             if (token != sourceTokens.end()) {
-                const auto lazy = lazyItems.find(token->second);
+                const auto lazy = rowOwner.lazyRow(token->second);
                 const auto selection = selections.find(sourceIndices.at(owner));
                 const auto speakerSelection = selection != selections.end() && selection->second.token == token->second &&
                     selection->second.phase == Selection::Producing && speakerNavCommands[token->second];
@@ -379,8 +378,8 @@ void QueueRoom::Impl::append() {
                 auto entry = std::find_if(items.begin(), items.end(), [&](const auto &i) {
                     return !i.item && sourceTokens[i.stream] == token->second;
                 });
-                if (!lmsNavigation && lazy != lazyItems.end() && entry != items.end()) {
-                    if (!lazy->second->publish(record.item)) {
+                if (!lmsNavigation && lazy && entry != items.end()) {
+                    if (!lazy->publish(record.item)) {
                         queue.releaseParent(owner);
                         selections.erase(sourceIndices.at(owner));
                         continue;
@@ -473,7 +472,7 @@ void QueueRoom::Impl::append() {
             { std::lock_guard<std::mutex> lock(sourceMutex); slot = window.find(sourceTokens.at(owner)); }
             if (slot) {
                 auto row = makeRow(*slot);
-                lazyItems.at(slot->token)->publish(record.item);
+                rowOwner.declaredLazyRow(slot->token).publish(record.item);
                 metadata.url = row.uri;
                 metadata.session = session + "-" + std::to_string(slot->token);
                 if (!record.estimated && std::isfinite(slot->track.duration) && slot->track.duration > 0)
@@ -592,10 +591,10 @@ bool QueueRoom::Impl::discardEvicted(Entry &entry) {
     const auto identity = sourceTokens.find(owner);
     if (identity == sourceTokens.end()) return false;
     const auto token = identity->second;
-    const auto lazy = lazyItems.find(token);
-    if (lazy == lazyItems.end()) return false;
+    const auto lazy = rowOwner.lazyRow(token);
+    if (!lazy) return false;
     replacementReasons[token] = "evicted";
-    lazy->second->reset(entry.item);
+    lazy->reset(entry.item);
     entry.stream = UINT64_MAX - token;
     entry.item.reset(); entry.owner = 0; entry.frames = 0; entry.originMs = 0;
     logQueue("cache evicted lms_index=" + std::to_string(sourceIndices.at(owner)));
