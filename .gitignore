@@ -112,6 +112,7 @@ field-cold-test
 /queue-native-decoder-test
 
 /speaker-position-fit-test
+/speaker-position-replay-test
 /speaker-websocket-fixture
 /websocket-timer-fixture
 

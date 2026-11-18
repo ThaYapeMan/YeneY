@@ -125,6 +125,9 @@
     ],
     "navigation-soak": [
       "yeney"
+    ],
+    "speaker-position-replay": [
+      "speaker-position-replay-test"
     ]
   },
   "steps": [
@@ -6348,6 +6351,114 @@
       "command": "YENEY_ROOM_TRANSITION_CASE=persistent YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket python3 tests/real_lms_test.py",
       "seconds": 30,
       "reason": "Live clock gaps and journal delivery across stop, play, pause, track change, and seek."
+    },
+    {
+      "name": "position-replay-paired",
+      "target": "speaker-position-test",
+      "command": "./speaker-position-replay-test paired",
+      "environment": {},
+      "prerequisites": {
+        "full": "speaker-position-replay",
+        "fast": "speaker-position-replay"
+      },
+      "phase": "parallel",
+      "reason": "Reproduce the owner probe pairing and rounding on recorded timestamps.",
+      "seconds": 0.1,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "position-replay-paired",
+      "time_judging": false
+    },
+    {
+      "name": "position-replay-changes",
+      "target": "speaker-position-test",
+      "command": "./speaker-position-replay-test changes",
+      "environment": {},
+      "prerequisites": {
+        "full": "speaker-position-replay",
+        "fast": "speaker-position-replay"
+      },
+      "phase": "parallel",
+      "reason": "Replay the owner skip and scrub samples on their recorded relative clock.",
+      "seconds": 0.1,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "position-replay-changes",
+      "time_judging": false
+    },
+    {
+      "name": "position-replay-study",
+      "target": "speaker-position-test",
+      "command": "./speaker-position-replay-test study",
+      "environment": {},
+      "prerequisites": {
+        "full": "speaker-position-replay",
+        "fast": "speaker-position-replay"
+      },
+      "phase": "parallel",
+      "reason": "Replay Study position answers through the production position fit on a controlled clock.",
+      "seconds": 0.1,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "position-replay-study",
+      "time_judging": false
+    },
+    {
+      "name": "position-replay-port",
+      "target": "speaker-position-test",
+      "command": "./speaker-position-replay-test port",
+      "environment": {},
+      "prerequisites": {
+        "full": "speaker-position-replay",
+        "fast": "speaker-position-replay"
+      },
+      "phase": "parallel",
+      "reason": "Replay a cable pattern with its reported slow outlier on a controlled clock.",
+      "seconds": 0.1,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "position-replay-port",
+      "time_judging": false
+    },
+    {
+      "name": "position-link-delay",
+      "target": "speaker-position-test",
+      "command": "python3 tests/sonos_link_pattern.py delay",
+      "environment": {},
+      "prerequisites": {},
+      "phase": "parallel",
+      "reason": "Show that identical round trips allow different sample times on the controlled uneven link.",
+      "seconds": 0.1,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "position-link-delay",
+      "time_judging": false
+    },
+    {
+      "name": "position-link-rate",
+      "target": "speaker-position-test",
+      "command": "python3 tests/sonos_link_pattern.py rate",
+      "environment": {},
+      "prerequisites": {},
+      "phase": "parallel",
+      "reason": "Check the rate-dependent delay pattern without a live clock.",
+      "seconds": 0.1,
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "position-link-rate",
+      "time_judging": false
     }
   ],
   "orders": {
@@ -6511,7 +6622,13 @@
       "shortened-row-upnp",
       "room-final-end",
       "room-poll-status",
-      "room-persistent-position"
+      "room-persistent-position",
+      "position-replay-paired",
+      "position-replay-changes",
+      "position-replay-study",
+      "position-replay-port",
+      "position-link-delay",
+      "position-link-rate"
     ],
     "fast": [
       "t0008",
@@ -6581,7 +6698,13 @@
       "t0120",
       "t0121",
       "t0155",
-      "parallel-runner-contract"
+      "parallel-runner-contract",
+      "position-replay-paired",
+      "position-replay-changes",
+      "position-replay-study",
+      "position-replay-port",
+      "position-link-delay",
+      "position-link-rate"
     ]
   },
   "external_build_sets": {

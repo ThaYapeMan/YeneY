@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from sonos_link_pattern import PATTERN, delays_ms
 
 
 class LocalApi:
@@ -301,21 +302,28 @@ class LocalApi:
                             time.sleep(delay_once)
                         if api.variant == 'interleaved': send({'command': 'metadataStatus'}, {})
                         if api.variant == 'slow-first' and api.polls == 1: time.sleep(.6)
-                        if api.answer_profile:
+                        if api.answer_profile == PATTERN:
+                            now = time.monotonic()
+                            interval = now - getattr(api, '_last_poll', now)
+                            api._last_poll = now
+                            question_ms, answer_ms = delays_ms(api.polls, interval)
+                        elif api.answer_profile:
                             interval = time.monotonic() - getattr(api, '_last_poll', time.monotonic())
                             api._last_poll = time.monotonic()
                             if api.answer_profile == 'cable': api.rtt_ms, api.spike_ms, api.spike_every = 10, 12, 5
                             else:
                                 api.rtt_ms, api.spike_ms = (77, 227) if interval > .12 else (11, 50)
                                 api.spike_every = 6
-                        delay = (api.spike_ms if api.spike_every and api.polls % api.spike_every == 0 else api.rtt_ms) / 2000
+                        if api.answer_profile != PATTERN:
+                            rtt_ms = api.spike_ms if api.spike_every and api.polls % api.spike_every == 0 else api.rtt_ms
+                            question_ms = answer_ms = rtt_ms / 2
                         outlier = api.polls == api.outlier_poll
-                        if outlier: delay = .125
-                        time.sleep(delay)
+                        if outlier: question_ms = answer_ms = 125
+                        time.sleep(question_ms / 1000)
                         with owner.lock:
                             body = status()
                             if outlier: body['positionMillis'] += 400
-                        time.sleep(delay)
+                        time.sleep(answer_ms / 1000)
                         gate = api.answer_gate
                         if gate is not None:
                             api.status_captured.set()

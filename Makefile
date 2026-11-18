@@ -43,6 +43,7 @@ yeney: $(OBJS) libqueuecontroller.a libqueueitems.a $(CORE_LIB)
 		-lpthread
 
 clean:
+	rm -f speaker-position-replay-test
 	rm -f websocket-timer-fixture consumption-diagnostic-test queue-declaration-test seek-worker-test queue-native-decoder-test
 	rm -f native-pcm-fixture native-mp4-fixture queue-window-test podcast-metadata-fixture podcast-sink-test volume-test lms-icon-test lms-icon-connection-test queue-source-test room-status-test xml-sanitize-test stream-metrics-lifetime-test stream-pacing-encoder-test encoded-backpressure-test stream-pacing-test stream-metrics-test queue-position-test libqueuecontroller.a playback-mode-test queue-ownership-test queue-actions-test queue-metadata-test queue-route-test yeney-queue-dryrun core-queue-sink-test libqueueitems.a queue-item-store-test oct12-boundary-test oct11-acquisition-test field-cold-test cold-position-test lms-position-test timing-tap-test timing-contract-test timing-probe-field-test timing-probe-settings-test timing-probe-test timing-probe-resets-test timing-probe-http-test lead-test range-test range-history-test encoded-buffer-test stream-content-test http-server-test speaker-state-test *.o tests/*.o upnp/*.o yeney position-test encoder-test resume-state-test streamer-test upnp-test own-control-test
 
@@ -404,6 +405,9 @@ speaker_websocket.o: speaker_websocket.cpp speaker_websocket.h speaker_position.
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. -c -o $@ $<
 
 speaker-position-fit-test: tests/speaker_position_fit_test.cpp speaker_position.h
+	g++ -std=c++17 -O2 -Wall -Wextra -I. $< -o $@
+
+speaker-position-replay-test: tests/speaker_position_replay_test.cpp speaker_position.h
 	g++ -std=c++17 -O2 -Wall -Wextra -I. $< -o $@
 
 
