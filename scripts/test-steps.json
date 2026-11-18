@@ -392,8 +392,7 @@
         "full": "full-queue-pressure-soak"
       },
       "phase": "quiet",
-      "run_alone": true,
-      "reason": "Load-sensitive in SEEK-03. The five-lane run timed out waiting for the renderer target after step 87. The same seed completed alone in 415.640 s.",
+      "reason": "Five complete lane sets passed this step on the first lane attempt after the auxiliary-input disconnect fix. The controlled SEEK-03 replay confirms index 7 at the former failure point.",
       "seconds": 416.19897989201127,
       "modes": [
         "full"
