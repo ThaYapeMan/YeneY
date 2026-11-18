@@ -279,18 +279,19 @@ void QueueRoom::Impl::append() {
         const auto owner = record.parent ? record.parent : record.source.occurrence;
         if (owner < firstStream || (record.source.occurrence > UINT64_MAX / 2 && !record.parent))
             continue;
-        if (record.item && !record.incomplete.empty())
-            continue; // LMS cancelled this render, not a speaker rejection.
-        if (record.item && record.item->evicted())
-            continue; // Cache loss is served by the row's new lazy producer.
-        if (!record.storageFault && !record.fault.empty() && rowOwner.sourceFaultSuperseded(owner))
-            continue; // A later LMS q retired this source fault before publication.
-        if (!record.fault.empty())
-            { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
-        if (record.pairedFrom && record.actual - record.attachOffset < record.verificationFrames)
-            continue; // Verify the complete overlap before exposing an attach.
-        if (!record.item || !record.incomplete.empty())
+        using Production = queue_audio::QueueRowOwner::Production;
+        switch (rowOwner.producerOutcome(record)) {
+        case Production::Pending:
+        case Production::Cancelled:
+        case Production::Evicted:
             continue;
+        case Production::Faulted:
+            if (record.storageFault) throw std::runtime_error(record.fault);
+            throw TrackFault(record.fault);
+        case Production::Writing:
+        case Production::Complete:
+            break;
+        }
         if (!record.parent) {
             std::lock_guard<std::mutex> lock(sourceMutex);
             const auto token = rowOwner.sourceToken(owner);
@@ -322,8 +323,6 @@ void QueueRoom::Impl::append() {
         }
         if (!length)
             continue;
-        if (!record.fault.empty())
-            { if (record.storageFault) throw std::runtime_error(record.fault); throw TrackFault(record.fault); }
         if (!record.parent) {
             std::unique_lock<std::mutex> lock(sourceMutex);
             const auto token = rowOwner.sourceToken(owner);

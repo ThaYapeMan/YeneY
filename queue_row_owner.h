@@ -70,8 +70,22 @@ public:
 
     void cancelSourceThrough(uint64_t occurrence) { cancelledThrough = occurrence; }
 
-    bool sourceFaultSuperseded(uint64_t occurrence) const {
-        return occurrence <= cancelledThrough;
+    enum class Production { Pending, Writing, Complete, Cancelled, Evicted, Faulted };
+
+    Production producerOutcome(const QueueRecord &record) const {
+        // A parked or cancelled response may still have a valid WAV handle.
+        if (record.item && !record.incomplete.empty()) return Production::Cancelled;
+        if (record.item && record.item->evicted()) return Production::Evicted;
+        const auto parent = record.parent ? record.parent : record.source.occurrence;
+        if (!record.fault.empty()) {
+            if (!record.storageFault && parent <= cancelledThrough)
+                return Production::Cancelled;
+            return Production::Faulted;
+        }
+        if (!record.item || !record.incomplete.empty() ||
+            (record.pairedFrom && record.actual - record.attachOffset < record.verificationFrames))
+            return Production::Pending;
+        return record.productionComplete ? Production::Complete : Production::Writing;
     }
 
     // The room worker advances admissions in token order.
