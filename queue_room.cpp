@@ -100,6 +100,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
               for (const auto &arg : args) { if (arg.first == "Unit") unit = arg.second; if (arg.first == "Target") target = arg.second; }
               if (unit == "TRACK_NR") {
                   const auto ordinal = unsigned(std::stoul(target));
+                  const auto &items = rowOwner.layout();
                   if (ordinal && ordinal <= items.size()) {
                       const auto &entry = items[ordinal - 1];
                       const auto owner = entry.owner ? entry.owner : entry.stream;

@@ -27,6 +27,7 @@ void QueueRoom::Impl::externalStop(const std::string &reason) {
     speakerCommand("stop", reason);
 }
 void QueueRoom::Impl::observe() {
+    const auto &items = rowOwner.layout();
     const auto live = speaker->speaker();
     if (live.coordinator != room.name && (!stoppedPlay || started || state == "PLAYING" || state == "PAUSED") && !externalReleased) {
         takeoverSource = "other-group member";
@@ -261,11 +262,11 @@ void QueueRoom::Impl::observe() {
     }
     if (checked != items.end() && !checked->item) return;
     if (checked != items.end()) {
-        if (discardEvicted(*checked)) return;
+        if (discardEvicted(size_t(checked - items.begin()))) return;
         try {
             (void)checked->item->contentLength();
         } catch (const queue_audio::ItemCancelled &) {
-            if (discardEvicted(*checked)) return;
+            if (discardEvicted(size_t(checked - items.begin()))) return;
             cancelledCurrent = true;
         }
     }

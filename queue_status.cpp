@@ -2,6 +2,7 @@
 #include "queue_room_internal.h"
 namespace bridge {
 void QueueRoom::Impl::publish() {
+    const auto &items = rowOwner.layout();
     std::vector<std::shared_ptr<queue_audio::Item>> retained;
     auto playing = std::find_if(items.begin(), items.end(), [this](const auto &entry) { return entry.stream == current; });
     if (playing != items.end()) {

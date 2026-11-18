@@ -65,6 +65,7 @@ void QueueRoom::Impl::releaseWindowParent(uint64_t token, uint64_t before) {
         queue.releaseParent(source);
 }
 void QueueRoom::Impl::release(bool stop) {
+    const auto &items = rowOwner.layout();
     generationRebuildEdits.reset();
     refreshUpcoming = false;
     lmsNavigation = false;
@@ -98,7 +99,7 @@ void QueueRoom::Impl::release(bool stop) {
     speakerNavCommands.clear();
     speakerNavFirst.clear();
     replacementReasons.clear();
-    items.clear();
+    rowOwner.commitLayout({});
     releasing = true;
     ownership.release(!sourceAway,
                       [cleanupOwned = std::move(cleanupOwned)](const auto &uri) { return cleanupOwned.count(uri) != 0; }, stop);
@@ -113,6 +114,7 @@ void QueueRoom::Impl::release(bool stop) {
     publish();
 }
 void QueueRoom::Impl::command(char c, uint64_t next) {
+    const auto &items = rowOwner.layout();
     const bool navigationTimeout = c == 'Z';
     if (navigationTimeout) c = 'q';
     if (c == 'H') {
@@ -273,6 +275,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
     }
 }
 void QueueRoom::Impl::append() {
+    const auto &items = rowOwner.layout();
     if (!paths.isRelay() || faulted || externalReleased || (started && sourceAway))
         return;
     for (const auto &record : queue.snapshot()) {
@@ -343,7 +346,7 @@ void QueueRoom::Impl::append() {
                         // periodic cleanup. A repeat-wrap producer must bind
                         // this existing lazy row, never append a duplicate.
                         lock.unlock();
-                        discardEvicted(*cached);
+                        discardEvicted(size_t(cached - items.begin()));
                         lock.lock();
                         cached = items.end();
                     }
@@ -361,9 +364,8 @@ void QueueRoom::Impl::append() {
                             logQueue("window pairing lms_index=" + std::to_string(index) +
                                 " decision=paired lms_commands=1");
                         }
-                        if (!cached->owner) cached->owner = cached->stream;
                         if (current == cached->stream) current = record.source.occurrence;
-                        cached->stream = record.source.occurrence;
+                        rowOwner.rebindClock(size_t(cached - items.begin()), record.source.occurrence);
                         selectionPublished(index);
                         windowDirty = true;
                         if (clockChanged) {
@@ -377,15 +379,11 @@ void QueueRoom::Impl::append() {
                     return !i.item && rowOwner.sourceToken(i.stream).value_or(0) == *token;
                 });
                 if (!lmsNavigation && lazy && entry != items.end()) {
-                    if (!lazy->publish(record.item)) {
+                    if (!rowOwner.reproduce(size_t(entry - items.begin()), *token, record, (*length - 44) / 6)) {
                         queue.releaseParent(owner);
                         rowOwner.retireSelection(index);
                         continue;
                     }
-                    entry->stream = record.source.occurrence;
-                    entry->item = record.item;
-                    entry->frames = (*length - 44) / 6;
-                    entry->originMs = record.originMs;
                     {
                         const auto reason = replacementReasons.find(*token);
                         if (reason != replacementReasons.end()) {
@@ -537,7 +535,7 @@ void QueueRoom::Impl::append() {
             }
         if (record.parent) logQueue("continuation insertion confirmed parent=" + std::to_string(record.parent) +
                                    " occurrence=" + std::to_string(record.source.occurrence));
-        items.insert(items.begin() + insertion, {record.source.occurrence, metadata.url, record.item, track.url,
+        rowOwner.insertRow(insertion, {record.source.occurrence, metadata.url, record.item, track.url,
                                                 metadata.frames, metadata.title, record.parent, record.segmentOffset, didl});
         windowDirty = true;
         publish();
@@ -582,22 +580,24 @@ void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
     publish();
     speakerCommand("stop", member ? "group-member" : reason == "track-fault-limit" ? reason : "room-fault");
 }
-bool QueueRoom::Impl::discardEvicted(Entry &entry) {
+bool QueueRoom::Impl::discardEvicted(size_t row) {
+    const auto &entry = rowOwner.layout().at(row);
     if (!entry.item || !entry.item->evicted()) return false;
     std::lock_guard<std::mutex> lock(sourceMutex);
     const auto owner = entry.owner ? entry.owner : entry.stream;
     const auto identity = rowOwner.sourceToken(owner);
     if (!identity) return false;
     const auto token = *identity;
-    if (!rowOwner.invalidateAudio(token, entry)) return false;
+    if (!rowOwner.invalidateAudio(token, row)) return false;
     replacementReasons[token] = "evicted";
     logQueue("cache evicted lms_index=" + std::to_string(rowOwner.sourceIndex(owner).value()));
     return true;
 }
 void QueueRoom::Impl::trimHistory() {
+    const auto &items = rowOwner.layout();
     // Rows survive navigation; the item store evicts unprotected played audio.
     if (!started || lmsNavigation) return;
-    for (auto &entry : items) discardEvicted(entry);
+    for (size_t row = 0; row < items.size(); ++row) discardEvicted(row);
 }
 void QueueRoom::Impl::run() {
     for (;;) {

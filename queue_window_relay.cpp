@@ -2,6 +2,7 @@
 #include "queue_room_internal.h"
 namespace bridge {
 void QueueRoom::Impl::reconcileWindow() {
+    const auto &items = rowOwner.layout();
     if (!started || faulted || externalReleased || sourceAway || !current || selecting) return;
     if (lmsNavigation && !navigationItem) return;
     const auto now = std::chrono::steady_clock::now();
@@ -132,8 +133,7 @@ void QueueRoom::Impl::reconcileWindow() {
                     " wav_origin=" + std::to_string(producer->wavOrigin) +
                     " attach_offset=" + std::to_string(producer->attachOffset) +
                     " produced_frames=" + std::to_string(producer->item->producedFrames()) + " lms_commands=0");
-                if (!retained->owner) retained->owner = retained->stream;
-                retained->stream = navigationItem->stream;
+                rowOwner.rebindClock(size_t(retained - items.begin()), navigationItem->stream);
                 current = retained->stream;
                 if (navigationItem->uri != retained->uri) owned.erase(navigationItem->uri);
                 const auto rendererMs = seekMs - retained->originMs;
@@ -475,7 +475,7 @@ void QueueRoom::Impl::reconcileWindow() {
             if (!match) throw std::runtime_error("queue ownership changed during navigation");
             rebased.push_back(*match);
         }
-        items = std::move(rebased);
+        rowOwner.commitLayout(std::move(rebased));
         windowDirty = true;
         nextWindowPoll = {};
         fastPoll();
@@ -511,7 +511,7 @@ void QueueRoom::Impl::reconcileWindow() {
         if (entry.owner && entry.owner != entry.stream) queue.releaseParent(entry.stream);
         for (const auto &uri : parent.uris) owned.erase(uri);
     }
-    items.swap(reordered);
+    rowOwner.commitLayout(std::move(reordered));
     if (lmsNavigation) {
         const auto target = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
             return entry.stream == navigationItem->stream;

@@ -136,6 +136,7 @@ void QueueRoom::Impl::beginSelection(uint64_t request) {
     remoteNaturalSuccessor = false;
 }
 void QueueRoom::Impl::selectPath() {
+    const auto &items = rowOwner.layout();
     if (!selecting || selectedRequest != rowOwner.currentRequest())
         return;
     {

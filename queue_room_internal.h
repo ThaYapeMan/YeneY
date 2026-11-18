@@ -78,7 +78,6 @@ struct QueueRoom::Impl {
     std::shared_ptr<SpeakerChanges> speakerChanges = std::make_shared<SpeakerChanges>();
     std::string publishedState, publishedUri;
     using Entry = queue_audio::QueueRowOwner::Entry;
-    std::vector<Entry> items;
     bool lmsNavigation = false;
     bool navigationSelecting = false;
     unsigned navigationFrom = 0;
@@ -174,7 +173,7 @@ struct QueueRoom::Impl {
     void command(char c, uint64_t next);
     void append();
     void trimHistory();
-    bool discardEvicted(Entry &);
+    bool discardEvicted(size_t row);
     void reconcileWindow();
     void observe();
     void run();

@@ -261,6 +261,34 @@ public:
         lazyRows.insert_or_assign(token, row);
     }
 
+    const std::vector<Entry> &layout() const { return committedRows; }
+
+    void commitLayout(std::vector<Entry> rows) { committedRows.swap(rows); }
+
+    void insertRow(size_t row, Entry entry) {
+        committedRows.insert(committedRows.begin() + row, std::move(entry));
+    }
+
+    void rebindClock(size_t row, uint64_t occurrence) {
+        auto &entry = committedRows.at(row);
+        if (!entry.owner) entry.owner = entry.stream;
+        entry.stream = occurrence;
+    }
+
+    bool reproduce(size_t row, uint64_t token, const QueueRecord &record, uint64_t frames) {
+        auto &entry = committedRows.at(row);
+        if (!declaredLazyRow(token).publish(record.item)) return false;
+        entry.stream = record.source.occurrence;
+        entry.item = record.item;
+        entry.frames = frames;
+        entry.originMs = record.originMs;
+        return true;
+    }
+
+    bool invalidateAudio(uint64_t token, size_t row) {
+        return invalidateAudio(token, committedRows.at(row));
+    }
+
     bool invalidateAudio(uint64_t token, Entry &entry) {
         const auto row = lazyRow(token);
         if (!row) return false;
@@ -288,6 +316,7 @@ private:
         }
     }
 
+    std::vector<Entry> committedRows;
     std::map<unsigned, Selection> selections;
     std::deque<unsigned> selectionOrder;
     std::shared_ptr<const StartSource> activeSource = std::make_shared<const StartSource>();
