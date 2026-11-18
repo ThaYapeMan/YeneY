@@ -19,7 +19,7 @@ struct Route::State {
         uint64_t epoch, revision;
         std::shared_ptr<Item> item;
         Resolver resolve;
-        std::function<std::shared_ptr<Item>()> ready;
+        Ready ready;
     };
     std::map<std::string, Entry> entries;
     std::set<uint64_t> revoked;
@@ -53,7 +53,7 @@ std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t re
     return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/" +
            std::to_string(revision) + "/" + id + ".wav";
 }
-std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, std::function<std::shared_ptr<Item>()> ready) {
+std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, Ready ready) {
     if (!token(identity) || !resolve) throw std::invalid_argument("invalid deferred route");
     const auto key = std::to_string(epoch) + "/1/" + identity;
     std::lock_guard<std::mutex> lock(state->mutex);
@@ -77,6 +77,8 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         return false;
     std::shared_ptr<Item> item;
     Resolver resolve;
+    bool audioPinned = false;
+    bool rowManaged = false;
     const auto path = r.path();
     const auto prefix = "/yeney/q/" + state->session + "/";
     std::string key;
@@ -89,12 +91,12 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         if (i != state->entries.end()) {
             item = i->second.item;
             resolve = i->second.resolve;
+            rowManaged = bool(i->second.ready);
             if (!item && i->second.ready) {
-                item = i->second.ready();
-                if (item && r.method() == upnp::StreamRequest::Method::Get) {
-                    item = Item::retainAudio(item);
-                    if (item) resolve = {};
-                }
+                const bool audio = r.method() == upnp::StreamRequest::Method::Get;
+                item = i->second.ready(audio);
+                audioPinned = item && audio;
+                if (audioPinned) resolve = {};
             }
         }
     }
@@ -109,6 +111,7 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         try { item = resolve(r); } catch (const std::exception &) { }
         if (!item || r.aborted() || r.peerClosed()) { r.disconnect(); return true; }
         resolve = {};
+        audioPinned = rowManaged;
     }
     if (!item) {
         std::printf("yeney: queue HTTP method=%s item=unknown range=unavailable status=404 content_length=0 produced_bytes=0 served_bytes=0 end=complete\n",
@@ -117,6 +120,6 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         r.reply(404);
         return true;
     }
-    return serveWav(r, item, std::chrono::seconds(15), std::move(resolve));
+    return serveWav(r, item, std::chrono::seconds(15), std::move(resolve), audioPinned);
 }
 } // namespace queue_audio

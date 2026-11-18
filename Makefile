@@ -199,7 +199,7 @@ queue_route.o queue_item_store.o wav_writer.o: %.o: %.cpp queue_item_store.h wav
 queue_route.o: queue_route.h
 libqueueitems.a: queue_item_store.o wav_writer.o queue_route.o
 	ar rcs $@ $^
-queue-row-order-test: tests/queue_row_order_test.cpp queue_row_owner.h queue_lazy_item.h core_queue_sink.h libqueueitems.a
+queue-row-order-test: tests/queue_row_order_test.cpp tests/test_temp.h queue_row_owner.h queue_lazy_item.h core_queue_sink.h libqueueitems.a
 	g++ -std=c++17 -O2 -Wall -Wextra -I. $< libqueueitems.a -lFLAC -pthread -o $@
 
 queue-item-store-test: tests/queue_item_store_test.cpp libqueueitems.a pcm_pack.h

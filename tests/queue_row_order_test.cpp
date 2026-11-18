@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_row_owner.h"
+#include "test_temp.h"
 
 #include <array>
 #include <cassert>
@@ -107,6 +108,81 @@ void cancelledFault() {
     record.source.occurrence = 2;
     assert(owner.producerOutcome(record) == Production::Faulted);
     std::cout << "PASS cancelled source fault is inert and genuine storage/current faults surface\n";
+}
+
+void audioBinding() {
+    struct TemporaryDirectory {
+        std::string path = testTempRoot() + "/yeney-row-order-XXXXXX";
+        TemporaryDirectory() { assert(mkdtemp(path.data())); }
+        ~TemporaryDirectory() { std::filesystem::remove_all(path); }
+    } temporary;
+
+    queue_audio::Config config;
+    config.root = temporary.path;
+    config.ramBytes = 4096 * 6;
+    std::array<yeney::Frame, 4096> frames{};
+    std::mt19937 generator(314159);
+    for (auto &frame : frames) {
+        frame = {int32_t(generator() & 0xffffff00u), int32_t(generator() & 0xffffff00u)};
+    }
+    auto produce = [&](queue_audio::Store &store, const std::string &name, uint64_t generation) {
+        auto item = store.create({name, 44100, frames.size(), generation});
+        item->append(frames.data(), frames.size(), false);
+        item->finish();
+        return item;
+    };
+    {
+        queue_audio::Store estimate("Estimate", config);
+        produce(estimate, "sample", 1);
+        const auto bytes = estimate.diskBytes();
+        assert(bytes != 0);
+        config.diskBytes = bytes * 2 + bytes / 2;
+    }
+    queue_audio::Store store("Room", config);
+    QueueRowOwner owner;
+    const auto row = std::make_shared<queue_audio::LazyItem>(nullptr, [] {}, true);
+    owner.registerLazyRow(token(0), row);
+    auto first = produce(store, "first", 1);
+    auto other = produce(store, "other", 2);
+    assert(row->publish(first));
+    const auto metadata = row->ready();
+    auto response = row->readyAudio();
+    assert(response == first && metadata == first);
+    auto wrongLength = store.create({"wrong-length", 44100, frames.size() + 1, 2});
+    bool rejected = false;
+    try {
+        row->replace(wrongLength);
+    } catch (const queue_audio::LazyItem::DeclarationMismatch &) {
+        rejected = true;
+    }
+    assert(rejected && row->ready() == first);
+
+    auto read = [](const auto &item) {
+        const auto length = item->contentLength().value();
+        std::vector<char> bytes(length);
+        auto reader = item->reader();
+        size_t offset = 0;
+        while (offset < length) {
+            const size_t amount = reader.read(bytes.data() + offset, length - offset,
+                                              std::chrono::milliseconds(0));
+            assert(amount);
+            offset += amount;
+        }
+        return bytes;
+    };
+
+    auto replacement = produce(store, "replacement", 3);
+    row->replace(replacement);
+    assert(other->evicted() && !first->evicted());
+    assert(row->readyAudio() == replacement && response == first);
+    assert(read(response) == read(replacement));
+    assert(store.diskBytes() <= config.diskBytes);
+
+    response.reset();
+    produce(store, "pressure-after-close", 4);
+    assert(metadata->evicted());
+    assert(row->readyAudio() == replacement);
+    std::cout << "PASS HTTP body retains the admitted generation across replacement and quota pressure\n";
 }
 
 enum class Operation { App, Rewind, Issue, Start, LateStart, Cancel, Publish, Observe, End };
@@ -236,6 +312,7 @@ int main(int argc, char **argv) {
     else if (name == "exact-admission") exactAdmission();
     else if (name == "navigation-generation") navigationGeneration();
     else if (name == "cancelled-fault") cancelledFault();
+    else if (name == "audio-binding") audioBinding();
     else if (name == "exhaustive") exhaustive();
     else if (name == "seeded") seeded();
     else return 2;

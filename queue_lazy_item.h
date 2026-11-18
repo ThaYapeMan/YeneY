@@ -104,6 +104,10 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         return cancelled || (produced && produced->evicted()) ? nullptr : produced;
     }
+    std::shared_ptr<Item> readyAudio() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return cancelled ? nullptr : Item::retainAudio(produced);
+    }
     bool abandoned() {
         std::lock_guard<std::mutex> lock(mutex);
         return cancelled;

@@ -67,9 +67,9 @@ ByteRange wavRange(const std::string &text, uint64_t length) {
 }
 bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &published,
               std::chrono::milliseconds wait,
-              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve) {
+              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned) {
     auto item = published;
-    if (request.method() == upnp::StreamRequest::Method::Get) {
+    if (request.method() == upnp::StreamRequest::Method::Get && !audioPinned) {
         item = Item::retainAudio(item);
         if (!item) { request.reply(503); return true; }
     }

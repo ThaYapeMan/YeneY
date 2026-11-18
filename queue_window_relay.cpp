@@ -753,7 +753,7 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
                 item ? "headers" : (ms >= 2990 ? "deadline" : "abandoned"),
                 (unsigned long long)token, (long long)ms, lazy->commandCount());
             return item;
-        }, [lazy] { return lazy->ready(); });
+        }, [lazy](bool audio) { return audio ? lazy->readyAudio() : lazy->ready(); });
     metadata.session = session + "-" + std::to_string(slot.token);
     metadata.title = slot.track.title; metadata.artist = slot.track.artist; metadata.album = slot.track.album;
     metadata.artwork = slot.track.artwork(host);
