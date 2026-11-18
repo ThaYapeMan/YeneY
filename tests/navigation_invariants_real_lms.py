@@ -170,7 +170,10 @@ def run(c):
             assert case in ('R-history-lms', 'R-history-app'), case
             for target in (0, 1):
                 if target == initial:
-                    wait(lambda: row(initial)['uri'] != partial['uri'], 10, 'deferred frame-zero row installed')
+                    wait(lambda: next((item['uri'] for item in items()
+                                       if item['metadata']['title'] == f'Title & {initial}'),
+                                      partial['uri']) != partial['uri'],
+                         10, 'deferred frame-zero row installed')
                 started = time.monotonic()
                 if case == 'R-history-app':
                     audible(target)
