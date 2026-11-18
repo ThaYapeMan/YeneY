@@ -273,6 +273,72 @@ public:
         lazyRows.insert_or_assign(token, row);
     }
 
+    void noteReplacement(uint64_t token, std::string reason) {
+        replacementReasons.insert_or_assign(token, std::move(reason));
+    }
+
+    std::optional<std::string> replacementReason(uint64_t token) const {
+        const auto found = replacementReasons.find(token);
+        if (found == replacementReasons.end()) return std::nullopt;
+        return found->second;
+    }
+
+    bool replacingShortenedRow(uint64_t token) {
+        return replacementReasons[token] == "seek-partial";
+    }
+
+    void clearReplacement(uint64_t token) { replacementReasons.erase(token); }
+
+    void noteAppSelection(uint64_t token, uint64_t first) { speakerNavFirst[token] = first; }
+
+    bool predatesAppSelection(uint64_t token, uint64_t occurrence) const {
+        const auto found = speakerNavFirst.find(token);
+        return found != speakerNavFirst.end() && occurrence < found->second;
+    }
+
+    void retireAppSelection(uint64_t token) { speakerNavFirst.erase(token); }
+
+    void noteAppCommand(uint64_t token) { speakerNavCommands[token] = 1; }
+
+    unsigned appCommands(uint64_t token) { return speakerNavCommands[token]; }
+
+    bool retireAppEcho(uint64_t token) { return speakerNavCommands.erase(token); }
+
+    void clearTransitionNotes() {
+        replacementReasons.clear();
+        speakerNavCommands.clear();
+        speakerNavFirst.clear();
+    }
+
+    enum class SnapshotDecision { Accept, RejectShort, ConfirmReplacement, ConfirmClear };
+
+    static SnapshotDecision snapshotDecision(const PlaylistSnapshot &known,
+                                             const PlaylistSnapshot &received, bool busy) {
+        if (busy && received.entries.size() < known.entries.size()) {
+            const bool disjoint = !received.entries.empty() &&
+                std::none_of(received.entries.begin(), received.entries.end(), [&](const auto &track) {
+                    return std::any_of(known.entries.begin(), known.entries.end(),
+                        [&track](const auto &old) { return old.url == track.url; });
+                });
+            return disjoint ? SnapshotDecision::ConfirmReplacement : SnapshotDecision::RejectShort;
+        }
+        if (received.entries.empty() && !known.entries.empty()) return SnapshotDecision::ConfirmClear;
+        return SnapshotDecision::Accept;
+    }
+
+    static bool confirmsReplacement(const PlaylistSnapshot &received, const PlaylistSnapshot &fresh) {
+        return fresh.revision == received.revision && fresh.index == received.index &&
+            fresh.entries.size() == received.entries.size() &&
+            std::equal(fresh.entries.begin(), fresh.entries.end(), received.entries.begin(),
+                [](const auto &a, const auto &b) { return a.url == b.url; });
+    }
+
+    static std::optional<uint64_t> seekWithin(const Entry &row, const QueueRecord &producer, uint64_t seekMs) {
+        if (!producer.pairedFrom || !producer.landedFrame || row.item != producer.item || seekMs < row.originMs)
+            return std::nullopt;
+        return seekMs - row.originMs;
+    }
+
     uint64_t navigationFirst() const { return firstNavigationOccurrence; }
     uint64_t navigationToken() const { return navigationRowToken; }
     const std::optional<Entry> &navigationTarget() const { return preparedNavigation; }
@@ -381,6 +447,10 @@ private:
     std::shared_ptr<const StartSource> navigationSource;
     std::optional<Entry> preparedNavigation;
     std::vector<Entry> committedRows;
+    std::map<uint64_t, std::string> replacementReasons;
+    std::map<uint64_t, unsigned> speakerNavCommands;
+    std::map<uint64_t, uint64_t> speakerNavFirst;
+
     std::map<unsigned, Selection> selections;
     std::deque<unsigned> selectionOrder;
     std::shared_ptr<const StartSource> activeSource = std::make_shared<const StartSource>();

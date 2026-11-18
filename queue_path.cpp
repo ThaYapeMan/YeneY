@@ -212,7 +212,7 @@ void QueueRoom::Impl::selectPath() {
                         // this app command's producer arrived. Retain its live
                         // declaration, but it cannot authorize treating a later
                         // controller return as the old app command's echo.
-                        if (speakerNavCommands.erase(pending.token))
+                        if (rowOwner.retireAppEcho(pending.token))
                             logQueue("selection echo retired reason=controller-index lms_index=" +
                                 std::to_string(index) + " target_index=" + std::to_string(snapshot.index));
                         const auto lazy = rowOwner.lazyRow(pending.token);
@@ -250,7 +250,7 @@ void QueueRoom::Impl::selectPath() {
                 index = playlist.successor(index);
             }
             if (navigationSelecting && pairing && playlist.mode != "stop" &&
-                speakerNavCommands[selection->token]) {
+                rowOwner.appCommands(selection->token)) {
                 std::lock_guard<std::mutex> sourceLock(sourceMutex);
                 const auto pending = std::find_if(items.begin(), items.end(), [&](const auto &entry) {
                     const auto identity = rowOwner.sourceToken(entry.owner ? entry.owner : entry.stream);

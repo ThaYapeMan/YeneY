@@ -134,6 +134,23 @@
   },
   "steps": [
     {
+      "name": "queue-row-order-snapshot-order",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test snapshot-order",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-snapshot-order",
+      "time_judging": false
+    },
+    {
       "name": "queue-row-order-audio-binding",
       "target": "queue-row-order-test",
       "command": "./queue-row-order-test audio-binding",
@@ -6930,6 +6947,7 @@
       "queue-row-order-late-start",
       "queue-row-order-exact-admission",
       "queue-row-order-navigation-generation",
+      "queue-row-order-snapshot-order",
       "queue-row-order-audio-binding",
       "queue-row-order-cancelled-fault",
       "queue-row-order-exhaustive",
@@ -7124,6 +7142,7 @@
       "queue-row-order-late-start",
       "queue-row-order-exact-admission",
       "queue-row-order-navigation-generation",
+      "queue-row-order-snapshot-order",
       "queue-row-order-audio-binding",
       "queue-row-order-cancelled-fault",
       "queue-row-order-exhaustive",

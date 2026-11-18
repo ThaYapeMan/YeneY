@@ -93,9 +93,6 @@ struct QueueRoom::Impl {
     void activateLazy(uint64_t token);
     Entry makeRow(const queue_audio::QueueWindow::Slot &slot,
                   const Entry *produced = nullptr);
-    std::map<uint64_t, std::string> replacementReasons;
-    std::map<uint64_t, unsigned> speakerNavCommands;
-    std::map<uint64_t, uint64_t> speakerNavFirst;
 
     std::map<uint64_t, bool> remote;
     std::mutex mutex, sourceMutex;

@@ -110,6 +110,25 @@ void cancelledFault() {
     std::cout << "PASS cancelled source fault is inert and genuine storage/current faults surface\n";
 }
 
+void snapshotOrder() {
+    using Decision = QueueRowOwner::SnapshotDecision;
+    queue_audio::PlaylistSnapshot known;
+    for (unsigned index = 0; index < rowCount; ++index) known.entries.push_back(source(index).track);
+    auto partial = known;
+    partial.entries.pop_back();
+    assert(QueueRowOwner::snapshotDecision(known, partial, true) == Decision::RejectShort);
+    queue_audio::PlaylistSnapshot empty;
+    assert(QueueRowOwner::snapshotDecision(known, empty, true) == Decision::RejectShort);
+    assert(QueueRowOwner::snapshotDecision(known, empty, false) == Decision::ConfirmClear);
+
+    auto disjoint = empty;
+    disjoint.entries.push_back(source(rowCount).track);
+    assert(QueueRowOwner::snapshotDecision(known, disjoint, true) == Decision::ConfirmReplacement);
+    assert(QueueRowOwner::confirmsReplacement(disjoint, disjoint));
+    assert(!QueueRowOwner::confirmsReplacement(disjoint, partial));
+    std::cout << "PASS short and empty snapshots cannot clear an active navigation\n";
+}
+
 void audioBinding() {
     struct TemporaryDirectory {
         std::string path = testTempRoot() + "/yeney-row-order-XXXXXX";
@@ -145,6 +164,16 @@ void audioBinding() {
     auto first = produce(store, "first", 1);
     auto other = produce(store, "other", 2);
     assert(row->publish(first, 1));
+    QueueRowOwner::Entry retained{};
+    retained.item = first;
+    retained.originMs = 1000;
+    QueueRecord seek;
+    seek.item = first;
+    seek.landedFrame = 1100;
+    assert(!QueueRowOwner::seekWithin(retained, seek, 1025));
+    seek.pairedFrom = 1;
+    assert(!QueueRowOwner::seekWithin(retained, seek, 975));
+    assert(QueueRowOwner::seekWithin(retained, seek, 1025) == 25);
     const auto metadata = row->ready();
     auto response = row->readyAudio();
     assert(response == first && metadata == first);
@@ -315,6 +344,7 @@ int main(int argc, char **argv) {
     else if (name == "exact-admission") exactAdmission();
     else if (name == "navigation-generation") navigationGeneration();
     else if (name == "cancelled-fault") cancelledFault();
+    else if (name == "snapshot-order") snapshotOrder();
     else if (name == "audio-binding") audioBinding();
     else if (name == "exhaustive") exhaustive();
     else if (name == "seeded") seeded();
