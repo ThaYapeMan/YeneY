@@ -93,7 +93,7 @@ void QueueRoom::Impl::release(bool stop) {
     selections.clear();
     {
         std::lock_guard<std::mutex> lock(mutex);
-        pendingCommandRequest.reset();
+        rowOwner.retireCommandStart();
     }
     selectionOrder.clear();
     rowOwner.clearAdmissions();

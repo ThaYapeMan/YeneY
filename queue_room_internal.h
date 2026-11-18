@@ -111,7 +111,6 @@ struct QueueRoom::Impl {
         std::shared_ptr<std::atomic<uint64_t>> commandRequest{};
     };
     std::map<unsigned, Selection> selections;
-    std::shared_ptr<std::atomic<uint64_t>> pendingCommandRequest;
     std::deque<unsigned> selectionOrder;
     void advanceSelections();
     void selectionPublished(unsigned index);

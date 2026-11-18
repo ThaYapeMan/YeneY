@@ -23,6 +23,21 @@ public:
     uint64_t nextRequest() { return ++request; }
     uint64_t currentRequest() const { return request.load(); }
 
+    void cancelRequest() {
+        const auto serial = nextRequest();
+        if (commandStart) {
+            commandStart->store(serial + 1);
+            commandStart.reset();
+        }
+    }
+
+    std::shared_ptr<std::atomic<uint64_t>> expectCommandStart() {
+        commandStart = std::make_shared<std::atomic<uint64_t>>(0);
+        return commandStart;
+    }
+
+    void retireCommandStart() { commandStart.reset(); }
+
     void cancelSourceThrough(uint64_t occurrence) { cancelledThrough = occurrence; }
 
     bool sourceFaultSuperseded(uint64_t occurrence) const {
@@ -77,6 +92,7 @@ public:
 
 private:
     std::atomic<uint64_t> request{0};
+    std::shared_ptr<std::atomic<uint64_t>> commandStart;
     std::atomic<uint64_t> cancelledThrough{0};
     std::map<uint64_t, Admission> admissions;
     std::map<uint64_t, std::shared_ptr<LazyItem>> lazyRows;

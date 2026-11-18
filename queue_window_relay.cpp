@@ -727,10 +727,9 @@ void QueueRoom::Impl::advanceSelections() {
         }
         selection->second.phase = Selection::Producing;
         selection->second.first = queue.latestOccurrence() + 1;
-        selection->second.commandRequest = std::make_shared<std::atomic<uint64_t>>(0);
         {
             std::lock_guard<std::mutex> lock(mutex);
-            pendingCommandRequest = selection->second.commandRequest;
+            selection->second.commandRequest = rowOwner.expectCommandStart();
         }
         speakerNavFirst[selection->second.token] = selection->second.first;
         if (selection->second.rewindMs) {

@@ -106,11 +106,7 @@ void QueueRoom::Impl::received(const yeney::Command &c) {
                 logQueue("producer cancellation occurrence=" + std::to_string(latest) +
                          " admission_delay_ms=" + std::to_string(queue_audio::QueueWindow::settleMs));
             }
-            rowOwner.nextRequest();
-            if (pendingCommandRequest) {
-                pendingCommandRequest->store(rowOwner.currentRequest() + 1);
-                pendingCommandRequest.reset();
-            }
+            rowOwner.cancelRequest();
             paths.cancelSelection();
             selectionDeferred = false;
             if (!paths.isRelay()) {
@@ -379,11 +375,8 @@ void QueueRoom::Impl::selectPath() {
                                      ? "remote-finite" : "local-source") : "remote-source";
     logQueue("path=" + std::string(selectedLocal ? "relay" : "stream") + " reason=" + pathReason +
              " boundary=" + (selectedNewPlay ? "new-play" : "track-end"));
-    if (selectedLocal) {
-        const auto first = queue.latestOccurrence() + 1;
-        command('s', first);
-        if (selectedToken) rowOwner.admit(selectedToken, selectedTrack.url, selectedRequest, first);
-    }
+    const auto first = selectedLocal ? queue.latestOccurrence() + 1 : 0;
+    if (selectedLocal) command('s', first);
     // Core resets only at a class boundary, without HELO or an LMS command.
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -391,6 +384,8 @@ void QueueRoom::Impl::selectPath() {
             selecting = false;
             return;
         }
+        if (selectedLocal && selectedToken)
+            rowOwner.admit(selectedToken, selectedTrack.url, selectedRequest, first);
         paths.select(selectedLocal, switching, selectedCommand);
         selectionDeferred = false;
     }
