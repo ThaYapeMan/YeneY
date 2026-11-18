@@ -380,12 +380,11 @@ void QueueRoom::Impl::selectPath() {
     // Core resets only at a class boundary, without HELO or an LMS command.
     {
         std::lock_guard<std::mutex> lock(mutex);
-        if (selectedRequest != rowOwner.currentRequest()) {
+        if (!rowOwner.commitSource({selectedTrack, selectedSourceIndex, selectedToken, selectedCommand.value},
+                                   selectedRequest, first)) {
             selecting = false;
             return;
         }
-        rowOwner.commitSource({selectedTrack, selectedSourceIndex, selectedToken, selectedCommand.value},
-                              selectedRequest, first);
         paths.select(selectedLocal, switching, selectedCommand);
         selectionDeferred = false;
     }

@@ -144,7 +144,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
         const auto source = rowOwner.sourceForStart();
         const auto &track = source->track;
         std::lock_guard<std::mutex> lock(sourceMutex);
-        rowOwner.recordSource(id, *source);
+        rowOwner.recordSource(id, source);
         // Paired producers bypass append's new-row path. Publish their known
         // relay classification before decoding, including FIR lookahead.
         if (!remotePlaybackSource(track.id, track.remote, track.url))

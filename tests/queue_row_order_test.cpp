@@ -1,0 +1,215 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+#include "queue_row_owner.h"
+
+#include <array>
+#include <cassert>
+#include <iostream>
+#include <random>
+
+using queue_audio::PlaylistEntry;
+using queue_audio::QueueRecord;
+using queue_audio::QueueRowOwner;
+
+namespace {
+constexpr unsigned rowCount = 3;
+constexpr uint64_t token(unsigned index) { return index + 1; }
+
+QueueRowOwner::StartSource source(unsigned index) {
+    PlaylistEntry track;
+    track.id = std::to_string(token(index));
+    track.url = "file:///row-" + track.id + ".flac";
+    return {std::move(track), int(index), token(index)};
+}
+
+void lateStart() {
+    QueueRowOwner owner;
+    const auto first = owner.nextRequest();
+    assert(owner.commitSource(source(0), first, 1));
+    owner.cancelRequest();
+    const auto second = owner.nextRequest();
+    assert(owner.commitSource(source(1), second, 2));
+    const auto accepted = owner.sourceForStart();
+    assert(!owner.commitSource(source(0), first, 1));
+    assert(owner.sourceForStart() == accepted);
+    assert(accepted->index == 1);
+    std::cout << "PASS late LMS start leaves the current source and its exact request intact\n";
+}
+
+void exactAdmission() {
+    QueueRowOwner owner;
+    const auto first = owner.nextRequest();
+    assert(owner.commitSource(source(0), first, 1));
+    const auto old = owner.sourceForStart();
+    owner.cancelRequest();
+    const auto second = owner.nextRequest();
+    assert(owner.commitSource(source(0), second, 2));
+    const auto current = owner.sourceForStart();
+    assert(current->cancellation > old->cancellation);
+
+    QueueRecord late;
+    late.source.occurrence = 2;
+    late.sourceToken = token(0);
+    late.sourceUrl = old->track.url;
+    late.incomplete = "flushed";
+    owner.recordSource(late.source.occurrence, old);
+    assert(!owner.drainDeclarations({late}));
+
+    QueueRecord settled = late;
+    settled.source.occurrence = 3;
+    owner.recordSource(settled.source.occurrence, current);
+    assert(owner.drainDeclarations({late, settled}));
+    std::cout << "PASS matching row and source still require the exact admission and cancellation generation\n";
+}
+
+void cancelledFault() {
+    QueueRowOwner owner;
+    const auto serial = owner.nextRequest();
+    assert(owner.commitSource(source(0), serial, 1));
+    owner.cancelRequest();
+    owner.cancelSourceThrough(1);
+    const auto next = owner.nextRequest();
+    assert(owner.commitSource(source(1), next, 2));
+    QueueRecord record;
+    record.source.occurrence = 1;
+    record.fault = "truncated shared input";
+    using Production = QueueRowOwner::Production;
+    assert(owner.producerOutcome(record) == Production::Cancelled);
+    assert(owner.sourceForStart()->index == 1);
+    record.storageFault = true;
+    assert(owner.producerOutcome(record) == Production::Faulted);
+    record.storageFault = false;
+    record.source.occurrence = 2;
+    assert(owner.producerOutcome(record) == Production::Faulted);
+    std::cout << "PASS cancelled source fault is inert and genuine storage/current faults surface\n";
+}
+
+enum class Operation { App, Rewind, Issue, Start, LateStart, Cancel, Publish, Observe, End };
+constexpr unsigned operationCount = 9;
+constexpr unsigned alphabetSize = operationCount * rowCount;
+
+class Replay {
+    QueueRowOwner owner;
+    uint64_t tick = 0;
+    uint64_t nextOccurrence = 1;
+    uint64_t previousRequest = 0;
+    uint64_t latestAccepted = 0;
+    unsigned latestIndex = 0;
+
+    void enqueue(unsigned index, std::optional<uint64_t> rewind) {
+        if (!owner.selectionAt(index)) owner.enqueueSelection(index, token(index), rewind);
+    }
+
+public:
+    void apply(unsigned symbol) {
+        const auto operation = Operation(symbol / rowCount);
+        const auto index = symbol % rowCount;
+        ++tick;
+        const auto before = owner.sourceForStart();
+        switch (operation) {
+        case Operation::App:
+            enqueue(index, {});
+            break;
+        case Operation::Rewind:
+            enqueue(index, 1000);
+            break;
+        case Operation::Issue:
+            if (owner.hasProducingSelection()) break;
+            while (const auto next = owner.dequeueSelection()) {
+                const auto selection = owner.selectionAt(*next);
+                if (!selection || selection->phase != QueueRowOwner::Selection::Queued) continue;
+                const auto now = std::chrono::steady_clock::time_point(std::chrono::milliseconds(tick));
+                const auto issued = owner.issueSelection(*next, nextOccurrence, now);
+                assert(issued.token == token(*next));
+                assert(issued.first == nextOccurrence);
+                if (issued.rewindMs) assert(issued.issued == now);
+                break;
+            }
+            break;
+        case Operation::Start:
+            previousRequest = latestAccepted;
+            latestAccepted = owner.nextRequest();
+            latestIndex = index;
+            assert(owner.commitSource(source(index), latestAccepted, nextOccurrence));
+            owner.recordSource(nextOccurrence++, owner.sourceForStart());
+            break;
+        case Operation::LateStart:
+            if (!previousRequest) break;
+            assert(!owner.commitSource(source(index), previousRequest, nextOccurrence));
+            assert(owner.sourceForStart() == before);
+            break;
+        case Operation::Cancel:
+            owner.cancelSourceThrough(nextOccurrence - 1);
+            owner.cancelRequest();
+            owner.clearAdmissions();
+            previousRequest = latestAccepted;
+            break;
+        case Operation::Publish:
+            owner.acknowledgePublication(index);
+            break;
+        case Operation::Observe:
+            owner.acknowledgeObservation(index, token(index), nextOccurrence - 1);
+            break;
+        case Operation::End:
+            owner.retireSelection(index);
+            break;
+        }
+
+        unsigned producing = 0;
+        for (const auto &[selectedIndex, selection] : owner.selectionSnapshot()) {
+            assert(selectedIndex < rowCount);
+            assert(selection.token == token(selectedIndex));
+            producing += selection.phase == QueueRowOwner::Selection::Producing;
+            assert(selection.phase == QueueRowOwner::Selection::Queued || selection.first != 0);
+        }
+        assert(producing <= 1);
+        if (latestAccepted) {
+            const auto accepted = owner.sourceForStart();
+            assert(accepted->request == latestAccepted);
+            assert(accepted->index == int(latestIndex));
+            assert(accepted->token == token(latestIndex));
+        }
+    }
+};
+
+template <size_t Size>
+void orders(std::array<unsigned, Size> &sequence, size_t count, uint64_t &checked) {
+    Replay replay;
+    for (size_t offset = 0; offset < count; ++offset) replay.apply(sequence[offset]);
+    ++checked;
+    if (count == Size) return;
+    for (unsigned symbol = 0; symbol < alphabetSize; ++symbol) {
+        sequence[count] = symbol;
+        orders(sequence, count + 1, checked);
+    }
+}
+
+void exhaustive() {
+    std::array<unsigned, 5> sequence{};
+    uint64_t checked = 0;
+    orders(sequence, 0, checked);
+    std::cout << "PASS three-row admission and selection orders N=" << sequence.size()
+              << " alphabet=" << alphabetSize << " orders=" << checked << '\n';
+}
+
+void seeded() {
+    for (uint32_t seed : {314159u, 8675309u, 271828u}) {
+        std::mt19937 generator(seed);
+        Replay replay;
+        for (unsigned event = 0; event < 2000; ++event) {
+            replay.apply(generator() % alphabetSize);
+        }
+        std::cout << "PASS three-row admission and selection seed=" << seed << " events=2000\n";
+    }
+}
+} // namespace
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    const std::string name = argv[1];
+    if (name == "late-start") lateStart();
+    else if (name == "exact-admission") exactAdmission();
+    else if (name == "cancelled-fault") cancelledFault();
+    else if (name == "exhaustive") exhaustive();
+    else if (name == "seeded") seeded();
+    else return 2;
+}

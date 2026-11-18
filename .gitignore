@@ -51,6 +51,7 @@ field-cold-test
 
 /libqueueitems.a
 /queue-item-store-test
+/queue-row-order-test
 
 /yeney-queue-dryrun
 /core-queue-sink-test

@@ -23,6 +23,7 @@
       "queue-metadata-test",
       "queue-route-test",
       "queue-item-store-test",
+      "queue-row-order-test",
       "core-queue-sink-test",
       "timing-tap-test",
       "timing-contract-test",
@@ -82,6 +83,7 @@
       "oct11-acquisition-test",
       "oct12-boundary-test",
       "queue-item-store-test",
+      "queue-row-order-test",
       "queue-declaration-test",
       "core-queue-sink-test",
       "yeney-queue-dryrun",
@@ -131,6 +133,91 @@
     ]
   },
   "steps": [
+    {
+      "name": "queue-row-order-late-start",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test late-start",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-late-start",
+      "time_judging": false
+    },
+    {
+      "name": "queue-row-order-exact-admission",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test exact-admission",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-exact-admission",
+      "time_judging": false
+    },
+    {
+      "name": "queue-row-order-cancelled-fault",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test cancelled-fault",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-cancelled-fault",
+      "time_judging": false
+    },
+    {
+      "name": "queue-row-order-exhaustive",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test exhaustive",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-exhaustive",
+      "time_judging": false
+    },
+    {
+      "name": "queue-row-order-seeded",
+      "target": "queue-row-order-test",
+      "command": "./queue-row-order-test seeded",
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "reason": "The step advances a controlled event clock.",
+      "modes": [
+        "full",
+        "fast"
+      ],
+      "label": "queue-row-order-seeded",
+      "time_judging": false
+    },
     {
       "name": "pressure-disconnect-order",
       "target": "full-queue-pressure",
@@ -6806,6 +6893,11 @@
   ],
   "orders": {
     "full": [
+      "queue-row-order-late-start",
+      "queue-row-order-exact-admission",
+      "queue-row-order-cancelled-fault",
+      "queue-row-order-exhaustive",
+      "queue-row-order-seeded",
       "pressure-disconnect-order",
       "t0001",
       "t0002",
@@ -6993,6 +7085,11 @@
       "position-lms-study-steady"
     ],
     "fast": [
+      "queue-row-order-late-start",
+      "queue-row-order-exact-admission",
+      "queue-row-order-cancelled-fault",
+      "queue-row-order-exhaustive",
+      "queue-row-order-seeded",
       "t0008",
       "t0009",
       "t0010",

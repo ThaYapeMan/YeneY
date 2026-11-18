@@ -39,13 +39,14 @@ public:
         int index = -1;
         uint64_t token = 0;
         uint32_t gain = 0;
+        uint64_t request = 0, cancellation = 0;
     };
 
     struct Admission {
         uint64_t token;
         std::string sourceUrl;
         uint64_t request;
-        uint64_t cancelledThrough;
+        uint64_t cancellation;
         uint64_t firstOccurrence;
     };
 
@@ -55,6 +56,7 @@ public:
 
     void cancelRequest() {
         const auto serial = nextRequest();
+        cancellation = serial;
         if (commandStart) {
             commandStart->store(serial + 1);
             commandStart.reset();
@@ -88,17 +90,15 @@ public:
         return record.productionComplete ? Production::Complete : Production::Writing;
     }
 
-    // The room worker advances admissions in token order.
-    void admit(uint64_t token, const std::string &sourceUrl, uint64_t serial,
-               uint64_t firstOccurrence) {
-        admissions.insert_or_assign(token, Admission{
-            token, sourceUrl, serial, cancelledThrough.load(), firstOccurrence});
-    }
-
-    void commitSource(StartSource source, uint64_t serial, uint64_t firstOccurrence) {
+    bool commitSource(StartSource source, uint64_t serial, uint64_t firstOccurrence) {
+        if (serial != currentRequest()) return false;
+        source.request = serial;
+        source.cancellation = cancellation;
         if (firstOccurrence && source.token)
-            admit(source.token, source.track.url, serial, firstOccurrence);
+            admissions.insert_or_assign(source.token, Admission{
+                source.token, source.track.url, serial, cancellation, firstOccurrence});
         std::atomic_store(&activeSource, std::make_shared<const StartSource>(std::move(source)));
+        return true;
     }
 
     std::shared_ptr<const StartSource> sourceForStart() const {
@@ -109,9 +109,11 @@ public:
         for (auto entry = admissions.begin(); entry != admissions.end();) {
             const auto &admission = entry->second;
             const auto declaring = std::find_if(records.begin(), records.end(),
-                [&admission](const auto &record) {
+                [this, &admission](const auto &record) {
                     return record.source.occurrence >= admission.firstOccurrence &&
-                           record.sourceToken == admission.token;
+                           record.sourceToken == admission.token &&
+                           record.sourceUrl == admission.sourceUrl &&
+                           matchesAdmission(record.source.occurrence, admission);
                 });
             if (declaring == records.end() ||
                 (declaring->incomplete.empty() && declaring->fault.empty() &&
@@ -202,12 +204,12 @@ public:
 
     void clearAdmissions() { admissions.clear(); }
 
-    void recordSource(uint64_t occurrence, const StartSource &source) {
+    void recordSource(uint64_t occurrence, std::shared_ptr<const StartSource> source) {
         std::lock_guard<std::mutex> lock(sourceMutex);
         auto &record = sources[occurrence];
-        record.track = source.track;
-        if (source.index >= 0) record.index = unsigned(source.index);
-        if (source.token) record.token = source.token;
+        if (source->index >= 0) record.index = unsigned(source->index);
+        if (source->token) record.token = source->token;
+        record.start = std::move(source);
     }
 
     void locate(uint64_t occurrence, unsigned index) {
@@ -225,7 +227,8 @@ public:
     std::optional<PlaylistEntry> sourceTrack(uint64_t occurrence) const {
         std::lock_guard<std::mutex> lock(sourceMutex);
         const auto record = sources.find(occurrence);
-        return record == sources.end() ? std::nullopt : record->second.track;
+        if (record == sources.end() || !record->second.start) return std::nullopt;
+        return record->second.start->track;
     }
 
     std::optional<unsigned> sourceIndex(uint64_t occurrence) const {
@@ -354,14 +357,23 @@ private:
     std::deque<unsigned> selectionOrder;
     std::shared_ptr<const StartSource> activeSource = std::make_shared<const StartSource>();
     std::atomic<uint64_t> request{0};
+    uint64_t cancellation = 0;
     std::shared_ptr<std::atomic<uint64_t>> commandStart;
     std::atomic<uint64_t> cancelledThrough{0};
     std::map<uint64_t, Admission> admissions;
     struct Source {
-        std::optional<PlaylistEntry> track;
+        std::shared_ptr<const StartSource> start;
         std::optional<unsigned> index;
         std::optional<uint64_t> token;
     };
+    bool matchesAdmission(uint64_t occurrence, const Admission &admission) const {
+        std::lock_guard<std::mutex> lock(sourceMutex);
+        const auto source = sources.find(occurrence);
+        if (source == sources.end() || !source->second.start) return false;
+        const auto &start = *source->second.start;
+        return start.request == admission.request && start.cancellation == admission.cancellation;
+    }
+
     mutable std::mutex sourceMutex;
     std::map<uint64_t, Source> sources;
     std::map<uint64_t, std::shared_ptr<LazyItem>> lazyRows;
