@@ -37,6 +37,10 @@ def run(c):
     cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
     wait(lambda: len(items()) == len(ids) and bool(sonos.audible_reads), 90, 'experiment static mirror audible')
     immutable = [i['uri'] for i in items()]
+    if os.environ.get('YENEY_FULLQ_PRESSURE_REPLAY') == '1':
+        from pressure_disconnect_replay import run as replay_disconnect
+        replay_disconnect(c, immutable, fetch)
+        return
     codec = os.environ.get('YENEY_FULLQ_CODEC', 'flac')
     if os.environ['YENEY_FULLQ_EXPERIMENT'] == 'scale':
         if codec == 'alac':

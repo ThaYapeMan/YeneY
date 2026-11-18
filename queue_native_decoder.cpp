@@ -467,6 +467,7 @@ public:
         changed.notify_all();
         worker.join();
     }
+    bool hasIndependentEncodedSource() const override { return true; }
     size_t feed(const uint8_t *, size_t bytes) override {
         allowance += bytes;
         changed.notify_all();

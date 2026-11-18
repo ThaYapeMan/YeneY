@@ -132,6 +132,37 @@
   },
   "steps": [
     {
+      "name": "pressure-disconnect-order",
+      "target": "full-queue-pressure",
+      "command": "YENEY_FULLQ_PRESSURE_REPLAY=1 YENEY_POSITION_SOURCE=websocket YENEY_FAKE_WEBSOCKET=1 YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_DEBUG": "",
+        "YENEY_LMS_VOLUME": "off",
+        "YENEY_VOLUME_MAX": "100",
+        "YENEY_LMS_ICON": "",
+        "YENEY_STREAM_PACING": "wall",
+        "YENEY_PLAYBACK_MODE": "stream",
+        "YENEY_START_LEAD_MS": "0",
+        "YENEY_TIMING_PROBE": "0",
+        "YENEY_TIMING_RAW": "0",
+        "YENEY_TIMING_PRIOR": "1",
+        "YENEY_TIMING_PUBLISH": "0",
+        "YENEY_TIMING_LOCKED_EVERY_S": "5",
+        "YENEY_AUDIBLE_OFFSET_MS": "0",
+        "YENEY_TIMING_STALE_S": "60"
+      },
+      "prerequisites": {
+        "full": "full-queue-pressure"
+      },
+      "phase": "parallel",
+      "reason": "Explicit shared-input and Slimproto gates decide the event order.",
+      "modes": [
+        "full"
+      ],
+      "label": "pressure-disconnect-order",
+      "time_judging": false
+    },
+    {
       "name": "t0001",
       "target": "full-queue-pressure-soak",
       "command": "YENEY_POSITION_SOURCE=websocket YENEY_FAKE_WEBSOCKET=1 YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_SOAK_SEED=314159 python3 tests/real_lms_test.py",
@@ -6775,6 +6806,7 @@
   ],
   "orders": {
     "full": [
+      "pressure-disconnect-order",
       "t0001",
       "t0002",
       "t0003",

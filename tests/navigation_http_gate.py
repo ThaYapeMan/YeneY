@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 class NavigationHTTPGate:
-    def __init__(self, hold_request=2, hold_following=False):
+    def __init__(self, hold_request=2, hold_following=False, truncate_held=False):
         self.held = threading.Event()
         self.release = threading.Event()
         self.following_held = threading.Event()
@@ -41,9 +41,12 @@ class NavigationHTTPGate:
                 try:
                     upstream.request('GET', self.path, headers=dict(self.headers))
                     response = upstream.getresponse()
+                    truncate = number == hold_request and truncate_held
                     self.send_response(response.status)
+                    if truncate:
+                        self.send_header('Content-Length', str(gate.prefix_limit + 1024 * 1024))
                     for name in ('Content-Type', 'Content-Length'):
-                        if response.getheader(name):
+                        if response.getheader(name) and (not truncate or name != 'Content-Length'):
                             self.send_header(name, response.getheader(name))
                     self.send_header('Connection', 'close')
                     self.end_headers()
@@ -65,6 +68,8 @@ class NavigationHTTPGate:
                         gate.held.set()
                         if not gate.release.wait(20):
                             raise AssertionError('unfinished decode-ahead was never selected')
+                        if truncate:
+                            return
                     if hold_following and number == hold_request + 1:
                         gate.following_held.set()
                         if not gate.following_release.wait(20):

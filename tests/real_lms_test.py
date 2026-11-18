@@ -42,6 +42,13 @@ class Tap:
         self.listener=socket.socket();self.listener.bind(('127.0.0.1',0));self.listener.listen(2);self.listener.settimeout(.1)
         self.port=self.listener.getsockname()[1];self.closed=False;self.sockets=[];self.records=[];self.errors=[]
         self.http_gate = None
+        self.replay = os.environ.get('YENEY_FULLQ_PRESSURE_REPLAY') == '1'
+        self.hold_control = threading.Event()
+        self.held_start = threading.Event()
+        self.release_control = threading.Event()
+        if self.replay:
+            from navigation_http_gate import NavigationHTTPGate
+            self.http_gate = NavigationHTTPGate(hold_request=1, truncate_held=True)
         nav_case = os.environ.get('YENEY_NAV_CASE', '')
         if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and (nav_case.startswith('R-') or nav_case in ('A2', 'S2', 'S3', 'B1', 'B2', 'F3', 'D1')):
             from navigation_http_gate import NavigationHTTPGate
@@ -57,7 +64,11 @@ class Tap:
                 except socket.timeout:continue
                 peer=socket.create_connection(('127.0.0.1',3483),timeout=3)
                 self.sockets += [client,peer];buffers={client:bytearray(),peer:bytearray()}
+                held_packets = []
                 while not self.closed:
+                    if self.release_control.is_set() and held_packets:
+                        client.sendall(b''.join(held_packets))
+                        held_packets.clear()
                     ready,_,_=select.select([client,peer],[],[],.1)
                     ended=False
                     for source in ready:
@@ -81,7 +92,15 @@ class Tap:
                                     assert struct.unpack('!H', body[18:20])[0] == 9000
                                     packet = packet[:24] + struct.pack('!H', self.http_gate.port) + packet[26:]
                                     record['http_gate_port'] = self.http_gate.port
-                                target.sendall(packet)
+                                if (self.replay and self.hold_control.is_set() and
+                                    not self.release_control.is_set() and op == 'strm' and
+                                    record['command'] in ('q', 's')):
+                                    held_packets.append(packet)
+                                    record['held'] = True
+                                    if record['command'] == 's':
+                                        self.held_start.set()
+                                else:
+                                    target.sendall(packet)
                             self.records.append(record)
                     if ended:break
                 client.close();peer.close()
