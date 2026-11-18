@@ -61,6 +61,32 @@ void exactAdmission() {
     std::cout << "PASS matching row and source still require the exact admission and cancellation generation\n";
 }
 
+void navigationGeneration() {
+    QueueRowOwner owner;
+    assert(owner.commitSource(source(0), owner.nextRequest(), 1));
+    const auto old = owner.sourceForStart();
+    owner.cancelRequest();
+    owner.beginNavigation(2);
+    assert(owner.commitSource(source(0), owner.nextRequest(), 2, true));
+    const auto active = owner.sourceForStart();
+
+    QueueRowOwner::Entry candidate{};
+    candidate.uri = "/row-1.wav";
+    candidate.stream = 2;
+    owner.recordSource(2, old);
+    assert(!owner.prepareNavigation(token(0), candidate));
+    assert(!owner.navigationTarget());
+    candidate.stream = 3;
+    owner.recordSource(3, active);
+    assert(owner.prepareNavigation(token(0), candidate));
+    candidate.stream = 4;
+    owner.recordSource(4, old);
+    assert(!owner.prepareNavigation(token(0), candidate));
+    assert(owner.navigationTarget()->stream == 3);
+    assert(owner.navigationTarget()->uri == "/row-1.wav");
+    std::cout << "PASS navigation accepts only the source generation that owns its target\n";
+}
+
 void cancelledFault() {
     QueueRowOwner owner;
     const auto serial = owner.nextRequest();
@@ -208,6 +234,7 @@ int main(int argc, char **argv) {
     const std::string name = argv[1];
     if (name == "late-start") lateStart();
     else if (name == "exact-admission") exactAdmission();
+    else if (name == "navigation-generation") navigationGeneration();
     else if (name == "cancelled-fault") cancelledFault();
     else if (name == "exhaustive") exhaustive();
     else if (name == "seeded") seeded();

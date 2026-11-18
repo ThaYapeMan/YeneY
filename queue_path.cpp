@@ -339,7 +339,6 @@ void QueueRoom::Impl::selectPath() {
             selectedSourceIndex = selectedIndex;
             const auto slot = selectedIndex < 0 ? std::nullopt : window.atIndex(unsigned(selectedIndex));
             selectedToken = slot ? slot->token : 0;
-            if (navigationSelecting) rowOwner.selectNavigationRow(selectedToken);
         }
         selectionKnown = true;
         if (!selectedNewPlay && selectedLocal != paths.isRelay()) {
@@ -381,7 +380,7 @@ void QueueRoom::Impl::selectPath() {
     {
         std::lock_guard<std::mutex> lock(mutex);
         if (!rowOwner.commitSource({selectedTrack, selectedSourceIndex, selectedToken, selectedCommand.value},
-                                   selectedRequest, first)) {
+                                   selectedRequest, first, navigationSelecting)) {
             selecting = false;
             return;
         }

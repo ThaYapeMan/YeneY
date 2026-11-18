@@ -90,14 +90,19 @@ public:
         return record.productionComplete ? Production::Complete : Production::Writing;
     }
 
-    bool commitSource(StartSource source, uint64_t serial, uint64_t firstOccurrence) {
+    bool commitSource(StartSource source, uint64_t serial, uint64_t firstOccurrence, bool navigation = false) {
         if (serial != currentRequest()) return false;
         source.request = serial;
         source.cancellation = cancellation;
         if (firstOccurrence && source.token)
             admissions.insert_or_assign(source.token, Admission{
                 source.token, source.track.url, serial, cancellation, firstOccurrence});
-        std::atomic_store(&activeSource, std::make_shared<const StartSource>(std::move(source)));
+        auto committed = std::make_shared<const StartSource>(std::move(source));
+        if (navigation) {
+            navigationRowToken = committed->token;
+            navigationSource = committed;
+        }
+        std::atomic_store(&activeSource, std::move(committed));
         return true;
     }
 
@@ -270,13 +275,18 @@ public:
 
     void beginNavigation(uint64_t first) {
         firstNavigationOccurrence = first;
+        navigationSource.reset();
         preparedNavigation.reset();
     }
 
-    void selectNavigationRow(uint64_t token) { navigationRowToken = token; }
-
     bool prepareNavigation(uint64_t token, Entry item) {
         if (token != navigationRowToken || item.stream < firstNavigationOccurrence) return false;
+        {
+            std::lock_guard<std::mutex> lock(sourceMutex);
+            const auto found = sources.find(item.stream);
+            if (found == sources.end() || !navigationSource || found->second.start != navigationSource)
+                return false;
+        }
         firstNavigationOccurrence = item.stream;
         preparedNavigation = std::move(item);
         return true;
@@ -351,6 +361,7 @@ private:
 
     uint64_t firstNavigationOccurrence = 0;
     uint64_t navigationRowToken = 0;
+    std::shared_ptr<const StartSource> navigationSource;
     std::optional<Entry> preparedNavigation;
     std::vector<Entry> committedRows;
     std::map<unsigned, Selection> selections;
