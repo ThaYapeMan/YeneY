@@ -124,6 +124,12 @@ class Coordinator(ThreadingHTTPServer):
         self.audible_bodies = []
         self.item_ids = {}
         self.soap_delay = 0
+        self.silent_from = self.silent_until = 0
+        self.silence_scope = ''
+        self.silence_action = None
+        self.silence_once = False
+        self.silence_misses = []
+        self.read_fault_once = None
         self.fail_save = self.hide_save = self.race_add = self.ignore_crossfade = self.race_page = False
         self.last_save, self.verified_save = None, False
         self.busy, self.max_busy, self.grouped = 0, 0, False
@@ -133,6 +139,18 @@ class Coordinator(ThreadingHTTPServer):
         if os.environ.get('YENEY_FAKE_WEBSOCKET') == '1':
             from sonos_websocket_fake import LocalApi
             self.local_api = LocalApi(self)
+
+    @property
+    def all_silent(self):
+        return self.silence_scope == 'all' and self.silent_from <= time.monotonic() < self.silent_until
+
+    def silence(self, seconds, scope='soap', *, after=0, action=None, once=False):
+        with self.lock:
+            self.silent_from = time.monotonic() + after
+            self.silent_until = self.silent_from + seconds
+            self.silence_scope, self.silence_action, self.silence_once = scope, action, once
+            self.silence_misses.clear()
+            return self.silent_from
 
     @property
     def transport_state(self):
@@ -211,7 +229,7 @@ class Coordinator(ThreadingHTTPServer):
                               AVTransportURI=self.uri, TransportState=self.transport_state)
         with self.event_lock:
             callback = getattr(self, 'callback', '')
-            if not callback or self.closing:return
+            if not callback or self.closing or self.all_silent:return
             self.event_sequence += 1
             change = '<Event><InstanceID val="0">'+''.join(
                 '<'+k+' val='+quoteattr(str(v))+'/>' for k,v in fields.items())+'</InstanceID></Event>'
@@ -246,6 +264,17 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = 'HTTP/1.1'
     def log_message(self, *_): pass
 
+    def withhold_answer(self):
+        # Discard the selected reply even if the room returns before its
+        # request deadline. Hold the socket open until the client gives up.
+        self.close_connection = True
+        try:
+            self.connection.settimeout(6)
+            while self.connection.recv(4096):
+                pass
+        except OSError:
+            pass
+
     def send(self, body, status=200):
         body = body.encode()
         self.send_response(status)
@@ -258,6 +287,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise # live client failures still fail the fixture
 
     def do_GET(self):
+        if self.server.all_silent:
+            self.withhold_answer()
+            return
         try:
             assert self.path == '/description.xml'
             services = ''.join('<service><serviceType>'+urn+'</serviceType><controlURL>'+PATHS[name]+
@@ -280,13 +312,28 @@ class Handler(BaseHTTPRequestHandler):
             assert self.path == PATHS[service] or (action == 'GetPositionInfo' and self.path == '/MediaRenderer/AVTransport/Control')
             assert self.headers['SOAPAction'] == '"'+urn+'#'+action+'"'
             with s.lock:
-                s.requests.append((action, args, service, time.monotonic()))
-                if getattr(s, 'all_soap_delay', 0): time.sleep(s.all_soap_delay)
-                elif action in ('Browse', 'GetZoneGroupState') and s.soap_delay: time.sleep(s.soap_delay)
-                result, fault = self.action(service, action, args)
-                if action == 'Seek' and s.soap_delay and not getattr(s, 'fullq_audio', False):
-                    s.read_audio(sum(int(v)*w for v,w in zip(args['Target'].split(':'),(3600,60,1))) if args.get('Unit') == 'REL_TIME' else 0)
-                s.busy -= 1
+                now = time.monotonic()
+                s.requests.append((action, args, service, now))
+                silent = s.silent_from <= now < s.silent_until and (
+                    not s.silence_action or action == s.silence_action) and (
+                    not s.silence_once or not s.silence_misses)
+                if silent:
+                    s.silence_misses.append((action, now))
+                    s.busy -= 1
+                else:
+                    if getattr(s, 'all_soap_delay', 0): time.sleep(s.all_soap_delay)
+                    elif action in ('Browse', 'GetZoneGroupState') and s.soap_delay: time.sleep(s.soap_delay)
+                    if s.read_fault_once and s.read_fault_once[0] == action:
+                        result, fault = {}, s.read_fault_once[1]
+                        s.read_fault_once = None
+                    else:
+                        result, fault = self.action(service, action, args)
+                    if action == 'Seek' and s.soap_delay and not getattr(s, 'fullq_audio', False):
+                        s.read_audio(sum(int(v)*w for v,w in zip(args['Target'].split(':'),(3600,60,1))) if args.get('Unit') == 'REL_TIME' else 0)
+                    s.busy -= 1
+            if silent:
+                self.withhold_answer()
+                return
             if not fault and s.echo_edits and (action in ('AddURIToQueue', 'AddMultipleURIsToQueue', 'RemoveTrackRangeFromQueue') or
                     action in ('SetAVTransportURI', 'Play', 'Seek') and s.uri.startswith('x-rincon-queue:')):
                 with s.lock:
@@ -547,6 +594,7 @@ class FiniteDeviceAudio:
     def tick(self):
         if not self.active:return
         s=self.server;now=time.monotonic()
+        if s.all_silent:return
         if s.transport_state=='TRANSITIONING' and now>=getattr(self,'transition_until',float('inf')):
             s.transport_state='PLAYING';self.stamp=now
         if s.transport_state!='PLAYING' or self.paused:

@@ -107,6 +107,9 @@ class Device(Handler):
         self.path = '/description.xml'
         super().do_GET()
     def do_SUBSCRIBE(self):
+        if self.server.all_silent:
+            self.withhold_answer()
+            return
         if 'ZoneGroupTopology' in self.path:
             self.server.topology_callback = self.headers.get('CALLBACK', '').strip('<>') or getattr(self.server, 'topology_callback', '')
         if 'RenderingControl' in self.path:
@@ -121,6 +124,9 @@ class Device(Handler):
         action = self.headers['SOAPAction'].strip('"').split('#')[1]
         service = next((name for name in SERVICES if name in self.path), 'AVTransport')
         if action in ('GetVolume','GetMute','SetVolume','SetMute','GetGroupVolume','GetGroupMute','SetGroupVolume','SetGroupMute','SnapshotGroupVolume'):
+            if self.server.all_silent:
+                self.withhold_answer()
+                return
             group='Group' in action
             service='GroupRenderingControl' if group else 'RenderingControl'
             assert self.path=='/MediaRenderer/'+service+'/Control'

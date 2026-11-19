@@ -577,6 +577,10 @@ try:
         from websocket_room_lifecycle import run_transition
         run_transition(globals(), os.environ['YENEY_ROOM_TRANSITION_CASE'])
         raise SystemExit(0)
+    if os.environ.get('YENEY_REACH_CASE'):
+        from reach_real_lms import run
+        run(globals(), os.environ['YENEY_REACH_CASE'])
+        raise SystemExit(0)
     if os.environ.get('YENEY_TIMING_03E_CHANGE'):
         from timing_room_real_lms import run_change
         run_change(globals(), os.environ['YENEY_TIMING_03E_CHANGE'])
@@ -917,7 +921,11 @@ finally:
             owned={entry[1]['EnqueuedURI'] for entry in sonos.actions('AddURIToQueue')}
             assert not any(i['uri'] in owned for i in sonos.items) and sonos.crossfade,'owned cleanup/crossfade'
             assert sonos.verified_save and sonos.snapshots[sonos.last_save]==sonos.original,'verified Before YeneY backup'
-        if not volume_only and not name_only and not identity_only:cleanup(ownership_restored)
+        # A terminated unreachable room cannot restore the renderer while it
+        # is offline. These cases check their exact cleanup traffic explicitly.
+        if (not volume_only and not name_only and not identity_only and
+                os.environ.get('YENEY_REACH_CASE') not in ('gone', 'back')):
+            cleanup(ownership_restored)
         cleanup(sonos.close)
     if remote:cleanup(remote.close)
     for source in extra_remotes:cleanup(source.close)

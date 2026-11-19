@@ -86,6 +86,9 @@ class LocalApi:
 
             def do_GET(self):
                 api.requests.append(self.path)
+                if getattr(owner, 'all_silent', False):
+                    self.close_connection = True
+                    return
                 if api.disabled:
                     self.send_error(503)
                     return
@@ -147,6 +150,7 @@ class LocalApi:
                 next_ping = connected + api.ping_interval
 
                 def control(opcode, body):
+                    if getattr(owner, 'all_silent', False): return
                     assert len(body) <= 125
                     with lock:
                         self.connection.sendall(bytes([0x80 | opcode, len(body)]) + body)
@@ -176,7 +180,7 @@ class LocalApi:
                     if api.variant == 'fragmented':
                         cut = len(value)//2
                         wire = frame(value[:cut], 1) + frame(b'ping', 0x89) + frame(value[cut:], 0x80)
-                    if api.silent: return
+                    if api.silent or getattr(owner, 'all_silent', False): return
                     if api.partial_frame: wire = wire[:3]
                     with lock:
                         if api.variant == 'split-tcp':

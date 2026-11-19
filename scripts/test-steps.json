@@ -7007,6 +7007,480 @@
       "modes": [
         "full"
       ]
+    },
+    {
+      "name": "reach-websocket-steady-2",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=steady-2 python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 14,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-steady-2",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-steady-2",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=steady-2 python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 14,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-steady-2",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-steady-5",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=steady-5 python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 17,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-steady-5",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-steady-5",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=steady-5 python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 17,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-steady-5",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-steady-15",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=steady-15 python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 27,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-steady-15",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-steady-15",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=steady-15 python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 27,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-steady-15",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-lms-next",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=lms-next python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 16,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-lms-next",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-lms-next",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=lms-next python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 16,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-lms-next",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-app-next",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=app-next python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 16,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-app-next",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-app-next",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=app-next python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 16,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-app-next",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-lms-scrub",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=lms-scrub python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 17,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-lms-scrub",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-lms-scrub",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=lms-scrub python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 17,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-lms-scrub",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-app-scrub",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=app-scrub python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-app-scrub",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-app-scrub",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=app-scrub python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-app-scrub",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-boundary",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=boundary python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 20,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-boundary",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-boundary",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=boundary python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 20,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-boundary",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-paused",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=paused python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 27,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-paused",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-paused",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=paused python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 27,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-paused",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-startup",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=startup python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-startup",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-startup",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=startup python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-startup",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-journal",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=journal python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-journal",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-journal",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=journal python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 18,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-journal",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-gone",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=gone python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 39,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-gone",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-gone",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=gone python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 39,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-gone",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-back",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=back python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 42,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-back",
+      "time_judging": true
+    },
+    {
+      "name": "reach-upnp-back",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=back python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "seconds": 42,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-back",
+      "time_judging": true
+    },
+    {
+      "name": "reach-websocket-answered-fault",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=websocket YENEY_REACH_CASE=answered-fault python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "seconds": 13,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-websocket-answered-fault"
+    },
+    {
+      "name": "reach-upnp-answered-fault",
+      "target": "speaker-reachability",
+      "command": "YENEY_FAKE_WEBSOCKET=1 YENEY_POSITION_SOURCE=upnp YENEY_REACH_CASE=answered-fault python3 tests/real_lms_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "seconds": 13,
+      "reason": "Verify queue recovery and its speaker and LMS effects.",
+      "modes": [
+        "full"
+      ],
+      "label": "reach-upnp-answered-fault"
     }
   ],
   "orders": {
@@ -7207,7 +7681,35 @@
       "position-subscription-skip",
       "position-link-diagnostic",
       "position-lms-cable-steady",
-      "position-lms-study-steady"
+      "position-lms-study-steady",
+      "reach-websocket-steady-2",
+      "reach-upnp-steady-2",
+      "reach-websocket-steady-5",
+      "reach-upnp-steady-5",
+      "reach-websocket-steady-15",
+      "reach-upnp-steady-15",
+      "reach-websocket-lms-next",
+      "reach-upnp-lms-next",
+      "reach-websocket-app-next",
+      "reach-upnp-app-next",
+      "reach-websocket-lms-scrub",
+      "reach-upnp-lms-scrub",
+      "reach-websocket-app-scrub",
+      "reach-upnp-app-scrub",
+      "reach-websocket-boundary",
+      "reach-upnp-boundary",
+      "reach-websocket-paused",
+      "reach-upnp-paused",
+      "reach-websocket-startup",
+      "reach-upnp-startup",
+      "reach-websocket-journal",
+      "reach-upnp-journal",
+      "reach-websocket-gone",
+      "reach-upnp-gone",
+      "reach-websocket-back",
+      "reach-upnp-back",
+      "reach-websocket-answered-fault",
+      "reach-upnp-answered-fault"
     ],
     "fast": [
       "queue-row-order-late-start",
