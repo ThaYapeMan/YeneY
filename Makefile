@@ -401,6 +401,7 @@ full-queue-acceptance: yeney
 
 .PHONY: test-fast test-fast-run
 test-fast:
+	$(MAKE) -C third_party/yeney-core format-check
 	python3 scripts/run-tests.py python3 scripts/test-runner.py --mode fast --serial
 
 
