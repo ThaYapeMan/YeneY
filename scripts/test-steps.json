@@ -135,6 +135,22 @@
   },
   "steps": [
     {
+      "name": "refill-probe",
+      "target": "main",
+      "command": "python3 tests/refill_probe_test.py",
+      "environment": {},
+      "prerequisites": {
+        "fast": "test-fast-run",
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Loopback refill probe, audio ranges and cleanup with accelerated playback.",
+      "seconds": 32,
+      "modes": ["fast", "full"],
+      "label": "refill-probe",
+      "time_judging": false
+    },
+    {
       "name": "build-upgrade",
       "target": "build-upgrade",
       "command": "python3 tests/build_dependencies_test.py upgrade",
@@ -7519,6 +7535,7 @@
   ],
   "orders": {
     "full": [
+      "refill-probe",
       "build-upgrade",
       "build-header-touch",
       "queue-smoke",
@@ -7749,6 +7766,7 @@
       "reach-upnp-answered-fault"
     ],
     "fast": [
+      "refill-probe",
       "build-header-touch",
       "queue-smoke",
       "queue-row-order-late-start",
