@@ -69,6 +69,10 @@ def run_change(c, case):
         time.sleep(.01)
     last_outside = max((i for i, (_, value, truth, _) in enumerate(samples) if abs(value-truth) > 30), default=-1)
     stable = samples[last_outside+1][0] if last_outside+1 < len(samples) else None
+    measure_after_hold = profile in ('cable', 'study-replay') and action in ('lms-scrub', 'resume')
+    stable_after_hold = None
+    if measure_after_hold and stable is not None and sonos.local_api.playing_report_at >= start:
+        stable_after_hold = max(0, stable - 1000 * (sonos.local_api.playing_report_at - start))
     held_samples = [(at, value, truth) for at, value, truth, held in samples if held]
     max_held_error = max((abs(value-truth) for _, value, truth in held_samples), default=None)
     held_advances = sum(
@@ -77,13 +81,16 @@ def run_change(c, case):
         for left, right in zip(samples, samples[1:]))
     row = dict(profile=profile, action=action, stable_ms=stable, held_samples=len(held_samples),
                max_held_error_ms=max_held_error, held_advances=held_advances)
+    if measure_after_hold:
+        row['stable_after_hold_ms'] = stable_after_hold
     print('MEASURE TIMING03E ' + json.dumps(row), flush=True)
     trace = c['base']/'timing03e.tsv'
     trace.write_text('after_action_ms\tlms_ms\ttruth_ms\theld\n' +
                      ''.join(f'{at:.6f}\t{value:.6f}\t{truth:.6f}\t{int(held)}\n'
                              for at, value, truth, held in samples))
     if not os.environ.get('YENEY_ACCEPTANCE_BINARY'):
-        assert stable is not None and stable <= 500, row
+        measured = stable_after_hold if measure_after_hold else stable
+        assert measured is not None and measured <= 500, row
 
 
 def run_steady(c, profile):

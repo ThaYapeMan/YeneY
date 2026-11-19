@@ -54,6 +54,7 @@ class LocalApi:
         self.status_captured = threading.Event()
         self.buffering_seconds = .3
         self.buffering_until = 0
+        self.playing_report_at = 0
         self.last_clock_stamp = None
         self.info_variant = None
         self.info_extra = {}
@@ -181,6 +182,10 @@ class LocalApi:
                         if api.variant == 'split-tcp':
                             for at in range(0, len(wire), 3): self.connection.sendall(wire[at:at+3])
                         else: self.connection.sendall(wire)
+                        if body.get('playbackState') == 'PLAYBACK_STATE_PLAYING':
+                            sent = time.monotonic()
+                            if api.playing_report_at < api.buffering_until <= sent:
+                                api.playing_report_at = sent
                     if header.get('response', header.get('command')) == 'getPlaybackStatus':
                         api.reply_times.append((id(self.connection), time.monotonic(),
                                                 (time.monotonic()-request_times[header['cmdId']])*1000))
