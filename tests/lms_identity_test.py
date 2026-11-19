@@ -5,7 +5,6 @@ import socket
 import struct
 import subprocess
 import tempfile
-import threading
 import unittest
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape
@@ -60,14 +59,10 @@ class LmsIdentityTest(unittest.TestCase):
         cls.binary = os.environ.get('YENEY_ACCEPTANCE_BINARY', str(ROOT / 'yeney'))
         cls.version = subprocess.check_output([cls.binary, '--version'], text=True).strip()
         cls.speaker = Coordinator(('127.0.0.1', 1400), IdentitySpeaker)
-        cls.thread = threading.Thread(target=cls.speaker.serve_forever)
-        cls.thread.start()
 
     @classmethod
     def tearDownClass(cls):
-        cls.speaker.shutdown()
-        cls.speaker.server_close()
-        cls.thread.join()
+        cls.speaker.close()
 
     def hello(self, mode, product, firmware):
         self.speaker.product, self.speaker.firmware = product, firmware
