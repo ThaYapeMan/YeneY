@@ -428,7 +428,14 @@ try:
         window_ids = [next(t['id'] for t in tracks if t.get('url', '').endswith(f'/fullq-{i}.{extension}'))
                       for i in range(fixture_count)]
     assert len(window_ids)==fixture_count,tracks
-    sonos=Coordinator(('127.0.0.1',1400),Device);sonos.follow_controls=True;sonos.consume_stream=True
+    if identity_only:
+        from lms_identity_test import IdentitySpeaker, captured_rooms
+        sonos=Coordinator(('127.0.0.1',1400),IdentitySpeaker)
+        sonos.product='Play:1'
+        sonos.firmware=captured_rooms()['Study']
+    else:
+        sonos=Coordinator(('127.0.0.1',1400),Device)
+    sonos.follow_controls=True;sonos.consume_stream=True
     sonos.volume=20;sonos.muted=0
     sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None,'Audiophile Recordings volume 3','The Absence']+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
     tap=Tap()
@@ -476,15 +483,18 @@ try:
         print('IDENTITY CLI model: '+repr(cli('model ?',mac)), flush=True)
         print('IDENTITY CLI modelname: '+repr(cli('modelname ?',mac)), flush=True)
         expected = subprocess.check_output([binary, '--version'], text=True).strip()
-        assert 'model:yeney' in fields and 'modelname:YeneY' in fields, fields
-        assert 'firmware:'+expected in fields, (expected, fields)
+        model='Sonos Play:1 (YeneY)'
+        lms_firmware=expected[:-1]+'; Sonos 86.10)'
+        assert 'model:yeney' in fields and 'modelname:'+model in fields, fields
+        assert 'firmware:'+lms_firmware in fields, (lms_firmware, fields)
         state=base/('stream-pacing-'+b'Study'.hex()+'.json')
         wait(lambda:state.exists() and json.loads(state.read_text()).get('playback',{}).get('firmware')==expected, 5, 'firmware status')
         bridge_log.flush()
         assert 'yeney: version='+expected in (base/'bridge.log').read_text()
         hellos=[bytes.fromhex(r['body'])[36:].decode() for r in tap.records if r['op']=='HELO']
-        assert any('Firmware='+expected in caps and caps.startswith('Model=yeney,ModelName=YeneY,') for caps in hellos),hellos
-        print('PASS C6 real LMS 9.1.1: firmware='+expected+'; model=yeney modelname=YeneY; HELO, --version, journal and room status identical', flush=True)
+        assert any('Firmware='+lms_firmware in caps.split(',') and caps.startswith('Model=yeney,ModelName='+model+',') for caps in hellos),hellos
+        print('PASS C6 real LMS 9.1.1: firmware='+lms_firmware+'; model=yeney modelname='+model+
+              '; bridge version matches --version, journal and room status', flush=True)
         raise SystemExit(0)
     if name_only:
         wait(lambda:cli('name ?',mac)[-1]=='Study (Sonos)',10,'initial true name')

@@ -6085,6 +6085,22 @@
       }
     },
     {
+      "name": "lms-identity",
+      "target": "main",
+      "command": "python3 tests/lms_identity_test.py",
+      "environment": {},
+      "prerequisites": {
+        "full": "test-run",
+        "fast": "test-fast-run"
+      },
+      "phase": "parallel",
+      "seconds": 2,
+      "reason": "Check the advertised identity and complete HELO in both playback modes.",
+      "modes": ["full", "fast"],
+      "label": "lms-identity",
+      "time_judging": false
+    },
+    {
       "name": "t0146",
       "target": "main",
       "command": "YENEY_REAL_LMS_IDENTITY_ONLY=1 python3 tests/real_lms_test.py",
@@ -7539,6 +7555,7 @@
       "build-upgrade",
       "build-header-touch",
       "queue-smoke",
+      "lms-identity",
       "queue-row-order-late-start",
       "queue-row-order-exact-admission",
       "queue-row-order-navigation-generation",
@@ -7769,6 +7786,7 @@
       "refill-probe",
       "build-header-touch",
       "queue-smoke",
+      "lms-identity",
       "queue-row-order-late-start",
       "queue-row-order-exact-admission",
       "queue-row-order-navigation-generation",
