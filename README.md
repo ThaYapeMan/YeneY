@@ -3,10 +3,11 @@
 **YeneY turns every Sonos speaker into a real Lyrion Music Server player.** Lyrion
 Music Server (LMS) was formerly called Logitech Media Server or Squeezebox Server.
 Your Sonos rooms appear in LMS next to your Squeezebox players, with their own Sonos
-icon in Material Skin. You control them from any LMS app: Material Skin, the web
-interface, iPeng or Squeezer. LMS stays in charge of the playlist and the sound.
+icon in Material Skin. You control them from any LMS app (Material Skin, the web
+interface, iPeng, Squeezer) **and from the Sonos app**. LMS stays in charge of the
+playlist and the sound.
 
-**What YeneY does better than other LMS-to-Sonos bridges:**
+**What sets YeneY apart:**
 
 - **Sound quality.** Lossless 24-bit audio. At 44.1 and 48 kHz the samples LMS
   produces reach the Sonos unchanged (bit-perfect when ReplayGain is off; YeneY
@@ -14,112 +15,111 @@ interface, iPeng or Squeezer. LMS stays in charge of the playlist and the sound.
   to the Sonos maximum by YeneY's own converter, measured equal to SoX at its
   highest quality setting (`rate -v`): passband ripple below ±0.0002 dB and
   aliasing below −120 dBFS ([measurements](docs/designs/queue-hires-decimation.md)).
-- **Track details.** In queue mode every LMS track is its own item in the Sonos
-  queue, with its own title, artist, album, artwork and duration in the Sonos app.
-  Podcast and radio artwork comes through LMS's image proxy. Damaged tags are
-  cleaned so they can never stop playback.
-- **Fast starts.** Local tracks start in about 1.3 s, hi-res tracks in under
-  0.5 s, podcasts and radio in under a second.
-- **Sonos-app pause and stop reach LMS.** Pause, resume and stop on the Sonos side
-  are passed back to LMS, without echo loops.
-- **Integration with LMS.** YeneY behaves like a well-mannered squeezelite player:
-  LMS's playlist index stays in step with what the speaker plays, YeneY sets its
-  own player icon, and it never sends LMS commands in reaction to LMS's own
-  messages.
+- **Your LMS playlist in the Sonos app.** Every LMS track is its own row in the
+  Sonos queue, with title, artist, album, artwork and duration: the whole playlist,
+  up to 500 rows by default.
+- **The Sonos app controls LMS.** Play, pause, stop, Next, Previous, seeking and a
+  tap on any row in the Sonos app all reach LMS. The speaker moves by itself and
+  YeneY reports its choice to LMS.
+- **Timing.** YeneY reads the playback position from the speaker's own clock in
+  milliseconds. On a cabled Sonos Port the position LMS shows was within a median
+  of 1.3 ms of the speaker (measured 19 November 2026). The same timing is
+  available to other programs, for example for music-reactive lighting
+  ([LampaStream](#related)).
+- **Integration with LMS.** YeneY behaves like a well-mannered LMS player: LMS's
+  playlist index stays in step with what the speaker plays, YeneY sets its own
+  player icon, and it never sends LMS commands in reaction to LMS's own messages.
 
-No Sonos-specific app, no pairing step per track, and no cloud service: YeneY runs
-on your own network, on any small Linux machine, container or VM.
+No cloud service and no Sonos account: YeneY runs on your own network, on any small
+Linux machine, container or VM.
 
 **YeneY** is pronounced **YEN-ee**. The palindrome nods to *Sonos*.
 
+## Status
+
+Version 0.9.0. YeneY is new and under active development. It is used daily on two
+Sonos Play:1 speakers and a Sonos Port. See [Known problems](#known-problems)
+before you rely on it.
+
 ## Two playback modes
 
-| Mode | How it plays | Best for |
+| Mode | How it plays | Used for |
 |---|---|---|
-| **Stream** (explicit `YENEY_PLAYBACK_MODE=stream`) | One continuous 24-bit FLAC stream per room, paced on the Sonos clock | Continuous sources; everything LMS can play |
-| **Queue** (default) | Local files: one Sonos queue item per LMS track (exact-length 24-bit WAV, hi-res converted by YeneY). Finite remote tracks and podcasts use queue items with a 5 s duration margin and lossless continuations. Live radio and sources without an LMS duration use stream | Standalone rooms and group coordinators: per-track titles and artwork, fast starts, hi-res |
+| **Queue** (default) | One Sonos queue row per LMS track. Local files are sent as exact-length 24-bit WAV; hi-res is converted by YeneY. Finite remote tracks and podcasts are queue rows too, with a 5 s length margin and lossless continuations | Local music, podcasts, remote tracks with a known length |
+| **Stream** | One continuous 24-bit FLAC stream per room, paced on the Sonos clock | Live radio and sources without a length; chosen automatically in queue mode. Can be forced with `YENEY_PLAYBACK_MODE=stream` |
 
-Queue mode was rebuilt in October 2026 as a small relay that follows LMS strictly,
-in the spirit of philippe44's LMS-uPnP. The earlier, larger design is preserved at
-the `queue-full-v1` tag; its features return one at a time on top of the relay
-(see the [rebuild checklist](docs/designs/queue-parked-features.md)).
-
-## YeneY compared with LMS-uPnP
+## YeneY compared with LMS-uPnP and Music Assistant
 
 [philippe44/LMS-uPnP](https://github.com/philippe44/LMS-uPnP) (UPnPBridge) is the
 mature, general-purpose bridge between LMS and UPnP/DLNA speakers, Sonos being one
-of many. It has two modes: *per track* (the speaker plays one track at a time) and
-*flow* (one continuous stream). It works with almost any UPnP renderer and has
-years of use behind it. YeneY is built for Sonos only, and for Sonos it does
-clearly more in **sound quality, track details, start times, Sonos-app pause and
-LMS integration**:
+of many. [Music Assistant](https://www.music-assistant.io) is a music server of its
+own with a Sonos player provider; it does not play the LMS library. YeneY is built
+for Sonos and LMS only.
 
-| | YeneY | LMS-uPnP, per track | LMS-uPnP, flow mode |
+| | YeneY | LMS-uPnP | Music Assistant (Sonos S2) |
 |---|---|---|---|
-| Lossless, 24-bit | ✔ 24-bit throughout; bit-perfect at 44.1/48 kHz with ReplayGain off | ✔ FLAC for files; radio passed through as is | ~ lossless, but changing titles need MP3/AAC |
-| Hi-res sources (88.2–192 kHz) | ✔ converted by YeneY's own converter, measured equal to SoX `rate -v`; start under 0.5 s (queue mode) | ~ depends on LMS transcoding and the speaker | ~ resampled to the flow rate |
-| LMS sound processing | ✔ ReplayGain, crossfade, DSP | ~ ReplayGain and resampling, no crossfade (none at all in pass-through mode) | ✔ ReplayGain, resampling and crossfade |
-| Gapless | ✔ stream mode: one continuous stream; queue mode: exact-length items, sample-continuous joins | ~ via SetNextAVTransportURI; depends on the speaker | ✔ gapless and crossfade |
-| Title, artist, album and artwork per track in the Sonos app | ✔ queue mode, including podcast artwork; stream mode: at the start of each stream | ✔ per track | ~ only with MP3/AAC (ICY) |
-| Start time | ✔ local ~1.3 s, hi-res < 0.5 s, podcasts/radio < 1 s | ? not measured | ? not measured |
-| Pause/stop in the Sonos app reaches LMS | ✔ pause, resume and stop, without echo loops | ✔ | ~ Sonos sees a live stream; pause needs a workaround (`live_pause`) |
-| Damaged tags (control characters, invalid UTF-8) | ✔ cleaned; playback never fails on them | ? not verified | ? not verified |
-| Own player icon in Material Skin | ✔ set automatically | ✔ DLNA icon | ✔ DLNA icon |
-| Next/Previous and seeking in the Sonos app | ✘ not yet (from LMS: ✔) | ? not verified | ✘ live stream |
-| Grouped Sonos rooms | ~ stream mode only; queue mode for standalone rooms | ✔ | ✔ |
-| Synchronises with other LMS players | ✘ not yet | ? not verified | ? not verified |
-| Other UPnP/DLNA speakers | ✘ Sonos only | ✔ | ✔ |
-| Maturity | new; tested daily on two Play:1 speakers and a Sonos Port | mature, years of use on many devices | mature |
+| Plays the LMS library | ✔ | ✔ | ✘ its own library and sources |
+| Lossless 24-bit | ✔ 24-bit throughout; bit-perfect at 44.1/48 kHz with ReplayGain off | ~ FLAC by default; 24-bit can be set, not verified on Sonos | ✔ FLAC by default; 24-bit on current models |
+| Hi-res sources (88.2–192 kHz) | ✔ YeneY's own converter, measured equal to SoX `rate -v` | ✔ resampled by LMS or the bridge | ✔ limited to 48 kHz |
+| Title, artist, album and artwork per track in the Sonos app | ✔ | ✔ | ✔ |
+| The whole playlist visible in the Sonos app | ✔ row for row, up to 500 rows by default | ✘ does not use the Sonos queue | ? the speaker holds a small window of tracks; what the app shows is not verified |
+| Gapless | ✔ | ✔ (not for tracks of unknown length) | ✔ |
+| Play, pause and stop in the Sonos app reach the server | ✔ | ✔ | ✔ (its own pause is sent as a stop) |
+| Next, Previous and seeking in the Sonos app | ✔ ([one known fault](#known-problems)) | ✘ not possible in this design | ~ Next and Previous; seeking is switched off |
+| Tap any row in the Sonos app | ✔ | ✘ | ? not verified |
+| A seek from the server keeps the track's row | ✔ | not applicable | ✘ the queue is loaded again |
+| Playback position reported to the server | ✔ milliseconds, from the speaker's own clock | ~ polled from the speaker, whole seconds | ~ milliseconds as they arrive, used for the progress bar |
+| Volume both ways | ✔ optional, with a maximum | ✔ | ✔ |
+| Sonos groups | ~ plays through the group's leading room; a member room stops cleanly | ✔ follows groups | ✔ makes and follows groups |
+| Synchronises with other LMS players | ✘ not yet | ~ start only | not applicable |
+| Home Assistant | ✔ through the LMS integration; shown as linked to the Sonos device | ✔ through the LMS integration | ✔ its own integration |
+| Song titles on internet radio | ~ at the start of a stream | ✔ | ? not verified |
+| Timing export for other programs (lighting) | ✔ | ✘ | ✘ |
+| Automated tests in the repository | ✔ | ✘ | ✔ |
+| Packaging | ✘ build from source on Linux | ✔ LMS plugin for all platforms | ✔ Home Assistant add-on and container |
+| Other speaker brands | ✘ Sonos only | ✔ any UPnP/DLNA renderer | ✔ many brands |
+| Maturity | new | mature, years of use on many devices | stable, widely used |
 
-✔ yes · ✘ no · ~ partly · ? not verified yet
+✔ yes · ✘ no · ~ partly · ? not verified
+
+How this table was made: LMS-uPnP was read at version 3.4.10 (October 2026) and
+Music Assistant at revision `2506795` of its server (19 November 2026), from their
+source and documentation. Music Assistant was not run on our speakers. Corrections
+are welcome.
 
 ### Which one should I use?
 
-Queue mode shows the whole LMS playlist in the Sonos app up to the configured
-`YENEY_QUEUE_ROWS` cap (default 500), with any visible row tappable. LMS and app
-navigation preserve those rows; audio is produced lazily and retained within
-the room's cache quota. Round 1 retains the seek-partial fallback: a partial seek followed by Next
-swaps that row twice to preserve immutable audio resources.
-
-| Choose YeneY if you… | Choose LMS-uPnP if you… |
-|---|---|
-| want the best sound on Sonos: 24-bit, bit-perfect at 44.1/48 kHz, top-quality hi-res conversion | have speakers from other brands as well |
-| want correct titles and artwork per track, and fast starts | group Sonos rooms a lot |
-| want the Sonos app to control LMS — Next, Previous, seek, pause and stop all reach LMS — with your queue visible in the app | prefer a long-proven solution |
-| control playback from LMS (Material Skin, the web interface, iPeng) | |
-| want sample-accurate timing data for music-reactive lighting (LampaStream) | |
-| only have Sonos speakers | |
-
-**Why YeneY exists.** LMS-uPnP is a general bridge: it serves many kinds of
-renderers well, and Sonos is one of them. YeneY is made only for Sonos and LMS, and
-uses that focus where it matters most: the sound (24-bit, bit-perfect at
-44.1/48 kHz, hi-res conversion as good as SoX's best), the track details in the
-Sonos app, start times, pause and stop from the Sonos app, and a clean integration
-with LMS. It also solves a Sonos limit that affects any continuous stream: a Sonos
-cannot resume a paused radio-style FLAC stream without an error. Background:
-[Why a continuous stream](docs/how-it-works.md#why-a-continuous-stream-and-how-this-differs-from-track-by-track-upnp)
-and [Sonos queue mode](docs/designs/sonos-queue-mode.md).
+| Choose YeneY if you… | Choose LMS-uPnP if you… | Choose Music Assistant if you… |
+|---|---|---|
+| use LMS and only have Sonos speakers | use LMS and have speakers of other brands as well | do not need LMS and want one server for many brands and services |
+| want your LMS playlist in the Sonos app, and the Sonos app to control LMS | prefer a long-proven solution | live in Home Assistant |
+| want the best sound on Sonos: 24-bit, bit-perfect at 44.1/48 kHz | want an LMS plugin that installs on any platform | group Sonos and other speakers a lot |
+| want millisecond timing, for example for music-reactive lighting | | |
 
 ## What you need
 
-- **Sonos speakers on the S2 software.** Tested on a Play:1 (firmware 86.10) and a
-  Sonos Port (97.2). S1-only speakers have not been tested.
+- **Sonos speakers on the S2 software.** Tested on the Play:1 (firmware 86.10) and
+  the Sonos Port (97.x). S1-only speakers have not been tested.
 - **Lyrion Music Server** on your network (formerly Logitech Media Server).
 - **A Linux machine for YeneY**, for example a Debian or Ubuntu container or VM.
   It needs to reach the Sonos speakers and LMS on the local network. One small
   process runs per Sonos room.
 
+A speaker on a network cable gives the steadiest timing. A speaker that reaches the
+network through another Sonos product's radio works too, with slower position
+answers for about 20 s after a start, skip or seek (see
+[Known problems](#known-problems)).
+
 ## How it works in one paragraph
 
 For every Sonos room, YeneY registers a player with LMS, exactly like a Squeezebox
-would. LMS sends it the music; YeneY encodes it as one continuous FLAC stream and
-tells the Sonos speaker to play that stream, while keeping play, pause, stop,
-volume, position and track information in step on both sides. LMS stays in charge
-of the playlist and the sound; the Sonos simply plays what it receives. In queue
-mode, local tracks are instead published one by one as exact-length items in the
-Sonos queue, while finite remote tracks use queue items with a 5 s margin and live radio keeps using the stream. The full
-story, including the Sonos pause problem YeneY solves, is in
-[How YeneY works](docs/how-it-works.md).
+would. LMS sends it the music. YeneY counts the audio exactly and offers each LMS
+track to the speaker as one row in the Sonos queue, with its exact length. The
+speaker fetches the audio from YeneY and plays it; it never plays your files
+itself. When you press Next or seek, in LMS or in the Sonos app, the speaker moves
+and YeneY keeps LMS in step, using the position from the speaker's own clock. Live
+radio and sources without a length are sent as one continuous FLAC stream instead.
+More background is in [How YeneY works](docs/how-it-works.md).
 
 ## Home Assistant
 
@@ -173,104 +173,8 @@ sudo make install
 ```
 
 The installer keeps your configuration. It asks `Keep this configuration? [Y/n]`
-and restarts only the rooms that run an older build.
-
-### Installer details
-
-On the first install, it asks for the LMS server and every discovered room. When
-an existing config has an `LMS_SERVER` line and at least one room, it shows the
-saved configuration and asks `Keep this configuration? [Y/n]`. Enter or `y` keeps
-it, adds newly discovered rooms as `no`, and displays and applies the plan without
-another confirmation. Answer `n` to configure the LMS server and every discovered
-room, then review the diff and confirm `Apply? [Y/n]`. `--reconfigure` goes straight
-to that full configuration flow. Offline rooms retain their config lines and
-appear as offline. Room arguments are enabled without per-room questions.
-
-Example re-run after a new build and discovery of MBR:
-
-```text
-YeneY installer — build abc1234
-LMS server: 192.0.2.23 (config)
-Sonos rooms found: 3
-Room        Model   IP          Group                          Bridge to LMS
-MBR         One     192.0.2.24  -                              new, not bridged
-Sonos Port  Port    192.0.2.25  member of Study                yes, running
-Study       Play:1  192.0.2.26  coordinator: Study+Sonos Port  yes, running
-Keep this configuration? [Y/n]
-Config:
---- current config
-+++ proposed config
-@@ -4,2 +4,3 @@
- room.Sonos Port=yes
- room.Study=yes
-+room.MBR=no
-Restart: Sonos Port, Study (new build abc1234); playback stops briefly
-Build record: update installed-build
-Sonos Port  running   LMS player "Sonos Port (Sonos)" connected
-Study       running   LMS player "Study (Sonos)" connected
-MBR         disabled
-Logs: journalctl -u 'yeney@*' -f
-```
-
-With the same build and settings, the plan instead includes:
-
-```text
-Keep this configuration? [Y/n]
-Config:  no changes
-Keep:    Sonos Port, Study
-Nothing to do.
-```
-
-Kept rooms are **not restarted**. Every install restarts all enabled room services
-when the binary changes, including rooms already running. A changed service
-template or installer-managed drop-in also restarts all enabled rooms, after
-`systemctl daemon-reload`. Unchanged builds and configuration may be kept; an LMS
-setting changed in this run or `--restart` also requests a restart. Each restarted
-room is reported as `restarted` alongside its LMS player check. An interrupted
-unit update remains pending until its service actions succeed.
-`/etc/yeney/installed-build` records the commit (with `-dirty` when applicable)
-and binary SHA-256; it is written atomically only after service actions succeed.
-The plan lists Start, Restart (with its reason), Stop and Keep, plus any service
-enabling, template installation, migration or build-record changes. With no work,
-there is no Apply prompt. Declining Apply or pressing Ctrl-C at a prompt changes
-no files or services.
-
-Afterward, enabled rooms (including kept rooms) share an LMS CLI check on port
-9090, waiting at most 15 seconds for the MAC from the room status with `connected:1`.
-A missing host or unreachable CLI skips the check without failing installation;
-a running service alone does not prove it reached LMS.
-
-Alternatively, edit `/etc/yeney/config` and run
-`sudo scripts/install-devices.sh --non-interactive` (or `sudo make install` and
-accept the defaults). Example config:
-
-```ini
-# LMS host or IP (no port). Empty = automatic discovery on the local network.
-LMS_SERVER=192.0.2.23
-# Sonos rooms found on the network.
-# yes = bridge this room to LMS, no = ignore it.
-room.Sonos Port=yes
-room.Study=yes
-room.MBR=yes
-```
-
-Set a room to `no` and apply to stop/disable its bridge. Existing comments, ordering
-and unrelated settings are preserved. The old `rooms` file migrates once to
-`room.<name>=yes` settings and is renamed `rooms.migrated` after approval.
-
-Installer flags (`scripts/install-devices.sh`):
-
-| Option | Behaviour |
-| --- | --- |
-| `--yes` | Apply the displayed plan without prompts; new rooms default to `no`, existing values stay unchanged. |
-| `--non-interactive` | Same as `--yes`; automatic when stdin or stdout is not a TTY. |
-| `--reconfigure` | Skip the keep question; ask for the LMS server and every discovered room on a TTY. Non-interactive flags take precedence. |
-| `--restart` | Force restart of every running enabled room; plan reason is `forced`. Stopped enabled rooms are started. |
-| `--server=<host>` | Override the saved LMS host (no port, whitespace or control characters). |
-
-Quoted room arguments such as `sudo scripts/install-devices.sh "Sonos Port"`
-set those rooms to `yes`. Interactive declines produce no new-room reminder;
-non-interactive runs print one combined reminder for newly added disabled rooms.
+and restarts only the rooms that run an older build. All its questions, flags and
+the configuration file are described in [Installer details](docs/installer.md).
 
 ## Settings
 
@@ -291,64 +195,10 @@ Environment=YENEY_TITLE_FORMAT=title
 ```sh
 sudo systemctl restart 'yeney@Study'
 ```
-
-The true player name is always `<room> (Sonos)`, alongside the unchanged room
-name and MAC. Only the display name sent to LMS changes. Precedence is
-`--show-sonos-suffix=yes|no`, then the per-room process environment
-`YENEY_SHOW_SONOS_SUFFIX`, then the global `YENEY_SHOW_SONOS_SUFFIX=yes|no`
-key in `/etc/yeney/config` (`YENEY_CONFIG` selects another file), then `yes`.
-An invalid selected value warns once and uses `yes`. This also works directly:
-
-```sh
-./yeney --room=Study --server=192.0.2.23 --show-sonos-suffix=no
-```
-
-LMS has one player-name field, so every LMS interface shows the display name.
-The MAC-bound player and its preferences/playlist remain the same. A rename in
-LMS lasts until the next YeneY restart, when the configured display name returns
-through SlimProto SETD. Startup logs show both names and the setting source;
-the room status publishes `true_name`, `display_name` and `mac`. Tools select by
-MAC and use the true name for reporting, independently of the LMS display name.
-
-Volume control also works when starting the binary directly:
-
-```sh
-YENEY_VOLUME_MAX=70 ./yeney --room=Study --server=192.0.2.23 --lms-volume=speaker
-```
-
-Volume mode precedence is `--lms-volume=off|speaker`, then the room process's
-`YENEY_LMS_VOLUME`, then `room.Study.lms_volume=off|speaker` in
-`/etc/yeney/config`, then `off`. The cap uses `YENEY_VOLUME_MAX`, then
-`room.Study.volume_max=70` in that same config, then 100. `YENEY_CONFIG` can
-select another volume configuration file. Invalid mode values warn once and
-select off; invalid caps warn once and select 100. Effective mode, source and
-cap appear in the startup log and room status (`lms_volume`,
-`lms_volume_source`, `volume_max` inside `playback`). Restart after changing
-settings. Config keys are suitable for a future per-player LMS plugin.
-
-LMS 9.1.1 does **not** offer its native fixed/adjustable volume preference for
-YeneY's player model: **Settings > Player > select the YeneY room > Audio** has
-no Volume control selector. The server's `digitalVolumeControl` preference
-exists internally, but YeneY does not advertise `HasDigitalOut`; LMS hides the
-selector and enforces adjustable internally. YeneY never changes that preference.
-The YeneY setting therefore controls this feature.
-
-In speaker mode LMS's exact integer mixer volume (not its nonlinear SlimProto
-gain) sets the room's own Sonos volume. A coordinator with members snapshots the group
-volume ratios before using group volume, and uses group mute; a standalone room or member uses its own volume/mute.
-App-side changes reach LMS through its CLI with echo suppression. Changes settle
-for 200 ms, and SOAP writes are spaced at least 200 ms apart across volume and
-mute; unchanged values are skipped. Own changes await confirmation for up to
-two seconds, suppressing intermediate group feedback. A separate bounded worker queries LMS and
-confirms speaker state; RenderingControl and GroupRenderingControl events wake
-it immediately, with a 100 ms polling fallback. A capped LMS value does not
-rewrite the LMS slider. The cap limits YeneY's writes; the Sonos app can still
-set its own volume above it. Both modes preserve audio samples without PCM
-volume scaling. Off mode starts no volume worker and sends no mixer commands
-or volume/mute writes.
-
-Settings are read once; timing RAW/STALE are inspected only when the probe is enabled. An invalid value logs a warning
-and uses the default, except for an invalid queue disk quota, which fails queue configuration.
+The most used settings are below; an invalid value logs a warning and uses the
+default (an invalid queue disk quota stops queue mode). Player name, volume,
+artwork, the Material Skin icon and the older debug names are explained in
+[Settings in detail](docs/settings-details.md).
 
 | Setting | Values | Default |
 |---|---|---|
@@ -379,170 +229,21 @@ and uses the default, except for an invalid queue disk quota, which fails queue 
 | `YENEY_TIMING_PRIOR` | Use the persisted per-UDN drift prior | `1` |
 | `YENEY_TIMING_PUBLISH` | `1`: publish the LampaStream timing contract and core audio tap, only with TIMING_PROBE | off |
 | `YENEY_AUDIBLE_OFFSET_MS` | -500–500 ms acoustic calibration, added to published audible times | `0` |
-
-Artwork in both stream and queue mode comes from LMS. Local library tracks keep
-`http://<lms>:9000/music/<id>/cover.jpg`. Remote tracks (podcasts, internet radio
-and streaming services) use LMS's `artwork_url`: relative paths use the LMS HTTP
-host, and absolute HTTP/HTTPS images go through its image proxy so Sonos fetches
-plain HTTP from LMS. Existing image-proxy paths retain their inner percent
-escapes. Remote tracks without artwork send no album-art element. Stream
-metadata is fetched at stream start; this adds no midstream polling.
-
-Queue mode is an explicit per-room opt-in in the same systemd override:
-
-```ini
-[Service]
-Environment=YENEY_PLAYBACK_MODE=queue
-Environment=YENEY_QUEUE_DISK_MIB=256
-```
-
-Settings apply on room service restart. Queue is built in; existing owner
-`Environment=YENEY_PLAYBACK_MODE=queue` overrides are redundant but harmless and
-are never removed by the installer. Explicit `stream` remains supported; `auto`
-and invalid settings still select stream and log the effective mode. At every
-new track, live topology must identify this room as coordinator. Adding or
-removing members does not change its per-source path. A member of another group
-writes no transport commands and reports one LMS stop, rather than controlling
-the other room or walking the playlist.
-
-Queue mode owns only its prepared finite WAV entries. Local files retain exact
-promises. Remote flags, negative IDs and non-file URLs select `remote-finite`
-relay when LMS supplies a positive non-live duration; live and unknown-duration
-sources select the existing continuous stream path. Both paths start
-progressively without waiting for the whole source. Class changes wait for the
-outgoing track to finish, then start the other path; a short measured gap is
-logged. Diagnostics expose `path=relay|stream` and
-`reason=local-source|remote-finite|remote-source`. Pacing logs and socket-wait accumulation
-are suppressed on the relay path and unchanged on the stream path. LMS controls play, pause, resume, stop and source
-seeks; confirmed speaker starts advance LMS through SlimProto. Queue mode reports unambiguous speaker-originated stops and pause/resume to LMS
-through one logged CLI mutation path. Normal LMS commands never echo as CLI mutations; a confirmed room fault or
-member refusal reports one explicit LMS stop. Source changes release owned entries without stopping the new source.
-There is no automatic fallback in this relay release. Source failures report STMn; room-level faults stop LMS once without skipping tracks.
-Whole-list mirroring, app next/previous/seek mapping, automatic fallback and auto selection are parked at
-`queue-full-v1`; see the [rebuild checklist](docs/designs/queue-parked-features.md).
-Owners can qualify a standalone room or an owner-formed group coordinator with
-`/usr/local/bin/yeney-queue-device-suite --room Study --server 192.168.178.23`,
-optionally `--album <id-or-name> --volume 10 --podcast <episode-or-menu-name>`. The suite saves/restores volume,
-LMS state and room configuration; it checks album joins, LMS pause/resume and
-stop/new play, and a remote favourite/podcast when available, followed by a
-local album returning to the relay. Missing remote entries produce a documented
-skip. Use the [systemd-run procedure](DEVICE-VERIFICATION.md#phase-3c-unattended-queue-playback-device-suite)
-to survive an SSH disconnect. [Relay status and limitations](docs/designs/sonos-queue-mode.md)
-are documented separately. The relay passed the owner device suite on Study and
-on the Sonos Port (21–23 October 2026), including LMS pause/resume, stop/new play,
-external stops, remote sources and 88.2/176.4 and 96/192 kHz tracks.
-
-On 19 October 2026, the owner qualified Study on bridge `5a686ad` with
-`/usr/local/bin/yeney-stream-pacing-suite --room Study --hours 2`: **PACING OK**.
-The run collected 720 samples at 10-second intervals over one connection, with
-719/720 samples locked, zero overwrites and zero drops. Qualified lead was
-1406–1499 ms, with a 1452 ms median in both hours; measured drift was about
-11.5 ppm. This result supports making Sonos-clock pacing the default.
-
-To opt out for a room, add `Environment=YENEY_STREAM_PACING=wall` under
-`[Service]` in that room's systemd override (for example,
-`sudo systemctl edit 'yeney@Study'`), then restart that room. Invalid values
-warn and use `sonos`. Other rooms can be qualified with
-`/usr/local/bin/yeney-stream-pacing-suite --room <room> --hours 2`; see
-[device verification](DEVICE-VERIFICATION.md#unattended-owner-stream-pacing-qualification).
-
-The details of each setting are in [How YeneY works](docs/how-it-works.md).
+| `YENEY_QUEUE_ROWS` | 1–60000: the largest number of LMS playlist rows shown in the Sonos queue | `500` |
+| `YENEY_POSITION_SOURCE` | `auto`: millisecond position from the speaker, whole seconds as fallback · `websocket` · `upnp`: whole seconds only | `auto` |
 
 ### LMS player icon (Material Skin)
 
-The supplied Sonos logo is bundled in `assets/sonos.svg`. It is included in
-YeneY's installation assets; you do not need to create or obtain an SVG.
-Material looks for custom icons in `<LMS prefs dir>/material-skin/images`.
-Find that preferences directory in **LMS Settings → Information**.
-
-When LMS and YeneY share a host, configure the directory explicitly on the
-first installation:
+YeneY brings its own Sonos icon (`assets/sonos.svg`) and selects it for each room.
+When LMS runs on the same machine, tell the installer once where the LMS
+preferences are:
 
 ```sh
 sudo make install LMS_PREFS_DIR=/absolute/path/to/lms/preferences
 ```
 
-The installer installs `sonos.svg` there and remembers the directory in
-`/etc/yeney/lms-prefs-dir` for later `sudo make install` runs. It does not guess
-an LMS directory. If none is configured, installation clearly reports that the
-Material asset was not installed; the bundled asset and command are still
-installed under `/usr/local/share/yeney` and `/usr/local/bin`.
-
-For LMS on a separate host, run the bundled asset installer **locally on the
-LMS host**. From a YeneY checkout there, no build or room-service installation
-is needed:
-
-```sh
-sudo /opt/yeney/scripts/yeney-install-lms-icon --lms-prefs-dir /absolute/path/to/lms/preferences
-```
-
-If YeneY's installation assets are already installed on that host, the equivalent
-command is:
-
-```sh
-sudo /usr/local/bin/yeney-install-lms-icon --lms-prefs-dir /absolute/path/to/lms/preferences
-```
-
-Both commands use the bundled logo. The runtime does not access the LMS host's
-filesystem. Repeated installation is idempotent, and updates to YeneY-managed
-copies use atomic replacement. A different owner-managed `sonos.svg` causes a
-clear conflict and is preserved. An identical pre-existing owner copy is left
-in place without being claimed as YeneY-managed.
-
-`YENEY_LMS_ICON` is a per-room systemd setting:
-
-- Unset defaults to `sonos`, selecting the bundled logo.
-- `Environment=YENEY_LMS_ICON=` disables automatic preference handling.
-- A nonempty name matching `[A-Za-z0-9_-]{1,64}` selects an icon already
-  available in Material Skin. Invalid values warn and disable handling.
-
-Use `sudo systemctl edit 'yeney@Study'`, put the setting under `[Service]`,
-and restart that room's service. Once per registered LMS connection, YeneY
-checks `plugin.material-skin:icon` asynchronously. Empty preferences are set;
-a value previously written and recorded by YeneY can be updated. Owner-selected
-icons are preserved, and already-correct values are not rewritten or claimed.
-Disabling handling leaves an existing icon in place. Timeouts and malformed
-replies are logged without blocking or failing playback.
-
-The installer generates a per-room `zz-yeney-state.conf` systemd drop-in. It
-supplies `STATE_DIRECTORY` as `/var/lib/yeney/<slug>-<hash>`: an ASCII lowercase
-slug (at most 40 characters) and the first 16 hexadecimal SHA-256 digits of the
-original UTF-8 room name. Spaces, quotes and Unicode names are safe, and names
-that produce the same slug remain distinct. Confirmed icon ownership and queue
-state live there. `ExecStart` and the room argument remain unchanged. View a room's
-configured path with `systemctl show -p StateDirectory 'yeney@Study.service'`.
-
-In both stream and queue mode, the room's `stream-pacing-<UTF-8-room-hex>.json`
-status file and drift-prior persistence use this directory. Only manual runs
-without `STATE_DIRECTORY` use `/var/lib/yeney`. Queue storage and confirmed icon
-ownership already follow the same room directory.
-
-`/usr/local/bin/yeney-queue-device-suite` and
-`/usr/local/bin/yeney-stream-pacing-suite` discover it automatically through
-`systemd-escape` and `systemctl show … -p StateDirectory --value`, using their
-bundled shared `yeney_room_state.py` helper. No copied files, symlinks or path
-flags are needed. Failed or ambiguous systemd lookups are errors; only an empty
-StateDirectory property selects the legacy directory. Installation removes old
-status files for migrated rooms and global symlinks pointing into their state
-directories, leaving other files alone.
-
-The owner-tool audit also covers `yeney-lms-position-check` (journal and LMS CLI),
-`yeney-timing-read` (the unchanged `/dev/shm` timing/audio objects), and
-`yeney-queue-suite` (its isolated `$TMPDIR`, or `/var/tmp`, workspace). Those tools do not read the
-room's persistent status/state files, so their data sources remain unchanged.
-
-On install, existing state from escaped or raw room-name directories is moved
-while that room is stopped. The temporary `/var/lib/yeney/sonos-port` workaround
-is migrated too. The installer removes the Port's `statedir.conf` automatically
-only if it contains exactly the three-line workaround (`[Service]`, empty
-`StateDirectory=`, then `StateDirectory=yeney/sonos-port`). Custom contents or
-symlinks are left in place with a warning. Identical state files can be merged;
-conflicting copies stop installation without overwriting either copy. Ad-hoc runs without a state directory
-skip automatic handling rather than writing an unrecorded preference.
-
-The SVG has a 24×24 viewBox, monochrome `#000` fills, outlined paths and
-`fill-rule="evenodd"` cut-outs. Its supplied geometry is preserved; Material
-recolours it itself. Material's native icon selector remains available.
+When LMS runs on another machine, or to choose another icon, see
+[Settings in detail](docs/settings-details.md#lms-player-icon-material-skin).
 
 ## Running a room by hand
 
@@ -567,307 +268,91 @@ The first instance binds port 1400 for its own use; a second concurrent instance
 ## Frequently asked questions
 
 **Can I play Lyrion Music Server (LMS) on Sonos speakers?**
-Yes. That is exactly what YeneY does: each Sonos room becomes an LMS player that
-you control from any LMS app.
+Yes. That is exactly what YeneY does: each Sonos room becomes an LMS player.
 
 **Does it work with Logitech Media Server or Squeezebox Server?**
-Yes. Logitech Media Server and Squeezebox Server are the old names of Lyrion
-Music Server.
+Yes. Those are the old names of Lyrion Music Server.
 
 **Do I need the Sonos app?**
-No. You control playback from LMS. The Sonos app keeps working next to it: pause
-and play in the Sonos app are passed back to LMS.
+No. You can control everything from LMS. The Sonos app works next to it: play,
+pause, stop, Next, Previous, seeking and a tap on a row are passed back to LMS, and
+the app shows your LMS playlist.
 
 **Does YeneY work with Sonos S1 or S2?**
 It is tested on speakers running the S2 software. S1 has not been tested.
 
-**Can I use internet radio and streaming services?**
-Yes. Anything LMS can play reaches the Sonos as lossless FLAC, including radio
-stations and the streaming-service plugins you use in LMS.
+**Can I use internet radio, podcasts and streaming services?**
+Yes. Anything LMS can play reaches the Sonos losslessly. Podcasts and remote tracks
+with a known length become queue rows; live radio is sent as one continuous stream.
 
 **Is it gapless? Does crossfade work?**
-Yes. YeneY sends one continuous stream, so albums play gapless and LMS crossfade
-works.
+Gapless: yes, in both modes. LMS crossfade works in stream mode; in queue mode it
+is not available yet.
 
 **Can I group Sonos rooms?**
-Yes. Play through the group coordinator. A member room refuses playback with
-one LMS stop and never changes the group or controls another room.
+Partly. Play through the group's leading room (the coordinator). A member room
+refuses playback with one LMS stop and never changes the group or controls another
+room. Adding a room to a group in the Sonos app stops that room's own LMS player.
 
 **Does it synchronise with my Squeezebox players?**
-Not yet. The Sonos starts a few seconds after other LMS players. Precise
-synchronisation is planned.
-
-**Can I skip tracks or seek from the Sonos app?**
-Not yet; use your LMS app for that. It is under investigation.
+Not yet. Precise synchronisation is planned and builds on the millisecond position.
 
 **Is YeneY free?**
 Yes, for noncommercial use, under the
 [PolyForm Noncommercial License](LICENSE). See [License](#license).
 
-## Where it falls short
+## Known problems
 
-- Next, Previous and seeking work from LMS, not yet from the Sonos app.
-- Queue mode is the default for standalone rooms and group coordinators; group members stop cleanly.
-- Queue mode has no automatic fallback to stream mode yet; a failure stops the
+As of 19 November 2026:
+
+- **End of a playlist.** After the last track the room can stay on "playing" in
+  LMS, and a new start inside the same playlist can then fail. Starting another
+  playlist works.
+- **Next in the Sonos app** can restart the new track from the beginning after
+  about a second, when that track had been prepared as the gapless follow-on.
+- **Repeat and shuffle set on the speaker itself** are not yet overruled by LMS;
+  switch them off in the Sonos app.
+- **A seek far ahead early in a track** can show 0:00 in the Sonos app for that
+  track.
+- **A speaker on Sonos's own radio link** answers position questions slowly for
+  about 20 s after a start, skip or seek; LMS can be 0.1–0.2 s behind in that time.
+- **Sonos rooms do not yet play in sync** with other LMS players.
+- **Crossfade** is not available in queue mode.
+- **Internet radio** shows the title at the start of a stream and does not follow
+  song changes.
+- **No automatic fallback** from queue mode to stream mode; a failure stops the
   room and is reported to LMS.
-- In stream mode the Sonos app shows the artist and title at the start of a
-  stream, but does not update them between tracks of a continuous album. Use
-  queue mode for per-track titles.
-- Sonos rooms do not yet play in sync with other LMS players.
-- Sonos only: other UPnP/DLNA speakers are not supported.
-
-The technical background of each point is in
-[How YeneY works](docs/how-it-works.md#where-it-falls-short).
-
-The old `YENEY_DEBUG_EVENTS=1`, `YENEY_DEBUG_STREAM=1`, `YENEY_POLL=legacy`
-and `YENEY_STOPPED_MEDIAINFO=1` names still work, with one deprecation warning
-each at startup. Canonical debug tokens enable the selected experiments; an
-enabled legacy alias also keeps its previous effect. All timing/LampaStream and
-user-facing playback settings retain their names and defaults.
+- **Sonos only**: other UPnP/DLNA speakers are not supported.
 
 ## For developers
 
-### Units
-
-YeneY uses metric (SI) units only, in code comments, documentation, logs and reports:
-metres, millimetres, kilograms, °C. Imperial units are not used.
-
-### Sources for the Sonos local API
-
-Additional connection-lifecycle sources (read for behaviour; nothing copied):
-
-| Source | Licence or publication terms | Use |
-| --- | --- | --- |
-| [Architecture](https://docs.sonos.com/docs/connected-home-architecture) | Sonos documentation; no software licence stated | LAN API availability |
-| [Control](https://docs.sonos.com/docs/control) | Sonos documentation; no software licence stated | Group addressing and command/event distinction |
-| [Discover](https://docs.sonos.com/docs/discover) | Sonos documentation; no software licence stated | Household, group and player identities |
-| [Subscribe](https://docs.sonos.com/docs/subscribe) | Sonos documentation; no software licence stated | Cloud subscription renewal and group changes |
-| [Play audio (cloud queue)](https://docs.sonos.com/docs/cloud-queue-play-audio) | Sonos documentation; no software licence stated | Cloud queue context |
-| [Connected Home Security](https://docs.sonos.com/docs/connected-home-security) | Sonos documentation; no software licence stated | Required S2 TLS suites |
-| [aiosonos](https://github.com/music-assistant/aiosonos) | Apache-2.0 | Heartbeat, command deadlines, event dispatch and coordinator changes |
-| [sonos-websocket](https://github.com/jjlawren/sonos-websocket) | MIT | Closed/reset connection handling |
-| [node-sonos](https://github.com/sonn-audio/node-sonos) (formerly lox-audioserver) | AGPL-3.0 | Heartbeat, pending commands, reconnection and group refresh |
-
-Each source above was read for behaviour; nothing copied. The public Sonos
-pages describe cloud subscriptions and do not specify a local WebSocket idle
-lifetime. Their three-day subscription limit is not evidence of a local
-connection timeout. The client acknowledges both local subscriptions before
-using the connection and renews them every 24 hours, on an expiry event, and
-after reconnecting. Group-moved events and responses trigger a fresh local-info
-lookup and subscriptions to the resolved group. Commands address the group ID,
-not an individual player ID. The exact owned UPnP URI remains the audio identity
-authority.
-
-The reader retains partial frames and treats a control frame or temporary lack
-of data as no application message yet. Commands retain their three-second
-answer deadline. A client ping is sent after 30 seconds with no outgoing data;
-a matching pong must arrive within three seconds. The first reconnect is
-immediate; consecutive unsuccessful attempts wait 1, 2, 4, 8 and then 16 seconds.
-An accepted position resets that failure streak. The last fitted line remains
-available for at most three seconds from its last observation, with
-`position_source_reason=reconnecting`; this is extrapolation, not a fabricated
-speaker observation. Persistent failure still selects the whole-second source.
-
-The check uses the room's worker, including its idle/event-reading path. It
-reports ping, pong and close frames, connection age, negotiated TLS, offered S2
-suites, and separate line fits for each item/seek segment. Local-info sockets
-are closed before opening the WebSocket. The check holds at most one TLS socket
-and one WebSocket; the capture reports measured held/peak connection counts in
-`connections.json`. These counts describe that tool, not other clients.
-
-The loopback fake permits three simultaneous connections: a room source, check
-and capture. This does not establish the connection limit of physical speakers.
-The node-sonos README's one-player-per-client-instance rule describes its client
-object; it is not evidence of a speaker-wide one-connection limit. Each tool
-closes only its own socket and sends no playback, topology or connection-reset
-command. For initial owner measurements, run one observer at a time while the
-room plays and retain the room journal; a hardware concurrency result requires
-those observations.
-
-Owner verification after deploying the committed fix (root on the YeneY
-container; replace speaker addresses and unit names). Run each command as its
-own step. Keep both rooms playing throughout, and introduce a track change and
-a seek during each check so that multiple fit segments are recorded:
-
-```sh
-SINCE=$(date --iso-8601=seconds)
-/opt/yeney/yeney --position-source-check --ip '<Port IP>' --seconds 180 > /tmp/yeney-Port-180s-check.txt 2>&1
-/opt/yeney/yeney --position-source-check --ip '<Study IP>' --seconds 180 > /tmp/yeney-Study-180s-check.txt 2>&1
-python3 /opt/yeney/scripts/sonos-local-api-capture.py --ip '<Port IP>' --seconds 180 > /tmp/yeney-Port-180s-capture.txt 2>&1
-python3 /opt/yeney/scripts/sonos-local-api-capture.py --ip '<Study IP>' --seconds 180 > /tmp/yeney-Study-180s-capture.txt 2>&1
-timeout 900 journalctl -u '<Port unit>' -u '<Study unit>' --since "$SINCE" --follow --no-pager > /tmp/yeney-15min-lifecycle-journal.txt
-```
-
-The capture archives are written under `/tmp`. Retain each archive's
-`websocket-controls.jsonl`, `connection-ending.json` and `connections.json`.
-The final command intentionally ends after 15 minutes with timeout status 124.
-Expected: no `position source=upnp` during playing, no periodic connection
-failure, and a line-fit restart at each item change or seek. A 60-second speaker
-ping is a test model until the owner's control-frame capture confirms it.
-
-The connection audit covers these separate readers and callers:
-
-| Place | Silence or partial-frame handling |
-| --- | --- |
-| Production TLS HTTP setup | Bounded discovery/upgrade reads remain setup operations; their failure prevents readiness |
-| Production WebSocket reader | Incremental nonblocking input; ping/pong returns without requiring another frame; TLS/TCP end is explicit |
-| Room wait branch and command branch | Both use that reader; only command/subscription deadlines turn an absent answer into failure |
-| Subscription setup/renewal | Both acknowledgements required; every pending command has its own deadline and is failed on connection end |
-| Binary check | Uses the same room worker, rather than a separate request/receive loop |
-| Capture reader | Incremental TLS/frame buffer; control frames, connection endings and partial data retained in the archive |
-| Paired timing probe | Its separate blocking reader is called only while an explicit status command awaits a reply; its existing three-second command bound remains |
-| Imitation speaker | Reads client frames until a complete frame arrives; handles client pings/pongs/close separately from commands; shutdown closes its sockets to release readers |
-
-Use the owner's captured local API messages alongside the Sonos developer documentation:
-[playbackStatus](https://docs.sonos.com/reference/playback-playbackstatus),
-[playbackError](https://docs.sonos.com/reference/playback-playbackerror),
-[metadataStatus](https://docs.sonos.com/reference/metadatastatus),
-[groups objects](https://docs.sonos.com/reference/groups-objects),
-[GlobalError](https://docs.sonos.com/docs/globalerror),
-[Control](https://docs.sonos.com/docs/control), and
-[Playback objects](https://docs.sonos.com/docs/playback-objects).
-The captures take precedence for local wire shapes. Public documentation describes
-cloud item identifiers; the captured local queue uses row number strings. The
-previous-position table says string, while its example and the capture use a
-number; accept both. Quality and local header fields absent from these public
-pages remain capture-based extensions. BUFFERING precedes playback and holds
-position. IDLE means neither playing nor paused, including startup, an empty
-queue, a source that cannot pause, or a playback error. Events report changes,
-including user seeks and track boundaries; steady progression is poll-only.
-
-### Building and testing
-
-The full gate uses `scripts/test-steps.json` as its only runtime step list.
-`make test-serial` runs that list in the original order;
-`YENEY_TEST_JOBS=1 make test` uses the same serial path. `make test` otherwise
-uses one isolated group per available core; `YENEY_TEST_JOBS` overrides their number. The fast
-gate remains serial: on 12 cores it took 220.5 seconds versus 249.5 seconds
-with isolated parallel scheduling (the previous recipe took 213.8 seconds).
-
-Shared binaries and core fixtures are built once before groups start. Pure
-configuration tests that compile private fixtures run in a serial preparation
-phase. Each parallel group has private loopback networking, IPC, shared memory,
-`HOME`, `TMPDIR`, XDG directories and writable caches. The numeric user ID stays
-the same. Bubblewrap is required. Groups have no route beyond loopback and read
-the installed LMS and Perl dependencies from the shared cache without writing
-there. Fixed `/tmp` and `/var/tmp` paths map to group-owned cache directories.
-
-Checks that judge elapsed time, alignment, pacing, latency, speed or live soak
-models run alone after every group has finished. The runner waits for the
-container's cgroup processor use over 30 seconds to be below 15 percent of its
-available cores and verifies conversion fitness of at least 20 times real time
-before a full run and again before its quiet phase. Capacity is read afresh
-from process affinity, effective cgroup cpusets and cgroup quotas. Host core
-counts, load averages and host idle counters are not admission criteria.
-Never start a gate while another round, pytest or a `make test` works in the
-checkout, or while the consumer project's gate runs on the container.
-
-`python3 scripts/test-runner.py --list` prints stable step names and commands.
-Run one check serially on the existing binary with
-`python3 scripts/test-runner.py --step NAME --no-build`. Failure output gives
-a replay command that restores the manifest, test environment and isolation,
-with a binary checksum, the group and the log path. Other groups
-finish unless `YENEY_TEST_FAIL_FAST=1`. An interrupt terminates groups and their
-descendants. Missing, duplicate, skipped or failed entries fail completeness;
-the full gate also requires positive production `require_v1=True` evidence.
-
-The terminal prints compact results in manifest order. The complete ordered
-transcript remains in `combined.log`, with per-step logs and metrics in one
-directory per group under the run directory printed at startup. Set
-`YENEY_TEST_VERBOSE=1` for verbose output. The normal five-run retention policy
-remains in effect. Scratch audio is removed; diagnostic text is retained.
-
-To add a check, append a new stable name to the appropriate mode orders and add
-its command, environment, mode membership, build-set references, phase and
-reason to the manifest. Add a compilation rule to the Makefile if needed and
-list its target in the referenced manifest build set. Do not add a second test
-recipe. Commands retain Makefile-style dollar escaping. Mark `time_judging`
-true and `phase` as `quiet` for a live-clock verdict; explain the reason. If
-uncertain, use `quiet`. Simulated timestamp replays can use `parallel`; a
-non-timing check that compiles a private fixture uses `serial`. Keep existing
-names when inserting new checks.
+Build and test:
 
 ```sh
 make
 make test
 ```
 
-`make test` runs the bridge fixtures and bundled core suite without a physical speaker.
-Persistent test installations use `$YENEY_TEST_CACHE` (default `~/.cache/yeney-test`);
-per-run scratch uses `$TMPDIR` (default `/var/tmp`) and is removed on exit.
-Only the last five transcript runs are retained in the cache. The cross-repository
-SHM consumer requires the sibling `../LampaStream` checkout or an explicit
-`LAMPASTREAM_CHECKOUT`; only `LAMPASTREAM_CONSUMER=off` remains available to the standalone core policy
-tests; the full gate rejects a skipped consumer. See [test storage](DEVICE-VERIFICATION.md#local-automated-test-storage-and-consumer-coverage).
-Test tools also require `flac`, `ffmpeg`, and `clang-format` (set `CLANG_FORMAT`
-to its executable path when needed). Physical
-tests on real Sonos speakers use `scripts/device-test.sh`; see
-[Testing and device-test tooling](docs/how-it-works.md#testing-and-device-test-tooling)
-and [DEVICE-VERIFICATION.md](DEVICE-VERIFICATION.md).
-
-The opt-in ReplayGain measurement runs with `SCENARIOS="9"` (also with `AUTO=1`),
-without app prompts. It needs a ReplayGain-tagged track and the `flac` tool
-(`apt-get install -y flac`). S9 measures the gain sent by LMS and the level change
-in YeneY's streamed FLAC, temporarily changes the player's ReplayGain preference,
-then restores it. `RG_TRACK` defaults to `id:47145` (Tony Bennett ft. Lady Gaga,
-“The Lady Is A Tramp”, *Duets II*), specific to the owner's LMS library like the
-`TRACK_A`/`TRACK_B` defaults. Find your own ID using the LMS CLI on port 9090:
-`titles 0 20 search:The%20Lady%20Is%20A%20Tramp tags:alY`, then set
-`RG_TRACK="id:<n>"`. A title instead selects the first of up to 20 matches with
-ReplayGain and archives all matches in `s9-matches.txt`; none tagged means
-INVALID with the matches listed. See the linked testing guide for `RG_SECS`.
-
-Forgot `--recursive` when cloning? `git submodule update --init --recursive` fixes
-it after the fact. Existing checkouts upgrading past the removal of the noson
-backend should run this once after pulling:
-
-```sh
-git submodule deinit -f noson && rm -rf .git/modules/noson noson
-```
-
-The separate UPnP device-discovery PNG icon is generated by `python3 scripts/make-icon.py` using only the
-Python standard library. The PNG and embedded header are committed, so building
-does not need an image tool or a generation step.
-
-### Player engine
-
-The executable uses only yeney-core. `YENEY_PLAYER` is obsolete: unset or `core`
-is silent; any other value produces one removal warning and continues with core.
-The startup journal identifies it as `Player engine: yeney-core`.
-The installer removes a room's `player.conf` only when it is precisely the
-single `[Service]` / `Environment=YENEY_PLAYER=core` override (optional final LF).
-Custom content and all other overrides, including `debug.conf`, are preserved.
-
-### Source layout
-
-| Path | What lives there |
-| --- | --- |
-| `yeney.cpp` | Startup: argument parsing, Sonos/LMS discovery, wiring the rest together. |
-| `core_sonos.cpp` / `.h` | Core sink, bounded PCM feeder and audible clock. |
-| `pcm_pack.h` | Project-owned signed PCM conversion. |
-| `third_party/yeney-core/` | Sole player engine and recursive decoder notices. |
-| `sbencoder.cpp` / `.h` | FLAC encoding of the decoded PCM, rate-limited relative to real time. |
-| `sbstreamer.cpp` / `.h` | The HTTP server Sonos actually connects to for the audio. |
-| `resume_state.h` | The "what does this unpause mean" decision logic, isolated from I/O for testing. |
-| `stop_debounce.h` | The 400 ms stop/seek debounce logic, likewise isolated. |
-| `sonos-status.cpp` / `.h` | UPnP polling of the Sonos device's own transport/track state. |
-| `sonos-position.cpp` / `.h` | UPnP polling of actual playback position, exposed to the output thread. |
-| `upnp/` | YeneY's own UPnP layer: discovery, SOAP control, GENA events, HTTP serving. |
-
-### Further reading
-
-- [How YeneY works](docs/how-it-works.md): design, the Sonos pause problem and how
-  it was found, metadata findings, the UPnP layer and test tooling.
-- [The UPnP layer and wire fixtures](docs/upnp-layer.md).
-- [DEVICE-VERIFICATION.md](DEVICE-VERIFICATION.md): which physical checks a change needs.
+`make test` runs the complete suite without a physical speaker; `make test-fast`
+is the quick check. Units are metric (SI) only. Everything else is in
+[Developer notes](docs/developer-notes.md): the Sonos local interface and its
+sources, the test runner, the source layout and technical notes by subject. See
+also [How YeneY works](docs/how-it-works.md),
+[the UPnP layer](docs/upnp-layer.md) and
+[DEVICE-VERIFICATION.md](DEVICE-VERIFICATION.md).
 
 ## Related
 
-- [philippe44/LMS-uPnP](https://github.com/philippe44/LMS-uPnP) -- the mature,
-  general-purpose LMS-to-UPnP bridge; see the comparison at the top.
-- [Lyrion Music Server](https://lyrion.org) -- the music server YeneY plays from.
-- [janbar/noson](https://github.com/janbar/noson) -- the Sonos library by
+- [philippe44/LMS-uPnP](https://github.com/philippe44/LMS-uPnP): the mature,
+  general-purpose LMS-to-UPnP bridge.
+- [Music Assistant](https://www.music-assistant.io): a music server with its own
+  Sonos support.
+- [Lyrion Music Server](https://lyrion.org): the music server YeneY plays from.
+- [LampaStream](https://github.com/ThaYapeMan/LampaStream): music-reactive Philips
+  Hue lighting that uses YeneY's timing.
+- [janbar/noson](https://github.com/janbar/noson): the Sonos library by
   Jean-Luc Barriere that YeneY started from; no longer included.
+
 ## License
 
 Project-owned code is licensed under the
@@ -884,153 +369,3 @@ Sonos is a trademark of Sonos, Inc. YeneY is an independent project and is not
 affiliated with or endorsed by Sonos, Inc., Logitech or the Lyrion project.
 
 Copyright (C) 2026 Jaap van Vliet
-
-Grouped HTTP recovery and investigation: [Decisions and findings](docs/grouped-range-recovery.md).
-
-Grouped playback reserve: `YENEY_START_LEAD_MS=1000` (default; valid 0–10000; 0 retains legacy pacing). Set `YENEY_DEBUG=stream` for per-response lead and TCP diagnostics. See [decisions and device trials](docs/start-lead.md).
-
-The opt-in playback-clock probe is documented in
-[Timing probe](docs/timing-probe.md). Enable it with `YENEY_TIMING_PROBE=1`; it
-never retimes audio. A locked clock now supplies continuous LMS position by
-default; `YENEY_LMS_POSITION_FROM_MODEL=0` restores RelTime-only reporting. With
-`YENEY_TIMING_PUBLISH=1`,
-LampaStream can read the opt-in SHM timing contract; inspect it with
-`scripts/yeney-timing-read <mac>`.
-
-Queue audio is 24-bit with a 48 kHz speaker cap. Modern queue-configured
-rooms advertise 192 kHz and yeney-core converts native local FLAC/ALAC with
-an integer-ratio linear-phase FIR: 88.2/176.4 kHz → 44.1 kHz and 96/192 kHz
-→ 48 kHz. Exact source counts give exact WAV lengths immediately, without
-waiting for LMS/SoX to finish a conversion. Remote sources use the stream
-path and the same conversion when necessary. Rates at or below 48 kHz pass
-through unchanged. Ordinary stream-mode rooms retain LMS/SoX conversion
-and their 48 kHz advertisement. Legacy `YENEY_AUDIO=16/44` retains the
-44.1 kHz advertisement and LMS conversion. Unsupported rate families and speaker errors
-stop/release queue playback and report failure to LMS. Queue diagnostics expose
-`rendered_rate` for the current owned item. `YENEY_QUEUE_POLL_MS` defaults
-to 500 ms; the relay checks every 100 ms during the first three seconds after
-Play/Seek/track changes and the final three seconds of an audible item. GENA
-events trigger fresh observations; successful position/transport polls are silent.
-
-The queue device suite accepts `--remote <favourite name or episode URL>` to
-choose its remote-source scenario. Feed/container entries are browsed for playable
-episodes; candidates that produce no SlimProto start within five seconds are
-unloaded, up to five attempts. If none is playable the scenario reports SKIP.
-See [device verification](DEVICE-VERIFICATION.md#remote-source-selection-in-the-queue-device-suite).
-
-Room-level topology, ownership, SOAP and transport faults stop LMS once without
-STMn or playlist advancement. Source/decode/length faults can fail a track;
-a second consecutive fault within ten seconds stops the room. Continuous stream
-display titles and durations follow LMS track changes; renderer DIDL is unchanged.
-
-Queue items carry the plain sanitised LMS title, with artist and album in their
-own musicTrack fields. An empty title stays empty; no non-empty queue fallback
-is added. `YENEY_TITLE_FORMAT` applies only to the stream path, whose radio-type
-DIDL makes the Sonos app display the title alone. Its artist-title default,
-sent-title log and continuous-stream display formatting remain unchanged.
-
-### Finite remote items
-
-| LMS source | Path | Published length |
-|---|---|---|
-| Local file | Relay / Sonos queue | Existing exact rendered frame count |
-| Remote, positive duration, `live_edge < 0` (or absent) | Relay, reason `remote-finite` | `ceil(duration × rate) + 5 × rate` frames |
-| Live (`live_edge >= 0`) or no positive duration | Existing stream path | Continuous stream |
-
-The named five-second margin is an upper bound promise, not silence padding.
-If production ends early, the connection ends at the real audio end. If an
-advertisement makes the episode longer, a continuation is inserted immediately
-after the episode, before any following track, preserving every rendered sample.
-Continuations share the title, artist, album and artwork and keep one LMS track
-and continuous episode position. Overflow is held in the compressed spool until its exact remaining length is known, with a deadline ten seconds before the current segment ends. At the deadline an unfinished producer gets one generous upper bound: overflow already produced plus the parent full declared duration, capped by room quota and WAV limits. Only audio exceeding that bound gets another continuation. Startup never waits for episode completion.
-
-All estimated items remain in the compressed spool for seek and resume after a
-long pause. Estimated playback raises the default per-room quota to 8 GiB;
-explicit `YENEY_QUEUE_DISK_MIB` still controls the quota. A measured three-hour,
-44.1 kHz, stereo 24-bit incompressible episode needed 2,868,842,882 disk bytes
-(2,857,680,000 PCM bytes). Current episode segments and the next item are retained. The budget accommodates
-two such incompressible three-hour episodes during decode-ahead.
-An explicitly inadequate quota fails with a logged storage fault; evicted history
-and future-range timeouts close the connection without fabricated audio.
-
-The generated-podcast regression uses the test-only `ffmpeg` encoder and the
-existing private LMS 9.1.1 harness.
-
-### Podcast metadata settings
-
-Native LMS Podcast sometimes supplies only a formatted title. The matching
-read-only feed menu supplies the plain episode title and podcast name; its
-exact suffix identifies the publisher without splitting names containing
-` by ` or ` from `. Ambiguous fields stay empty with a diagnostic. The existing
-two-second lookup budget and canonical source URL cache are retained.
-
-Process environment takes precedence over `room.<name>.<KEY>` in
-`/etc/yeney/config` (`YENEY_CONFIG` override), then the global `<KEY>`, then the
-default. Each setting accepts `yes|no`; invalid values warn once and use its
-default. Effective values and sources appear once at startup and in room status.
-This works for direct starts without systemd. LMS's own artist/album win;
-local tracks and the LMS display are unchanged. Continuations inherit metadata.
-
-At the ten-second deadline, an unfinished producer gets its upper-bound fallback
-even if no overflow is available yet. If the real source ends inside the parent
-bound, the unused fallback closes at real EOF without padding, another LMS start
-or a jump in the episode clock. Further items require an exceeded fallback bound.
-
-LMS seeks within retained queue audio keep the same WAV and queue row for native,
-unconverted ALAC, FLAC and PCM when the core proves the landing and the retained
-prefix covers its exact overlap. Trimmed ALAC uses the original source origin
-when attaching. Converted hi-res audio and AAC/MP3 with unprovable landings use a
-single speaker switch with `landed-frame-unknown`; an exact PCM mismatch uses
-`landed-pcm-mismatch` and preserves the retained WAV until that switch.
-
-Check the production position client without playing anything or contacting LMS:
-`yeney --position-source-check --ip <speaker-ip> --seconds 30`. This read-only
-check prints discovery, upgrade and subscription results, the selected source,
-and 5/20 Hz RTT and position-residual statistics. It can run beside a room service.
-With `--link-rates`, the same read-only check measures 5, 10, 20 and 40 requests
-per second. It reports the median, 95th percentile and maximum RTT for status
-answers and WebSocket pongs. The baseline measures status and ping in separate
-intervals. The interleaved trial sends a ping with each position question.
-The displayed rate is the target cadence and the answer counts show how much of
-it the link sustained.
-
-The queue room reports `position_link`, `position_precision_ms` and
-`position_trusted_answer_age_ms` beside `position_source`. The precision is
-an estimate from the answer times of samples used in the fit. It is unavailable
-when the current coordinate came only from an event. An uneven link keeps the
-last fitted position advancing while answers are delayed.
-
-Fallback room status includes `position_source_reason`; failed retries remind the
-journal at most once per ten minutes. For redacted device evidence, run
-`python3 scripts/sonos-local-api-capture.py --ip <speaker-ip> --seconds 60`
-and attach the printed tarball. Change track and pause during that capture.
-
-Queue mode can read the speaker's millisecond position from the Sonos local
-WebSocket API on port 1443. This read-only interface uses a public application
-key and the speaker's self-signed TLS certificate; it needs no Sonos account.
-It is an undocumented local interface, so socket failures fall back to UPnP and
-retry automatically. Room status shows `position_source` and
-`position_precision`. Set `YENEY_POSITION_SOURCE=upnp` (or
-`--position-source=upnp`) to force the previous position source.
-
-
-The final TIMING-03b loopback comparison measured a -0.813 ms steady median over
-120 seconds, all samples within ±30 ms, zero jumps and +0.003376 ms/s creep.
-App seek, rewind, LMS in-item seek, natural boundary and row switch aligned in
-101.308, 266.394, 107.455, 117.776 and 152.188 ms. Their 60-second median errors
-were -1.092, -1.172, -0.859, +0.099 and -1.181 ms; all samples were within
-±30 ms with zero jumps, and the largest absolute creep was 0.008924 ms/s.
-This uses 20 Hz precise-source sampling and coalesced immediate core status
-requests. The owner's two Port captures on 14 November had medians of +991
-and +1047 ms for speaker position minus LMS time; the new loopback figures
-await the owner device comparison. Full-gate acceptance was not achieved
-within the round's three-attempt limit. See
-[the position-source design](docs/designs/speaker-position-source.md) for the
-measurement table and retained historical failures.
-
-`yeney --version`, the startup journal and room status (`playback.firmware`)
-show the compile-time version `0.9.0-<bridge revision> (core <core revision>)`.
-Builds read the release from `VERSION` and both revisions from Git. In LMS,
-the player type is `yeney`. Its firmware field includes the speaker's shortened
-version when available, for example
-`0.9.0-<bridge revision> (core <core revision>; Sonos 86.10)`.
