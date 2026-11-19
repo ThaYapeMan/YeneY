@@ -22,6 +22,8 @@
 #include "stream_display.h"
 #include "queue_lms_commands.h"
 #include "upnp/list_rooms.h"
+#include "upnp/discovery.h"
+#include "upnp/xml.h"
 #include <iostream>
 
 #include "resume_state.h"
@@ -38,7 +40,7 @@
 #include "stream_session.h"
 #include "audio_mode.h"
 #include "obsolete_player.h"
-void runCoreClient(const char*, const uint8_t*, const char*);
+#include "core_sonos.h"
 
 extern "C" {
 unsigned get_squeezebox_stream_id(void);
@@ -55,6 +57,8 @@ unsigned get_squeezebox_stream_id(void);
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <future>
+#include <string_view>
 #include <mutex>
 #include <memory>
 #include <netdb.h>
@@ -531,14 +535,66 @@ static bool sendLmsCommand(const std::string& server, const uint8_t* mac, const 
     return ok;
 }
 
+static std::string lmsCapabilityText(const std::string& text)
+{
+    const auto utf8 = upnp::xmlSanitize(text);
+    std::string result;
+    for (size_t i = 0; i < utf8.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(utf8[i]);
+        // LMS splits the capability list on commas and each assignment on equals.
+        if (byte < 32 || byte == 127 || byte == ',' || byte == '=') continue;
+        if (byte == 0xc2 && i + 1 < utf8.size() &&
+            static_cast<unsigned char>(utf8[i + 1]) <= 0x9f) {
+            ++i; // UTF-8 encoded C1 control character.
+            continue;
+        }
+        if (byte == ' ' && (result.empty() || result.back() == ' ')) continue;
+        result += utf8[i];
+    }
+    if (!result.empty() && result.back() == ' ') result.pop_back();
+    return result;
+}
+
+static bridge::LmsIdentity lmsIdentity(std::string product, const std::string& firmware)
+{
+    constexpr std::string_view prefix = "Sonos ";
+    constexpr std::string_view suffix = " (YeneY)";
+    product = lmsCapabilityText(product);
+    std::string_view name = product;
+    while (name.substr(0, prefix.size()) == prefix) name.remove_prefix(prefix.size());
+    if (name == "Sonos") name = {};
+
+    std::string model = "Sonos";
+    if (!name.empty()) {
+        size_t end = 0;
+        constexpr auto limit = 64 - prefix.size() - suffix.size();
+        for (size_t count = 0; end < name.size() && count < limit; ++count) {
+            ++end;
+            while (end < name.size() && (static_cast<unsigned char>(name[end]) & 0xc0) == 0x80)
+                ++end;
+        }
+        if (name[end - 1] == ' ') --end;
+        model = prefix;
+        model.append(name.substr(0, end));
+    }
+    model.append(suffix);
+
+    std::string version = bridge::firmwareVersion();
+    const auto speakerVersion = lmsCapabilityText(firmware.substr(0, firmware.find('-')));
+    if (!speakerVersion.empty()) version.insert(version.size() - 1, "; Sonos " + speakerVersion);
+    return {std::move(model), std::move(version)};
+}
+
 // Runs yeney-core on a dedicated thread; returns when the
 // LMS connection is torn down (e.g. process shutdown).
-static void runPlayerClient(const char* server, std::string playerName)
+static void runPlayerClient(const char* server, std::string playerName,
+                            std::future<std::string> product, std::string firmware)
 {
+    const auto identity = lmsIdentity(product.get(), firmware);
     if (gQueueRoom)
-        bridge::runQueueCoreClient(server, gMac, playerName.c_str(), *gQueueRoom);
+        bridge::runQueueCoreClient(server, gMac, playerName.c_str(), identity, *gQueueRoom);
     else
-        runCoreClient(server, gMac, playerName.c_str());
+        runCoreClient(server, gMac, playerName.c_str(), identity);
     printf("player client thread stopped\n");
 }
 
@@ -1063,6 +1119,8 @@ int main(int argc, char** argv)
     }
     if (!gPlayer->discover(room, ip ? ip : "")) return EXIT_FAILURE;
     const auto selectedSpeaker = gPlayer->speaker();
+    // Overlap the selected room's description read with the rest of startup.
+    auto product = std::async(std::launch::async, upnp::deviceModel, selectedSpeaker.location);
     if (const auto source = findOption(argc, argv, "--position-source"))
         setenv("YENEY_POSITION_SOURCE", source, 1);
     bridge::playerName() = bridge::playerNames(selectedSpeaker.name, findOption(argc, argv, "--show-sonos-suffix"),
@@ -1129,7 +1187,8 @@ int main(int argc, char** argv)
     volume.reset(new bridge::VolumeWorker(std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer),
         gServer.substr(0, gServer.find(':')), volumeMac, bridge::roomVolumeSettings()));
     static StopTimer stopTimer;
-    std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(), bridge::playerName().displayName);
+    std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(),
+                             bridge::playerName().displayName, std::move(product), selectedSpeaker.firmware);
 
     runBridgeLoop(status);
 

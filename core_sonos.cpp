@@ -1,4 +1,3 @@
-#include "bridge_version.h"
 extern "C" void yeney_stream_track_changed() __attribute__((weak));
 extern "C" void yeney_stream_new_track() __attribute__((weak));
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
@@ -205,13 +204,14 @@ void CoreSonosSink::feed() {
         }
     }
 }
-void runCoreClient(const char* server, const uint8_t* mac, const char* name) {
+void runCoreClient(const char* server, const uint8_t* mac, const char* name, const bridge::LmsIdentity& identity) {
     for (int sig : {SIGINT, SIGTERM, SIGQUIT, SIGHUP}) std::signal(sig, stopCore);
     try {
         CoreSonosSink sink(mac);
         bridge::LmsIcon icon(mac, [](const auto &line) { printf("%s\n", line.c_str()); });
         yeney::Config config;
-        config.firmware = bridge::firmwareVersion();
+        config.modelName = identity.modelName;
+        config.firmware = identity.firmware;
         config.server = server ? server : "";
         auto colon = config.server.find(':');
         if (colon != std::string::npos) {

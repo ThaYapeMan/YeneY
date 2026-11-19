@@ -1,5 +1,6 @@
 #include "consumption_diagnostic.h"
 #pragma once
+#include "lms_identity.h"
 #include "third_party/yeney-core/core/player.h"
 #include "pcm_pack.h"
 #include <atomic>
@@ -68,5 +69,5 @@ public:
     void contentPosition(uint64_t frame, bool known) override { bridge::consumptionContent().set(frame, known); }
     bool paced() const override { return false; }
 };
-void runCoreClient(const char* server, const uint8_t* mac, const char* name);
+void runCoreClient(const char* server, const uint8_t* mac, const char* name, const bridge::LmsIdentity& identity);
 extern "C" int sonos_output_running();

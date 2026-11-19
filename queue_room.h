@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
+#include "lms_identity.h"
 #include "playback_mode.h"
 #include "room_status.h"
 #include "third_party/yeney-core/core/player.h"
@@ -27,5 +28,5 @@ public:
     void sourcePeer(const std::string &);
     std::optional<yeney::FlacSourceInfo> flacSourceInfo(uint64_t, std::optional<yeney::FlacSourceInfo>);
 };
-void runQueueCoreClient(const char *, const uint8_t *, const char *, QueueRoom &);
+void runQueueCoreClient(const char *, const uint8_t *, const char *, const LmsIdentity &, QueueRoom &);
 } // namespace bridge

@@ -275,12 +275,13 @@ bool QueueRoom::remoteSource(uint64_t id) const {
     return it == impl->remote.end() || it->second;
 }
 void QueueRoom::statusPlayer(yeney::Player *player) { impl->statusPlayer.store(player); }
-void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name, QueueRoom &room) {
+void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name, const LmsIdentity &identity, QueueRoom &room) {
     std::signal(SIGINT, stopRoom);
     std::signal(SIGTERM, stopRoom);
     LmsIcon icon(mac, [](const auto &line) { std::printf("%s\n", line.c_str()); });
     yeney::Config config;
-    config.firmware = bridge::firmwareVersion();
+    config.modelName = identity.modelName;
+    config.firmware = identity.firmware;
     std::string host = server ? server : "";
     auto colon = host.find(':');
     if (colon != std::string::npos) {
