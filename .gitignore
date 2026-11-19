@@ -121,3 +121,10 @@ field-cold-test
 /native-pcm-fixture
 
 /bridge_version.h
+
+*.d
+*.d.tmp
+/.build-flags
+/.build-flags.tmp
+/yeney-smoke-server
+/bridge_version.h.tmp
