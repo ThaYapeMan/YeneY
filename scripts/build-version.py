@@ -20,4 +20,6 @@ if sys.argv[1:] == ['--check']:
     if current:
         print('current')
 elif not current:
-    target.write_text(text)
+    pending = target.with_suffix(".h.tmp")
+    pending.write_text(text)
+    pending.replace(target)
