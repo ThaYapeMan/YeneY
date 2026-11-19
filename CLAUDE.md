@@ -21,6 +21,8 @@ YeneY is the only backend. `YENEY_UPNP=yeney` and `own` are accepted; other valu
 
 ## Our modifications
 
+- **LMS identity**. The player type is always exactly `yeney`. The model and version texts contain no commas.
+
 - **Podcast metadata**: `podcast_settings.h` resolves environment, room config, global config and defaults (`YENEY_PODCAST_TITLE_PLAIN=yes`, `YENEY_PODCAST_ARTIST_SHOW=yes`, `YENEY_PODCAST_ALBUM_PUBLISHER=no`). The bounded matching feed/menu lookup handles plain native titles and decorated feed names, resolves formatted by/from splits against episode/menu data, and caches title, podcast and publisher; incomplete cache entries trigger a fresh lookup. Step/reason diagnostics omit URLs and tokens. Own LMS fields win. Disabled or unknown fields are sent as empty elements; a Sonos discards DIDL without upnp:album. Sanitised logs/status match the sent values, without LMS display mutation. Direct starts work without systemd.
 
 - **Track metadata**: LMS CLI (port 9090) is queried for title, artist, album and artwork at stream start. `YENEY_TITLE_FORMAT=artist-title|title` formats the stream-path sent title only (default artist-title), because radio-type DIDL shows only the title. Queue musicTrack items always send the plain sanitised LMS title (empty stays empty), with separate artist/album fields; keep the sent-title log and cached renderer title consistent with DIDL. Continuous-stream status alone follows confirmed LMS track changes (title and duration) without rewriting DIDL. `scripts/meta-variant.py` is an owner-run device diagnostic.

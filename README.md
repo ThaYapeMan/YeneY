@@ -121,6 +121,14 @@ Sonos queue, while finite remote tracks use queue items with a 5 s margin and li
 story, including the Sonos pause problem YeneY solves, is in
 [How YeneY works](docs/how-it-works.md).
 
+## Home Assistant
+
+YeneY registers one LMS player per bridged Sonos speaker under the speaker's
+own network address. The LMS model text shows the Sonos product, for example
+`Sonos Play:1 (YeneY)`. From Home Assistant 2026.9, the YeneY and Sonos devices
+appear as linked devices because they share that address. You can browse the
+LMS library in Home Assistant and play it on the Sonos speaker.
+
 ## Installing
 
 The commands use `sudo`; in a container where you are already root, you can leave it out.
@@ -1020,8 +1028,9 @@ within the round's three-attempt limit. See
 [the position-source design](docs/designs/speaker-position-source.md) for the
 measurement table and retained historical failures.
 
-`yeney --version`, the startup journal, room status (`playback.firmware`) and
-the LMS player firmware field show the same compile-time version:
-`0.9.0-<bridge revision> (core <core revision>)`. Builds read the release from
-`VERSION` and both revisions from Git. HELO model identity remains
-`Model=yeney,ModelName=YeneY`.
+`yeney --version`, the startup journal and room status (`playback.firmware`)
+show the compile-time version `0.9.0-<bridge revision> (core <core revision>)`.
+Builds read the release from `VERSION` and both revisions from Git. In LMS,
+the player type is `yeney`. Its firmware field includes the speaker's shortened
+version when available, for example
+`0.9.0-<bridge revision> (core <core revision>; Sonos 86.10)`.
