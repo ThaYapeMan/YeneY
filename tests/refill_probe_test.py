@@ -188,6 +188,7 @@ def run():
         downloads.audio = full
         renderer = Coordinator(handler=Renderer)
         renderer.crossfade = False
+        renderer.realtime = True
         renderer.follow_controls = True
         renderer.fail_play = False
         renderer.missing = set()
@@ -225,6 +226,7 @@ def run():
                 assert calls[-3:] == ['show', 'stop', 'start']
                 path = work / 'normal.tar.gz'
                 experiment.archive(path)
+                assert all('start_advancing_ms' in row and 'join_delta_ms' in row for row in experiment.results)
                 inspect_archive(path)
                 check_ranges(experiment)
                 args.cases = ['wav', 'flac']
@@ -234,13 +236,11 @@ def run():
                 assert 'error' in failed.results[0] and 'error' not in failed.results[1]
                 assert calls[-3:] == ['show', 'stop', 'start'] and renderer.items == renderer.original
                 interrupted = new()
-                original_choose = interrupted.choose
-
-                def interrupt(uri):
-                    original_choose(uri)
+                def interrupt(_since, _seconds):
+                    time.sleep(.08)
                     raise KeyboardInterrupt
 
-                interrupted.choose = interrupt
+                interrupted.wait = interrupt
                 try:
                     interrupted.run('test-unit')
                 except KeyboardInterrupt:
@@ -249,6 +249,7 @@ def run():
                     raise AssertionError('interrupt was swallowed')
                 path = work / 'interrupted.tar.gz'
                 interrupted.archive(path)
+                assert interrupted.series, 'missing partial refill measurements'
                 inspect_archive(path)
                 assert calls[-3:] == ['show', 'stop', 'start'] and renderer.items == renderer.original
                 assert renderer.volume == 23

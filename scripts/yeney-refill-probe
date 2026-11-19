@@ -518,7 +518,7 @@ class Questions:
                             pos = None
                     except (ValueError, TypeError):
                         pos = None
-                    error = body.get('errorCode') or ('error' if header.get('type') == 'error' else '')
+                    error = body.get('errorCode') or ('error' if ws_error(raw) else '')
                     self.result('websocket', sent, time.monotonic(), pos, body.get('itemId', ''),
                                 body.get('playbackState', ''), error)
         except Exception as exc:
@@ -584,6 +584,16 @@ def local_route(host, port):
         return connection.getsockname()[0]
 
 
+def ws_error(message):
+    if not isinstance(message, list) or len(message) != 2:
+        return False
+    header, body = message
+    if not isinstance(header, dict) or not isinstance(body, dict):
+        return False
+    return bool(body.get('errorCode') or header.get('success') is False or
+                any('error' in str(header.get(key, '')).lower() for key in ('type', 'name', 'command')))
+
+
 def ws_check(speaker):
     with contextlib.closing(speaker.socket()) as ws:
         ws.send(json.dumps([dict(namespace='playback:1', command='getPlaybackStatus', cmdId='check',
@@ -597,7 +607,7 @@ def ws_check(speaker):
             if not isinstance(header, dict) or not isinstance(body, dict):
                 raise ValueError(f'bad WebSocket response; raw answer: {reply!r}')
             if str(header.get('cmdId')) == 'check':
-                if header.get('type') == 'error' or 'errorCode' in body:
+                if ws_error(reply):
                     raise ValueError(f'WebSocket position failed; raw answer: {reply!r}')
                 return
         raise ValueError('no WebSocket position answer')
@@ -777,6 +787,7 @@ class Experiment:
         paused = self.t()
         self.speaker.av('Pause')
         self.wait(paused, 30)
+        result['before_resume_position_s'] = self.latest_position(paused)
         resumed = self.t()
         self.speaker.av('Play', Speed=1)
         result['resume_playing_ms'] = (self.playing(resumed) - resumed) * 1000
@@ -785,15 +796,29 @@ class Experiment:
         target = max(0, int(self.duration - 12))
         join = self.seek(target)
         self.playing(join)
+        repeated = False
         deadline = join + (self.duration - target + 6) * self.scale
         while self.t() < deadline:
             observations = self.questions(join, self.t(), 'UPnP')
             following = next((row for row in observations if row['item'] == second), None)
             if following:
                 observed = (following['sent'] + following['received']) / 2
-                result['join_delta_ms'] = (observed - join - (self.duration - target) * self.scale) * 1000
+                expected_end = join + (self.duration - target) * self.scale
+                anchored = next((row for row in observations if row['item'] == first
+                                 and row['position_s'] is not None and row['position_s'] >= target), None)
+                if anchored:
+                    expected_end = ((anchored['sent'] + anchored['received']) / 2
+                                    + (self.duration - anchored['position_s']) * self.scale)
+                result['join_delta_ms'] = (observed - expected_end) * 1000
+                result['join_repeated'] = int(repeated)
                 return
+            first_positions = [row['position_s'] for row in observations
+                               if row['item'] == first and row['position_s'] is not None]
+            if any(previous >= target and current < target - 2
+                   for previous, current in zip(first_positions, first_positions[1:])):
+                repeated = True
             time.sleep(.25 * self.scale)
+        result['join_repeated'] = int(repeated)
         raise ValueError('second item did not start')
 
     def finalize_measurement(self, measurement):
@@ -835,6 +860,9 @@ class Experiment:
             if complete >= horizon:
                 result[f'bytes_{horizon}'] = sum(seconds[:horizon])
         result['peak_B_per_s'] = max(seconds)
+        result['playback_errors'] = sum(
+            row['kind'] == 'speaker' and row.get('protocol') == 'websocket' and ws_error(row.get('raw'))
+            for row in self.records.rows if started <= row['time'] < measurement['end'])
         playing_rate = self.server.items[next(iter(paths))].actual / self.duration
         last_fast = max((i for i, count in enumerate(seconds) if count > playing_rate * 1.05), default=-1)
         if complete == 40 and last_fast < 39:
@@ -972,7 +1000,9 @@ class Experiment:
                 columns.extend((f'{label}_{protocol}_{key}', f'{label} {short} {heading}')
                                for key, heading in metrics)
         columns.extend([('seek_requests', 'seek requests'), ('pause_position_s', 'pause s'),
-                        ('resume_position_s', 'resume position s'), ('failures', 'failures')])
+                        ('before_resume_position_s', 'before resume s'), ('resume_position_s', 'resume position s'),
+                        ('join_repeated', 'join repeats'), ('playback_errors', 'playback errors'),
+                        ('failures', 'failures')])
         render = lambda value: f'{value:.1f}' if value is not None else '—'
         table = ['case\t' + '\t'.join(name for _, name in columns)]
         table += [case + '\t' + '\t'.join(render(row.get(key)) for key, _ in columns)

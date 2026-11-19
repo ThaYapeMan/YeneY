@@ -14,7 +14,8 @@ Replace 123 with the track's LMS ID. The check uses read-only speaker requests.
 It confirms the local HTTP route and listener. The real speaker's ability to
 connect back is established when it first requests a queue item.
 
-Wait until the room is stopped and ungrouped. Run the same command without
+Wait until the room is stopped and ungrouped, with normal queue order and
+crossfade off. Run the same command without
 `--check` to play. Leave LMS and the Sonos app alone for about 25 minutes. The
 probe stops the Study bridge if it was running, temporarily appends two rows
 per case, and restarts the bridge when it exits. Ctrl-C saves partial results.
