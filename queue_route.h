@@ -16,7 +16,7 @@ class Route {
 public:
     using Resolver = std::function<std::shared_ptr<Item>(upnp::StreamRequest &)>;
     Route(std::string room, std::string session);
-    void registerWith(upnp::StreamServer &);
+    void registerWith(upnp::StreamServer &, std::string speakerAddress = {}, std::function<void()> activity = {});
     std::string publish(const std::string &room, uint64_t epoch, uint64_t revision,
                         const std::shared_ptr<Item> &, Resolver = {});
     // A deferred row supplies retained audio for an audio lookup and for its resolver.

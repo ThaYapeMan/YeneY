@@ -20,6 +20,8 @@ void QueueRoom::Impl::publish() {
     v.path = pathReason == "remote-source" ? "stream" : "relay";
     v.state = state;
     v.transportStatus = transportStatus;
+    if (unansweredReads)
+        v.speakerSilentMs = std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - firstUnanswered).count();
     v.positionSource = activePositionSource.empty() ? "upnp" : activePositionSource;
     v.positionPrecision = activePositionPrecision;
     v.positionSourceReason = activePositionReason;

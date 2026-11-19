@@ -43,7 +43,7 @@ void OwnSpeakerControl::startEvents() {
         }, [this](const GenaEvent& event) { return receiveEvent(event); }, routeAddress, [this] {
             const auto s = speaker();
             return groupVolume && s.coordinator == s.name && s.members.size() > 1 ? s.ip : "";
-        }));
+        }, [this](const std::string& address) { roomAnswered(address); }));
     } catch (const std::exception& error) {
         printf("yeney: subscription result=unavailable reason=%s\n", logValue(error.what()).c_str());
     }
@@ -75,6 +75,7 @@ void OwnSpeakerControl::queueEvents(GenaHandler handler, bool ownsPosition) {
     queueOwnsPosition = ownsPosition;
 }
 bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
+    roomAnswered(event.address);
     if (event.service == Service::RenderingControl || event.service == Service::GroupRenderingControl) ++volumeEvents;
     GenaHandler observer;
     {
@@ -98,6 +99,12 @@ bool OwnSpeakerControl::receiveEvent(const GenaEvent& event) {
         serviceName(event.service), logValue(state.snapshot().transport.state).c_str(), event.sequence);
     if (eventCallback) eventCallback();
     return true;
+}
+void OwnSpeakerControl::roomAnswered(const std::string& address) {
+    if (address.empty() || address != speaker().ip) return;
+    const auto now = Clock::now().time_since_epoch().count();
+    auto previous = roomAnswerAt.load();
+    while (previous < now && !roomAnswerAt.compare_exchange_weak(previous, now)) {}
 }
 Speaker OwnSpeakerControl::speaker() const { return state.snapshot().room; }
 bool OwnSpeakerControl::refreshTopology() { return topology(speaker().ip, false); }
@@ -131,6 +138,7 @@ SoapResult OwnSpeakerControl::call(const std::string& action, const SoapArgument
     auto http = httpPost({address, path, speakerPort}, {
         {"Content-Type", "text/xml"}, {"SOAPACTION", "\"urn:schemas-upnp-org:service:" + service + ":1#" + action + "\""}
     }, soapBody(service, action, args), actionTimeoutMs(action));
+    if (http.status) roomAnswered(address);
     if (!http.localAddress.empty()) { std::lock_guard<std::mutex> lock(runtimeMutex); localAddress = http.localAddress; }
     auto result = parseSoap(http.body, action);
     if (!result.faultCode.empty() || !result.faultDescription.empty()) {

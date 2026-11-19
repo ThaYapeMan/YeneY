@@ -76,7 +76,13 @@ void QueueCoordinator::discover() {
     HttpUrl description;
     if (!parseHttpUrl(room.location, description) || description.host != room.ip)
         throw std::runtime_error("queue-device-description-unavailable");
-    auto response = httpGet(description, timeout);
+    auto response = read([&] {
+        auto result = httpGet(description, readDeadline ? readDeadline(timeout) : timeout);
+        if (!result.status && waitForRead)
+            throw QueueReadUnanswered("device-description", result.error);
+        if (result.status && answered) answered();
+        return result;
+    });
     XmlNode root;
     if (response.status != 200 || !response.error.empty() || !parseXml(response.body, root))
         throw std::runtime_error("queue-device-description-invalid");
@@ -118,6 +124,12 @@ void QueueCoordinator::discover() {
 }
 SoapResult QueueCoordinator::raw(const std::string &service, const std::string &action,
                                  const SoapArguments &args) {
+    const bool readOnly = action.compare(0, 3, "Get") == 0 || action == "Browse";
+    if (readOnly) return read([&] { return request(service, action, args, true); });
+    return request(service, action, args, false);
+}
+SoapResult QueueCoordinator::request(const std::string &service, const std::string &action,
+                                     const SoapArguments &args, bool readOnly) {
     discover();
     const auto &endpoint = services.at(service);
     std::string body = "<?xml version=\"1.0\" encoding=\"utf-8\"?>"
@@ -130,7 +142,9 @@ SoapResult QueueCoordinator::raw(const std::string &service, const std::string &
     auto http =
         httpPost(endpoint.url,
                  {{"Content-Type", "text/xml"}, {"SOAPACTION", "\"" + endpoint.urn + "#" + action + "\""}},
-                 body, timeout);
+                 body, readOnly && readDeadline ? readDeadline(timeout) : timeout);
+    if (!http.status && readOnly && waitForRead) throw QueueReadUnanswered(action, http.error);
+    if (http.status && answered) answered();
     auto result = parseSoap(http.body, action);
     const bool poll = action == "GetPositionInfo" || action == "GetTransportInfo" || action == "GetMediaInfo";
     if (log && (!poll || !http.error.empty() || http.status != 200 || !result.ok))
@@ -180,6 +194,9 @@ SoapResult QueueCoordinator::releaseTransport(const std::string &action, const S
     return raw("AVTransport", action, args);
 }
 QueueSnapshot QueueCoordinator::browse() {
+    return read([&] { return browseOnce(); });
+}
+QueueSnapshot QueueCoordinator::browseOnce() {
     QueueSnapshot snapshot;
     uint32_t total = 0;
     do {
@@ -209,6 +226,9 @@ QueueSnapshot QueueCoordinator::browse() {
     return snapshot;
 }
 std::vector<SavedQueue> QueueCoordinator::playlists() {
+    return read([&] { return playlistsOnce(); });
+}
+std::vector<SavedQueue> QueueCoordinator::playlistsOnce() {
     std::vector<SavedQueue> saved;
     std::set<std::string> ids;
     uint32_t total = 0, revision = 0;
@@ -251,6 +271,7 @@ std::vector<SavedQueue> QueueCoordinator::playlists() {
     return saved;
 }
 void QueueCoordinator::destroyPlaylist(const std::string &id) {
+    read([&] {
     auto saved = playlists();
     auto item = std::find_if(saved.begin(), saved.end(), [&](const auto &p) { return p.id == id; });
     if (item == saved.end() || item->title.compare(0, 13, "Before YeneY "))
@@ -266,5 +287,6 @@ void QueueCoordinator::destroyPlaylist(const std::string &id) {
         return;
     }
     raw("ContentDirectory", "DestroyObject", {{"ObjectID", id}});
+    });
 }
 } // namespace upnp

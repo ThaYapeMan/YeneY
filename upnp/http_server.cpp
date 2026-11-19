@@ -98,6 +98,7 @@ struct Request : StreamRequest {
     Method method() const override { return verb == "GET" ? Method::Get : verb == "HEAD" ? Method::Head : Method::Other; }
     std::string parameter(const std::string& key) const override { auto i=params.find(key); return i == params.end() ? "" : i->second; }
     RequestHeaders headers() const override { return fields; }
+    std::string peerAddress() const override { return io.address; }
     int64_t connectionBacklog() const override { return io.backlog ? io.backlog() : -1; }
     uint64_t connectionSentBytes() const override { return io.sentBytes ? io.sentBytes() : UINT64_MAX; }
     std::string connectionDiagnostics() const override { return io.diagnostics ? io.diagnostics() : StreamRequest::connectionDiagnostics(); }
@@ -233,10 +234,15 @@ struct HttpServer::Impl {
             wire.append(bytes, n);
         }
         if (stopping) return;
+        sockaddr_in peer{};
+        socklen_t peerSize = sizeof(peer);
+        char address[INET_ADDRSTRLEN]{};
+        if (!getpeername(client->fd, reinterpret_cast<sockaddr*>(&peer), &peerSize) && peer.sin_family == AF_INET)
+            inet_ntop(AF_INET, &peer.sin_addr, address, sizeof(address));
         HttpRequestIO io{
             [client](const char* p,size_t n) { return client->send(p,n); },
             [client] { return client->closed(); }, [this] { return stopping.load(); },
-            [client](unsigned ms) { client->timeout(ms); }, [client] { client->disconnect(); }, [client] { return client->diagnostics(); }, [client] { return client->sentBytes.load(); }, [client] { return client->backlog(); }};
+            [client](unsigned ms) { client->timeout(ms); }, [client] { client->disconnect(); }, [client] { return client->diagnostics(); }, [client] { return client->sentBytes.load(); }, [client] { return client->backlog(); }, address};
         auto request = httpRequestFromHeaders(wire, std::move(io));
         if (error || !request) {
             const auto reply = response(error ? error : wire.compare(0, 7, "NOTIFY ") == 0 ? 412 : 400) + "\r\n"; client->send(reply.data(),reply.size()); return;
@@ -263,6 +269,7 @@ struct HttpServer::Impl {
             if (stopping) return;
             bool accepted = false;
             if (parseGenaBody(wire.substr(start,length), event)) {
+                event.address = address;
                 std::lock_guard<std::mutex> lock(notifyMutex);
                 accepted = notifyHandler && notifyHandler(event);
             }

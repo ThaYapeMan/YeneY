@@ -31,6 +31,7 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
       queue(room.name, queue_audio::Config::environment(), 60), paths(queue, rawMac), window(queueRows(room.name)),
       route(room.name, session), coordinator(room, logQueue),
       actions([this](const auto &name, const auto &args) {
+          return coordinator.read([&] {
           // The acquisition topology is reused, but GENA can revoke it before
           // any write, including a write in the middle of a mirror batch.
           if (name.compare(0, 3, "Get") && speaker->speaker().coordinator != room.name) {
@@ -129,16 +130,21 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
               speakerChanges->transportSelected("x-rincon-queue:" + room.uuid + "#0");
           }
           return result;
+          });
       }),
       ownership(ownershipIO(), session) {
+    coordinator.readRecovery(
+        [this](const auto &error) { waitForSpeakerRead(error); },
+        [this] { speakerAnswered(); },
+        [this](unsigned timeout) { return speakerReadDeadline(timeout); });
     auto colon = host.find(':');
     if (colon != std::string::npos)
         host.resize(colon);
     if (positionSetting(room.name) != "upnp")
-        websocketPosition = std::make_shared<WebsocketSpeakerPosition>(room.ip, false, logQueue);
+        websocketPosition = std::make_shared<WebsocketSpeakerPosition>(room.ip, false, logQueue, speakerActivity());
     if (websocketPosition) positionSources.add(websocketPosition);
     positionSources.add(upnpPosition);
-    route.registerWith(*http);
+    route.registerWith(*http, room.ip, speakerActivity());
     relayEvents(true);
     paths.describeSource = [this](uint64_t id) {
         const auto source = rowOwner.sourceForStart();

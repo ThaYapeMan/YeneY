@@ -121,6 +121,10 @@ void QueueRoom::Impl::beginSelection(uint64_t request) {
     std::lock_guard<std::mutex> lock(mutex);
     if (request != rowOwner.currentRequest())
         return;
+    if (roomStopped && !stopAcknowledged && fault == "speaker-unreachable") {
+        selectionDeferred = false;
+        return;
+    }
     if (stoppedPlay && stopAcknowledged) roomStopped = false;
     selectedRequest = request;
     selectedCommand = requestedCommand;

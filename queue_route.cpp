@@ -23,6 +23,8 @@ struct Route::State {
     };
     std::map<std::string, Entry> entries;
     std::set<uint64_t> revoked;
+    std::string speakerAddress;
+    std::function<void()> activity;
     State(std::string room, std::string session) : room(std::move(room)), session(std::move(session)) {}
 };
 Route::Route(std::string r, std::string s) {
@@ -30,7 +32,9 @@ Route::Route(std::string r, std::string s) {
         throw std::invalid_argument("invalid queue route owner");
     state = std::make_shared<State>(std::move(r), std::move(s));
 }
-void Route::registerWith(upnp::StreamServer &server) {
+void Route::registerWith(upnp::StreamServer &server, std::string address, std::function<void()> activity) {
+    state->speakerAddress = std::move(address);
+    state->activity = std::move(activity);
     // Each connection retains room state, even if the controller is released.
     // Revocation fences new readers while existing readers retain their asset.
     server.registerStream("queue", "/yeney/q/", "YeneY queue", "audio/wav", "",
@@ -89,6 +93,9 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         std::lock_guard<std::mutex> lock(state->mutex);
         auto i = state->entries.find(key);
         if (i != state->entries.end()) {
+            if (state->activity && r.peerAddress() == state->speakerAddress &&
+                (r.method() == upnp::StreamRequest::Method::Get || r.method() == upnp::StreamRequest::Method::Head))
+                state->activity();
             item = i->second.item;
             resolve = i->second.resolve;
             rowManaged = bool(i->second.ready);

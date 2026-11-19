@@ -329,6 +329,7 @@ void QueueRoom::Impl::reconcileWindow() {
         return Edits::Snapshot{value.update, value.uris};
     };
     io.remove = [this, &originalUri](auto update, auto first, auto count) {
+        coordinator.read([&] {
         const auto stamp = std::chrono::steady_clock::now();
         const auto position = actions.position().response;
         const auto evidence = speakerChanges->poll(stamp,
@@ -344,6 +345,7 @@ void QueueRoom::Impl::reconcileWindow() {
             }
         }
         actions.remove(update, first, count);
+        });
     };
     io.insert = [this, &entries](auto token, auto segment, auto ordinal) {
         const auto &entry = entries.at(token).at(segment);

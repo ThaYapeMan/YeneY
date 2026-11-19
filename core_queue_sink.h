@@ -69,6 +69,10 @@ class CoreQueueSink : public yeney::Sink {
     std::function<bool(char, uint32_t)> commandHandler;
     std::optional<yeney::PlaybackState> speakerState;
     std::optional<uint32_t> speakerElapsed;
+    uint64_t recoveredClockOccurrence = 0;
+    std::chrono::steady_clock::time_point speakerElapsedAt{};
+    std::atomic_bool extrapolateSpeaker{false};
+    std::optional<uint32_t> coarseSpeakerElapsed() const;
     std::function<std::optional<uint32_t>()> preciseElapsed;
     uint64_t preciseOccurrence = 0;
     uint64_t interruptedAudible = 0;
@@ -141,8 +145,9 @@ public:
     bool takeQueueCachedStart() override { return cachedStartRequested.exchange(false); }
     bool takeQueueRefetch() override { return refetchRequested.exchange(false); }
     void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs, uint32_t seekPositionMs);
-    void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState);
+    void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState, bool recovered = false);
     void positionClock(uint64_t occurrence, std::function<std::optional<uint32_t>()> clock);
+    void extrapolateSpeakerClock(bool enabled) { extrapolateSpeaker = enabled; }
     std::optional<uint32_t> relativeElapsedMs(uint64_t occurrence, uint32_t coarseOrigin) const;
     bool speakerDriven() const override;
     std::optional<yeney::EncodedSpool> encodedSpool(uint64_t) override;

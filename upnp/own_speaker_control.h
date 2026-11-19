@@ -26,6 +26,9 @@ public:
     void queueEvents(GenaHandler, bool ownsPosition = true);
     void enableGroupVolume() { groupVolume = true; }
     uint64_t volumeRevision() const { return volumeEvents.load(); }
+    std::chrono::steady_clock::time_point lastRoomAnswer() const {
+        return std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(roomAnswerAt.load()));
+    }
     SoapResult volumeAction(const std::string& action, const SoapArguments& args, bool group) {
         const auto current = speaker();
         const bool currentGroup = current.coordinator == current.name && current.members.size() > 1;
@@ -68,6 +71,8 @@ private:
     std::function<void()> eventCallback;
     std::atomic<bool> groupVolume{false};
     std::atomic<uint64_t> volumeEvents{0};
+    std::atomic<Clock::duration::rep> roomAnswerAt{0};
+    void roomAnswered(const std::string& address);
     GenaHandler queueObserver;
     bool queueOwnsPosition = true;
     std::mutex queueObserverMutex;

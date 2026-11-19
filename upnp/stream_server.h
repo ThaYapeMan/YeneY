@@ -32,6 +32,7 @@ public:
     virtual Method method() const = 0;
     virtual std::string parameter(const std::string& name) const = 0;
     virtual RequestHeaders headers() const { return {}; }
+    virtual std::string peerAddress() const { return {}; }
     std::string header(std::string name) const {
         for (auto& c : name) c = std::tolower(static_cast<unsigned char>(c));
         for (auto h : headers()) {

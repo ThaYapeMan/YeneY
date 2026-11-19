@@ -15,6 +15,7 @@ struct HttpRequestIO {
     std::function<std::string()> diagnostics = {};
     std::function<uint64_t()> sentBytes = {};
     std::function<int64_t()> backlog = {};
+    std::string address = {};
 };
 std::unique_ptr<StreamRequest> httpRequestFromHeaders(const std::string&, HttpRequestIO);
 class HttpServer : public StreamServer {

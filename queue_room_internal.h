@@ -36,6 +36,8 @@ unsigned pollSetting();
 } // namespace queue_room_detail
 using namespace queue_room_detail;
 struct TrackFault : std::runtime_error { using std::runtime_error::runtime_error; };
+struct SpeakerUnreachable {};
+struct QueueRoomClosing {};
 struct QueueRoom::Impl {
     std::atomic<yeney::Player *> statusPlayer{nullptr};
     void requestStatus() { if (auto player = statusPlayer.load()) player->requestStatus(); }
@@ -71,6 +73,23 @@ struct QueueRoom::Impl {
     std::string pathReason = "local-source";
     queue_audio::Route route;
     upnp::QueueCoordinator coordinator;
+    using Clock = std::chrono::steady_clock;
+    std::shared_ptr<std::atomic<Clock::duration::rep>> lastSpeakerLife =
+        std::make_shared<std::atomic<Clock::duration::rep>>(0);
+    auto speakerActivity() const {
+        return [stamp = lastSpeakerLife] {
+            const auto now = Clock::now().time_since_epoch().count();
+            auto previous = stamp->load();
+            while (previous < now && !stamp->compare_exchange_weak(previous, now)) {}
+        };
+    }
+    Clock::time_point readStarted{}, firstUnanswered{};
+    unsigned unansweredReads = 0;
+    bool recoveredSpeakerPosition = false;
+    std::chrono::milliseconds speakerSilence() const;
+    unsigned speakerReadDeadline(unsigned timeout);
+    void waitForSpeakerRead(const upnp::QueueReadUnanswered &);
+    void speakerAnswered();
     upnp::QueueActions actions;
     std::set<std::string> owned;
     upnp::QueueOwnership ownership;
@@ -162,7 +181,7 @@ struct QueueRoom::Impl {
     void selectPath();
     void handoffComplete();
     void publish();
-    void release(bool stop = false);
+    void release(bool stop = false, bool cleanupSpeaker = true);
     void releaseWindowParent(uint64_t token, uint64_t before = UINT64_MAX);
     void command(char c, uint64_t next);
     void append();

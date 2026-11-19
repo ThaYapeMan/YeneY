@@ -67,7 +67,7 @@ void QueueRoom::Impl::observe() {
         std::lock_guard<std::mutex> lock(mutex);
         return !commands.empty();
     };
-    const auto now = std::chrono::steady_clock::now();
+    auto now = std::chrono::steady_clock::now();
     const auto selectedPosition = positionSources.select(positionMonotonic());
     auto precise = selectedPosition.first && std::string(selectedPosition.first->precision()) == "ms" ?
         selectedPosition.second : std::nullopt;
@@ -137,13 +137,14 @@ void QueueRoom::Impl::observe() {
         precise->item != lastWebsocketItem ||
         (precise && previousPrecisePosition && precise->state != previousPrecisePosition->state);
     if (identityPoll) {
+    const bool observed = coordinator.read([&] {
     nextIdentityPoll = now + std::chrono::seconds(1);
     const auto positionStarted = std::chrono::steady_clock::now();
     const auto p = actions.position().response;
     auto position = speakerChanges->poll(positionStarted,
         {{"CurrentTrack", p.value("Track")}, {"CurrentTrackURI", p.value("TrackURI")},
          {"RelativeTimePosition", p.value("RelTime")}});
-    if (pending()) return;
+    if (pending()) return false;
     const auto transportStarted = std::chrono::steady_clock::now();
     const auto transportRevision = speaker->transportRevision();
     const auto info = coordinator.transport("GetTransportInfo", {{"InstanceID", "0"}}).response;
@@ -151,7 +152,7 @@ void QueueRoom::Impl::observe() {
     const auto transportFields = speakerChanges->poll(transportStarted,
         {{"TransportState", info.value("CurrentTransportState")},
          {"TransportStatus", info.value("CurrentTransportStatus")}});
-    if (pending()) return;
+    if (pending()) return false;
     const auto mediaStarted = std::chrono::steady_clock::now();
     const auto media = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response;
     const auto mediaFields = speakerChanges->poll(mediaStarted,
@@ -160,6 +161,10 @@ void QueueRoom::Impl::observe() {
     cachedTransport = transportFields;
     cachedMedia = mediaFields;
     cachedMediaUri = media.child("CurrentURI");
+    return true;
+    });
+    if (!observed) return;
+    now = std::chrono::steady_clock::now();
     if (precise) {
         // The serialized identity requests can span a buffering release.
         // Use the newer clock only for the item whose identity was observed.
@@ -450,7 +455,8 @@ void QueueRoom::Impl::observe() {
         } catch (const std::exception &) { logQueue("pause position baseline unavailable"); }
     }
     queue.speakerPosition(current, naturalEnd ? realEnd :
-                          elapsedMs * it->item->descriptor().rate / 1000, playback);
+                          elapsedMs * it->item->descriptor().rate / 1000, playback,
+                          std::exchange(recoveredSpeakerPosition, false));
     if (precise && !naturalEnd) {
         const auto owner = queue.audibleOccurrence();
         const auto baseline = queue.audibleElapsedMs(owner);

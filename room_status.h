@@ -23,6 +23,7 @@ struct ModeStatus {
     std::optional<double> positionPrecisionMs, positionLastTrustedAnswer;
     bool owned = false;
     uint64_t occurrence = 0;
+    uint64_t speakerSilentMs = 0;
     uint32_t renderedRate = 0;
     std::vector<std::string> ownedUris;
     std::string currentUri, lastFault, title;
@@ -92,6 +93,7 @@ public:
                 << ",\"speaker_quality\":" << q(v.speakerQuality)
                 << ",\"position_source_reason\":" << q(v.positionSourceReason)
                 << ",\"transport_status\":" << q(v.transportStatus)
+                << ",\"speaker_silent_ms\":" << v.speakerSilentMs
                 << ",\"occurrence\":" << v.occurrence << ",\"owned\":" << (v.owned ? "true" : "false")
                 << ",\"rendered_rate\":" << v.renderedRate << ",\"current_owned_item\":" << q(queueUriLog(v.currentUri))
                 << ",\"last_fault\":" << q(queueUriLog(v.lastFault)) << ",\"owned_item_uris\":[";

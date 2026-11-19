@@ -1,6 +1,50 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
 namespace bridge {
+namespace {
+// Allow a speaker to recover from a short radio interruption. End the room
+// only after 20 s without any evidence that it can still communicate.
+constexpr auto speakerUnreachableAfter = std::chrono::seconds(20);
+}
+std::chrono::milliseconds QueueRoom::Impl::speakerSilence() const {
+    auto last = Clock::time_point(Clock::duration(lastSpeakerLife->load()));
+    last = std::max(last, speaker->lastRoomAnswer());
+    if (last == Clock::time_point{}) last = firstUnanswered;
+    return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - last);
+}
+unsigned QueueRoom::Impl::speakerReadDeadline(unsigned timeout) {
+    readStarted = Clock::now();
+    if (!releasing && started) queue.extrapolateSpeakerClock(true);
+    if (releasing || !unansweredReads) return timeout;
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(speakerUnreachableAfter) - speakerSilence();
+    return unsigned(std::clamp<int64_t>(remaining.count(), 1, timeout));
+}
+void QueueRoom::Impl::waitForSpeakerRead(const upnp::QueueReadUnanswered &error) {
+    if (releasing) throw;
+    if (++unansweredReads == 1) {
+        firstUnanswered = readStarted;
+        logQueue("speaker silent action=" + error.action + " error=" + error.what());
+    }
+    if (speakerSilence() >= speakerUnreachableAfter) throw SpeakerUnreachable{};
+    publish();
+    const auto backoff = std::chrono::milliseconds(250 * (1u << std::min(unansweredReads - 1, 2u)));
+    const auto timeLeft = speakerUnreachableAfter - speakerSilence();
+    std::unique_lock<std::mutex> lock(mutex);
+    if (changed.wait_for(lock, std::min(Clock::duration(backoff), Clock::duration(timeLeft)), [this] { return closing; }))
+        throw QueueRoomClosing{};
+    if (speakerSilence() >= speakerUnreachableAfter) throw SpeakerUnreachable{};
+}
+void QueueRoom::Impl::speakerAnswered() {
+    const auto now = Clock::now();
+    speakerActivity()();
+    queue.extrapolateSpeakerClock(false);
+    if (!unansweredReads) return;
+    const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - firstUnanswered).count();
+    logQueue("speaker answering silent_ms=" + std::to_string(duration) + " unanswered=" + std::to_string(unansweredReads));
+    unansweredReads = 0;
+    recoveredSpeakerPosition = true;
+    publish();
+}
 void QueueRoom::Impl::fastPoll() {
     fastUntil = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     nextPoll = {};
@@ -25,9 +69,13 @@ upnp::QueueOwnershipIO QueueRoom::Impl::ownershipIO() {
     };
     io.prepareTransport = [this] {
         const auto ownQueue = "x-rincon-queue:" + room.uuid + "#0";
-        const auto uri = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
-        if (uri == ownQueue) return;
-        actions.selectQueue(room.uuid);
+        const bool switched = coordinator.read([&] {
+            const auto uri = coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI");
+            if (uri == ownQueue) return false;
+            actions.selectQueue(room.uuid);
+            return true;
+        });
+        if (!switched) return;
         if (coordinator.transport("GetMediaInfo", {{"InstanceID", "0"}}).response.value("CurrentURI") != ownQueue)
             throw std::runtime_error("queue-transport-switch-unconfirmed");
         queueSelectedForAdmission = true;
@@ -64,7 +112,8 @@ void QueueRoom::Impl::releaseWindowParent(uint64_t token, uint64_t before) {
     for (const auto source : rowOwner.earlierSources(token, before))
         queue.releaseParent(source);
 }
-void QueueRoom::Impl::release(bool stop) {
+void QueueRoom::Impl::release(bool stop, bool cleanupSpeaker) {
+    queue.extrapolateSpeakerClock(false);
     const auto &items = rowOwner.layout();
     generationRebuildEdits.reset();
     refreshUpcoming = false;
@@ -99,11 +148,12 @@ void QueueRoom::Impl::release(bool stop) {
     rowOwner.clearTransitionNotes();
     rowOwner.commitLayout({});
     releasing = true;
-    ownership.release(!sourceAway,
+    ownership.release(cleanupSpeaker && !sourceAway,
                       [cleanupOwned = std::move(cleanupOwned)](const auto &uri) { return cleanupOwned.count(uri) != 0; }, stop);
     releasing = false;
     coordinator.invalidateIdentity();
     started = false;
+    recoveredSpeakerPosition = false;
     waitingForPlay = false;
     current = 0;
     lastElapsed = 0;
@@ -551,13 +601,22 @@ void QueueRoom::Impl::append() {
 void QueueRoom::Impl::roomFault(const std::string &reason, bool member) {
     if (roomStopped) return;
     roomStopped = true;
-    logQueue("end decision=fault occurrence=" + std::to_string(current) + " reason=" + reason);
+    const bool unreachable = reason == "speaker-unreachable";
+    logQueue("end decision=fault occurrence=" + std::to_string(current) + " reason=" + reason +
+             (unreachable ? " silent_ms=" + std::to_string(speakerSilence().count()) : ""));
     fault = reason;
     faulted = true;
     selecting = selectionKnown = false;
+    if (unreachable) {
+        std::lock_guard<std::mutex> lock(mutex);
+        // A natural decode-ahead start can arrive during the unanswered
+        // read. Retire it before the LMS stop acknowledgement is queued.
+        rowOwner.cancelRequest();
+        selectionDeferred = false;
+    }
     paths.cancelSelection();
     if (!member) {
-        try { release(!externalReleased); }
+        try { release(!externalReleased, !unreachable); }
         catch (const std::exception &e) { logQueue("release failed=" + std::string(e.what())); }
     }
     if (member) {
@@ -604,6 +663,8 @@ void QueueRoom::Impl::run() {
             pending.swap(commands);
         }
         try {
+            if (started && paths.isRelay() && speakerSilence() >= speakerUnreachableAfter)
+                throw SpeakerUnreachable{};
             for (const auto &c : pending) {
                 if (c.first == 'L') activateLazy(c.second);
                 else if (c.first == 'I')
@@ -673,6 +734,12 @@ void QueueRoom::Impl::run() {
             advanceSelections();
             trimHistory();
             reconcileWindow();
+        } catch (const QueueRoomClosing &) {
+            break;
+        } catch (const SpeakerUnreachable &) {
+            roomFault("speaker-unreachable");
+            unansweredReads = 0;
+            *lastSpeakerLife = 0;
         } catch (const queue_audio::ItemCancelled &) {
             // Producer cancellation raced a snapshot; observe the next run.
         } catch (const std::exception &e) {

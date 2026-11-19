@@ -12,6 +12,7 @@ struct GenaEvent {
     std::string body;
     StateUpdate update;
     std::vector<Speaker> topology;
+    std::string address;
 };
 using GenaHandler = std::function<bool(const GenaEvent&)>;
 // Validation is independent of the shared HTTP listener and bridge state.

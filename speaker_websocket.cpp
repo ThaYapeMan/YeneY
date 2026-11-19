@@ -184,6 +184,7 @@ class Tls {
     bool websocketReady = false;
 public:
     std::function<void(const std::string &)> observe = [](const std::string &) {};
+    std::function<void()> activity;
     explicit Tls(std::shared_ptr<ConnectionCounts> c = {}) : counts(std::move(c)) {}
     Tls(const Tls &) = delete;
     ~Tls() {
@@ -410,6 +411,9 @@ public:
                     if (opcode >= 8 && (!(first & 128) || size > 125))
                         throw std::runtime_error("invalid websocket control frame");
                     if (buffered.size() >= offset + size) {
+                        if (activity && (opcode == 8 || opcode == 9 || opcode == 10 ||
+                                         (first & 128 && (opcode == 0 || opcode == 1))))
+                            activity();
                         const auto body = buffered.substr(offset, size);
                         buffered.erase(0, offset + size);
                         const auto age = " age_s=" + std::to_string(positionMonotonic()-connected);
@@ -487,6 +491,7 @@ public:
         const Fields info(discovery);
         group = info["groupId"]; household = info["householdId"];
         if (group.empty() || household.empty()) throw std::runtime_error("local info missing identity");
+        if (connection.activity) connection.activity();
         auto endpoint = host;
         const auto url = info["websocketUrl"];
         if (!url.empty()) {
@@ -505,6 +510,7 @@ public:
         }
         step("local/info OK");
         connection.websocket(endpoint);
+        if (connection.activity) connection.activity();
         step("WebSocket upgrade OK");
         subscribe();
         const auto deadline = positionMonotonic() + 3;
@@ -784,6 +790,7 @@ struct WebsocketSpeakerPosition::Impl {
     std::vector<std::string> journal;
     std::string rawState;
     std::function<void(const std::string &)> journalSink;
+    std::function<void()> activity;
     void emit(const std::string &line) {
         if (journalSink) journalSink(line);
         else journal.push_back(line);
@@ -861,8 +868,10 @@ struct WebsocketSpeakerPosition::Impl {
         return true;
     }
     std::thread worker;
-    explicit Impl(std::string h, bool d, std::function<void(const std::string &)> sink)
-        : host(std::move(h)), diagnostic(d), journalSink(std::move(sink)), worker([this] { run(); }) {}
+    explicit Impl(std::string h, bool d, std::function<void(const std::string &)> sink,
+                  std::function<void()> heard)
+        : host(std::move(h)), diagnostic(d), journalSink(std::move(sink)), activity(std::move(heard)),
+          worker([this] { run(); }) {}
     ~Impl() { stop = true; if (worker.joinable()) worker.join(); }
     void run() {
         sigset_t blocked;
@@ -874,6 +883,7 @@ struct WebsocketSpeakerPosition::Impl {
             std::optional<LocalSession> activeSession(std::in_place, counts);
             try {
                 auto &session = *activeSession;
+                session.connection.activity = activity;
                 { std::lock_guard<std::mutex> lock(mutex); reconnecting = true; }
                 session.open(host, [this](const std::string &line) {
                     std::lock_guard<std::mutex> lock(mutex); emit(line);
@@ -983,8 +993,9 @@ struct WebsocketSpeakerPosition::Impl {
     }
 };
 WebsocketSpeakerPosition::WebsocketSpeakerPosition(std::string host, bool diagnostic,
-                                                     std::function<void(const std::string &)> journal)
-    : impl(new Impl(std::move(host), diagnostic, std::move(journal))) {}
+                                                     std::function<void(const std::string &)> journal,
+                                                     std::function<void()> activity)
+    : impl(new Impl(std::move(host), diagnostic, std::move(journal), std::move(activity))) {}
 WebsocketSpeakerPosition::~WebsocketSpeakerPosition() = default;
 std::optional<SpeakerPositionSample> WebsocketSpeakerPosition::position(double now) const {
     std::lock_guard<std::mutex> lock(impl->mutex);

@@ -901,13 +901,14 @@ bool CoreQueueSink::speakerDriven() const {
     std::lock_guard<std::mutex> lock(mutex);
     return speakerClock;
 }
-void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::PlaybackState state) {
+void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::PlaybackState state, bool recovered) {
     std::unique_lock<std::mutex> lock(mutex);
     preciseElapsed = {};
     const auto it = records.find(id);
     if (!speakerClock || it == records.end() || !it->second.item)
         return;
     auto &r = it->second;
+    const auto previousElapsed = speakerElapsed;
     // A confirmed start still needs actual source PCM, not silence-only output.
     const auto produced = r.item->producedFrames();
     if (!produced && r.parent && r.productionComplete &&
@@ -951,6 +952,7 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
                 speakerElapsed = 0;
             }
             audibleSource = source;
+            if (recovered) recoveredClockOccurrence = source;
             if (!r.parent && id < UINT64_MAX / 2)
                 audibleSignals.push_back({id, r.first + r.prefixFrames, true});
             else if (r.parent && cachedReanchor) {
@@ -970,6 +972,8 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
         speakerElapsed =
             uint32_t(std::min<uint64_t>(UINT32_MAX, (audibleFrame - old.first) * 1000 / old.source.rate));
     }
+    if (speakerElapsed != previousElapsed || changed || speakerState != state)
+        speakerElapsedAt = std::chrono::steady_clock::now();
     if (audibleSource && speakerState != state) {
         speakerState = state;
         speakerStates.push_back({audibleSource, state});
@@ -1011,13 +1015,31 @@ std::optional<uint32_t> CoreQueueSink::audibleElapsedMs(uint64_t occurrence) con
     if (occurrence != audibleSource) return {};
     if (preciseElapsed && occurrence == preciseOccurrence)
         if (auto value = preciseElapsed()) return value;
-    return speakerElapsed;
+    return coarseSpeakerElapsed();
+}
+std::optional<uint32_t> CoreQueueSink::coarseSpeakerElapsed() const {
+    if (!extrapolateSpeaker || speakerState != yeney::PlaybackState::Playing ||
+        !speakerElapsed || speakerElapsedAt == std::chrono::steady_clock::time_point{})
+        return speakerElapsed;
+    const auto record = records.find(audibleId);
+    if (record == records.end() || !record->second.source.rate) return speakerElapsed;
+    auto elapsed = uint64_t(std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - speakerElapsedAt).count());
+    if (record->second.promised) {
+        const auto remaining = *record->second.promised - std::min(*record->second.promised, speakerItemFrame);
+        elapsed = std::min(elapsed, remaining * 1000 / record->second.source.rate);
+    }
+    return uint32_t(std::min<uint64_t>(UINT32_MAX, *speakerElapsed + elapsed));
 }
 std::optional<uint32_t> CoreQueueSink::relativeElapsedMs(uint64_t occurrence, uint32_t coarseOrigin) const {
     std::lock_guard<std::mutex> lock(mutex);
     if (occurrence != audibleSource) return {};
-    auto value = speakerElapsed;
+    auto value = coarseSpeakerElapsed();
     auto origin = coarseOrigin;
+    if (occurrence == recoveredClockOccurrence) {
+        const auto record = records.find(occurrence);
+        if (record != records.end()) origin = record->second.seekPositionMs;
+    }
     if (preciseElapsed && occurrence == preciseOccurrence) {
         if (auto fitted = preciseElapsed()) {
             value = fitted;

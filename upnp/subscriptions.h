@@ -51,8 +51,10 @@ public:
     using Targets = std::function<std::array<std::string, 3>()>;
     using Address = std::function<std::string(const std::string&, unsigned)>;
     Subscriptions(unsigned speakerPort, HttpServer& server, Targets targets, GenaHandler handler,
-                  Address address = routeAddress, std::function<std::string()> groupTarget = {})
-        : port(speakerPort), server(server), targets(std::move(targets)), handler(std::move(handler)), address(std::move(address)), groupTarget(std::move(groupTarget)) {
+                  Address address = routeAddress, std::function<std::string()> groupTarget = {},
+                  std::function<void(const std::string&)> answered = {})
+        : port(speakerPort), server(server), targets(std::move(targets)), handler(std::move(handler)), address(std::move(address)), groupTarget(std::move(groupTarget)),
+          answered(std::move(answered)) {
         server.setNotifyHandler([this](const GenaEvent& event) { return receive(event); });
         try { worker = std::thread([this] { run(); }); }
         catch (...) { server.setNotifyHandler({}); throw; }
@@ -85,6 +87,7 @@ private:
     GenaHandler handler;
     Address address;
     std::function<std::string()> groupTarget;
+    std::function<void(const std::string&)> answered;
     std::array<std::string, 4> desiredTargets() const {
         const auto t = targets();
         return {{t[0], t[1], t[2], groupTarget ? groupTarget() : ""}};
@@ -95,8 +98,10 @@ private:
     bool stopping = false;
     std::thread worker;
     void unsubscribe(const Slot& slot, Service service) {
-        if (!slot.sid.empty()) httpRequest("UNSUBSCRIBE", {slot.host, subscriptionPath(service), port},
+        if (slot.sid.empty()) return;
+        const auto response = httpRequest("UNSUBSCRIBE", {slot.host, subscriptionPath(service), port},
                                           {{"SID", slot.sid}}, "", timing::unsubscribeMs);
+        if (response.status && answered) answered(slot.host);
     }
     bool receive(const GenaEvent& event) {
         const auto desired = desiredTargets();
@@ -152,6 +157,7 @@ private:
                 HttpResponse response;
                 if (local.empty() || desired[i].empty()) response.error = "no-local-address";
                 else response = httpRequest("SUBSCRIBE", {desired[i], subscriptionPath(service), port}, headers, "", timing::subscribeMs);
+                if (response.status && answered) answered(desired[i]);
                 unsigned seconds = 0; const auto timeout = response.headers.find("timeout");
                 if (timeout != response.headers.end()) {
                     if (timeout->second == "Second-infinite") seconds = timing::subscriptionSeconds;
