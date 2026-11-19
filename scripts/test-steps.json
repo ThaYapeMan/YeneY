@@ -1,6 +1,7 @@
 {
   "version": 2,
   "build_sets": {
+    "build-checks": ["all", "yeney-smoke-server"],
     "test-fast-run": [
       "yeney",
       "queue-native-decoder-test",
@@ -133,6 +134,39 @@
     ]
   },
   "steps": [
+    {
+      "name": "build-upgrade",
+      "target": "build-upgrade",
+      "command": "python3 tests/build_dependencies_test.py upgrade",
+      "prerequisites": {"full": "build-checks"},
+      "phase": "prepare",
+      "reason": "Compares historical incremental builds with a fresh product build.",
+      "modes": ["full"],
+      "label": "build-upgrade",
+      "time_judging": false
+    },
+    {
+      "name": "build-header-touch",
+      "target": "build-header-touch",
+      "command": "python3 tests/build_dependencies_test.py touch",
+      "prerequisites": {"full": "build-checks", "fast": "build-checks"},
+      "phase": "prepare",
+      "reason": "Temporarily changes header timestamps with exclusive access to the build tree.",
+      "modes": ["full", "fast"],
+      "label": "build-header-touch",
+      "time_judging": false
+    },
+    {
+      "name": "queue-smoke",
+      "target": "smoke",
+      "command": "./yeney-smoke-server",
+      "prerequisites": {"full": "build-checks", "fast": "build-checks"},
+      "phase": "prepare",
+      "reason": "Checks the installer smoke executable against the shared product objects.",
+      "modes": ["full", "fast"],
+      "label": "queue-smoke",
+      "time_judging": false
+    },
     {
       "name": "queue-row-order-lifecycle-exhaustive-0",
       "target": "queue-row-order-test",
@@ -7485,6 +7519,9 @@
   ],
   "orders": {
     "full": [
+      "build-upgrade",
+      "build-header-touch",
+      "queue-smoke",
       "queue-row-order-late-start",
       "queue-row-order-exact-admission",
       "queue-row-order-navigation-generation",
@@ -7712,6 +7749,8 @@
       "reach-upnp-answered-fault"
     ],
     "fast": [
+      "build-header-touch",
+      "queue-smoke",
       "queue-row-order-late-start",
       "queue-row-order-exact-admission",
       "queue-row-order-navigation-generation",
