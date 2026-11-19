@@ -13,6 +13,7 @@ import time
 from types import SimpleNamespace
 import unittest.mock as mock
 import tarfile
+import xml.etree.ElementTree as ET
 
 from queue_binary_test import Device
 from queue_sonos_fake import Coordinator, request
@@ -36,6 +37,14 @@ class Renderer(Device):
     def action(self, service, action, args):
         s = self.server
         if action == 'AddURIToQueue':
+            item, = ET.fromstring(args['EnqueuedURIMetaData'])
+            assert [probe.local(element.tag) for element in item] == ['title', 'creator', 'artist', 'album', 'class', 'res']
+            resource = item[-1]
+            assert resource.text == args['EnqueuedURI'] and resource.get('sampleFrequency') == '8000'
+            compressed = resource.text.endswith('.flac')
+            assert resource.get('bitsPerSample') == ('16' if compressed else '24')
+            assert resource.get('nrAudioChannels') == ('1' if compressed else '2')
+            assert int(resource.get('size', '0')) > 44 and resource.get('duration') == '00:03:00'
             s.items.append({'uri': args['EnqueuedURI']})
             s.update += 1
             return {}, None

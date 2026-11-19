@@ -87,7 +87,8 @@ def build_audio(source, wav, flac, work, minimum=180):
         raise ValueError('FLAC track does not declare its duration')
     if frames / rate < minimum:
         raise ValueError(f'FLAC track is too short ({frames / rate:.1f} s, need {minimum} s)')
-    if ((data >> 41) & 7) > 1 or ((data >> 36) & 31) > 23:
+    channels, bits = ((data >> 41) & 7) + 1, ((data >> 36) & 31) + 1
+    if channels > 2 or bits > 24:
         raise ValueError('need a mono or stereo FLAC track with at most 24 bits per sample')
     size = 6 * frames
     if size + 36 > 0xffffffff:
@@ -115,7 +116,7 @@ def build_audio(source, wav, flac, work, minimum=180):
         start = output.tell()
         stream.seek(first)
         shutil.copyfileobj(stream, output)
-    return rate, frames, [(s, start + o - first) for s, o, _ in index]
+    return rate, frames, [(s, start + o - first) for s, o, _ in index], channels, bits
 
 
 class Item:
@@ -283,6 +284,7 @@ class Records:
             if token and not token.isdecimal():
                 value = re.sub(r'(?<!\w)' + re.escape(token) + r'(?!\w)', '<private>', value)
         value = re.sub(r'(?i)\b(?:RINCON|Sonos)_[A-Za-z0-9_.-]+', '<device>', value)
+        value = re.sub(r'\byeney:[0-9a-f]{24}\b', '<item>', value)
         value = re.sub(r'\b(?:\d{1,3}\.){3}\d{1,3}\b', '<address>', value)
         value = re.sub(r'[a-zA-Z][a-zA-Z0-9+.-]*://[^\s"<>\\]+', '<uri>', value)
         value = re.sub(r'(?i)(\b(?:householdId|groupId|playerId|deviceId|locationId|queueId|serialNumber|macAddress)"\s*:\s*")[^"]*', r'\1<private>', value)
@@ -429,14 +431,23 @@ def service(unit_name, action):
         return state == 'active'
 
 
-def metadata(uri, mime):
+def metadata(uri, mime, rate, frames, length, channels, bits):
     document = ET.Element('DIDL-Lite', {'xmlns': 'urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/',
                                         'xmlns:dc': 'http://purl.org/dc/elements/1.1/',
                                         'xmlns:upnp': 'urn:schemas-upnp-org:metadata-1-0/upnp/'})
-    item = ET.SubElement(document, 'item', id='0', parentID='Q:0', restricted='1')
+    item = ET.SubElement(document, 'item', id='yeney:' + uri.rsplit('/', 1)[-1].split('.')[0],
+                         parentID='0', restricted='true')
     ET.SubElement(item, 'dc:title').text = 'YeneY refill probe'
+    ET.SubElement(item, 'dc:creator').text = 'YeneY'
+    ET.SubElement(item, 'upnp:artist').text = 'YeneY'
+    ET.SubElement(item, 'upnp:album').text = 'Refill probe'
     ET.SubElement(item, 'upnp:class').text = 'object.item.audioItem.musicTrack'
-    ET.SubElement(item, 'res', protocolInfo=f'http-get:*:{mime}:*').text = uri
+    duration = hms(frames // rate)
+    if frames % rate:
+        duration += f'.{(frames % rate) * 1_000_000_000 // rate:09}'
+    ET.SubElement(item, 'res', protocolInfo=f'http-get:*:{mime}:*', duration=duration,
+                  size=str(length), sampleFrequency=str(rate), bitsPerSample=str(bits),
+                  nrAudioChannels=str(channels)).text = uri
     return ET.tostring(document, encoding='unicode')
 
 
@@ -650,7 +661,8 @@ class Experiment:
     def prepare(self):
         source, self.wav, self.flac = (self.work / name for name in ('source.flac', 'track.wav', 'track.flac'))
         track(self.args.lms_host, self.lms_port, self.args.track_id, source)
-        self.rate, self.frames, self.index = build_audio(source, self.wav, self.flac, self.work, self.minimum)
+        self.rate, self.frames, self.index, self.flac_channels, self.flac_bits = build_audio(
+            source, self.wav, self.flac, self.work, self.minimum)
         self.duration = self.frames / self.rate
         wav_size, flac_size = self.wav.stat().st_size, self.flac.stat().st_size
         self.sizes = dict(wav_bytes=wav_size, flac_bytes=flac_size, flac_wav_ratio=flac_size / wav_size)
@@ -727,15 +739,19 @@ class Experiment:
         compressed, pace = CASES[case]
         path = self.flac if compressed else self.wav
         bound = self.wav.stat().st_size if case == 'flac-bound' else None
+        mime = 'audio/flac' if compressed else 'audio/wav'
+        channels, bits = (self.flac_channels, self.flac_bits) if compressed else (2, 24)
         uris = []
         for _ in range(2):
             route = f'/{secrets.token_hex(12)}{path.suffix}'
-            self.server.items[route] = Item(path, self.duration, pace, bound, self.index, self.frames)
+            item = Item(path, self.duration, pace, bound, self.index, self.frames)
+            self.server.items[route] = item
             uri = f'http://{self.server.server_address[0]}:{self.server.server_port}{route}'
             self.own.add(uri)
             uris.append(uri)
-            self.speaker.av('AddURIToQueue', EnqueuedURI=uri, EnqueuedURIMetaData=metadata(
-                uri, 'audio/flac' if compressed else 'audio/wav'), DesiredFirstTrackNumberEnqueued=0, EnqueueAsNext=0)
+            self.speaker.av('AddURIToQueue', EnqueuedURI=uri,
+                            EnqueuedURIMetaData=metadata(uri, mime, self.rate, self.frames, item.length, channels, bits),
+                            DesiredFirstTrackNumberEnqueued=0, EnqueueAsNext=0)
         rows, _ = self.speaker.browse()
         indices = [next(i for i, row in enumerate(rows, 1) if uri in row) for uri in uris]
         if indices[1] != indices[0] + 1:

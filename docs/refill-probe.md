@@ -24,7 +24,8 @@ comma-separated list or `--repeats` to shorten a follow-up run.
 
 The WAV cases serve identical PCM. Two of them limit the transfer after
 the first 2 s of audio. The FLAC cases use the track's compressed frames with
-fresh stream metadata and one seek point per frame. The bounded case advertises
+fresh stream metadata and one seek point per frame. Queue descriptions
+declare the media duration, size, sample rate, bit depth and channel count. The bounded case advertises
 the WAV length and maps seek offsets onto FLAC frame boundaries.
 
 The final line names the archive to attach. It contains timestamped requests,
