@@ -93,9 +93,9 @@ def clone_tree(tree, revision):
     checkout(tree, revision)
 
 
-def build(tree, jobs, *args):
+def build(tree, jobs):
     started = time.monotonic()
-    run(tree, 'make', f'-j{jobs}', *args)
+    run(tree, 'make', f'-j{jobs}')
     print(f'Product build wall {time.monotonic() - started:.3f} s', flush=True)
 
 
