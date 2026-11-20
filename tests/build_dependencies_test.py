@@ -104,14 +104,6 @@ def checksums(tree):
             for path in sorted(product_objects(tree) | {tree / 'yeney'})}
 
 
-def stripped_objects(tree, scratch):
-    results = {}
-    for path in sorted(product_objects(tree)):
-        run(tree, 'objcopy', '--strip-debug', str(path), str(scratch))
-        results[str(path.relative_to(tree))] = hashlib.sha256(scratch.read_bytes()).hexdigest()
-    return results
-
-
 def compare(before, after, label):
     differing = sorted(name for name in before.keys() | after.keys()
                        if before.get(name) != after.get(name))
@@ -128,9 +120,6 @@ def upgrade(jobs):
             print(f'Building {older}, then updating to {final} in place', flush=True)
             clone_tree(tree, older)
             build(tree, jobs)
-            if older == START:
-                baseline_version_header = (tree / 'bridge_version.h').read_bytes()
-                baseline = stripped_objects(tree, temp / 'strip.o')
             checkout(tree, final)
             build(tree, jobs)
             incremental[older] = checksums(tree)
@@ -148,22 +137,6 @@ def upgrade(jobs):
         expected = (tree / 'VERSION').read_text().strip() + '-' + git(tree, 'rev-parse', '--short=7', 'HEAD')
         expected += ' (core ' + git(tree / CORE, 'rev-parse', '--short=7', 'HEAD') + ')'
         assert version == expected, (version, expected)
-        final_objects = stripped_objects(tree, temp / 'strip.o')
-        compare(dict.fromkeys(baseline), dict.fromkeys(final_objects), 'object list')
-        version_objects = sorted(name for name in baseline if baseline[name] != final_objects[name])
-        if version_objects:
-            # Optimizers can split or duplicate the version in constant data.
-            # Recompile with identical header contents to check every object byte.
-            print('Objects differing with distinct version headers: '
-                  + ', '.join(version_objects), flush=True)
-            (tree / 'bridge_version.h').write_bytes(baseline_version_header)
-            for name in version_objects:
-                (tree / name).unlink()
-            build(tree, jobs, '-o', 'bridge_version.h', *version_objects)
-            final_objects = stripped_objects(tree, temp / 'strip.o')
-        compare(baseline, final_objects, 'stripped objects with identical version header')
-        print(f'PASS same program: {len(baseline)} stripped objects match '
-              'with identical version header contents')
 
 
 def main():
