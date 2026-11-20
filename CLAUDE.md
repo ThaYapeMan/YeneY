@@ -865,3 +865,7 @@ true and `phase` as `quiet` for a live-clock verdict; explain the reason. If
 uncertain, use `quiet`. Simulated timestamp replays can use `parallel`; a
 non-timing check that compiles a private fixture uses `serial`. Keep existing
 names when inserting new checks.
+
+Keep comparisons that prove a single round left program behavior unchanged in
+that round's report. A permanent check must be able to pass after an ordinary
+program change.
