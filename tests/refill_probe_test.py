@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Loopback exercise of the refill probe, including its cleanup paths."""
 import contextlib
+import io
 import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.machinery import SourceFileLoader
@@ -24,15 +25,46 @@ probe = SourceFileLoader('refill_probe', str(ROOT / 'scripts/yeney-refill-probe'
 SCALE = .025
 
 
+DESCRIPTIONS = ROOT / 'tests/fixtures/refill-study'
+DESCRIPTION_PATH = '/xml/device_description.xml'
+AV_CONTROL = '/MediaRenderer/AVTransport/Control'
+DOCUMENT = (DESCRIPTIONS / 'device_description.xml').read_text()
+DESCRIPTION_ROUTES = {DESCRIPTION_PATH: DOCUMENT}
+CONTROL_ROUTES = set()
+for node in ET.fromstring(DOCUMENT).iter():
+    if node.tag.endswith('}SCPDURL'):
+        DESCRIPTION_ROUTES[node.text] = (DESCRIPTIONS / Path(node.text).name).read_text()
+    elif node.tag.endswith('}controlURL'):
+        CONTROL_ROUTES.add(node.text)
+
+
 class Renderer(Device):
     def do_GET(self):
-        for service, actions in probe.WRITES.items():
-            if self.path == probe.SERVICES[service] + '/Service.xml':
-                actions = actions - self.server.missing
-                self.send('<scpd><actionList>' + ''.join(f'<action><name>{a}</name></action>' for a in actions)
-                          + '</actionList></scpd>')
-                return
-        super().do_GET()
+        document = DESCRIPTION_ROUTES.get(self.path)
+        if document is None:
+            self.send_error(404)
+            return
+        if self.path == DESCRIPTION_PATH:
+            document = document.replace(AV_CONTROL, self.server.av_control)
+        if self.server.missing and self.path == '/xml/AVTransport1.xml':
+            root = ET.fromstring(document)
+            for actions in root.iter():
+                for action in list(actions):
+                    if probe.local(action.tag) == 'action' and any(
+                            probe.local(child.tag) == 'name' and child.text in self.server.missing
+                            for child in action):
+                        actions.remove(action)
+            document = ET.tostring(root, encoding='unicode')
+        self.send(document)
+
+    def do_POST(self):
+        if self.path not in CONTROL_ROUTES:
+            self.send_error(404)
+            return
+        assert list(self.headers) == ['Host', 'Connection', 'Content-Length', 'Content-Type', 'SOAPACTION']
+        assert self.headers['Connection'] == 'close'
+        assert self.headers['Content-Type'] == 'text/xml'
+        super().do_POST()
 
     def action(self, service, action, args):
         s = self.server
@@ -168,6 +200,29 @@ def check_ranges(experiment):
             server.shutdown()
             thread.join()
 
+    with probe.MediaServer('127.0.0.1', p.records) as server:
+        wav = probe.Item(p.wav, p.duration)
+        server.items['/wire.wav'] = wav
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            uri = f'http://127.0.0.1:{server.server_port}/wire.wav'
+            for byte_range, status, reason, length in (
+                    ('', 200, 'OK', wav.length), ('bytes=45-103', 206, 'Partial Content', 59)):
+                connection, response = request(uri, byte_range=byte_range)
+                with contextlib.closing(connection):
+                    assert (response.version, response.status, response.reason) == (11, status, reason)
+                    expected = [('Content-Type', 'audio/wav'), ('Content-Length', str(length)),
+                                ('Accept-Ranges', 'bytes'), ('Connection', 'close')]
+                    if byte_range:
+                        expected.append(('Content-Range', f'bytes 45-103/{wav.length}'))
+                    assert response.getheaders() == expected
+                    if byte_range:
+                        assert len(response.read()) == length
+        finally:
+            server.shutdown()
+            thread.join()
+
     for path, pace in ((p.wav, 2), (p.wav, 1.25), (p.flac, 2)):
         records = probe.Records()
         with probe.MediaServer('127.0.0.1', records) as server:
@@ -201,6 +256,7 @@ def run():
         renderer.follow_controls = True
         renderer.fail_play = False
         renderer.missing = set()
+        renderer.av_control = AV_CONTROL
         api = LocalApi(renderer, port=0)
         api.shape = 'tidy'
         api.rtt_ms = api.spike_ms = 0
@@ -223,6 +279,12 @@ def run():
                 experiment = new()
                 assert experiment.check('test-unit') == 0
                 assert calls == ['show']
+                renderer.av_control = '/MediaRenderer/AVTransport/OtherControl'
+                with contextlib.redirect_stdout(io.StringIO()) as output:
+                    assert new().check('test-unit') == 1
+                assert ("AVTransport advertises controlURL '/MediaRenderer/AVTransport/OtherControl', "
+                        "probe uses '/MediaRenderer/AVTransport/Control'") in output.getvalue()
+                renderer.av_control = AV_CONTROL
                 for label in ('websocket', 'action', 'not-flac', 'short'):
                     api.disabled = label == 'websocket'
                     renderer.missing = {'Seek'} if label == 'action' else set()

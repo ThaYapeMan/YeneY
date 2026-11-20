@@ -11,6 +11,9 @@ scripts/yeney-refill-probe --speaker 192.168.178.132 --room Study --lms-host 192
 ```
 
 Replace 123 with the track's LMS ID. The check uses read-only speaker requests.
+It reads the device description, verifies the control URLs for the services
+the probe uses, and checks the required actions at their advertised SCPD URLs.
+The measurement repeats this validation before stopping the room service.
 It confirms the local HTTP route and listener. The real speaker's ability to
 connect back is established when it first requests a queue item.
 
