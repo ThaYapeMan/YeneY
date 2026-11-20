@@ -76,7 +76,7 @@ class Renderer(Device):
             compressed = resource.text.endswith('.flac')
             assert resource.get('bitsPerSample') == ('16' if compressed else '24')
             assert resource.get('nrAudioChannels') == ('1' if compressed else '2')
-            assert int(resource.get('size', '0')) > 44 and resource.get('duration') == '00:03:00'
+            assert int(resource.get('size', '0')) > 44 and resource.get('duration') == '0:03:00'
             s.items.append({'uri': args['EnqueuedURI']})
             s.update += 1
             return {}, None
