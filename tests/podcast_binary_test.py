@@ -13,7 +13,7 @@ def episode_items(host):
     # the episode under test. Their publication is independently exercised.
     return [entry for entry in host.items() if entry.get('metadata',{}).get('title')==host.titles[0]]
 
-def fetch(uri,stall=False):
+def fetch(uri,stall=None):
     url=urlsplit(uri);conn=http.client.HTTPConnection(url.netloc,timeout=20)
     try:
         if stall:
@@ -21,7 +21,7 @@ def fetch(uri,stall=False):
         conn.request('GET',url.path+('?' + url.query if url.query else ''));response=conn.getresponse()
         first=response.read(16384) if stall else b''
         if stall:
-            time.sleep(2)
+            stall()
             response.fp.raw._sock.setsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF,4*1024*1024)
         try:return first+response.read()
         except http.client.IncompleteRead as error:return first+error.partial
@@ -43,7 +43,12 @@ for late,seconds in ((False,80),(False,320),(True,55)):
         assert following>=2
         if not late:assert following==2,following
         assert [e['metadata']['title'] for e in entries[:following]]==['Title & 0']*following
-        bodies=[fetch(e['uri'],stall=not late and index==0) for index,e in enumerate(entries[:following])]
+        def receiver_stalled():
+            # A paced producer takes longer to fill the kernel socket buffers.
+            host.until(lambda: 'HTTP backpressure item=' in (host.base/'bridge.log').read_text(),
+                       timeout=15)
+        bodies = [fetch(e['uri'], stall=receiver_stalled if not late and index == 0 else None)
+                  for index, e in enumerate(entries[:following])]
         actual=b''.join(b[44:] for b in bodies)
         expected=(b'\0\xe8\x03\0\x18\xfc')*(44100*seconds)
         assert actual==expected,(len(actual),len(expected))

@@ -258,6 +258,7 @@ print('REAL LMS transcript directory: '+str(base),flush=True)
 install()
 perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
+study_pacing = os.environ.get('YENEY_QUEUE_PACING_STUDY')
 nav_media = os.environ.get('YENEY_NAV_MEDIA', '')
 fullq_codec = os.environ.get('YENEY_FULLQ_CODEC', 'flac') if os.environ.get('YENEY_FULLQ') == '1' else 'flac'
 assert fullq_codec in ('flac', 'alac', 'wav', 'converted-flac')
@@ -268,6 +269,8 @@ fixture_count = 4 if scale_mb else 12 if os.environ.get('YENEY_FULLQ') == '1' el
 for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
     seconds = 360 if os.environ.get('YENEY_WS_LIFECYCLE') == '1' and i < 2 else 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
+    if study_pacing and i < 4:
+        seconds = (48, 48, 30, 30)[i]
     if os.environ.get('YENEY_SEEK_RESTART_TIMING') == '1' and i < 2:
         if i or os.environ.get('YENEY_NAV_CASE') != 'R-natural':
             seconds = 100
@@ -276,7 +279,7 @@ for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44
     if scale_mb:
         seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
     source=bytearray(wav(rate,seconds,noise=True))
-    if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
+    if study_pacing or os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
         np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
     path.write_bytes(source)
@@ -440,6 +443,10 @@ try:
     sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None,'Audiophile Recordings volume 3','The Absence']+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
     tap=Tap()
     env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB=os.environ.get('YENEY_FULLQ_QUOTA_MIB', '256' if nav_media else '64'),STATE_DIRECTORY=str(base))
+    if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY') == '1':
+        # The podcast renderer consumes some episodes at 5× real play speed.
+        # Its accelerated playback clock cannot use a real-time byte budget.
+        env['YENEY_QUEUE_PACING'] = 'off'
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':env['YENEY_LMS_ICON']=''
     if volume_only:env['YENEY_LMS_VOLUME']='speaker'
     bridge=subprocess.Popen([os.environ.get('YENEY_ACCEPTANCE_BINARY',str(ROOT/'yeney')),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
@@ -644,6 +651,10 @@ try:
     if os.environ.get('YENEY_REAL_LMS_LAZY_ONLY')=='1':
         from lazy_real_lms import run
         run(globals())
+        raise SystemExit(0)
+    if study_pacing:
+        from queue_pacing_study_test import run
+        run(globals(), study_pacing)
         raise SystemExit(0)
     hires_only=os.environ.get('YENEY_REAL_LMS_HIRES_ONLY')=='1'
     if not hires_only:

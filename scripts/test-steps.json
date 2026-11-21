@@ -135,6 +135,63 @@
   },
   "steps": [
     {
+      "name": "queue-body-pacing",
+      "target": "main",
+      "command": "python3 tests/queue_pacing_test.py",
+      "environment": {},
+      "prerequisites": {
+        "fast": "build-checks",
+        "full": "build-checks"
+      },
+      "phase": "quiet",
+      "reason": "Measure byte budgets, receiver pauses, tail requests, cancellation and body identity on loopback.",
+      "seconds": 46,
+      "modes": [
+        "fast",
+        "full"
+      ],
+      "label": "queue-body-pacing",
+      "time_judging": true
+    },
+    {
+      "name": "queue-pacing-study-transport",
+      "target": "navigation-targeted",
+      "command": "python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_QUEUE_PACING_STUDY": "transport"
+      },
+      "prerequisites": {
+        "full": "navigation-targeted"
+      },
+      "phase": "quiet",
+      "reason": "Test default pacing with the Study fetch limits during start, seek, pause, resume and LMS Next.",
+      "seconds": 55,
+      "modes": [
+        "full"
+      ],
+      "label": "queue-pacing-study-transport",
+      "time_judging": true
+    },
+    {
+      "name": "queue-pacing-study-joins",
+      "target": "navigation-targeted",
+      "command": "python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_QUEUE_PACING_STUDY": "joins"
+      },
+      "prerequisites": {
+        "full": "navigation-targeted"
+      },
+      "phase": "quiet",
+      "reason": "Test default pacing and prefetch deadlines for natural queue joins with the Study fetch model.",
+      "seconds": 105,
+      "modes": [
+        "full"
+      ],
+      "label": "queue-pacing-study-joins",
+      "time_judging": true
+    },
+    {
       "name": "refill-probe",
       "target": "main",
       "command": "python3 tests/refill_probe_test.py",
@@ -423,6 +480,7 @@
       "target": "full-queue-pressure-soak",
       "command": "YENEY_POSITION_SOURCE=websocket YENEY_FAKE_WEBSOCKET=1 YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_SOAK_SEED=314159 python3 tests/real_lms_test.py",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -499,6 +557,7 @@
       "target": "full-queue-pressure",
       "command": "for run in 1 2 3; do \\\n    printf 'D1 final-binary run=%s/3\\n' \"$$run\"; \\\n    source=websocket; fake=1; if test $$run = 3; then source=upnp; fake=0; fi; \\\n    YENEY_POSITION_SOURCE=$$source YENEY_FAKE_WEBSOCKET=$$fake YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 python3 tests/real_lms_test.py || exit $$?; \\\ndone",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -537,6 +596,7 @@
       "target": "full-queue-pressure",
       "command": "YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_CODEC=alac python3 tests/real_lms_test.py",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -575,6 +635,7 @@
       "target": "full-queue-pressure",
       "command": "YENEY_FULLQ=1 YENEY_FULLQ_QUOTA_MIB=24 YENEY_FULLQ_EXPERIMENT=pressure YENEY_FULLQ_CODEC=converted-flac python3 tests/real_lms_test.py",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -613,6 +674,7 @@
       "target": "navigation-targeted",
       "command": "python3 tests/navigation_suite.py",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -673,6 +735,7 @@
       "target": "navigation-soak",
       "command": "python3 tests/navigation_suite.py --soak",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -5937,6 +6000,7 @@
       "target": "main",
       "command": "YENEY_REAL_LMS_NAV_ONLY=1 python3 tests/real_lms_test.py",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -6497,6 +6561,7 @@
     {
       "target": "navigation-soak",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -6529,6 +6594,7 @@
     {
       "target": "navigation-soak",
       "environment": {
+        "YENEY_QUEUE_PACING": "off",
         "YENEY_DEBUG": "",
         "YENEY_LMS_VOLUME": "off",
         "YENEY_VOLUME_MAX": "100",
@@ -7551,6 +7617,9 @@
   ],
   "orders": {
     "full": [
+      "queue-body-pacing",
+      "queue-pacing-study-transport",
+      "queue-pacing-study-joins",
       "refill-probe",
       "build-upgrade",
       "build-header-touch",
@@ -7783,6 +7852,7 @@
       "reach-upnp-answered-fault"
     ],
     "fast": [
+      "queue-body-pacing",
       "refill-probe",
       "build-header-touch",
       "queue-smoke",
