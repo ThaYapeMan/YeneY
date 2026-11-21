@@ -201,8 +201,8 @@
         "full": "test-run"
       },
       "phase": "parallel",
-      "reason": "Loopback refill probe, audio ranges and cleanup with accelerated playback.",
-      "seconds": 32,
+      "reason": "Loopback refill probe formats, exact FLAC size and PCM proofs, millisecond figures and restored play mode.",
+      "seconds": 50,
       "modes": ["fast", "full"],
       "label": "refill-probe",
       "time_judging": false

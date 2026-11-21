@@ -16,6 +16,8 @@ import math
 import os
 from pathlib import Path
 import re
+import random
+import select
 import secrets
 import signal
 import shutil
@@ -38,9 +40,20 @@ spec = importlib.util.spec_from_file_location('timing', SCRIPTS / 'sonos-timing-
 timing = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(timing)
 
-CASES = {'wav': (False, 0), 'wav-paced-2': (False, 2),
-         'wav-paced-1.25': (False, 1.25), 'flac': (True, 0),
-         'flac-paced-2': (True, 2), 'flac-bound': (True, 0)}
+CASES = {
+    'wav': ('wav', 'wav'),
+    'fixed16': ('fixed16', 'fixed16'),
+    'fixed24': ('fixed24', 'fixed24'),
+    'packed16': ('packed16', 'packed16'),
+    'packed24': ('packed24', 'packed24'),
+    'fixed-then-packed': ('fixed16', 'packed16'),
+    'packed-then-fixed': ('packed16', 'fixed16'),
+    'fixed16-noseek': ('fixed16-noseek', 'fixed16-noseek'),
+    'short': ('short-wav',) * 3,
+    'short-fixed16': ('short-fixed16',) * 3,
+    'bound': ('packed16', 'packed16'),
+}
+
 SERVICES = {'AVTransport': '/MediaRenderer/AVTransport',
             'RenderingControl': '/MediaRenderer/RenderingControl',
             'Queue': '/MediaRenderer/Queue',
@@ -54,7 +67,7 @@ ACTIONS = {'AVTransport': {'GetTransportInfo', 'GetMediaInfo', 'GetPositionInfo'
            'Queue': {'Browse'},
            'ZoneGroupTopology': {'GetZoneGroupState'}}
 
-VERSION = '1'
+VERSION = '2'
 
 
 def service_type(service):
@@ -88,7 +101,15 @@ def hms(seconds):
     return f'{s // 3600:02}:{s // 60 % 60:02}:{s % 60:02}'
 
 
-def build_audio(source, wav, flac, work, minimum=180):
+def wav_header(rate, frames):
+    size = frames * 6
+    if size + 36 > 0xffffffff:
+        raise ValueError('track exceeds the RIFF size limit')
+    return struct.pack('<4sI8sIHHIIHH4sI', b'RIFF', size + 36, b'WAVEfmt ',
+                       16, 1, 2, rate, rate * 6, 6, 24, b'data', size)
+
+
+def source_audio(source, pcm, helper, minimum):
     with source.open('rb') as stream:
         header = stream.read(8)
         if header[:4] != b'fLaC':
@@ -107,66 +128,214 @@ def build_audio(source, wav, flac, work, minimum=180):
     channels, bits = ((data >> 41) & 7) + 1, ((data >> 36) & 31) + 1
     if channels > 2 or bits > 24:
         raise ValueError('need a mono or stereo FLAC track with at most 24 bits per sample')
-    size = 6 * frames
-    if size + 36 > 0xffffffff:
-        raise ValueError('track exceeds the RIFF size limit')
-    with wav.open('wb') as output:
-        output.write(struct.pack('<4sI8sIHHIIHH4sI', b'RIFF', size + 36, b'WAVEfmt ',
-                                 16, 1, 2, rate, rate * 6, 6, 24, b'data', size))
+    if pcm.exists():
+        pcm.unlink()
+    audio_command(helper, source, pcm)
+    if pcm.stat().st_size != frames * 6:
+        raise ValueError('FLAC decode failed or its sample count differs from STREAMINFO')
+    return rate, frames, bits, channels
+
+
+def audio_command(helper, *args):
+    result = subprocess.run([helper, *map(str, args)], capture_output=True, text=True)
+    if result.returncode:
+        raise ValueError('audio preparation failed: ' + (result.stderr.strip() or str(args[0])))
+    return result.stdout
+
+
+def audio_helper(work):
     helper = work / 'refill-audio'
     if not helper.exists():
         recipe = ('refill-audio: ' + str(SCRIPTS / 'yeney-refill-audio.cpp') +
                   '\n\t$(CXX) -std=c++17 -O2 -Wall -Wextra $< -lFLAC -o $@\n')
         subprocess.run(['make', '-s', '-f', '-', 'refill-audio'], cwd=work, input=recipe,
                        text=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc = subprocess.run([helper, source, wav], capture_output=True, text=True)
-    if proc.returncode or wav.stat().st_size != size + 44:
-        raise ValueError('FLAC decode failed or its sample count differs from STREAMINFO')
-    index = [tuple(map(int, line.split())) for line in proc.stdout.splitlines()]
-    first = index[0][1]
-    table = b''.join(struct.pack('>QQH', sample, offset - first, count)
-                     for sample, offset, count in index)
-    if len(table) >= 1 << 24:
-        raise ValueError('FLAC seek table exceeds the metadata size limit')
-    with flac.open('wb') as output, source.open('rb') as stream:
-        output.write(b'fLaC\x00\x00\x00\x22' + info + b'\x83' + len(table).to_bytes(3, 'big') + table)
-        start = output.tell()
-        stream.seek(first)
-        shutil.copyfileobj(stream, output)
-    return rate, frames, [(s, start + o - first) for s, o, _ in index], channels, bits
+    return helper
+
+
+def written_pcm(source, target, width, frames, channels):
+    remaining = frames * 6
+    pattern = random.Random(717)
+    with source.open('rb') as stream, target.open('wb') as output:
+        while remaining:
+            chunk = bytearray(stream.read(min(remaining, 6 * 8192)))
+            if not chunk or len(chunk) % 6:
+                raise ValueError('short PCM source while preparing row')
+            remaining -= len(chunk)
+            if channels == 1:
+                mono = bytearray(len(chunk) // 2)
+                mono[0::3], mono[1::3], mono[2::3] = chunk[0::6], chunk[1::6], chunk[2::6]
+                chunk = mono
+            if width == 2:
+                body = bytearray(len(chunk) * 2 // 3)
+                body[0::2], body[1::2] = chunk[1::3], chunk[2::3]
+            else:
+                # Preserve the source's high 16 bits. The largest added
+                # magnitude, 15 in 24-bit PCM, is below -114 dBFS.
+                low_bits = pattern.randbytes(len(chunk) // 3)
+                chunk[0::3] = low_bits.translate(bytes(n & 15 for n in range(256)))
+                body = chunk
+            output.write(body)
+
+
+def verify_pcm(source, width, channels, target, first_frame, frames):
+    if target.stat().st_size != frames * 6:
+        raise ValueError('FLAC decoded sample count differs from its PCM source')
+    remaining = frames
+    with source.open('rb') as pcm, target.open('rb') as decoded:
+        pcm.seek(first_frame * channels * width)
+        while remaining:
+            count = min(remaining, 8192)
+            remaining -= count
+            expect = pcm.read(count * channels * width)
+            if channels == 1:
+                stereo = bytearray(count * 2 * width)
+                for byte in range(width):
+                    stereo[byte::2 * width] = stereo[byte + width::2 * width] = expect[byte::width]
+                expect = stereo
+            actual = decoded.read(count * 6)
+            if width == 2:
+                if (actual[0::3] != bytes(count * 2) or
+                    actual[1::3] != expect[0::2] or actual[2::3] != expect[1::2]):
+                    raise ValueError('FLAC verification changed source PCM')
+            elif actual != expect:
+                raise ValueError('FLAC verification changed source PCM')
+
+
+def verify_seek_table(media, frames, offsets, expected):
+    points = []
+    with media.open('rb') as stream:
+        if stream.read(4) != b'fLaC':
+            raise ValueError('audio item is missing the FLAC marker')
+        last = False
+        while not last:
+            header = stream.read(4)
+            if len(header) != 4:
+                raise ValueError('short FLAC metadata header')
+            last = bool(header[0] & 0x80)
+            kind = header[0] & 0x7f
+            size = int.from_bytes(header[1:], 'big')
+            if kind == 3:
+                points = [(sample, offset, count) for sample, offset, count in
+                          struct.iter_unpack('>QQH', stream.read(size)) if sample < frames]
+            else:
+                stream.seek(size, os.SEEK_CUR)
+        first = stream.tell()
+    actual = {(sample, offset - first, count) for sample, offset, count in offsets}
+    if bool(points) != expected or any(point not in actual for point in points):
+        raise ValueError('FLAC seek table disagrees with the delivered frame offsets')
+    return len(points)
+
+
+def verify_flac(helper, media, pcm, width, channels, frames, work, proof, seek_table):
+    decoded = work / 'proof.pcm'
+    with contextlib.suppress(FileNotFoundError):
+        decoded.unlink()
+    try:
+        offsets = [tuple(map(int, row.split())) for row in
+                   audio_command(helper, media, decoded).splitlines()]
+        verify_pcm(pcm, width, channels, decoded, 0, frames)
+    finally:
+        decoded.unlink(missing_ok=True)
+    points = verify_seek_table(media, frames, offsets, seek_table)
+    if proof:
+        predicted, sample, offset, largest = proof
+        actual = media.stat().st_size
+        if predicted != actual or (sample, offset) not in {(s, o) for s, o, _ in offsets}:
+            raise ValueError('fixed FLAC predicted size or frame offset disagrees with decoded file')
+        tail = work / 'proof-tail.flac'
+        try:
+            with media.open('rb') as full, tail.open('wb') as part:
+                info = bytearray(full.read(42))
+                info[4] |= 0x80
+                part.write(info)
+                full.seek(offset)
+                shutil.copyfileobj(full, part)
+            audio_command(helper, tail, decoded)
+            verify_pcm(pcm, width, channels, decoded, sample, frames - sample)
+        finally:
+            tail.unlink(missing_ok=True)
+            decoded.unlink(missing_ok=True)
+        evidence = dict(predicted=predicted, written=actual, decoded_bit_exact=True,
+                        range_sample=sample, range_offset=offset, range_bit_exact=True,
+                        largest_frame=largest, seek_points=points)
+    else:
+        evidence = dict(decoded_bit_exact=True, seek_points=points)
+    return [(s, o) for s, o, _ in offsets], evidence
+
+
+def prepare_audio(source, work, cases, minimum):
+    helper = audio_helper(work)
+    original = work / 'source.pcm'
+    rate, total_frames, source_bits, source_channels = source_audio(source, original, helper, minimum)
+    forms = {form for case in cases for form in CASES[case]}
+    if any('16' in form for form in forms) and source_bits != 16:
+        raise ValueError(f'16-bit cases require a 16-bit FLAC source (track is {source_bits}-bit)')
+    pcm_files = {}
+    media = {}
+    for form in sorted(forms):
+        short = form.startswith('short-')
+        size = 30 * rate if short else total_frames
+        bits = 16 if '16' in form else 24
+        width = bits // 8
+        if size > total_frames:
+            raise ValueError('need at least 30 seconds of source audio for short rows')
+        is_wav = form.removeprefix('short-') == 'wav'
+        channels = 2 if is_wav else source_channels
+        pcm = pcm_files.get((size, bits, channels))
+        if pcm is None:
+            pcm = work / f'pcm-{size}-{bits}-{channels}'
+            written_pcm(original, pcm, width, size, channels)
+            pcm_files[size, bits, channels] = pcm
+        index = []
+        evidence = {}
+        path = work / (form + ('.wav' if is_wav else '.flac'))
+        if is_wav:
+            with path.open('wb') as output, pcm.open('rb') as stream:
+                output.write(wav_header(rate, size))
+                shutil.copyfileobj(stream, output)
+        else:
+            proof = None
+            mode = 'packed'
+            if 'fixed' in form:
+                mode = 'fixed-noseek' if 'noseek' in form else 'fixed'
+            result = audio_command(helper, mode, pcm, path, size, rate, bits, channels)
+            if mode != 'packed':
+                proof = tuple(map(int, result.split()))
+            index, evidence = verify_flac(helper, path, pcm, width, channels, size, work, proof, mode != 'fixed-noseek')
+        media[form] = dict(path=path, frames=size, rate=rate, bits=bits, channels=channels, index=index, proof=evidence)
+    return media
 
 
 class Item:
-    def __init__(self, path, duration, pace=0, bound=None, index=(), frames=0):
+    def __init__(self, path, duration, bound=None, index=(), frames=0):
         self.path = path
         self.actual = path.stat().st_size
-        self.length = bound or self.actual
-        self.bound = bound is not None
-        self.pace = pace
+        if bound is not None and bound <= self.actual:
+            raise ValueError('packed FLAC item is not smaller than its advertised upper bound')
+        self.length = self.actual if bound is None else bound
         self.duration = duration
-        self.samples = [s for s, _ in index]
-        self.offsets = [o for _, o in index]
+        self.samples = [sample for sample, _ in index]
+        self.offsets = [offset for _, offset in index]
         self.frames = frames
-        self.eof = threading.Event()
-        self.pace_lock = threading.Lock()
-        self.next_send = 0
-        if self.path.suffix == '.flac':
-            first_after_burst = bisect.bisect_left(self.samples, 2 * frames / duration)
-            self.burst_end = self.offsets[first_after_burst] if first_after_burst < len(self.offsets) else self.actual
+        header = 44 if path.suffix == '.wav' else 0
+        self.play_rate = (self.actual - header) / self.duration
+        self.burst = 2 * self.play_rate
+
+    def paced(self, offset):
+        if self.path.suffix == '.wav':
+            seconds = max(0, offset - 44) / self.play_rate
+        elif offset >= self.actual:
+            return False
         else:
-            self.burst_end = min(self.actual, 44 + round(2 * (self.actual - 44) / duration))
-
-    def wait_for_bytes(self, count, closing):
-        with self.pace_lock:
-            now = time.monotonic()
-            due = self.next_send = max(now, self.next_send) + count / (self.actual / self.duration * self.pace)
-        return closing.wait(max(0, due - now))
-
+            index = max(0, bisect.bisect_right(self.offsets, offset) - 1)
+            seconds = self.samples[index] * self.duration / self.frames
+        return self.duration - seconds > 20
 
     def range(self, value):
         if not value:
-            return 200, 0, self.length - 1, 0
-        match = re.fullmatch(r'bytes=(\d*)-(\d*)', value.strip())
+            return 200, 0, self.length - 1
+        match = re.fullmatch(r'bytes=([0-9]*)-([0-9]*)', value.strip())
         if not match:
             raise ValueError('unsupported Range')
         a, b = match.groups()
@@ -176,14 +345,34 @@ class Item:
         last = min(int(b), self.length - 1) if a and b else self.length - 1
         if first > last:
             raise ValueError('unsatisfiable Range')
-        offset = first
-        if self.bound and first:
-            if first == self.actual and self.eof.is_set():
-                offset = self.actual
-            else:
-                sample = first * self.frames // self.length
-                offset = self.offsets[bisect.bisect_right(self.samples, sample) - 1]
-        return 206, first, last, offset
+        return 206, first, last
+
+
+class Budget:
+    def __init__(self, item):
+        self.available = self.cap = item.burst
+        self.refill = item.play_rate * 2
+        self.last = time.monotonic()
+        self.waited = 0
+
+    def take(self, count, connection, closing):
+        while True:
+            now = time.monotonic()
+            self.available = min(self.cap, self.available + (now - self.last) * self.refill)
+            self.last = now
+            if self.available >= count:
+                self.available -= count
+                return True
+            if select.select([connection], [], [], 0)[0]:
+                try:
+                    if not connection.recv(1, socket.MSG_PEEK | socket.MSG_DONTWAIT):
+                        return False
+                except BlockingIOError:
+                    pass
+            stopped = closing.wait(min(.005, (count - self.available) / self.refill))
+            self.waited += time.monotonic() - now
+            if stopped:
+                return False
 
 
 class MediaServer(ThreadingHTTPServer):
@@ -220,9 +409,10 @@ class MediaHandler(BaseHTTPRequestHandler):
         self.server.records.add('requests', event='open', **event)
         total = 0
         status = 416
+        budget = None
         try:
             try:
-                status, first, last, offset = item.range(request_range)
+                status, first, last = item.range(request_range)
             except ValueError:
                 self.send_response_only(status, 'Range Not Satisfiable')
                 self.send_header('Content-Range', f'bytes */{item.length}')
@@ -240,32 +430,28 @@ class MediaHandler(BaseHTTPRequestHandler):
             self.end_headers()
             if not body:
                 return
-            amount = min(last - first + 1, item.actual - offset)
-            playing_rate = item.actual / item.duration
-            burst = max(0, item.burst_end - offset)
+            amount = min(last - first + 1, item.actual - first)
+            budget = Budget(item) if item.paced(first) else None
             with item.path.open('rb') as stream:
-                stream.seek(offset)
+                stream.seek(first)
                 while total < amount and not self.server.closing.is_set():
-                    count = min(16384, amount - total)
-                    if item.pace:
-                        if total < burst:
-                            count = min(count, burst - total)
-                        else:
-                            count = min(count, max(1, int(playing_rate * item.pace / 20)))
-                            if item.wait_for_bytes(count, self.server.closing):
-                                break
+                    count = min(8192, amount - total)
+                    if budget:
+                        count = min(count, int(budget.cap))
+                        if not budget.take(count, self.connection, self.server.closing):
+                            break
                     chunk = stream.read(count)
                     if not chunk:
                         break
                     self.wfile.write(chunk)
                     total += len(chunk)
                     self.server.records.add('bytes', path=self.path, size=len(chunk))
-            if total and offset + total == item.actual:
-                item.eof.set()
         except OSError as exc:
             self.server.records.add('requests', event='disconnect', detail=str(exc), **event)
         finally:
-            self.server.records.add('requests', event='close', status=status, size=total, **event)
+            self.server.records.add('requests', event='close', status=status, size=total,
+                                    paced=int(budget is not None),
+                                    pace_wait_ms=round(1000 * budget.waited) if budget else 0, **event)
 
 
 class Records:
@@ -425,11 +611,13 @@ class Speaker:
             raise ValueError('description URL is outside the speaker HTTP endpoint')
         return address.path + ('?' + address.query if address.query else '')
 
-    def check_actions(self, volume):
+    def check_actions(self, volume, normal_play_mode=False):
         root = ET.fromstring(self.http('GET', DESCRIPTION_PATH))
         services = [{local(child.tag): (child.text or '').strip() for child in node}
                     for node in root.iter() if local(node.tag) == 'service']
         for service, expected in ACTIONS.items():
+            if service == 'AVTransport' and normal_play_mode:
+                expected = expected | {'SetPlayMode'}
             if service == 'RenderingControl' and volume is not None:
                 expected = expected | {'SetVolume'}
             matches = [entry for entry in services if entry.get('serviceType') == service_type(service)]
@@ -692,6 +880,44 @@ def stats(rows, expected=None):
     return result
 
 
+def answer_time(row):
+    return (row['sent'] + row['received']) / 2
+
+
+def playing_answers(rows):
+    return sorted((row for row in rows
+                   if row['received'] is not None and row['position_s'] is not None and
+                   not row.get('error') and str(row['state']).upper() in ('PLAYING', 'PLAYBACK_STATE_PLAYING')),
+                  key=answer_time)
+
+
+def join_gap(rows, anchor, duration, scale=1):
+    """Read the two playback-clock intercepts closest to a row change."""
+    near = sorted(rows, key=lambda row: abs(anchor - answer_time(row)))
+    # UPnP identifies the change and supplies a coarse clock anchor. Choose
+    # millisecond positions near the end of the previous row and the start of
+    # the following row even when their midpoint precedes the UPnP reply.
+    before = [row for row in near
+              if duration - 5 <= row['position_s'] <= duration + .5][:8]
+    after = [row for row in near if row['position_s'] <= 5][:8]
+    if len(before) < 8 or len(after) < 8:
+        return None
+    previous_end = statistics.median(answer_time(row) + (duration - row['position_s']) * scale
+                                     for row in before)
+    next_start = statistics.median(answer_time(row) - row['position_s'] * scale for row in after)
+    return 1000 * (next_start - previous_end)
+
+
+def position_offset(rows, steady_start, steady_end, scale=1):
+    if not rows:
+        return None
+    steady = [row for row in rows if steady_start <= answer_time(row) < steady_end]
+    if not steady:
+        return None
+    origin = statistics.median(answer_time(row) - row['position_s'] * scale for row in steady)
+    return 1000 * (origin - answer_time(rows[0]))
+
+
 class Experiment:
     def __init__(self, args, work, speaker, records, scale=1, lms_port=9000, minimum=180):
         self.args = args
@@ -708,16 +934,21 @@ class Experiment:
         self.selection_attempted = False
 
     def prepare(self):
-        source, self.wav, self.flac = (self.work / name for name in ('source.flac', 'track.wav', 'track.flac'))
+        source = self.work / 'source.flac'
         track(self.args.lms_host, self.lms_port, self.args.track_id, source)
-        self.rate, self.frames, self.index, self.flac_channels, self.flac_bits = build_audio(
-            source, self.wav, self.flac, self.work, self.minimum)
-        self.duration = self.frames / self.rate
-        wav_size, flac_size = self.wav.stat().st_size, self.flac.stat().st_size
-        self.sizes = dict(wav_bytes=wav_size, flac_bytes=flac_size, flac_wav_ratio=flac_size / wav_size)
-        self.records.log(f'WAV {wav_size} B, FLAC {flac_size} B, FLAC/WAV {flac_size / wav_size:.4f}')
-        if 'flac-bound' in self.args.cases and flac_size >= wav_size:
-            raise ValueError('FLAC item is not smaller than its WAV upper bound')
+        self.media = prepare_audio(source, self.work, self.args.cases, self.minimum)
+        self.sizes = {}
+        for name, audio in self.media.items():
+            size = audio['path'].stat().st_size
+            proof = audio['proof']
+            self.sizes[name] = dict(bytes=size, samples=audio['frames'], bits=audio['bits'], **proof)
+            self.records.log(f'{name} {size} B, {audio["frames"]} samples, {audio["bits"]}-bit')
+            if proof:
+                self.records.log(name + ' proof ' + ' '.join(f'{key}={value}' for key, value in proof.items()))
+        if 'bound' in self.args.cases:
+            packed = self.media['packed16']
+            if packed['path'].stat().st_size >= 44 + 6 * packed['frames']:
+                raise ValueError('packed FLAC item is not smaller than its advertised upper bound')
 
     def check(self, name):
         checks = [
@@ -727,11 +958,10 @@ class Experiment:
             ('UPnP transport', lambda: self.transport()),
             ('UPnP source', lambda: self.speaker.av('GetMediaInfo')),
             ('UPnP position', lambda: self.speaker.av('GetPositionInfo')),
-            ('UPnP play mode', lambda: self.speaker.av('GetTransportSettings')),
-            ('UPnP crossfade', lambda: self.speaker.av('GetCrossfadeMode')),
+            ('UPnP play mode', self.check_play_mode),
             ('UPnP queue', self.speaker.browse),
             ('UPnP volume', self.speaker.volume),
-            ('UPnP advertised actions', lambda: self.speaker.check_actions(self.args.volume)),
+            ('UPnP advertised actions', lambda: self.speaker.check_actions(self.args.volume, self.normal_play_mode)),
             ('LMS FLAC track', self.prepare),
             ('HTTP listen address and port', self.check_port),
         ]
@@ -745,6 +975,24 @@ class Experiment:
                 failures.append(label)
         self.records.log('check: ' + ('FAIL ' + ', '.join(failures) if failures else 'pass'))
         return 1 if failures else 0
+
+    @property
+    def normal_play_mode(self):
+        return getattr(self.args, 'normal_play_mode', False)
+
+    def play_mode(self):
+        mode = self.speaker.av('GetTransportSettings').get('PlayMode', '').strip()
+        crossfade = self.speaker.av('GetCrossfadeMode').get('CrossfadeMode', '').strip()
+        self.records.log(f'speaker play mode {mode or "missing"}, crossfade {crossfade or "missing"}')
+        if not mode or crossfade.lower() not in ('0', 'false'):
+            raise ValueError('measurement would refuse without a known play mode and crossfade off')
+        if mode.upper() != 'NORMAL' and not self.normal_play_mode:
+            raise ValueError('measurement would refuse this play mode; use --normal-play-mode for the run')
+        return mode
+
+    def check_play_mode(self):
+        if self.play_mode().upper() != 'NORMAL':
+            self.records.log('measurement would temporarily set play mode to NORMAL')
 
     def check_port(self):
         host = local_route(self.speaker.host, self.speaker.port)
@@ -785,25 +1033,24 @@ class Experiment:
         return next((r['position_s'] for r in reversed(rows) if r['position_s'] is not None), None)
 
     def add_items(self, case):
-        compressed, pace = CASES[case]
-        path = self.flac if compressed else self.wav
-        bound = self.wav.stat().st_size if case == 'flac-bound' else None
-        mime = 'audio/flac' if compressed else 'audio/wav'
-        channels, bits = (self.flac_channels, self.flac_bits) if compressed else (2, 24)
         uris = []
-        for _ in range(2):
+        for form in CASES[case]:
+            media = self.media[form]
+            path, frames, rate = (media[key] for key in ('path', 'frames', 'rate'))
+            bound = 44 + 6 * frames if case == 'bound' else None
+            mime = 'audio/flac' if path.suffix == '.flac' else 'audio/wav'
             route = f'/{secrets.token_hex(12)}{path.suffix}'
-            item = Item(path, self.duration, pace, bound, self.index, self.frames)
+            item = Item(path, frames / rate, bound=bound, index=media['index'], frames=frames)
             self.server.items[route] = item
             uri = f'http://{self.server.server_address[0]}:{self.server.server_port}{route}'
             self.own.add(uri)
             uris.append(uri)
             self.speaker.av('AddURIToQueue', EnqueuedURI=uri,
-                            EnqueuedURIMetaData=metadata(uri, mime, self.rate, self.frames, item.length, channels, bits),
+                            EnqueuedURIMetaData=metadata(uri, mime, rate, frames, item.length, media['channels'], media['bits']),
                             DesiredFirstTrackNumberEnqueued=0, EnqueueAsNext=0)
         rows, _ = self.speaker.browse()
         indices = [next(i for i, row in enumerate(rows, 1) if uri in row) for uri in uris]
-        if indices[1] != indices[0] + 1:
+        if indices != list(range(indices[0], indices[0] + len(indices))):
             raise ValueError('probe rows are not consecutive')
         return uris
 
@@ -818,78 +1065,113 @@ class Experiment:
         self.speaker.av('Seek', Unit='TRACK_NR', Target=first)
 
     def seek(self, seconds):
-        at = self.t()
+        sent = self.t()
         self.speaker.av('Seek', Unit='REL_TIME', Target=hms(seconds))
-        return at
+        return dict(sent=sent, acknowledged=self.t(), target=seconds)
+
+    def advance(self, previous, following, since, deadline, target):
+        repeated = False
+        while self.t() < deadline:
+            observations = self.questions(since, self.t(), 'UPnP')
+            after = next((row for row in observations if row['item'] == following), None)
+            if after:
+                return answer_time(after), repeated
+            positions = [row['position_s'] for row in observations
+                         if row['item'] == previous and row['position_s'] is not None]
+            repeated |= any(before >= target and current < target - 2
+                            for before, current in zip(positions, positions[1:]))
+            time.sleep(.25 * self.scale)
+        raise ValueError('next probe item did not start')
 
     def measure(self, result):
         case = result['case']
-        first, second = self.add_items(case)
-        paths = {uri[uri.index('/', len('http://')):] for uri in (first, second)}
+        uris = self.add_items(case)
+        first, second = uris[:2]
+        durations = [self.media[form]['frames'] / self.media[form]['rate'] for form in CASES[case]]
+        duration = durations[0]
+        paths = [urlsplit(uri).path for uri in uris]
         self.choose(first)
         started = self.t()
-        measurement = dict(result=result, paths=paths, started=started)
+        measurement = dict(result=result, paths=paths, started=started, seeks=[], joins=[], duration=duration)
         self.measurements.append(measurement)
         self.speaker.av('Play', Speed=1)
         result['start_playing_ms'] = (self.playing(started) - started) * 1000
-        self.wait(started, 80)
-        target = int(self.duration * .6)
-        sought = self.seek(target)
-        measurement['sought'] = sought
-        result['seek_playing_ms'] = (self.playing(sought) - sought) * 1000
-        self.wait(sought, 3)
-        readings = self.questions(sought, self.t(), 'websocket')
-        actual = next((r for r in reversed(readings) if r['position_s'] is not None), None)
-        if actual:
-            expected_seek = target + ((actual['sent'] + actual['received']) / 2 - sought) / self.scale
-            result['seek_position_error_ms'] = (actual['position_s'] - expected_seek) * 1000
-        self.wait(sought, 20)
-        requests = [row for row in self.records.rows if row.get('path') in paths
-                    and row.get('event') == 'open' and sought <= row['time'] < sought + 23 * self.scale]
-        result['seek_requests'] = len(requests)
-        result['seek_ranges'] = [row['range'] or 'full' for row in requests]
-        result['pause_position_s'] = self.latest_position(sought)
+        short = len(uris) == 3
+        self.wait(started, 6 if short else 80)
+
+        sought = self.seek(int(duration * .6))
+        measurement['seeks'].append(sought)
+        result['seek_playing_ms'] = (self.playing(sought['acknowledged']) - sought['sent']) * 1000
+        self.wait(sought['sent'], 3 if short else 20)
+        result['pause_position_s'] = self.latest_position(sought['sent'])
         paused = self.t()
+        sought['end'] = paused
         self.speaker.av('Pause')
-        self.wait(paused, 30)
+        self.wait(paused, 10)
         result['before_resume_position_s'] = self.latest_position(paused)
+
         resumed = self.t()
         self.speaker.av('Play', Speed=1)
         result['resume_playing_ms'] = (self.playing(resumed) - resumed) * 1000
         self.wait(resumed, 1)
         result['resume_position_s'] = self.latest_position(resumed)
-        target = max(0, int(self.duration - 12))
-        join = self.seek(target)
-        self.playing(join)
-        repeated = False
-        deadline = join + (self.duration - target + 6) * self.scale
-        while self.t() < deadline:
-            observations = self.questions(join, self.t(), 'UPnP')
-            following = next((row for row in observations if row['item'] == second), None)
-            if following:
-                observed = (following['sent'] + following['received']) / 2
-                expected_end = join + (self.duration - target) * self.scale
-                anchored = next((row for row in observations if row['item'] == first
-                                 and row['position_s'] is not None and row['position_s'] >= target), None)
-                if anchored:
-                    expected_end = ((anchored['sent'] + anchored['received']) / 2
-                                    + (self.duration - anchored['position_s']) * self.scale)
-                result['join_delta_ms'] = (observed - expected_end) * 1000
-                result['join_repeated'] = int(repeated)
-                return
-            first_positions = [row['position_s'] for row in observations
-                               if row['item'] == first and row['position_s'] is not None]
-            if any(previous >= target and current < target - 2
-                   for previous, current in zip(first_positions, first_positions[1:])):
-                repeated = True
-            time.sleep(.25 * self.scale)
+
+        target = max(0, int(duration - 12))
+        late = self.seek(target)
+        measurement['seeks'].append(late)
+        self.playing(late['acknowledged'])
+        deadline = late['sent'] + (duration - target + 6) * self.scale
+        join, repeated = self.advance(first, second, late['sent'], deadline, target)
+        late['end'] = join
         result['join_repeated'] = int(repeated)
-        raise ValueError('second item did not start')
+        measurement['joins'].append(dict(at=join, begin=late['acknowledged'],
+                                         duration=duration, end=join + 6 * self.scale))
+        if short:
+            deadline = join + (durations[1] + 6) * self.scale
+            last, _ = self.advance(second, uris[2], join, deadline, 0)
+            measurement['joins'].append(dict(at=last, begin=join, duration=durations[1],
+                                             end=last + 6 * self.scale))
+            join = last
+        self.wait(join, 10)
+
+    def playback_figures(self, measurement):
+        result = measurement['result']
+        started, end = measurement['started'], measurement['end']
+        rows = playing_answers(self.questions(started, end, 'websocket'))
+        seeks = measurement['seeks']
+        first_seek = seeks[0]['sent'] if seeks else end
+        steady_start = max(started + 2 * self.scale, first_seek - 8 * self.scale)
+        offset = position_offset(rows, steady_start, first_seek, self.scale)
+        if offset is not None:
+            result['position_offset_ms'] = offset
+        for i, seek in enumerate(seeks):
+            prefix = 'seek' if i == 0 else 'tail_seek'
+            until = seek.get('end', end)
+            found = next((row for row in rows if row['sent'] >= seek['acknowledged'] and
+                          answer_time(row) < until), None)
+            if found:
+                result[prefix + '_landing_s'] = found['position_s']
+                result[prefix + '_landing_ms'] = 1000 * (found['position_s'] - seek['target'])
+            requests = [row for row in self.records.rows if row.get('path') == measurement['paths'][0]
+                        and row.get('event') == 'open'
+                        and seek['sent'] <= row['time'] < until]
+            result[prefix + '_requests'] = len(requests)
+            result[prefix + '_get_requests'] = sum(row['method'] == 'GET' for row in requests)
+            result[prefix + '_head_requests'] = sum(row['method'] == 'HEAD' for row in requests)
+            result[prefix + '_ranges'] = [row['range'] or 'full' for row in requests]
+        for i, join in enumerate(measurement['joins']):
+            points = [row for row in rows if join['begin'] <= answer_time(row) < join['end']]
+            gap = join_gap(points, join['at'], join['duration'], self.scale)
+            if gap is None:
+                continue
+            result['join_gap_ms' if i == 0 else 'second_join_gap_ms'] = gap
 
     def finalize_measurement(self, measurement):
         result, paths, started = (measurement[key] for key in ('result', 'paths', 'started'))
-        if 'sought' in measurement:
-            self.latencies(result, 'after_seek', measurement['sought'], 20, end=measurement['end'])
+        self.playback_figures(measurement)
+        if measurement['seeks']:
+            self.latencies(result, 'after_seek', measurement['seeks'][0]['sent'], 40,
+                           end=measurement['seeks'][0].get('end', measurement['end']))
         window_end = min(measurement['end'], started + 40 * self.scale)
         rows = sorted(self.questions(started, window_end, 'websocket'), key=lambda row: row['sent'])
         initial = next((row for row in rows if row['position_s'] is not None), None)
@@ -928,7 +1210,7 @@ class Experiment:
         result['playback_errors'] = sum(
             row['kind'] == 'speaker' and row.get('protocol') == 'websocket' and ws_error(row.get('raw'))
             for row in self.records.rows if started <= row['time'] < measurement['end'])
-        playing_rate = self.server.items[next(iter(paths))].actual / self.duration
+        playing_rate = self.server.items[paths[0]].play_rate
         last_fast = max((i for i, count in enumerate(seconds) if count > playing_rate * 1.05), default=-1)
         if complete == 40 and last_fast < 39:
             result['settled_s'] = last_fast + 2
@@ -947,10 +1229,11 @@ class Experiment:
                 for i in range(0, duration, 5)]
 
     def run(self, name):
-        self.speaker.check_actions(self.args.volume)
+        self.speaker.check_actions(self.args.volume, self.normal_play_mode)
         active = service(name, 'show')
         restart = False
         changed = False
+        restore_mode = None
         try:
             if active:
                 restart = True
@@ -968,10 +1251,12 @@ class Experiment:
                 raise ValueError('speaker did not report the current transport source')
             self.records.add('speaker', snapshot=dict(state=state, source=source.get('CurrentURI'),
                              queue_count=len(self.original_queue), volume=original_volume))
-            play_mode = self.speaker.av('GetTransportSettings').get('PlayMode', '')
-            crossfade = self.speaker.av('GetCrossfadeMode').get('CrossfadeMode', '')
-            if play_mode.strip().upper() != 'NORMAL' or crossfade.strip().lower() not in ('0', 'false'):
-                raise ValueError(f'need sequential playback with crossfade off (play mode {play_mode}, crossfade {crossfade})')
+            play_mode = self.play_mode()
+            if play_mode.upper() != 'NORMAL':
+                restore_mode = play_mode
+                self.speaker.av('SetPlayMode', NewPlayMode='NORMAL')
+                if self.speaker.av('GetTransportSettings').get('PlayMode', '').strip().upper() != 'NORMAL':
+                    raise ValueError('speaker did not enter NORMAL play mode')
             self.prepare()
             host = local_route(self.speaker.host, self.speaker.port)
             with MediaServer(host, self.records) as self.server:
@@ -1008,9 +1293,15 @@ class Experiment:
                         if changed:
                             self.speaker.set_volume(original_volume)
         finally:
-            if restart:
-                self.records.log(f'Starting {name}')
-                service(name, 'start')
+            try:
+                if restore_mode is not None:
+                    self.speaker.av('SetPlayMode', NewPlayMode=restore_mode)
+                    if self.speaker.av('GetTransportSettings').get('PlayMode', '').strip() != restore_mode:
+                        raise ValueError('speaker did not restore its previous play mode')
+            finally:
+                if restart:
+                    self.records.log(f'Starting {name}')
+                    service(name, 'start')
 
     def reset(self, source):
         if not self.own:
@@ -1045,8 +1336,10 @@ class Experiment:
                    ('refill_websocket_median_ms', 'WS p50 ms'), ('refill_websocket_p95_ms', 'WS p95 ms'),
                    ('refill_UPnP_median_ms', 'UPnP p50 ms'), ('refill_UPnP_p95_ms', 'UPnP p95 ms'),
                    ('start_playing_ms', 'start ms'), ('start_advancing_ms', 'advancing ms'),
-                   ('seek_playing_ms', 'seek ms'), ('seek_position_error_ms', 'seek error ms'),
-                   ('resume_playing_ms', 'resume ms'), ('join_delta_ms', 'join delta ms')]
+                   ('seek_playing_ms', 'seek ms'), ('seek_landing_ms', 'seek landing ms'),
+                   ('tail_seek_landing_ms', 'tail seek landing ms'), ('position_offset_ms', 'position offset ms'),
+                   ('resume_playing_ms', 'resume ms'), ('join_gap_ms', 'join gap ms'),
+                   ('second_join_gap_ms', 'second join gap ms')]
         averages = {}
         for case in self.args.cases:
             runs = [row for row in self.results if row['case'] == case]
@@ -1065,7 +1358,7 @@ class Experiment:
                     metrics += [('position_median_ms', 'position p50 ms'), ('position_max_ms', 'position max ms')]
                 columns.extend((f'{label}_{protocol}_{key}', f'{label} {short} {heading}')
                                for key, heading in metrics)
-        columns.extend([('seek_requests', 'seek requests'), ('pause_position_s', 'pause s'),
+        columns.extend([('seek_requests', 'seek requests'), ('tail_seek_requests', 'tail seek requests'), ('pause_position_s', 'pause s'),
                         ('before_resume_position_s', 'before resume s'), ('resume_position_s', 'resume position s'),
                         ('join_repeated', 'join repeats'), ('playback_errors', 'playback errors'),
                         ('failures', 'failures')])
@@ -1136,7 +1429,8 @@ def main():
     parser.add_argument('--track-id', type=int, required=True)
     parser.add_argument('--volume', type=int)
     parser.add_argument('--cases', default=','.join(CASES))
-    parser.add_argument('--repeats', type=int, default=2)
+    parser.add_argument('--repeats', type=int, default=1)
+    parser.add_argument('--normal-play-mode', action='store_true')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
     args.cases = [part.strip() for part in args.cases.split(',')]
