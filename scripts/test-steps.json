@@ -5905,7 +5905,8 @@
         "full": "test-run"
       },
       "phase": "quiet",
-      "reason": "Live audio clock, latency, WebSocket cadence, timing profiles or soak model.",
+      "run_alone": true,
+      "reason": "PACE-01 concurrent lane saw an extra LMS Stop after the resumed episode. The isolated rerun passed unchanged.",
       "seconds": 245.53895624598954,
       "modes": [
         "full"
