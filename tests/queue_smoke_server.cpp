@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fcntl.h>
+#include <iostream>
 #include <string_view>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -128,9 +129,48 @@ void check() {
     get(server.port(), url, std::string_view(expected).substr(first, length), "bytes=" + bounds,
         "bytes " + bounds + "/" + std::to_string(expected.size()));
 }
+void pacingFixture() {
+    Scratch scratch;
+    queue_audio::Config config;
+    config.root = scratch.path;
+    queue_audio::Store store("pacing", config);
+    queue_audio::Route route("pacing", "pacing-session");
+    upnp::HttpServer server(0);
+    route.registerWith(server);
+
+    constexpr unsigned rate = 44100;
+    auto publish = [&](const char *name, unsigned seconds) {
+        const auto item = store.create({name, rate, rate * seconds, 1});
+        const std::vector<yeney::Frame> pcm(rate, {0x12345600, -0x12345600});
+        for (unsigned second = 0; second < seconds; ++second)
+            item->append(pcm.data(), pcm.size(), false);
+        item->finish();
+        const auto url = route.publish("pacing", 1, 1, item);
+        return std::make_pair(item, url);
+    };
+    const auto [item, url] = publish("long", 32);
+    const auto [shortItem, shortUrl] = publish("short", 10);
+    std::printf("fixture %u %s %s\n", server.port(), url.c_str(), shortUrl.c_str());
+    std::fflush(stdout);
+    std::string command;
+    while (std::cin >> command) {
+        if (command == "cancel")
+            item->cancel();
+        else if (command == "flush")
+            item->releaseAudio();
+        else
+            break;
+    }
 }
 
-int main() {
+}
+
+int main(int argc, char **argv) {
+    if (argc == 2 && std::string_view(argv[1]) == "--pacing-fixture") {
+        setvbuf(stdout, nullptr, _IOLBF, 0);
+        pacingFixture();
+        return 0;
+    }
     // Production request diagnostics share stdout with the smoke verdict.
     const Descriptor verdict{dup(STDOUT_FILENO)};
     const Descriptor quiet{open("/dev/null", O_WRONLY | O_CLOEXEC)};
