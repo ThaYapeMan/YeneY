@@ -22,7 +22,7 @@ class Fixture:
         env = dict(os.environ, YENEY_QUEUE_PACING="on", YENEY_QUEUE_PACE_RATE="2",
                    YENEY_QUEUE_PACE_FREE_MS="2000", YENEY_QUEUE_PACE_TAIL_MS="20000")
         env.update(self.settings)
-        command = ["./yeney-smoke-server", "--pacing-fixture"]
+        command = [os.environ.get("YENEY_PACING_FIXTURE", "./yeney-smoke-server"), "--pacing-fixture"]
         if self.small_window:
             command.append("--small-window")
         self.process = subprocess.Popen(
@@ -159,8 +159,9 @@ class QueuePacing(unittest.TestCase):
             while time.monotonic() < deadline:
                 received += len(response.read1(8192))
             # Account for TCP data queued before the pause and credit earned
-            # during the measurement, including the last read's chunk.
-            limit = 2 * RATE + int(2 * RATE * window) + 65536 + 8192
+            # during the measurement. Include one outstanding server write
+            # and one final read that can straddle the deadline.
+            limit = 2 * RATE + int(2 * RATE * window) + 65536 + 2 * 8192
             self.assertLessEqual(received, limit)
             sock.shutdown(socket.SHUT_RDWR)
             self.assertEqual(fixture.diagnostic()["paced"], "1")
