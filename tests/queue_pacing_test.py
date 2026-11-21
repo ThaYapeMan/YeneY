@@ -14,15 +14,19 @@ LENGTH = 44 + 32 * RATE
 
 
 class Fixture:
-    def __init__(self, **settings):
+    def __init__(self, small_window=False, **settings):
+        self.small_window = small_window
         self.settings = settings
 
     def __enter__(self):
         env = dict(os.environ, YENEY_QUEUE_PACING="on", YENEY_QUEUE_PACE_RATE="2",
                    YENEY_QUEUE_PACE_FREE_MS="2000", YENEY_QUEUE_PACE_TAIL_MS="20000")
         env.update(self.settings)
+        command = ["./yeney-smoke-server", "--pacing-fixture"]
+        if self.small_window:
+            command.append("--small-window")
         self.process = subprocess.Popen(
-            ["./yeney-smoke-server", "--pacing-fixture"],
+            command,
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True, env=env,
         )
         for line in self.process.stdout:
@@ -46,7 +50,13 @@ class Fixture:
     @contextlib.contextmanager
     def request(self, range_value=None, short=False):
         with contextlib.closing(http.client.HTTPConnection("127.0.0.1", self.port, timeout=60)) as client:
-            client.connect()
+            if self.small_window:
+                client.sock = socket.socket()
+                client.sock.settimeout(client.timeout)
+                client.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)
+                client.sock.connect(("127.0.0.1", self.port))
+            else:
+                client.connect()
             sock = client.sock
             headers = {"Range": range_value} if range_value else {}
             client.request("GET", self.short_url if short else self.url, headers=headers)
@@ -129,24 +139,30 @@ class QueuePacing(unittest.TestCase):
                     self.assertLess(int(diagnostic["served_bytes"]), 8192)
 
     def test_slow_client(self):
-        with Fixture() as fixture, fixture.request("bytes=0-2645999") as (response, _):
+        # Keep the transport's read-ahead smaller than the initial allowance.
+        with Fixture(small_window=True) as fixture, fixture.request("bytes=0-2645999") as (response, _):
             start = time.monotonic()
-            for step in range(20):
-                self.assertEqual(len(response.read(RATE // 2)), RATE // 2)
-                time.sleep(max(0, start + (step + 1) * .5 - time.monotonic()))
+            for step in range(200):
+                self.assertEqual(len(response.read(RATE // 20)), RATE // 20)
+                time.sleep(max(0, start + (step + 1) * .05 - time.monotonic()))
             diagnostic = fixture.diagnostic()
             self.assertEqual(diagnostic["paced"], "1")
             self.assertEqual(diagnostic["pace_wait_ms"], "0")
 
     def test_no_second_burst(self):
-        with Fixture() as fixture, fixture.request() as (response, _):
-            response.read(2 * RATE)
+        with Fixture(small_window=True) as fixture, fixture.request() as (response, sock):
+            self.assertEqual(len(response.read(2 * RATE)), 2 * RATE)
             time.sleep(10)
-            start = time.monotonic()
-            # The transport can already hold bytes handed out before it blocked.
-            # Check that the response cannot finish in a second burst.
-            self.assertLess(len(response.read()), LENGTH)
-            self.assertGreater(time.monotonic() - start, 1)
+            window = .1
+            deadline = time.monotonic() + window
+            received = 0
+            while time.monotonic() < deadline:
+                received += len(response.read1(8192))
+            # Account for TCP data queued before the pause and credit earned
+            # during the measurement, including the last read's chunk.
+            limit = 2 * RATE + int(2 * RATE * window) + 65536 + 8192
+            self.assertLessEqual(received, limit)
+            sock.shutdown(socket.SHUT_RDWR)
             self.assertEqual(fixture.diagnostic()["paced"], "1")
 
 

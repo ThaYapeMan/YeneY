@@ -13,10 +13,17 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
+namespace {
+int fixtureSendBuffer = 0;
+}
+
 // The production listener normally accepts connections on all interfaces.
 extern "C" int __real_bind(int fd, const sockaddr *address, socklen_t length);
 extern "C" int __wrap_bind(int fd, const sockaddr *address, socklen_t length) {
     if (length == sizeof(sockaddr_in) && address->sa_family == AF_INET) {
+        if (fixtureSendBuffer &&
+            setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &fixtureSendBuffer, sizeof fixtureSendBuffer))
+            return -1;
         sockaddr_in local;
         std::memcpy(&local, address, sizeof local);
         local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
@@ -166,7 +173,9 @@ void pacingFixture() {
 }
 
 int main(int argc, char **argv) {
-    if (argc == 2 && std::string_view(argv[1]) == "--pacing-fixture") {
+    if (argc >= 2 && std::string_view(argv[1]) == "--pacing-fixture") {
+        if (argc == 3 && std::string_view(argv[2]) == "--small-window")
+            fixtureSendBuffer = 16384;
         setvbuf(stdout, nullptr, _IOLBF, 0);
         pacingFixture();
         return 0;
