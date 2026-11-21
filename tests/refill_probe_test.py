@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Loopback exercise of the refill probe, including its cleanup paths."""
 import contextlib
+import json
 import io
 import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -17,7 +18,7 @@ import tarfile
 import xml.etree.ElementTree as ET
 
 from queue_binary_test import Device
-from queue_sonos_fake import Coordinator, request
+from queue_sonos_fake import Coordinator, Position, request
 from sonos_websocket_fake import LocalApi
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,18 @@ for node in ET.fromstring(DOCUMENT).iter():
         DESCRIPTION_ROUTES[node.text] = (DESCRIPTIONS / Path(node.text).name).read_text()
     elif node.tag.endswith('}controlURL'):
         CONTROL_ROUTES.add(node.text)
+
+
+class PlaybackPosition(Position):
+    def playing_elapsed(self):
+        return super().playing_elapsed() / SCALE
+
+
+class ProbeCoordinator(Coordinator):
+    @Coordinator.position.setter
+    def position(self, value):
+        Coordinator.position.fset(self, value)
+        self._position = PlaybackPosition(self, self._position)
 
 
 class Renderer(Device):
@@ -74,10 +87,11 @@ class Renderer(Device):
             resource = item[-1]
             assert resource.text == args['EnqueuedURI'] and resource.get('sampleFrequency') == '8000'
             compressed = resource.text.endswith('.flac')
-            assert resource.get('bitsPerSample') == ('16' if compressed else '24')
+            assert resource.get('bitsPerSample') in (('16', '24') if compressed else ('24',))
             assert resource.get('nrAudioChannels') == ('1' if compressed else '2')
-            assert int(resource.get('size', '0')) > 44 and resource.get('duration') == '0:03:00'
-            s.items.append({'uri': args['EnqueuedURI']})
+            assert int(resource.get('size', '0')) > 44 and resource.get('duration') in ('0:03:00', '0:00:30')
+            s.items.append(dict(uri=args['EnqueuedURI'], duration=probe.position(resource.get('duration')),
+                                bits=int(resource.get('bitsPerSample')), size=int(resource.get('size'))))
             s.update += 1
             return {}, None
         if action == 'RemoveTrackRangeFromQueue':
@@ -94,40 +108,101 @@ class Renderer(Device):
         if action == 'Play' and s.fail_play:
             s.fail_play = False
             return {}, '712'
-        if action in ('Play', 'Seek') and s.position['TrackURI'].startswith('http://127.'):
-            if action == 'Play' or args['Unit'] == 'REL_TIME':
-                def fetch(uri, seconds):
-                    try:
-                        offset = 0
-                        if seconds:
-                            head, response = request(uri, method='HEAD')
-                            with contextlib.closing(head):
-                                assert response.status == 200
-                                offset = int(response.getheader('Content-Length')) * int(seconds) // 180
-                        connection, response = request(uri, byte_range=f'bytes={offset}-' if offset else None)
-                        with contextlib.closing(connection):
-                            assert response.status == (206 if offset else 200)
-                            response.read(256)
-                    except Exception as exc:
-                        s.errors.append('probe media request: ' + repr(exc))
-                seek = action == 'Seek'
-                target = probe.position(args['Target']) if seek else 0
-                threading.Thread(target=fetch, args=(s.position['TrackURI'], target),
-                                 daemon=True).start()
-                if seek and target > 160:
-                    uri = s.position['TrackURI']
-                    following = s.items[int(s.position['Track'])]['uri']
+        if action == 'SetPlayMode':
+            assert s.stopped_bridge
+            s.play_mode = args['NewPlayMode']
+            s.mode_changes.append(s.play_mode)
+            return {}, None
+        if action in ('Pause', 'Stop', 'SetAVTransportURI', 'Seek', 'Play'):
+            if s.join_timer:
+                s.join_timer.cancel()
+                s.join_timer = None
+        result = super().action(service, action, args)
+        row = next((row for row in s.items if row['uri'] == s.position['TrackURI']), None)
+        if row and 'duration' in row and s.transport_state == 'PLAYING' and (
+                action == 'Play' or action == 'Seek' and args['Unit'] == 'REL_TIME'):
+            target = probe.position(s.position['RelTime'])
+            self.start_audio(row, target)
+        return result
 
-                    def join():
-                        if s.position['TrackURI'] == uri and s.transport_state == 'PLAYING':
-                            s.position = dict(Track=str(int(s.position['Track']) + 1),
-                                              TrackURI=following, RelTime='00:00:00')
-                            fetch(following, 0)
+    def start_audio(self, row, target):
+        s = self.server
+        uri, duration = row['uri'], row['duration']
 
-                    timer = threading.Timer((180 - target) * SCALE, join)
-                    timer.daemon = True
-                    timer.start()
-        return super().action(service, action, args)
+        def fetch():
+            try:
+                offset = self.media_offset(row, target)
+                connection, response = request(uri, byte_range=f'bytes={offset}-' if offset else None)
+                with contextlib.closing(connection), contextlib.closing(response):
+                    assert response.status == (206 if offset else 200)
+                    body = response.read(256)
+                    assert len(body) == 256
+                    if uri.endswith('.flac'):
+                        if offset:
+                            assert int.from_bytes(body[:2], 'big') & 0xfffe == 0xfff8
+                        else:
+                            assert body.startswith(b'fLaC')
+                            info = int.from_bytes(body[18:26], 'big')
+                            assert ((info >> 36) & 31) + 1 == row['bits']
+                    elif not offset:
+                        assert body.startswith(b'RIFF') and int.from_bytes(body[34:36], 'little') == 24
+            except Exception as exc:
+                s.errors.append('probe media request: ' + repr(exc))
+
+        threading.Thread(target=fetch, daemon=True).start()
+
+        def join():
+            with s.lock:
+                if s.position['TrackURI'] != uri or s.transport_state != 'PLAYING':
+                    return
+                index = int(s.position['Track'])
+                if index < len(s.items) and 'duration' in s.items[index]:
+                    following = s.items[index]
+                    s.position = dict(Track=str(index + 1), TrackURI=following['uri'], RelTime='00:00:00')
+                    self.start_audio(following, 0)
+
+        s.join_timer = threading.Timer(max(0, duration - target) * SCALE, join)
+        s.join_timer.daemon = True
+        s.join_timer.start()
+
+    @staticmethod
+    def media_offset(row, seconds):
+        uri = row['uri']
+        if seconds < 1:
+            return 0
+        head, response = request(uri, method='HEAD')
+        with contextlib.closing(head), contextlib.closing(response):
+            assert response.status == 200
+            assert int(response.getheader('Content-Length')) == row['size']
+            assert response.read() == b''
+        sample = int(seconds * 8000)
+        if uri.endswith('.wav'):
+            return 44 + sample * 6
+        connection, response = request(uri, byte_range='bytes=0-4095')
+        with contextlib.closing(connection), contextlib.closing(response):
+            header = response.read()
+            assert response.status == 206 and header.startswith(b'fLaC')
+        cursor = 4
+        points = []
+        while True:
+            flag = header[cursor]
+            length = int.from_bytes(header[cursor + 1:cursor + 4], 'big')
+            if flag & 0x7f == 3:
+                points = list(struct.iter_unpack('>QQH', header[cursor + 4:cursor + 4 + length]))
+            cursor += 4 + length
+            if flag & 0x80:
+                break
+        if points:
+            return cursor + max(offset for at, offset, _ in points if at <= sample)
+        # The fixture knows the fixed frame sizes. Open a separate discovery
+        # request to represent reading the header without a seek table.
+        frame = sample // 4096
+        offset = cursor + sum((1 if i < 128 else 2) + 8 + 4096 * (row['bits'] // 8)
+                              for i in range(frame))
+        connection, response = request(uri, byte_range=f'bytes={offset}-{offset + 1}')
+        with contextlib.closing(connection), contextlib.closing(response):
+            assert response.status == 206 and int.from_bytes(response.read(), 'big') & 0xfffe == 0xfff8
+        return offset
 
 
 class Download(BaseHTTPRequestHandler):
@@ -167,15 +242,19 @@ def inspect_archive(path):
 
 def check_ranges(experiment):
     p = experiment
-    item = probe.Item(p.flac, p.duration, bound=p.wav.stat().st_size, index=p.index, frames=p.frames)
+    audio = p.media['packed16']
+    path = audio['path']
+    frames, rate = audio['frames'], audio['rate']
+    item = probe.Item(path, frames / rate, bound=44 + frames * 6, index=audio['index'], frames=frames)
     for numerator in (1, 10, 60, 99):
-        target = item.length * numerator // 100
-        status, first, last, offset = item.range(f'bytes={target}-')
-        assert (status, first, last) == (206, target, item.length - 1)
-        i = item.offsets.index(offset)
-        following = item.samples[i + 1] if i + 1 < len(item.samples) else p.frames
-        assert item.samples[i] <= target * p.frames // item.length < following
-        with p.flac.open('rb') as media:
+        target = frames * numerator // 100
+        i = max(i for i, sample in enumerate(item.samples) if sample <= target)
+        offset = item.offsets[i]
+        status, first, last = item.range(f'bytes={offset}-')
+        assert (status, first, last) == (206, offset, item.length - 1)
+        following = item.samples[i + 1] if i + 1 < len(item.samples) else frames
+        assert item.samples[i] <= target < following
+        with path.open('rb') as media:
             media.seek(offset)
             assert int.from_bytes(media.read(2), 'big') & 0xfffe == 0xfff8
     with probe.MediaServer('127.0.0.1', p.records) as server:
@@ -184,15 +263,17 @@ def check_ranges(experiment):
         thread.start()
         try:
             uri = f'http://127.0.0.1:{server.server_port}/bound'
-            connection, response = request(uri, byte_range=f'bytes={item.length * 3 // 5}-')
-            with contextlib.closing(connection):
+            offset = item.offsets[len(item.offsets) * 3 // 5]
+            connection, response = request(uri, byte_range=f'bytes={offset}-')
+            with contextlib.closing(connection), contextlib.closing(response):
                 assert response.status == 206
-                assert response.getheader('Content-Range') == f'bytes {item.length * 3 // 5}-{item.length - 1}/{item.length}'
-                assert response.getheader('Content-Length') == str(item.length - item.length * 3 // 5)
-                assert response.read(2)[0] == 0xff
-            item.eof.set()
+                assert response.getheader('Content-Range') == f'bytes {offset}-{item.length - 1}/{item.length}'
+                assert response.getheader('Content-Length') == str(item.length - offset)
+                with path.open('rb') as media:
+                    media.seek(offset)
+                    assert response.read(64) == media.read(64)
             connection, response = request(uri, byte_range=f'bytes={item.actual}-')
-            with contextlib.closing(connection):
+            with contextlib.closing(connection), contextlib.closing(response):
                 assert response.status == 206
                 assert response.getheader('Content-Range') == f'bytes {item.actual}-{item.length - 1}/{item.length}'
                 assert response.read(1) == b''
@@ -201,12 +282,18 @@ def check_ranges(experiment):
             thread.join()
 
     with probe.MediaServer('127.0.0.1', p.records) as server:
-        wav = probe.Item(p.wav, p.duration)
+        audio = p.media['wav']
+        wav = probe.Item(audio['path'], audio['frames'] / audio['rate'])
         server.items['/wire.wav'] = wav
         thread = threading.Thread(target=server.serve_forever)
         thread.start()
         try:
             uri = f'http://127.0.0.1:{server.server_port}/wire.wav'
+            connection, response = request(uri, method='HEAD', byte_range='bytes=45-103')
+            with contextlib.closing(connection), contextlib.closing(response):
+                assert response.status == 206 and response.getheader('Content-Length') == '59'
+                assert response.getheader('Content-Range') == f'bytes 45-103/{wav.length}'
+                assert response.read() == b''
             for byte_range, status, reason, length in (
                     ('', 200, 'OK', wav.length), ('bytes=45-103', 206, 'Partial Content', 59)):
                 connection, response = request(uri, byte_range=byte_range)
@@ -223,17 +310,18 @@ def check_ranges(experiment):
             server.shutdown()
             thread.join()
 
-    for path, pace in ((p.wav, 2), (p.wav, 1.25), (p.flac, 2)):
+    for form in ('wav', 'fixed16', 'packed16', 'packed24'):
+        media = p.media[form]
         records = probe.Records()
         with probe.MediaServer('127.0.0.1', records) as server:
-            item = probe.Item(path, p.duration, pace=pace, index=p.index, frames=p.frames)
+            item = probe.Item(media['path'], media['frames'] / media['rate'],
+                              index=media['index'], frames=media['frames'])
             server.items['/pace'] = item
             thread = threading.Thread(target=server.serve_forever)
             thread.start()
             try:
                 uri = f'http://127.0.0.1:{server.server_port}/pace'
-                rate = item.actual / item.duration
-                count = item.burst_end + int(rate * pace * .35)
+                count = int(item.burst + item.play_rate * 2 * .35)
                 started = time.monotonic()
                 connection, response = request(uri)
                 with contextlib.closing(connection):
@@ -245,16 +333,51 @@ def check_ranges(experiment):
                 thread.join()
 
 
+def check_stereo_fixed(work):
+    helper = probe.audio_helper(work)
+    frames, rate = 2050 * 4096 + 5, 44100
+    samples = bytes((0x0d, 0x34, 0x12, 0x07, 0xcb, 0xed))
+    pcm, media = work / 'stereo24.pcm', work / 'stereo24.flac'
+    with pcm.open('wb') as stream:
+        for _ in range(2050):
+            stream.write(samples * 4096)
+        stream.write(samples * 5)
+    proof = tuple(map(int, probe.audio_command(helper, 'fixed', pcm, media, frames, rate, 24, 2).split()))
+    _, evidence = probe.verify_flac(helper, media, pcm, 3, 2, frames, work, proof, True)
+    assert evidence['predicted'] == evidence['written']
+    assert evidence['decoded_bit_exact'] and evidence['range_bit_exact']
+    assert evidence['largest_frame'] == 24588
+    print('stereo-fixed24', json.dumps(evidence, sort_keys=True))
+
+
+def check_millisecond_figures():
+    fixture = json.loads((ROOT / 'tests/fixtures/refill-millisecond-fixture.json').read_text())
+    for case in fixture['cases']:
+        answers = probe.playing_answers([
+            dict(sent=sent / 1000, received=received / 1000, position_s=position / 1000, state=state)
+            for sent, received, position, state in case['rows']])
+        gap = probe.join_gap(answers, case['anchor_ms'] / 1000, case['duration_ms'] / 1000)
+        offset = probe.position_offset(answers, case['steady_from_ms'] / 1000, case['steady_until_ms'] / 1000)
+        assert math.isclose(gap, case['expected_join_ms'], abs_tol=.001)
+        assert math.isclose(offset, case['expected_offset_ms'], abs_tol=.001)
+        print(f"clock fixture {case['case']} join_gap_ms={gap:.3f} position_offset_ms={offset:.3f}")
+
+
 def run():
+    check_millisecond_figures()
     with tempfile.TemporaryDirectory(prefix='refill-test-') as directory, DownloadServer() as downloads:
         work = Path(directory)
+        check_stereo_fixed(work)
         full, short = fixture(work, 180), fixture(work, 2)
         downloads.audio = full
-        renderer = Coordinator(handler=Renderer)
+        renderer = ProbeCoordinator(handler=Renderer)
         renderer.crossfade = False
         renderer.realtime = True
         renderer.follow_controls = True
         renderer.fail_play = False
+        renderer.join_timer = None
+        renderer.stopped_bridge = False
+        renderer.mode_changes = []
         renderer.missing = set()
         renderer.av_control = AV_CONTROL
         api = LocalApi(renderer, port=0)
@@ -267,6 +390,11 @@ def run():
 
             def service(name, action):
                 calls.append(action)
+                if action == 'stop':
+                    renderer.stopped_bridge = True
+                elif action == 'start':
+                    assert renderer.play_mode != 'NORMAL' or not getattr(args, 'normal_play_mode', False)
+                    renderer.stopped_bridge = False
                 return True
 
             def new():
@@ -291,16 +419,38 @@ def run():
                     downloads.audio = b'other data' if label == 'not-flac' else short if label == 'short' else full
                     assert new().check('test-unit') == 1, label
                 downloads.audio = full
+                renderer.play_mode = 'SHUFFLE'
+                with contextlib.redirect_stdout(io.StringIO()) as refusal:
+                    assert new().check('test-unit') == 1
+                assert 'speaker play mode SHUFFLE, crossfade 0' in refusal.getvalue()
+                assert 'measurement would refuse' in refusal.getvalue()
+                args.normal_play_mode = True
+                renderer.crossfade = True
+                assert new().check('test-unit') == 1
+                renderer.crossfade = False
+                assert not renderer.mode_changes
                 experiment.run('test-unit')
-                assert len(experiment.results) == 6 and all('error' not in row for row in experiment.results), experiment.results
+                assert renderer.play_mode == 'SHUFFLE' and renderer.mode_changes == ['NORMAL', 'SHUFFLE']
+                assert len(experiment.results) == 11 and all('error' not in row for row in experiment.results), experiment.results
                 assert renderer.items == renderer.original and renderer.volume == 23
                 assert calls[-3:] == ['show', 'stop', 'start']
                 path = work / 'normal.tar.gz'
                 experiment.archive(path)
-                assert all('start_advancing_ms' in row and 'join_delta_ms' in row for row in experiment.results)
+                assert all('start_advancing_ms' in row and 'join_gap_ms' in row for row in experiment.results)
+                assert all('position_offset_ms' in row and row['seek_requests'] > 0 and
+                           row['tail_seek_requests'] > 0 for row in experiment.results)
+                assert all('second_join_gap_ms' in row for row in experiment.results
+                           if row['case'] in ('short', 'short-fixed16'))
+                for form in ('fixed16', 'fixed24', 'fixed16-noseek', 'short-fixed16'):
+                    evidence = experiment.media[form]['proof']
+                    assert evidence['predicted'] == evidence['written']
+                    assert evidence['decoded_bit_exact'] and evidence['range_bit_exact']
+                    assert evidence['largest_frame'] <= 32768
+                    assert bool(evidence['seek_points']) == (form != 'fixed16-noseek')
+                    print(form, json.dumps(evidence, sort_keys=True))
                 inspect_archive(path)
                 check_ranges(experiment)
-                args.cases = ['wav', 'flac']
+                args.cases = ['wav', 'packed16']
                 renderer.fail_play = True
                 failed = new()
                 failed.run('test-unit')
