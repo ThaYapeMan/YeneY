@@ -203,6 +203,7 @@ artwork, the Material Skin icon and the older debug names are explained in
 | Setting | Values | Default |
 |---|---|---|
 | `YENEY_PLAYBACK_MODE` | `queue`: source-aware relay/stream on the coordinator · `stream`: explicit continuous transport · `auto`: stream, logged as `auto-phase4` | `queue` |
+| `YENEY_QUEUE_PACING` | Limit the delivery rate of queue audio. Set to `off` to disable. | `on` |
 | `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |
 | `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |
 | `YENEY_QUEUE_DISK_MIB` | Positive disk-history quota in MiB per queue room; explicit values apply to both paths | `256` local / `8192` estimated |

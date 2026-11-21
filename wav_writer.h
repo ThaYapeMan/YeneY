@@ -18,8 +18,18 @@ struct ByteRange {
     bool partial;
 };
 ByteRange wavRange(const std::string &header, uint64_t length);
+struct Pacing {
+    bool enabled = true;
+    double rate = 2.0;
+    unsigned freeMs = 2000;
+    unsigned tailMs = 20000;
+
+    static Pacing environment();
+    void log() const;
+};
 // Finite WAV handler shared by the production route and storage tests.
 bool serveWav(upnp::StreamRequest &, const std::shared_ptr<Item> &,
               std::chrono::milliseconds wait = std::chrono::seconds(15),
-              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve = {}, bool audioPinned = false);
+              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve = {}, bool audioPinned = false,
+              const Pacing &pacing = {});
 } // namespace queue_audio

@@ -14,6 +14,7 @@ bool token(const std::string &s) {
 } // namespace
 struct Route::State {
     const std::string room, session;
+    const Pacing pacing = Pacing::environment();
     std::mutex mutex;
     struct Entry {
         uint64_t epoch, revision;
@@ -31,6 +32,7 @@ Route::Route(std::string r, std::string s) {
     if (r.empty() || !token(s))
         throw std::invalid_argument("invalid queue route owner");
     state = std::make_shared<State>(std::move(r), std::move(s));
+    state->pacing.log();
 }
 void Route::registerWith(upnp::StreamServer &server, std::string address, std::function<void()> activity) {
     state->speakerAddress = std::move(address);
@@ -127,6 +129,6 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         r.reply(404);
         return true;
     }
-    return serveWav(r, item, std::chrono::seconds(15), std::move(resolve), audioPinned);
+    return serveWav(r, item, std::chrono::seconds(15), std::move(resolve), audioPinned, state->pacing);
 }
 } // namespace queue_audio

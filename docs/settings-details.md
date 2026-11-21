@@ -229,3 +229,21 @@ and `YENEY_STOPPED_MEDIAINFO=1` names still work, with one deprecation warning
 each at startup. Canonical debug tokens enable the selected experiments; an
 enabled legacy alias also keeps its previous effect. All timing/LampaStream and
 user-facing playback settings retain their names and defaults.
+
+
+## Queue audio pacing
+
+Each room reads these settings at startup. They apply to queue HTTP bodies,
+including remote tracks and podcasts. Invalid values log a warning and use
+the corresponding default.
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `YENEY_QUEUE_PACING` | `on` or `off` | `on` |
+| `YENEY_QUEUE_PACE_RATE` | 1.0–8.0 times the item's PCM byte rate | `2.0` |
+| `YENEY_QUEUE_PACE_FREE_MS` | 0–30000 ms of audio available at once | `2000` |
+| `YENEY_QUEUE_PACE_TAIL_MS` | 0–120000 ms at the end of an item | `20000` |
+
+Each request starts with the free allowance. The allowance refills at the
+configured rate up to the same limit. A request that starts within the tail
+or serves an item shorter than the tail is unlimited.

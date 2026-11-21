@@ -9,7 +9,91 @@
 #include <cerrno>
 #include <limits>
 #include <stdexcept>
+#include <cstdlib>
+#include <thread>
 namespace queue_audio {
+namespace {
+using Clock = std::chrono::steady_clock;
+using namespace std::chrono_literals;
+
+unsigned millisecondsSetting(const char *key, unsigned fallback, unsigned maximum) {
+    if (const auto *value = std::getenv(key)) {
+        char *end;
+        const auto number = std::strtoul(value, &end, 10);
+        if (*value >= '0' && *value <= '9' && !*end && number <= maximum)
+            return static_cast<unsigned>(number);
+        std::printf("yeney: queue invalid %s; using %u\n", key, fallback);
+    }
+    return fallback;
+}
+
+class ByteBudget {
+    const double perSecond, burst;
+    double available;
+    Clock::time_point updated = Clock::now();
+
+public:
+    ByteBudget(uint64_t bytesPerSecond, const Pacing &pacing)
+        : perSecond(bytesPerSecond * pacing.rate),
+          burst(bytesPerSecond * (pacing.freeMs / 1000.0)), available(burst) {}
+
+    size_t chunkLimit() const {
+        // With zero free bytes each chunk earns its budget from zero.
+        return static_cast<size_t>(std::max(1.0, burst ? burst : perSecond / 100));
+    }
+
+    template<class Active>
+    bool take(size_t size, Clock::duration &waited, Active active) {
+        auto now = Clock::now();
+        auto refill = [&](double capacity) {
+            available = std::min(capacity, available +
+                std::chrono::duration<double>(now - updated).count() * perSecond);
+            updated = now;
+        };
+        refill(burst);
+        const auto start = now;
+        while (available < size) {
+            if (!active())
+                return false;
+            const auto delay = std::chrono::ceil<Clock::duration>(
+                std::chrono::duration<double>((size - available) / perSecond));
+            std::this_thread::sleep_for(std::min(delay, Clock::duration(5ms)));
+            now = Clock::now();
+            waited += now - updated;
+            refill(std::max(burst, double(size)));
+        }
+        available -= size;
+        return start == now || active();
+    }
+};
+} // namespace
+
+Pacing Pacing::environment() {
+    Pacing settings;
+    if (const auto *value = std::getenv("YENEY_QUEUE_PACING")) {
+        if (!std::strcmp(value, "off"))
+            settings.enabled = false;
+        else if (std::strcmp(value, "on"))
+            std::printf("yeney: queue invalid YENEY_QUEUE_PACING; using on\n");
+    }
+    if (const auto *value = std::getenv("YENEY_QUEUE_PACE_RATE")) {
+        char *end;
+        const auto rate = std::strtod(value, &end);
+        if (end != value && !*end && rate >= 1 && rate <= 8)
+            settings.rate = rate;
+        else
+            std::printf("yeney: queue invalid YENEY_QUEUE_PACE_RATE; using 2.00\n");
+    }
+    settings.freeMs = millisecondsSetting("YENEY_QUEUE_PACE_FREE_MS", settings.freeMs, 30000);
+    settings.tailMs = millisecondsSetting("YENEY_QUEUE_PACE_TAIL_MS", settings.tailMs, 120000);
+    return settings;
+}
+
+void Pacing::log() const {
+    std::printf("yeney: queue pacing=%s rate=%.2f free_ms=%u tail_ms=%u\n",
+                enabled ? "on" : "off", rate, freeMs, tailMs);
+}
+
 uint64_t wavLength(uint64_t frames) {
     if (frames > (uint64_t(UINT32_MAX) - 36) / 6)
         throw std::invalid_argument("WAV exceeds RIFF limit");
@@ -67,7 +151,8 @@ ByteRange wavRange(const std::string &text, uint64_t length) {
 }
 bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &published,
               std::chrono::milliseconds wait,
-              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned) {
+              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned,
+              const Pacing &pacing) {
     auto item = published;
     if (request.method() == upnp::StreamRequest::Method::Get && !audioPinned) {
         item = Item::retainAudio(item);
@@ -79,6 +164,8 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         unsigned status = 0;
         uint64_t length = 0, served = 0, bodyStart = UINT64_MAX, backpressure = 0;
         std::string ending = "cancelled";
+        bool paced = false;
+        Clock::duration paceWait{};
         ~Diagnostic() {
             const auto sent = request.connectionSentBytes();
             if (bodyStart != UINT64_MAX && sent != UINT64_MAX && sent >= bodyStart) served = sent-bodyStart;
@@ -86,12 +173,13 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             auto range = request.header("Range");
             if (range.find_first_not_of("bytes=0123456789-, ") != std::string::npos || range.size() > 128)
                 range = "invalid";
-            std::printf("yeney: queue HTTP method=%s item=%s range=%s status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu\n",
+            std::printf("yeney: queue HTTP method=%s item=%s range=%s status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu paced=%d pace_wait_ms=%lld\n",
                 request.method() == upnp::StreamRequest::Method::Get ? "GET" :
                 request.method() == upnp::StreamRequest::Method::Head ? "HEAD" : "OTHER",
                 item->descriptor().occurrence.c_str(), range.empty() ? "none" : range.c_str(), status,
                 (unsigned long long)length, (unsigned long long)(44 + item->producedFrames()*6),
-                (unsigned long long)served, ending.c_str(), (unsigned long long)backpressure);
+                (unsigned long long)served, ending.c_str(), (unsigned long long)backpressure,
+                paced, static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(paceWait).count()));
         }
     } diagnostic{request, item};
     if (request.method() != upnp::StreamRequest::Method::Get &&
@@ -188,6 +276,16 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
     }
     bridge::ConsumptionDiagnostic consumption(request, item->room(), "queue");
     auto reader = item->reader(range.first);
+    const uint64_t playRate = uint64_t(item->descriptor().rate) * 6;
+    const uint64_t pcmStart = std::max<uint64_t>(range.first, 44);
+    diagnostic.paced = pacing.enabled && (*length - pcmStart) * 1000 > playRate * pacing.tailMs;
+    ByteBudget budget(playRate, pacing);
+    auto active = [&] {
+        if (request.aborted() || request.peerClosed())
+            return false;
+        (void)item->contentLength();
+        return true;
+    };
     uint64_t left = range.last - range.first + 1;
     auto deadline = std::chrono::steady_clock::now() + wait;
     diagnostic.ending = "speaker-closed";
@@ -199,7 +297,8 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             // fresh bounded wait, not a 15 s total track lifetime.
             size_t n;
             try {
-                n = reader.read(bytes, std::min<uint64_t>(left, sizeof(bytes)),
+                const auto limit = diagnostic.paced ? std::min(sizeof(bytes), budget.chunkLimit()) : sizeof(bytes);
+                n = reader.read(bytes, std::min<uint64_t>(left, limit),
                                 std::chrono::milliseconds(100));
             } catch (const ReadTimeout &) {
                 if (std::chrono::steady_clock::now() >= deadline)
@@ -207,6 +306,8 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
                 continue;
             }
             if (!n) { diagnostic.ending = "early-EOF"; break; }
+            if (diagnostic.paced && !budget.take(n, diagnostic.paceWait, active))
+                break;
             if (!send(bytes, n)) {
                 diagnostic.ending = errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT ? "timeout" : "speaker-closed";
                 break;
