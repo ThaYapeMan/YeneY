@@ -70,6 +70,24 @@ int main() {
             assert(root.child("item")->value("title").empty());
         }
     }
+    for (const auto *extension : {"wav", "flac"}) {
+        upnp::QueueMetadata m;
+        m.url = std::string("http://localhost/yeney/q/test/1/3/2.") + extension;
+        m.session = "test";
+        m.rate = 44100;
+        m.frames = 257;
+        // Two FLAC frames, each with 11 overhead bytes and six bytes per sample.
+        m.size = (std::string(extension) == "flac" ? 42 + 22 : 44) + 6 * m.frames;
+        auto text = upnp::queueDidl(m);
+        assert(text.find(std::string("protocolInfo=\"http-get:*:audio/") + extension + ":*\"") != std::string::npos);
+        assert(text.find("bitsPerSample=\"24\"") != std::string::npos);
+        assert(text.find("size=\"" + std::to_string(m.size) + "\"") != std::string::npos);
+        ++m.size;
+        bool rejected = false;
+        try { upnp::queueDidl(m); } catch (const std::invalid_argument &) { rejected = true; }
+        assert(rejected);
+    }
+    std::cout << "PASS WAV and FLAC descriptions reject the wrong size\n";
     std::cout << "PASS queue DIDL element presence: title/creator/artist/album retained for every empty-field combination\n";
     std::cout << "PASS queue plain title: unset/artist-title/title identical, empty stays empty, controls/invalid UTF-8 repaired, Unicode retained\n";
     std::cout << "PASS queue DIDL: escaped title/artist/album, session ownership, native rates, exact WAV "
