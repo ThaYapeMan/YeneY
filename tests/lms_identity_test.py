@@ -64,7 +64,7 @@ class LmsIdentityTest(unittest.TestCase):
     def tearDownClass(cls):
         cls.speaker.close()
 
-    def hello(self, mode, product, firmware):
+    def hello(self, mode, product, firmware, *, queue_format=None, expected_format=None):
         self.speaker.product, self.speaker.firmware = product, firmware
         with (socket.socket() as listener,
               tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR')) as state):
@@ -74,6 +74,8 @@ class LmsIdentityTest(unittest.TestCase):
             port = listener.getsockname()[1]
             env = dict(os.environ, YENEY_PLAYBACK_MODE=mode, YENEY_LMS_ICON='',
                        YENEY_LMS_VOLUME='off', STATE_DIRECTORY=state)
+            if queue_format is not None:
+                env['YENEY_QUEUE_FORMAT'] = queue_format
             with open(os.path.join(state, 'bridge.log'), 'w+') as log:
                 proc = subprocess.Popen(
                     [self.binary, '--room=Study', '--ip=127.0.0.1', f'--server=127.0.0.1:{port}'],
@@ -85,7 +87,17 @@ class LmsIdentityTest(unittest.TestCase):
                         with conn.makefile('rb') as wire:
                             opcode, length = struct.unpack('!4sI', wire.read(8))
                             self.assertEqual(opcode, b'HELO')
-                            return wire.read(length)[36:].decode()
+                            caps = wire.read(length)[36:].decode()
+                            if expected_format:
+                                log.seek(0)
+                                text = log.read()
+                                expected_line = 'queue format=' + expected_format
+                                if expected_format == 'flac':
+                                    expected_line += ' block=256'
+                                self.assertEqual(sum(expected_line in line for line in text.splitlines()), 1)
+                                if queue_format == 'invalid':
+                                    self.assertIn('invalid YENEY_QUEUE_FORMAT', text)
+                            return caps
                 except (OSError, struct.error) as error:
                     log.seek(0)
                     self.fail(f'{error}\n{log.read()}')
@@ -103,6 +115,14 @@ class LmsIdentityTest(unittest.TestCase):
                 with self.subTest(mode=mode, product=product):
                     entries = self.hello(mode, product, '').split(',')
                     self.assertEqual([x for x in entries if x.startswith('Model=')], ['Model=yeney'])
+
+    def test_room_queue_format(self):
+        for setting, expected in (('wav', 'wav'), ('flac', 'flac'), ('invalid', 'flac')):
+            with self.subTest(setting=setting):
+                entries = self.hello('queue', 'Sonos Play:1', '86.11',
+                                     queue_format=setting, expected_format=expected).split(',')
+                self.assertIn('Firmware=' + self.version[:-1] + '; Sonos 86.11; rows ' + expected + ')',
+                              entries)
 
     def test_model_text_table(self):
         for product, expected in MODELS:
