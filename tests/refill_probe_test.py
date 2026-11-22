@@ -7,6 +7,7 @@ import math
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+import socket
 import struct
 import subprocess
 import tempfile
@@ -410,51 +411,131 @@ def check_block_sizes(work):
             print(f'block {block} {mode}', json.dumps(evidence, sort_keys=True))
 
 
+class SeekRenderer:
+    """Deterministic speaker clock with separate reported and consumed positions."""
+
+    RATE = 44100
+    BLOCK = 4096
+
+    def __init__(self, records, fixed_offset):
+        self.records = records
+        self.fixed_offset = fixed_offset
+        self.now = 0.0
+        self.number = 1
+        self.state = 'STOPPED'
+        self.origin = self.base = self.offset = 0.0
+        self.sample_at = .25
+        self.uris = [f'http://127.0.0.1/row-{i}.flac' for i in range(1, 12)]
+
+    def av(self, action, **args):
+        if action == 'Play':
+            self.origin = self.now
+            self.state = 'PLAYING'
+        elif action == 'Pause':
+            self.base += self.now - self.origin
+            self.state = 'PAUSED'
+        elif action == 'Seek':
+            assert args['Unit'] == 'REL_TIME'
+            self.base = probe.position(args['Target'])
+            self.origin = self.now
+            sample = int(self.base * self.RATE)
+            next_block = (sample + self.BLOCK - 1) // self.BLOCK + 1
+            self.offset = .1045 if self.fixed_offset else (next_block * self.BLOCK - sample) / self.RATE
+            self.records.rows.append(dict(kind='requests', event='open', time=self.now,
+                                          path=f'/row-{self.number}.flac', range='bytes=42-'))
+
+    def advance_clock(self, delay):
+        end = self.now + delay
+        while self.sample_at <= end:
+            at = self.sample_at
+            if self.state == 'PLAYING':
+                join = self.origin + 40 - self.base - self.offset
+                if at >= join:
+                    self.number += 1
+                    self.origin, self.base, self.offset = join, 0, 0
+                position = round((self.base + at - self.origin) * 1000) / 1000
+                for protocol in ('websocket', 'UPnP'):
+                    self.records.rows.append(dict(kind='questions', time=at + .001,
+                                                  sent=at - .001, received=at + .001,
+                                                  protocol=protocol, position_s=position, latency_ms=2,
+                                                  item=self.uris[self.number - 1], state=self.state))
+            self.sample_at += .25
+        self.now = end
+
+
 def check_seek_verdict():
-    for fixed_offset in (False, True):
-        rows = []
-        for targets, _ in probe.SEEK_ACTIONS:
-            target = targets[-1] if targets else None
-            _, expected = probe.seek_prediction(44100, 4096, target)
-            observed = 104.5 if fixed_offset and targets else expected
-            answers = []
-            for i in range(8):
-                before, after = -.25 * (i + 1), .25 * (i + 1)
-                for time_s, pos in ((before, 40 + before - observed / 1000), (after, after)):
-                    answers.append(dict(sent=time_s - .001, received=time_s + .001,
-                                        position_s=pos, latency_ms=2))
-            gap = probe.seek_join(answers, 0, 40)
-            assert abs(gap - observed) < 1
-            rows.append(dict(targets=targets, join_ms=gap, difference_ms=gap - expected))
-        assert probe.seek_verdict([dict(rows=rows)])[-1] == ('H fails' if fixed_offset else 'H holds')
+    with mock.patch.object(probe.Experiment, 'choose'), mock.patch.object(probe.Experiment, 'add_items'):
+        for fixed_offset in (False, True):
+            records = probe.Records()
+            speaker = SeekRenderer(records, fixed_offset)
+            case = 'fixed16-4096'
+            args = SimpleNamespace(set='seek', cases=[case])
+            experiment = probe.Experiment(args, None, speaker, records)
+            result = dict(case=case, repeat=1)
+            experiment.results.append(result)
+            experiment.add_items.return_value = speaker.uris
+            with (mock.patch.object(experiment, 'transport', side_effect=lambda: (speaker.state, 'OK')),
+                  mock.patch.object(experiment, 't', side_effect=lambda: speaker.now),
+                  mock.patch.object(probe.time, 'sleep', side_effect=speaker.advance_clock)):
+                experiment.measure_chain(result)
+            assert len(result['rows']) == 10 and speaker.number == 11
+            assert [r['request_count'] for r in result['rows']] == [0, 1, 1, 1, 1, 1, 1, 2, 1, 1]
+            if not fixed_offset:
+                assert all(abs(row['difference_ms']) < 1 for row in result['rows']), result['rows']
+            assert probe.seek_verdict([result])[-1] == ('H fails' if fixed_offset else 'H holds')
+            print(experiment.seek_summary(), end='')
 
 
-def check_named_waits():
-    with mock.patch.object(probe.http.client, 'HTTPConnection', side_effect=TimeoutError):
+def check_named_waits(work):
+    class HeldDownload(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.server.release.wait(2)
+
+    timer = threading.Timer
+    with ThreadingHTTPServer(('127.0.0.1', 0), HeldDownload) as server:
+        server.release = threading.Event()
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
         try:
-            probe.track('127.0.0.1', 9000, 42, Path('unused'))
+            messages = []
+            with mock.patch.object(probe.threading, 'Timer',
+                                   side_effect=lambda delay, *a, **kw: timer(delay / 1000, *a, **kw)):
+                try:
+                    probe.track('127.0.0.1', server.server_port, 42, work / 'held.flac', messages.append)
+                except TimeoutError as exc:
+                    assert 'LMS' in str(exc) and '120' in str(exc) and 'track' in str(exc), str(exc)
+                    print(exc)
+                else:
+                    raise AssertionError('track timeout did not surface')
+            assert messages == ['waiting for LMS to deliver the track'], messages
+            assert not (work / 'held.flac').exists()
+        finally:
+            server.release.set()
+            server.shutdown()
+            thread.join()
+
+    reader, silent = socket.socketpair()
+    with reader, silent:
+        fake = mock.Mock()
+        fake.socket.return_value = SimpleNamespace(group='group', household='household',
+                                                   socket=reader, send=reader.sendall,
+                                                   receive=lambda: reader.recv(1), close=reader.close)
+        try:
+            probe.ws_check(fake)
         except TimeoutError as exc:
-            assert 'LMS' in str(exc) and '120' in str(exc) and 'track' in str(exc), str(exc)
+            assert 'speaker websocket' in str(exc) and '3' in str(exc) and 'position' in str(exc), str(exc)
+            print(exc)
         else:
-            raise AssertionError('track timeout did not surface')
-    fake = mock.Mock()
-    fake.socket.return_value.receive.side_effect = TimeoutError
-    try:
-        probe.ws_check(fake)
-    except TimeoutError as exc:
-        assert 'speaker websocket' in str(exc) and '3' in str(exc) and 'position' in str(exc), str(exc)
-    else:
-        raise AssertionError('speaker timeout did not surface')
+            raise AssertionError('speaker timeout did not surface')
 
 
 def run():
     check_millisecond_figures()
-    check_field_joins()
     check_prediction()
     check_seek_verdict()
-    check_named_waits()
     with tempfile.TemporaryDirectory(prefix='refill-test-') as directory, DownloadServer() as downloads:
         work = Path(directory)
+        check_named_waits(work)
         check_stereo_fixed(work)
         check_block_sizes(work)
         full, short = fixture(work, 180), fixture(work, 2)
@@ -585,4 +666,9 @@ class DownloadServer(ThreadingHTTPServer):
 
 
 if __name__ == '__main__':
-    run()
+    import sys
+
+    if sys.argv[1:] == ['--field-joins']:
+        check_field_joins()
+    else:
+        run()

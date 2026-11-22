@@ -69,8 +69,6 @@ static int decode(const char *source, const char *target) {
 }
 
 namespace {
-constexpr uint32_t blockSize = 4096;
-
 void writeBytes(std::ostream &out, const Bytes &data) {
     out.write(reinterpret_cast<const char *>(data.data()), data.size());
 }
@@ -97,8 +95,8 @@ void frameNumber(Bytes &header, uint32_t number) {
         header.push_back(0x80 | ((number >> (6 * (part - 1))) & 0x3f));
 }
 
-unsigned frameSize(uint32_t index, unsigned count, unsigned width, unsigned channels) {
-    return 7 + numberWidth(index) + (count == blockSize ? 0 : 2) + channels * (1 + count * width);
+unsigned frameSize(uint32_t index, unsigned count, unsigned width, unsigned channels, bool explicitSize) {
+    return 7 + numberWidth(index) + (explicitSize ? 2 : 0) + channels * (1 + count * width);
 }
 
 template<unsigned Bits, unsigned Polynomial>
@@ -140,14 +138,14 @@ struct PcmFile {
     }
 };
 
-void fixed(PcmFile &pcm, const char *path, bool seekTable) {
+void fixed(PcmFile &pcm, const char *path, bool seekTable, unsigned blockSize) {
     const unsigned frames = (pcm.frames + blockSize - 1) / blockSize;
     const auto points = seekTable ? std::min(frames, 100u) : 0;
     std::vector<uint64_t> offsets{0};
     unsigned smallest = UINT32_MAX, largest = 0;
     for (unsigned i = 0; i < frames; ++i) {
         const auto count = std::min<uint64_t>(blockSize, pcm.frames - uint64_t(i) * blockSize);
-        const auto size = frameSize(i, count, pcm.width(), pcm.channels);
+        const auto size = frameSize(i, count, pcm.width(), pcm.channels, count != 4096);
         smallest = std::min(smallest, size);
         largest = std::max(largest, size);
         offsets.push_back(offsets.back() + size);
@@ -177,9 +175,9 @@ void fixed(PcmFile &pcm, const char *path, bool seekTable) {
     for (unsigned i = 0; i < frames; ++i) {
         const auto count = std::min<uint64_t>(blockSize, pcm.frames - uint64_t(i) * blockSize);
         const auto samples = pcm.read(count);
-        Bytes frame{0xff, 0xf8, uint8_t(count == blockSize ? 0xc0 : 0x70), uint8_t((pcm.channels - 1) << 4)};
+        Bytes frame{0xff, 0xf8, uint8_t(count == 4096 ? 0xc0 : 0x70), uint8_t((pcm.channels - 1) << 4)};
         frameNumber(frame, i);
-        if (count != blockSize)
+        if (count != 4096)
             bigEndian(frame, count - 1, 2);
         frame.push_back(crc<8, 0x07>(frame));
         for (unsigned channel = 0; channel < pcm.channels; ++channel) {
@@ -206,7 +204,7 @@ void fixed(PcmFile &pcm, const char *path, bool seekTable) {
               << metadata.size() + offsets[midway] << ' ' << largest << '\n';
 }
 
-void packed(PcmFile &pcm, const char *path) {
+void packed(PcmFile &pcm, const char *path, unsigned blockSize) {
     const auto encoder = std::unique_ptr<FLAC__StreamEncoder, decltype(&FLAC__stream_encoder_delete)>(
         FLAC__stream_encoder_new(), FLAC__stream_encoder_delete);
     const auto seek = std::unique_ptr<FLAC__StreamMetadata, decltype(&FLAC__metadata_object_delete)>(
@@ -250,14 +248,18 @@ int main(int argc, char **argv) {
     try {
         if (argc == 3)
             return decode(argv[1], argv[2]);
-        if (argc != 8)
+        if (argc != 8 && argc != 9)
             return 2;
         const std::string mode = argv[1];
         PcmFile pcm(argv[2], std::stoull(argv[4]), std::stoul(argv[5]), std::stoul(argv[6]), std::stoul(argv[7]));
+        size_t blockEnd = 0;
+        const auto blockSize = argc == 9 ? std::stoul(argv[8], &blockEnd) : 4096;
+        if (blockSize < 16 || blockSize > 4096 || (argc == 9 && argv[8][blockEnd] != '\0'))
+            throw std::runtime_error("FLAC block size must be an integer from 16 to 4096");
         if (mode == "packed")
-            packed(pcm, argv[3]);
+            packed(pcm, argv[3], blockSize);
         else if (mode == "fixed" || mode == "fixed-noseek")
-            fixed(pcm, argv[3], mode == "fixed");
+            fixed(pcm, argv[3], mode == "fixed", blockSize);
         else
             return 2;
         return 0;

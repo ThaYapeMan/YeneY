@@ -69,3 +69,55 @@ answer. The summary also counts the audio requests per seek.
 The final line names the archive to attach. It contains timestamped
 requests, speaker messages and measurements, per-case summaries, the log
 and versions. The generated audio files are removed automatically.
+
+## Seek chains
+
+Use `--set seek` to measure how far the reported position and the audible
+row join diverge after a seek. Each chain uses eleven contiguous 40 s
+segments from one FLAC track. Provide at least 440 s of native 44.1 kHz
+audio. The default chains require a 16-bit source. Use `--track-id-48`
+with a separate 16-bit 48 kHz FLAC of the same minimum length to include
+the optional 48 kHz chain. The probe verifies the source rate and never
+resamples. Use `--cases` and `--repeats` within the selected set.
+
+| Chain | Audio |
+| --- | --- |
+| `wav` | 24-bit WAV |
+| `fixed16-4096`, `fixed16-1024`, `fixed16-256` | Fixed-size 16-bit FLAC, block size in the chain name |
+| `fixed24-256` | Fixed-size 24-bit FLAC, 256 samples per block |
+| `packed16-4096`, `packed16-1024` | Packed 16-bit FLAC, block size in the chain name |
+| `fixed16-4096-48k` | Optional fixed-size 16-bit FLAC at 48 kHz |
+| `fixed16-4096-ms` | Unavailable pending verification of the Sonos WebSocket seek reference |
+
+The first row starts with Play and has no action. After 4 s, rows 2–7
+seek to 20, 21, 22, 23, 24, and 26 s, respectively. Row 8 seeks to 20 s
+and then to 27 s three seconds later. Row 9 seeks to 24 s, plays for 2 s,
+pauses for 5 s, then resumes. Row 10 plays for 20 s and seeks backwards
+to 2 s. Each row ends naturally. The probe measures into the following
+row and plays 6 s of the closing row. One chain takes about 4½ minutes.
+
+The seek table's `join_ms` is positive when the next row starts early
+relative to the previous row's reported clock. The default refill table
+retains its earlier `join_gap_ms` sign, where a positive result means a
+late start. Seek joins use the eight nearest playing WebSocket answers
+on each side, excluding round trips of 30 ms or longer. For FLAC, the
+prediction is one block plus the samples to the next boundary, or
+one block when the seek lands on a boundary. With two seeks the
+prediction uses the last target. WAV and the control row predict zero.
+The summary reports the largest absolute residual across seek rows and
+the largest absolute control join. A complete chain within 3 ms gives
+`H holds`. A residual beyond 3 ms gives `H fails`. The measurement
+compares the position clock with the row boundary and cannot establish
+which is out of step with the sound.
+
+Fixed-size seek FLAC rows omit seek tables. Preparation computes their
+byte count and an interior frame offset directly from the sample count,
+block size and sample format. It verifies the full PCM and the PCM decoded
+starting at that offset. Packed FLAC byte counts depend on the sample
+values. For those rows preparation verifies the decoded frame boundaries,
+seek table and PCM, including decoding at an independently read frame
+offset. The archive includes a chain, repeat and row for each measured
+playback window and media request.
+
+The LMS download allows up to 120 s in total and prints
+`waiting for LMS to deliver the track` once after 10 s.

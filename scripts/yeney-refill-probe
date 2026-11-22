@@ -153,10 +153,11 @@ def audio_helper(work):
     return helper
 
 
-def written_pcm(source, target, width, frames, channels):
+def written_pcm(source, target, width, frames, channels, start=0):
     remaining = frames * 6
     pattern = random.Random(717)
     with source.open('rb') as stream, target.open('wb') as output:
+        stream.seek(start * 6)
         while remaining:
             chunk = bytearray(stream.read(min(remaining, 6 * 8192)))
             if not chunk or len(chunk) % 6:
@@ -227,7 +228,7 @@ def verify_seek_table(media, frames, offsets, expected):
     return len(points)
 
 
-def verify_flac(helper, media, pcm, width, channels, frames, work, proof, seek_table):
+def verify_flac(helper, media, pcm, width, channels, frames, work, proof, seek_table, block=None):
     decoded = work / 'proof.pcm'
     with contextlib.suppress(FileNotFoundError):
         decoded.unlink()
@@ -238,16 +239,30 @@ def verify_flac(helper, media, pcm, width, channels, frames, work, proof, seek_t
     finally:
         decoded.unlink(missing_ok=True)
     points = verify_seek_table(media, frames, offsets, seek_table)
-    if proof:
-        predicted, sample, offset, largest = proof
+    evidence = dict(decoded_bit_exact=True, seek_points=points)
+    if block is not None and ([sample for sample, _, _ in offsets] != list(range(0, frames, block)) or
+                              any(count != min(block, frames - sample) for sample, _, count in offsets)):
+        raise ValueError(f'FLAC decoded frame boundaries disagree with block size {block}')
+    if proof or block is not None:
         actual = media.stat().st_size
-        if predicted != actual or (sample, offset) not in {(s, o) for s, o, _ in offsets}:
-            raise ValueError('fixed FLAC predicted size or frame offset disagrees with decoded file')
+        if proof:
+            predicted, sample, offset, largest = proof
+            if predicted != actual or (sample, offset) not in {(s, o) for s, o, _ in offsets}:
+                raise ValueError('fixed FLAC predicted size or frame offset disagrees with decoded file')
+            evidence.update(predicted=predicted, written=actual, largest_frame=largest)
+        else:
+            sample, offset, _ = offsets[len(offsets) // 2]
+            evidence['written'] = actual
         tail = work / 'proof-tail.flac'
         try:
             with media.open('rb') as full, tail.open('wb') as part:
                 info = bytearray(full.read(42))
                 info[4] |= 0x80
+                if not proof:
+                    # The range stream contains only a suffix of the original PCM.
+                    settings = int.from_bytes(info[18:26], 'big') >> 36
+                    info[18:26] = ((settings << 36) | (frames - sample)).to_bytes(8, 'big')
+                    info[26:42] = bytes(16)
                 part.write(info)
                 full.seek(offset)
                 shutil.copyfileobj(full, part)
@@ -256,11 +271,11 @@ def verify_flac(helper, media, pcm, width, channels, frames, work, proof, seek_t
         finally:
             tail.unlink(missing_ok=True)
             decoded.unlink(missing_ok=True)
-        evidence = dict(predicted=predicted, written=actual, decoded_bit_exact=True,
-                        range_sample=sample, range_offset=offset, range_bit_exact=True,
-                        largest_frame=largest, seek_points=points)
-    else:
-        evidence = dict(decoded_bit_exact=True, seek_points=points)
+        evidence.update(range_sample=sample, range_offset=offset, range_bit_exact=True)
+        if proof and block is None:
+            evidence = dict(predicted=predicted, written=actual, decoded_bit_exact=True,
+                            range_sample=sample, range_offset=offset, range_bit_exact=True,
+                            largest_frame=largest, seek_points=points)
     return [(s, o) for s, o, _ in offsets], evidence
 
 
@@ -304,6 +319,72 @@ def prepare_audio(source, work, cases, minimum):
                 proof = tuple(map(int, result.split()))
             index, evidence = verify_flac(helper, path, pcm, width, channels, size, work, proof, mode != 'fixed-noseek')
         media[form] = dict(path=path, frames=size, rate=rate, bits=bits, channels=channels, index=index, proof=evidence)
+    return media
+
+
+SEEK_CASES = {
+    'wav': ('wav', 24, 0, 44100),
+    'fixed16-4096': ('fixed-noseek', 16, 4096, 44100),
+    'fixed16-1024': ('fixed-noseek', 16, 1024, 44100),
+    'fixed16-256': ('fixed-noseek', 16, 256, 44100),
+    'fixed24-256': ('fixed-noseek', 24, 256, 44100),
+    'packed16-4096': ('packed', 16, 4096, 44100),
+    'packed16-1024': ('packed', 16, 1024, 44100),
+    'fixed16-4096-ms': ('fixed-noseek', 16, 4096, 44100),
+    'fixed16-4096-48k': ('fixed-noseek', 16, 4096, 48000),
+}
+
+SEEK_ACTIONS = (
+    ((), 'none'),
+    ((20000,), 'seek 20 s'),
+    ((21000,), 'seek 21 s'),
+    ((22000,), 'seek 22 s'),
+    ((23000,), 'seek 23 s'),
+    ((24000,), 'seek 24 s'),
+    ((26000,), 'seek 26 s'),
+    ((20000, 27000), 'seek 20 s, then 27 s'),
+    ((24000,), 'seek 24 s, pause and resume'),
+    ((2000,), 'seek back to 2 s'),
+)
+ROW_SECONDS = 40
+
+
+def prepare_seek_audio(source, work, cases, rate):
+    helper = audio_helper(work)
+    original = work / 'seek-source.pcm'
+    duration = ROW_SECONDS * (len(SEEK_ACTIONS) + 1)
+    actual, _, source_bits, channels = source_audio(source, original, helper, duration)
+    if actual != rate:
+        raise ValueError(f'seek track must be {rate} Hz (track is {actual} Hz)')
+    media = {}
+    for case in cases:
+        mode, bits, block, _ = SEEK_CASES[case]
+        if bits == 16 and source_bits != 16:
+            raise ValueError(f'{case} requires a 16-bit source (track is {source_bits}-bit)')
+        fields = dict(rate=rate, frames=ROW_SECONDS * rate, bits=bits,
+                      channels=2 if mode == 'wav' else channels)
+        rows = []
+        pcm = work / 'seek-row.pcm'
+        try:
+            for row in range(len(SEEK_ACTIONS) + 1):
+                frames = fields['frames']
+                written_pcm(original, pcm, bits // 8, frames, fields['channels'], row * frames)
+                path = work / f'{case}-{row + 1}.{"wav" if mode == "wav" else "flac"}'
+                index, evidence = [], {}
+                if mode == 'wav':
+                    with path.open('wb') as output, pcm.open('rb') as stream:
+                        output.write(wav_header(rate, frames))
+                        shutil.copyfileobj(stream, output)
+                else:
+                    result = audio_command(helper, mode, pcm, path, frames, rate, bits, channels, block)
+                    proof = tuple(map(int, result.split())) if mode == 'fixed-noseek' else None
+                    index, evidence = verify_flac(helper, path, pcm, bits // 8, channels, frames,
+                                                 work, proof, mode == 'packed', block)
+                rows.append(dict(path=path, index=index, proof=evidence, **fields))
+        finally:
+            pcm.unlink(missing_ok=True)
+        media[case] = rows
+    original.unlink()
     return media
 
 
@@ -447,7 +528,9 @@ class MediaHandler(BaseHTTPRequestHandler):
                     total += len(chunk)
                     self.server.records.add('bytes', path=self.path, size=len(chunk))
         except OSError as exc:
-            self.server.records.add('requests', event='disconnect', detail=str(exc), **event)
+            detail = ('timed out after 3 s waiting to write audio from own media server'
+                      if isinstance(exc, TimeoutError) else str(exc))
+            self.server.records.add('requests', event='disconnect', detail=detail, **event)
         finally:
             self.server.records.add('requests', event='close', status=status, size=total,
                                     paced=int(budget is not None),
@@ -503,7 +586,11 @@ class Speaker:
         self.ws_port = ws_port
         self.records = records
 
-    def http(self, method, path, body=None, headers=None):
+    def http(self, method, path, body=None, headers=None, operation=None):
+        with named_timeout('speaker UPnP', operation or f'{method} {path}', 2):
+            return self.http_request(method, path, body, headers)
+
+    def http_request(self, method, path, body, headers):
         with contextlib.closing(http.client.HTTPConnection(self.host, self.port, timeout=2)) as conn:
             conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
             conn.putheader('Host', f'{self.host}:{self.port}')
@@ -527,7 +614,7 @@ class Speaker:
                 's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
                 f'<s:Body><u:{action} xmlns:u="{ns}">{arguments}</u:{action}></s:Body></s:Envelope>')
         raw = self.http('POST', control_path(service), body.encode(),
-                        {'Content-Type': 'text/xml', 'SOAPACTION': f'"{ns}#{action}"'})
+                        {'Content-Type': 'text/xml', 'SOAPACTION': f'"{ns}#{action}"'}, operation=action)
         try:
             data = fields(raw)
             if action + 'Response' not in data:
@@ -600,7 +687,8 @@ class Speaker:
                 raise ValueError(f'Browse: {exc}; raw answer: {raw}') from exc
 
     def socket(self):
-        ws = timing.SonosSocket(self.host, self.ws_port)
+        with named_timeout('speaker websocket', 'local info and connection handshake', 3):
+            ws = timing.SonosSocket(self.host, self.ws_port)
         self.records.private.update((str(ws.group), str(ws.household)))
         return ws
 
@@ -711,7 +799,7 @@ class Questions:
         self.ws = speaker.socket()
 
     def __enter__(self):
-        self.ws.socket.settimeout(None)
+        self.ws.socket.settimeout(3)
         self.send_lock = threading.Lock()
         send = self.ws.send
 
@@ -771,7 +859,9 @@ class Questions:
                                 body.get('playbackState', ''), error)
         except Exception as exc:
             if not self.done.is_set():
-                self.records.add('speaker', protocol='websocket', error=str(exc))
+                error = ('timed out after 3 s waiting for a speaker websocket message'
+                         if isinstance(exc, TimeoutError) else str(exc))
+                self.records.add('speaker', protocol='websocket', error=error)
 
     def soap_position(self, sent):
         try:
@@ -797,17 +887,20 @@ class Questions:
                 with self.lock:
                     for key, old in list(self.pending.items()):
                         if sent - old >= 2:
-                            self.result('websocket', old, error='unanswered')
+                            self.result('websocket', old, error=(
+                                'timed out after 2 s waiting for speaker websocket playback status'))
                             del self.pending[key]
                     self.pending[cid] = sent
                 try:
                     header = dict(namespace='playback:1', command='getPlaybackStatus', cmdId=cid,
                                   groupId=self.ws.group, householdId=self.ws.household)
                     self.ws.send(json.dumps([header, {}]).encode())
-                except OSError:
+                except OSError as exc:
                     with self.lock:
                         self.pending.pop(cid, None)
-                        self.result('websocket', sent, error='connection closed')
+                        error = ('timed out after 3 s waiting to send speaker websocket playback status'
+                                 if isinstance(exc, TimeoutError) else 'connection closed')
+                        self.result('websocket', sent, error=error)
                 if serial % 2:
                     futures = {future for future in futures if not future.done()}
                     if len(futures) < 8:
@@ -816,14 +909,44 @@ class Questions:
                         self.result('UPnP', sent, error='previous questions still pending')
 
 
-def track(host, port, track_id, path):
-    with contextlib.closing(http.client.HTTPConnection(host, port, timeout=15)) as connection:
-        connection.request('GET', f'/music/{track_id}/download')
-        response = connection.getresponse()
-        if response.status != 200:
-            raise ValueError(f'LMS track request returned HTTP {response.status}')
-        with path.open('wb') as out:
-            shutil.copyfileobj(response, out)
+def track(host, port, track_id, path, log=lambda message: print(message, flush=True)):
+    limit = 120
+    deadline = time.monotonic() + limit
+    notice = threading.Timer(10, log, args=('waiting for LMS to deliver the track',))
+    notice.start()
+    expired = threading.Event()
+    timer = None
+    try:
+        with contextlib.closing(http.client.HTTPConnection(host, port, timeout=limit)) as connection:
+            connection.connect()
+            transport = connection.sock
+
+            def interrupt():
+                expired.set()
+                with contextlib.suppress(OSError):
+                    transport.shutdown(socket.SHUT_RDWR)
+
+            timer = threading.Timer(max(0, deadline - time.monotonic()), interrupt)
+            timer.start()
+            connection.request('GET', f'/music/{track_id}/download')
+            with connection.getresponse() as response:
+                if response.status != 200:
+                    raise ValueError(f'LMS track request returned HTTP {response.status}')
+                with path.open('wb') as out:
+                    shutil.copyfileobj(response, out)
+                if expired.is_set() or time.monotonic() >= deadline:
+                    raise TimeoutError
+    except (OSError, http.client.HTTPException) as exc:
+        if isinstance(exc, TimeoutError) or expired.is_set():
+            path.unlink(missing_ok=True)
+            raise TimeoutError(f'timed out after {limit} s waiting for LMS to deliver track {track_id}') from exc
+        raise
+    finally:
+        notice.cancel()
+        notice.join()
+        if timer is not None:
+            timer.cancel()
+            timer.join()
 
 
 def local_route(host, port):
@@ -842,12 +965,21 @@ def ws_error(message):
                 any('error' in str(header.get(key, '')).lower() for key in ('type', 'name', 'command')))
 
 
+@contextlib.contextmanager
+def named_timeout(endpoint, operation, seconds):
+    try:
+        yield
+    except TimeoutError as exc:
+        raise TimeoutError(f'timed out after {seconds:g} s waiting for {operation} at {endpoint}') from exc
+
+
 def ws_check(speaker):
-    with contextlib.closing(speaker.socket()) as ws:
+    with contextlib.closing(speaker.socket()) as ws, named_timeout('speaker websocket', 'position answer', 3):
+        deadline = time.monotonic() + 3
         ws.send(json.dumps([dict(namespace='playback:1', command='getPlaybackStatus', cmdId='check',
                                  groupId=ws.group, householdId=ws.household), {}]).encode())
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
+        while (remaining := deadline - time.monotonic()) > 0:
+            ws.socket.settimeout(remaining)
             reply = ws.receive()
             if not isinstance(reply, list) or len(reply) != 2:
                 raise ValueError(f'bad WebSocket response; raw answer: {reply!r}')
@@ -858,7 +990,7 @@ def ws_check(speaker):
                 if ws_error(reply):
                     raise ValueError(f'WebSocket position failed; raw answer: {reply!r}')
                 return
-        raise ValueError('no WebSocket position answer')
+        raise TimeoutError
 
 
 def stats(rows, expected=None):
@@ -908,6 +1040,32 @@ def join_gap(rows, anchor, duration, scale=1):
     return 1000 * (next_start - previous_end)
 
 
+def seek_prediction(rate, block, target_ms):
+    if not block or target_ms is None:
+        return None, 0.0
+    remainder = (target_ms * rate // 1000) % block
+    return remainder, (block + (-remainder % block)) * 1000 / rate
+
+
+def seek_join(rows, anchor, duration, scale=1):
+    quick = [row for row in rows if row['latency_ms'] is not None and row['latency_ms'] < 30]
+    gap = join_gap(quick, anchor, duration, scale)
+    return None if gap is None else -gap / scale
+
+
+def seek_verdict(runs):
+    rows = [row for run in runs for row in run['rows']]
+    differences = [abs(row['difference_ms']) for row in rows if row['targets'] and row['difference_ms'] is not None]
+    controls = [abs(row['join_ms']) for row in rows if not row['targets'] and row['join_ms'] is not None]
+    worst = max(differences, default=None)
+    complete = bool(runs) and all(len(run['rows']) == len(SEEK_ACTIONS) and not run.get('error') and
+                                 all(row['difference_ms'] is not None and not row.get('errors')
+                                     for row in run['rows']) for run in runs)
+    control = max(controls, default=None)
+    failed = any(value is not None and value > 3 for value in (worst, control))
+    return worst, control, 'H fails' if failed else 'H holds' if complete else 'not played'
+
+
 def position_offset(rows, steady_start, steady_end, scale=1):
     if not rows:
         return None
@@ -930,12 +1088,21 @@ class Experiment:
         self.results = []
         self.series = []
         self.measurements = []
+        self.chain_paths = {}
+        self.chain_windows = []
         self.own = set()
         self.selection_attempted = False
 
+    @property
+    def seek_set(self):
+        return getattr(self.args, 'set', 'refill') == 'seek'
+
     def prepare(self):
+        if self.seek_set:
+            self.prepare_chains()
+            return
         source = self.work / 'source.flac'
-        track(self.args.lms_host, self.lms_port, self.args.track_id, source)
+        track(self.args.lms_host, self.lms_port, self.args.track_id, source, self.records.log)
         self.media = prepare_audio(source, self.work, self.args.cases, self.minimum)
         self.sizes = {}
         for name, audio in self.media.items():
@@ -949,6 +1116,29 @@ class Experiment:
             packed = self.media['packed16']
             if packed['path'].stat().st_size >= 44 + 6 * packed['frames']:
                 raise ValueError('packed FLAC item is not smaller than its advertised upper bound')
+
+    def prepare_chains(self):
+        self.media = {}
+        self.sizes = {}
+        for rate, track_id in ((44100, self.args.track_id), (48000, self.args.track_id_48)):
+            cases = [case for case in self.args.cases
+                     if SEEK_CASES[case][3] == rate and case != 'fixed16-4096-ms']
+            if not cases:
+                continue
+            source = self.work / f'source-{rate}.flac'
+            track(self.args.lms_host, self.lms_port, track_id, source, self.records.log)
+            self.media.update(prepare_seek_audio(source, self.work, cases, rate))
+            source.unlink()
+            for case in cases:
+                sizes = []
+                for row, audio in enumerate(self.media[case], 1):
+                    sizes.append(dict(bytes=audio['path'].stat().st_size, samples=audio['frames'],
+                                      bits=audio['bits'], rate=rate, block=SEEK_CASES[case][2], **audio['proof']))
+                    self.records.log(f'{case} row {row} ' +
+                                     ' '.join(f'{key}={value}' for key, value in sizes[-1].items()))
+                self.sizes[case] = sizes
+        if 'fixed16-4096-ms' in self.args.cases:
+            self.records.log('fixed16-4096-ms: unavailable until the Sonos seek reference is verified')
 
     def check(self, name):
         checks = [
@@ -1026,22 +1216,24 @@ class Experiment:
             if state == 'PLAYING':
                 return self.t()
             time.sleep(.1 * self.scale)
-        raise ValueError('transport did not reach PLAYING')
+        raise TimeoutError(f'timed out after {8 * self.scale:g} s waiting for PLAYING at speaker UPnP')
 
     def latest_position(self, since):
         rows = self.questions(since, self.t(), 'websocket')
         return next((r['position_s'] for r in reversed(rows) if r['position_s'] is not None), None)
 
-    def add_items(self, case):
+    def add_items(self, case, repeat=None):
         uris = []
-        for form in CASES[case]:
-            media = self.media[form]
+        rows = self.media[case] if self.seek_set else (self.media[form] for form in CASES[case])
+        for row, media in enumerate(rows, 1):
             path, frames, rate = (media[key] for key in ('path', 'frames', 'rate'))
             bound = 44 + 6 * frames if case == 'bound' else None
             mime = 'audio/flac' if path.suffix == '.flac' else 'audio/wav'
             route = f'/{secrets.token_hex(12)}{path.suffix}'
             item = Item(path, frames / rate, bound=bound, index=media['index'], frames=frames)
             self.server.items[route] = item
+            if self.seek_set:
+                self.chain_paths[route] = dict(chain=case, row=row, repeat=repeat)
             uri = f'http://{self.server.server_address[0]}:{self.server.server_port}{route}'
             self.own.add(uri)
             uris.append(uri)
@@ -1081,7 +1273,7 @@ class Experiment:
             repeated |= any(before >= target and current < target - 2
                             for before, current in zip(positions, positions[1:]))
             time.sleep(.25 * self.scale)
-        raise ValueError('next probe item did not start')
+        raise TimeoutError(f'timed out after {deadline - since:g} s waiting for the next row at speaker UPnP')
 
     def measure(self, result):
         case = result['case']
@@ -1133,6 +1325,113 @@ class Experiment:
                                              end=last + 6 * self.scale))
             join = last
         self.wait(join, 10)
+
+    def measure_chain(self, result):
+        case, repeat = result['case'], result['repeat']
+        result['rows'] = rows = []
+        if case == 'fixed16-4096-ms':
+            result['error'] = 'Sonos WebSocket seek reference unavailable'
+            return
+        _, _, block, rate = SEEK_CASES[case]
+        uris = self.add_items(case, repeat)
+        self.choose(uris[0])
+        started = self.t()
+        self.speaker.av('Play', Speed=1)
+        self.playing(started)
+        for number, (targets, action) in enumerate(SEEK_ACTIONS, 1):
+            target = targets[-1] if targets else None
+            remainder, prediction = seek_prediction(rate, block, target)
+            row = dict(row=number, action=action, targets=targets, remainder=remainder,
+                       predicted_ms=prediction, join_ms=None, difference_ms=None,
+                       request_count=0, ranges=[], errors=[])
+            rows.append(row)
+            window = dict(chain=case, repeat=repeat, row=number, start=started, end=None)
+            self.chain_windows.append(window)
+            path = urlsplit(uris[number - 1]).path
+            first_action = None
+            since = started
+            try:
+                self.wait(started, 20 if number == 10 else 4)
+                for millis in targets:
+                    if first_action is not None:
+                        self.wait(since, 3)
+                    sought = self.seek(millis // 1000)
+                    if first_action is None:
+                        first_action = sought['sent']
+                    since = sought['acknowledged']
+                    self.playing(since)
+                remaining = ROW_SECONDS - (target or 0) / 1000
+                if number == 9:
+                    self.wait(since, 2)
+                    paused = self.t()
+                    self.speaker.av('Pause')
+                    self.wait(paused, 5)
+                    since = self.t()
+                    self.speaker.av('Play', Speed=1)
+                    self.playing(since)
+                    remaining -= 2
+                anchor, _ = self.advance(uris[number - 1], uris[number], since,
+                                         since + (remaining + 6) * self.scale, (target or 0) / 1000)
+                window['end'] = anchor
+                self.wait(anchor, 3 if number < len(SEEK_ACTIONS) else 6)
+                points = playing_answers(self.questions(since, self.t(), 'websocket'))
+                gap = seek_join(points, anchor, ROW_SECONDS, self.scale)
+                row['join_ms'] = gap
+                if gap is None:
+                    row['errors'].append('fewer than eight quick positions on either side of the join')
+                else:
+                    row['difference_ms'] = gap - prediction
+                started = anchor
+            except Exception as exc:
+                row['errors'].append(error_text(exc))
+                raise
+            finally:
+                if window['end'] is None:
+                    window['end'] = self.t()
+                records = list(self.records.rows)
+                row['errors'].extend(entry['raw'] for entry in records
+                                     if window['start'] <= entry['time'] < window['end'] and
+                                     entry['kind'] == 'speaker' and ws_error(entry.get('raw')))
+                if first_action is not None:
+                    row['ranges'] = [entry['range'] or 'full' for entry in records
+                                     if entry.get('path') == path and entry.get('event') == 'open' and
+                                     first_action <= entry['time'] < window['end']]
+                    row['request_count'] = len(row['ranges'])
+        self.chain_windows.append(dict(chain=case, repeat=repeat, row=len(SEEK_ACTIONS) + 1,
+                                       start=started, end=self.t()))
+
+    def seek_summary(self):
+        def render(value):
+            return '—' if value is None else f'{value:.3f}'
+
+        table = []
+        for run in self.results:
+            table.extend((f'{run["case"]} repeat {run["repeat"]}',
+                          'row\taction\tremainder\tjoin_ms\tpredicted_ms\tdifference_ms\trequests\terrors'))
+            for row in run['rows']:
+                table.append('\t'.join((str(row['row']), row['action'],
+                                        '—' if row['remainder'] is None else str(row['remainder']),
+                                        *(render(row[key]) for key in ('join_ms', 'predicted_ms', 'difference_ms')),
+                                        f'{row["request_count"]} {", ".join(row["ranges"])}'.rstrip(),
+                                        json.dumps(row['errors']))))
+            if run.get('error'):
+                table.append(run['error'])
+            table.append('')
+        table.append('chain\tmax |difference_ms| (seek)\tmax |join_ms| (control)\tverdict')
+        for case in self.args.cases:
+            worst, control, verdict = seek_verdict([run for run in self.results if run['case'] == case])
+            table.append(f'{case}\t{render(worst)}\t{render(control)}\t{verdict}')
+        return '\n'.join(table) + '\n'
+
+    def tag_chain_record(self, entry):
+        tags = self.chain_paths.get(entry.get('path'))
+        if tags is None:
+            stamp = entry.get('sent', entry['time'])
+            for window in self.chain_windows:
+                if window['start'] <= stamp < window['end']:
+                    tags = {key: window[key] for key in ('chain', 'row', 'repeat')}
+                    break
+        return dict(entry, **tags) if tags else entry
 
     def playback_figures(self, measurement):
         result = measurement['result']
@@ -1229,6 +1528,9 @@ class Experiment:
                 for i in range(0, duration, 5)]
 
     def run(self, name):
+        if self.seek_set:
+            count = len(self.args.cases) * self.args.repeats
+            self.records.log(f'{count} chains, expected duration about {count * 277 / 60:.0f} min')
         self.speaker.check_actions(self.args.volume, self.normal_play_mode)
         active = service(name, 'show')
         restart = False
@@ -1267,7 +1569,8 @@ class Experiment:
                         changed = True
                         self.speaker.set_volume(self.args.volume)
                     count = len(self.args.cases) * self.args.repeats
-                    self.records.log(f'{count} cases, expected duration about {count * 145 / 60:.0f} min')
+                    if not self.seek_set:
+                        self.records.log(f'{count} cases, expected duration about {count * 145 / 60:.0f} min')
                     with Questions(self.speaker, self.records, self.scale):
                         for repeat in range(1, self.args.repeats + 1):
                             for case in self.args.cases:
@@ -1275,7 +1578,10 @@ class Experiment:
                                 self.results.append(result)
                                 self.records.log(f'{case} repeat {repeat}')
                                 try:
-                                    self.measure(result)
+                                    if self.seek_set:
+                                        self.measure_chain(result)
+                                    else:
+                                        self.measure(result)
                                 except Exception as exc:
                                     result['error'] = error_text(exc)
                                     self.records.log(f'{case}: FAIL {result["error"]}')
@@ -1375,9 +1681,13 @@ class Experiment:
             if case != 'wav':
                 table.append(case + '\t' + '\t'.join(render(row[key] - baseline[key])
                              if key in row and key in baseline else '—' for key, _ in delta))
-        summary_text = '\n'.join(table) + '\n'
+        summary_text = self.seek_summary() if self.seek_set else '\n'.join(table) + '\n'
         print(summary_text, end='')
         rows = list(self.records.rows)
+        tags = []
+        if self.seek_set:
+            rows = [self.tag_chain_record(row) for row in rows]
+            tags = ['chain', 'repeat', 'row']
 
         def tsv(values, names):
             text = io.StringIO()
@@ -1397,7 +1707,7 @@ class Experiment:
         files = {
             'per-second.tsv': tsv(self.series, ['case', 'repeat', 'second', 'bytes', 'opens', 'closes', 'ranges']),
             'questions.tsv': tsv((r for r in rows if r['kind'] == 'questions'),
-                                 ['protocol', 'sent', 'received', 'latency_ms', 'position_s', 'item', 'state', 'error']),
+                                 ['protocol', 'sent', 'received', 'latency_ms', 'position_s', 'item', 'state', 'error'] + tags),
             'requests.jsonl': json_lines('requests'),
             'speaker.jsonl': json_lines('speaker'),
             'summary.txt': summary_text,
@@ -1428,15 +1738,24 @@ def main():
     parser.add_argument('--lms-host', type=ipaddress.IPv4Address, required=True)
     parser.add_argument('--track-id', type=int, required=True)
     parser.add_argument('--volume', type=int)
-    parser.add_argument('--cases', default=','.join(CASES))
+    parser.add_argument('--set', choices=('refill', 'seek'), default='refill')
+    parser.add_argument('--track-id-48', type=int)
+    parser.add_argument('--cases')
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--normal-play-mode', action='store_true')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
-    args.cases = [part.strip() for part in args.cases.split(',')]
+    cases = CASES if args.set == 'refill' else SEEK_CASES
+    if args.cases is None:
+        args.cases = [case for case in cases if case != 'fixed16-4096-48k' or args.track_id_48 is not None]
+    else:
+        args.cases = [part.strip() for part in args.cases.split(',')]
+    if (args.track_id_48 is not None and args.track_id_48 < 1 or
+            'fixed16-4096-48k' in args.cases and args.track_id_48 is None):
+        parser.error('fixed16-4096-48k requires a positive --track-id-48')
     args.speaker, args.lms_host = str(args.speaker), str(args.lms_host)
     if (args.track_id < 1 or args.repeats < 1 or args.volume is not None and not 0 <= args.volume <= 100 or
-            len(set(args.cases)) != len(args.cases) or any(case not in CASES for case in args.cases)):
+            len(set(args.cases)) != len(args.cases) or any(case not in cases for case in args.cases)):
         parser.error('invalid track id, volume, repeat count, or cases')
     if os.geteuid() != 0:
         parser.error('run as root')
