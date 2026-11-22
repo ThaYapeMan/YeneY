@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #pragma once
 #include "queue_item_store.h"
+#include "queue_format.h"
 #include "upnp/stream_server.h"
 #include <map>
 #include <functional>
@@ -15,13 +16,15 @@ class Route {
 
 public:
     using Resolver = std::function<std::shared_ptr<Item>(upnp::StreamRequest &)>;
-    Route(std::string room, std::string session);
+    Route(std::string room, std::string session, Format = queueFormat());
     void registerWith(upnp::StreamServer &, std::string speakerAddress = {}, std::function<void()> activity = {});
     std::string publish(const std::string &room, uint64_t epoch, uint64_t revision,
                         const std::shared_ptr<Item> &, Resolver = {});
     // A deferred row supplies retained audio for an audio lookup and for its resolver.
     using Ready = std::function<std::shared_ptr<Item>(bool audio)>;
-    std::string publishDeferred(uint64_t epoch, const std::string &identity, Resolver, Ready = {});
+    std::string publishDeferred(uint64_t epoch, const std::string &identity, Resolver, Ready = {},
+                                PromiseKind = PromiseKind::Exact);
+    Format formatFor(PromiseKind) const;
     void revoke(uint64_t epoch);
     bool serve(upnp::StreamRequest &);
 };

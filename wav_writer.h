@@ -6,12 +6,21 @@
 #include <memory>
 #include <functional>
 #include <string>
+#include "queue_format.h"
+#include "flac_writer.h"
 namespace upnp {
 class StreamRequest;
 }
 namespace queue_audio {
 class Item;
-uint64_t wavLength(uint64_t frames);
+inline uint64_t wavLength(uint64_t frames) {
+    if (frames > (uint64_t(UINT32_MAX) - 36) / 6)
+        throw std::invalid_argument("WAV exceeds RIFF limit");
+    return 44 + frames * 6;
+}
+inline uint64_t rowLength(Format format, uint64_t frames, unsigned rate) {
+    return format == Format::Flac ? FlacLayout(frames, rate).size() : wavLength(frames);
+}
 std::array<char, 44> wavHeader(uint32_t rate, uint64_t frames);
 struct ByteRange {
     uint64_t first, last;
@@ -22,12 +31,17 @@ struct Pacing {
     bool enabled = true;
     double rate = 2.0;
     unsigned freeMs = 2000;
-    unsigned tailMs = 20000;
+    unsigned tailMs = 0;
 
     static Pacing environment();
     void log() const;
 };
-// Finite WAV handler shared by the production route and storage tests.
+bool serveRow(upnp::StreamRequest &, const std::shared_ptr<Item> &, Format,
+              std::chrono::milliseconds wait,
+              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned,
+              const Pacing &pacing);
+
+// WAV entry point for callers that explicitly serve WAV.
 bool serveWav(upnp::StreamRequest &, const std::shared_ptr<Item> &,
               std::chrono::milliseconds wait = std::chrono::seconds(15),
               std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve = {}, bool audioPinned = false,

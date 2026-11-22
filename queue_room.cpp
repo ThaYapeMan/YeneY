@@ -25,11 +25,11 @@ unsigned pollSetting() {
 } // namespace queue_room_detail
 QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
                       std::shared_ptr<upnp::OwnSpeakerControl> s, std::string h, std::string m,
-                      const uint8_t *rawMac, std::function<std::string()> url)
+                      const uint8_t *rawMac, std::function<std::string()> url, queue_audio::Format format)
     : room(std::move(r)), host(std::move(h)), mac(std::move(m)), session(streamSessionToken()),
       streamUrl(std::move(url)), speaker(std::move(s)),
       queue(room.name, queue_audio::Config::environment(), 60), paths(queue, rawMac), window(queueRows(room.name)),
-      route(room.name, session), coordinator(room, logQueue),
+      route(room.name, session, format), coordinator(room, logQueue),
       actions([this](const auto &name, const auto &args) {
           return coordinator.read([&] {
           // The acquisition topology is reused, but GENA can revoke it before
@@ -217,9 +217,9 @@ void QueueRoom::Impl::shutdown() {
 
 QueueRoom::QueueRoom(upnp::Speaker room, std::shared_ptr<upnp::StreamServer> http,
                      std::shared_ptr<upnp::OwnSpeakerControl> speaker, PlaybackSelection, std::string host,
-                     std::string mac, const uint8_t *rawMac, std::function<std::string()> url)
+                     std::string mac, const uint8_t *rawMac, std::function<std::string()> url, queue_audio::Format format)
     : impl(new Impl(std::move(room), std::move(http), std::move(speaker), std::move(host), std::move(mac),
-                    rawMac, std::move(url))) {}
+                    rawMac, std::move(url), format)) {}
 QueueRoom::~QueueRoom() = default;
 yeney::Sink &QueueRoom::sink() { return impl->paths; }
 void QueueRoom::shutdown() { impl->shutdown(); }

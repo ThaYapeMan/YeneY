@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_route.h"
 #include "wav_writer.h"
+#include "flac_writer.h"
 #include <set>
 #include <cstdio>
 #include <utility>
@@ -15,9 +16,11 @@ bool token(const std::string &s) {
 struct Route::State {
     const std::string room, session;
     const Pacing pacing = Pacing::environment();
+    const Format format;
     std::mutex mutex;
     struct Entry {
         uint64_t epoch, revision;
+        Format format;
         std::shared_ptr<Item> item;
         Resolver resolve;
         Ready ready;
@@ -26,13 +29,17 @@ struct Route::State {
     std::set<uint64_t> revoked;
     std::string speakerAddress;
     std::function<void()> activity;
-    State(std::string room, std::string session) : room(std::move(room)), session(std::move(session)) {}
+    State(std::string room, std::string session, Format format)
+        : room(std::move(room)), session(std::move(session)), format(format) {}
 };
-Route::Route(std::string r, std::string s) {
+Route::Route(std::string r, std::string s, Format format) {
     if (r.empty() || !token(s))
         throw std::invalid_argument("invalid queue route owner");
-    state = std::make_shared<State>(std::move(r), std::move(s));
+    state = std::make_shared<State>(std::move(r), std::move(s), format);
     state->pacing.log();
+}
+Format Route::formatFor(PromiseKind kind) const {
+    return kind == PromiseKind::Exact ? state->format : Format::Wav;
 }
 void Route::registerWith(upnp::StreamServer &server, std::string address, std::function<void()> activity) {
     state->speakerAddress = std::move(address);
@@ -53,19 +60,21 @@ std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t re
     if (state->revoked.count(epoch))
         throw std::logic_error("queue epoch revoked");
     const bool lazy = bool(resolve);
-    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, item, std::move(resolve), {}});
+    const auto format = formatFor(item->descriptor().kind);
+    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, format, item, std::move(resolve), {}});
     if (!inserted.second && (inserted.first->second.item != item || lazy || inserted.first->second.resolve))
         throw std::logic_error("immutable queue URL reused");
     return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/" +
-           std::to_string(revision) + "/" + id + ".wav";
+           std::to_string(revision) + "/" + id + formatExtension(format);
 }
-std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, Ready ready) {
+std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, Ready ready, PromiseKind kind) {
     if (!token(identity) || !resolve) throw std::invalid_argument("invalid deferred route");
     const auto key = std::to_string(epoch) + "/1/" + identity;
+    const auto format = formatFor(kind);
     std::lock_guard<std::mutex> lock(state->mutex);
-    if (state->revoked.count(epoch) || !state->entries.emplace(key, State::Entry{epoch, 1, {}, std::move(resolve), std::move(ready)}).second)
+    if (state->revoked.count(epoch) || !state->entries.emplace(key, State::Entry{epoch, 1, format, {}, std::move(resolve), std::move(ready)}).second)
         throw std::logic_error("deferred route reused");
-    return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/1/" + identity + ".wav";
+    return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/1/" + identity + formatExtension(format);
 }
 void Route::revoke(uint64_t epoch) {
     std::lock_guard<std::mutex> lock(state->mutex);
@@ -88,13 +97,15 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
     const auto path = r.path();
     const auto prefix = "/yeney/q/" + state->session + "/";
     std::string key;
-    if (path.compare(0, prefix.size(), prefix) == 0 && path.size() > 4 && path.substr(path.size()-4) == ".wav") {
-        key = path.substr(prefix.size(), path.size()-prefix.size()-4);
-    }
+    Format format = Format::Wav;
+    const auto dot = path.rfind('.');
+    if (path.compare(0, prefix.size(), prefix) == 0 && dot != std::string::npos && dot >= prefix.size())
+        key = path.substr(prefix.size(), dot - prefix.size());
     if (!key.empty()) {
         std::lock_guard<std::mutex> lock(state->mutex);
         auto i = state->entries.find(key);
-        if (i != state->entries.end()) {
+        if (i != state->entries.end() && path.compare(dot, std::string::npos, formatExtension(i->second.format)) == 0) {
+            format = i->second.format;
             if (state->activity && r.peerAddress() == state->speakerAddress &&
                 (r.method() == upnp::StreamRequest::Method::Get || r.method() == upnp::StreamRequest::Method::Head))
                 state->activity();
@@ -115,7 +126,7 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         if (r.method() != upnp::StreamRequest::Method::Get) { r.reply(503); return true; }
         try {
             const auto range = wavRange(r.header("Range"), UINT64_MAX);
-            if (range.last < 44 || range.first != 0) { r.reply(503); return true; }
+            if (range.last < (format == Format::Flac ? FlacLayout::headerSize : 44) || range.first != 0) { r.reply(503); return true; }
         } catch (const std::exception &) { r.reply(416); return true; }
         try { item = resolve(r); } catch (const std::exception &) { }
         if (!item || r.aborted() || r.peerClosed()) { r.disconnect(); return true; }
@@ -129,6 +140,10 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         r.reply(404);
         return true;
     }
-    return serveWav(r, item, std::chrono::seconds(15), std::move(resolve), audioPinned, state->pacing);
+    if (format == Format::Flac && item->descriptor().kind != PromiseKind::Exact) {
+        r.disconnect();
+        return true;
+    }
+    return serveRow(r, item, format, std::chrono::seconds(15), std::move(resolve), audioPinned, state->pacing);
 }
 } // namespace queue_audio

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "wav_writer.h"
+#include "flac_writer.h"
 #include "consumption_diagnostic.h"
 #include "queue_item_store.h"
 #include "upnp/stream_server.h"
@@ -33,7 +34,7 @@ class ByteBudget {
     Clock::time_point updated = Clock::now();
 
 public:
-    ByteBudget(uint64_t bytesPerSecond, const Pacing &pacing)
+    ByteBudget(double bytesPerSecond, const Pacing &pacing)
         : perSecond(bytesPerSecond * pacing.rate),
           burst(bytesPerSecond * (pacing.freeMs / 1000.0)), available(burst) {}
 
@@ -94,11 +95,6 @@ void Pacing::log() const {
                 enabled ? "on" : "off", rate, freeMs, tailMs);
 }
 
-uint64_t wavLength(uint64_t frames) {
-    if (frames > (uint64_t(UINT32_MAX) - 36) / 6)
-        throw std::invalid_argument("WAV exceeds RIFF limit");
-    return 44 + frames * 6;
-}
 std::array<char, 44> wavHeader(uint32_t rate, uint64_t frames) {
     if (!rate || rate > UINT32_MAX / 6)
         throw std::invalid_argument("invalid WAV rate");
@@ -149,11 +145,73 @@ ByteRange wavRange(const std::string &text, uint64_t length) {
         throw std::invalid_argument("unsatisfiable Range");
     return {first, last, true};
 }
-bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &published,
+namespace {
+class FlacReader {
+    FlacLayout layout;
+    uint64_t offset, frameIndex;
+    Reader pcm;
+    std::array<char, FlacLayout::headerSize> header;
+    std::array<char, FlacLayout::blockSize * 6> input;
+    size_t filled = 0;
+    std::vector<char> frame;
+
+    static uint64_t frameAt(const FlacLayout &layout, uint64_t offset) {
+        uint64_t lo = 0, hi = layout.frameCount();
+        while (lo + 1 < hi) {
+            const auto middle = lo + (hi - lo) / 2;
+            if (layout.offset(middle) > offset)
+                hi = middle;
+            else
+                lo = middle;
+        }
+        return lo;
+    }
+
+public:
+    FlacReader(const Item &item, const FlacLayout &layout, uint64_t offset)
+        : layout(layout), offset(offset), frameIndex(frameAt(layout, offset)),
+          pcm(item.reader(44 + frameIndex * FlacLayout::blockSize * 6)), header(layout.header()) {}
+
+    size_t read(char *target, size_t limit, std::chrono::milliseconds wait) {
+        if (offset < header.size()) {
+            const auto count = std::min<uint64_t>(limit, header.size() - offset);
+            std::copy_n(header.data() + offset, count, target);
+            offset += count;
+            return count;
+        }
+
+        if (frame.empty()) {
+            const auto need = layout.frameSamples(frameIndex) * 6;
+            while (filled < need) {
+                const auto count = pcm.read(input.data() + filled, need - filled, wait);
+                if (!count)
+                    throw std::runtime_error("incomplete FLAC frame");
+                filled += count;
+            }
+            frame = layout.frame(frameIndex, input.data());
+            filled = 0;
+        }
+        const auto skip = offset - layout.offset(frameIndex);
+        const auto count = std::min<uint64_t>(limit, frame.size() - skip);
+        std::copy_n(frame.data() + skip, count, target);
+        offset += count;
+        if (skip + count == frame.size()) {
+            frame.clear();
+            ++frameIndex;
+        }
+        return count;
+    }
+};
+} // namespace
+
+bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &published, Format format,
               std::chrono::milliseconds wait,
               std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned,
               const Pacing &pacing) {
     auto item = published;
+    const auto &description = item->descriptor();
+    std::optional<FlacLayout> flac;
+    const auto headerSize = format == Format::Flac ? FlacLayout::headerSize : 44;
     if (request.method() == upnp::StreamRequest::Method::Get && !audioPinned) {
         item = Item::retainAudio(item);
         if (!item) { request.reply(503); return true; }
@@ -161,6 +219,8 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
     struct Diagnostic {
         upnp::StreamRequest &request;
         std::shared_ptr<Item> item;
+        Format format;
+        const std::optional<FlacLayout> &flac;
         unsigned status = 0;
         uint64_t length = 0, served = 0, bodyStart = UINT64_MAX, backpressure = 0;
         std::string ending = "cancelled";
@@ -173,15 +233,19 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             auto range = request.header("Range");
             if (range.find_first_not_of("bytes=0123456789-, ") != std::string::npos || range.size() > 128)
                 range = "invalid";
-            std::printf("yeney: queue HTTP method=%s item=%s range=%s status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu paced=%d pace_wait_ms=%lld\n",
+            const auto frames = item->producedFrames();
+            const auto produced = flac
+                ? flac->offset(frames == flac->totalSamples() ? flac->frameCount() : frames / FlacLayout::blockSize)
+                : 44 + frames * 6;
+            std::printf("yeney: queue HTTP method=%s item=%s range=%s form=%s status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu paced=%d pace_wait_ms=%lld\n",
                 request.method() == upnp::StreamRequest::Method::Get ? "GET" :
                 request.method() == upnp::StreamRequest::Method::Head ? "HEAD" : "OTHER",
-                item->descriptor().occurrence.c_str(), range.empty() ? "none" : range.c_str(), status,
-                (unsigned long long)length, (unsigned long long)(44 + item->producedFrames()*6),
+                item->descriptor().occurrence.c_str(), range.empty() ? "none" : range.c_str(), formatName(format), status,
+                (unsigned long long)length, (unsigned long long)produced,
                 (unsigned long long)served, ending.c_str(), (unsigned long long)backpressure,
                 paced, static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(paceWait).count()));
         }
-    } diagnostic{request, item};
+    } diagnostic{request, item, format, flac};
     if (request.method() != upnp::StreamRequest::Method::Get &&
         request.method() != upnp::StreamRequest::Method::Head) {
         diagnostic.status = 405; diagnostic.ending = "complete";
@@ -194,6 +258,11 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         request.reply(503);
         return true;
     } // sealed assets are unpublished
+    const auto frames = (*length - 44) / 6;
+    if (format == Format::Flac) {
+        flac.emplace(frames, description.rate);
+        length = flac->size();
+    }
     ByteRange range;
     try {
         range = wavRange(request.header("Range"), *length);
@@ -208,7 +277,7 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
     diagnostic.length = range.last - range.first + 1;
     auto wire =
         std::string("HTTP/1.1 ") + (range.partial ? "206 Partial Content" : "200 OK") +
-        "\r\nContent-Type: audio/wav\r\nContent-Length: " + std::to_string(range.last - range.first + 1) +
+        "\r\nContent-Type: audio/" + formatName(format) + "\r\nContent-Length: " + std::to_string(range.last - range.first + 1) +
         "\r\nAccept-Ranges: bytes\r\nConnection: close\r\n";
     if (range.partial)
         wire += "Content-Range: bytes " + std::to_string(range.first) + "-" + std::to_string(range.last) +
@@ -246,7 +315,7 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         diagnostic.ending = "complete";
         return true;
     }
-    if (resolve && range.last >= 44) {
+    if (resolve && range.last >= headerSize) {
         // The immutable declaration has already reached the speaker. HEAD and
         // rejected ranges never select LMS; an abandoned GET may end here with
         // headers only. The room resolver owns settle/selection, never this HTTP
@@ -256,7 +325,7 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             produced = resolve(request);
             if (produced && (produced->room() != published->room() ||
                 produced->descriptor().rate != published->descriptor().rate ||
-                produced->contentLength() != length ||
+                produced->contentLength() != published->contentLength() ||
                 produced->descriptor().kind != published->descriptor().kind)) {
                 diagnostic.ending = "declaration-mismatch";
                 request.disconnect();
@@ -275,10 +344,14 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         diagnostic.item = item;
     }
     bridge::ConsumptionDiagnostic consumption(request, item->room(), "queue");
-    auto reader = item->reader(range.first);
-    const uint64_t playRate = uint64_t(item->descriptor().rate) * 6;
-    const uint64_t pcmStart = std::max<uint64_t>(range.first, 44);
-    diagnostic.paced = pacing.enabled && (*length - pcmStart) * 1000 > playRate * pacing.tailMs;
+    std::optional<Reader> wavReader;
+    std::optional<FlacReader> flacReader;
+    if (flac) flacReader.emplace(*item, *flac, range.first);
+    else wavReader.emplace(item->reader(range.first));
+    const double playRate = frames ? double(*length) * description.rate / frames : double(description.rate) * 6;
+    const auto tailBytes = static_cast<uint64_t>(std::min<double>(*length, playRate * pacing.tailMs / 1000));
+    const auto tailStart = *length - tailBytes;
+    diagnostic.paced = pacing.enabled && range.first < tailStart;
     ByteBudget budget(playRate, pacing);
     auto active = [&] {
         if (request.aborted() || request.peerClosed())
@@ -296,17 +369,23 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             // startup deadline applies to first body data; later data has a
             // fresh bounded wait, not a 15 s total track lifetime.
             size_t n;
+            const auto offset = range.last - left + 1;
+            const bool paced = pacing.enabled && offset < tailStart;
             try {
-                const auto limit = diagnostic.paced ? std::min(sizeof(bytes), budget.chunkLimit()) : sizeof(bytes);
-                n = reader.read(bytes, std::min<uint64_t>(left, limit),
-                                std::chrono::milliseconds(100));
+                const auto limit = paced
+                    ? std::min<uint64_t>({sizeof(bytes), budget.chunkLimit(), tailStart - offset})
+                    : sizeof(bytes);
+                const auto count = std::min<uint64_t>(left, limit);
+                if (!active()) break;
+                n = flacReader ? flacReader->read(bytes, count, 100ms)
+                               : wavReader->read(bytes, count, 100ms);
             } catch (const ReadTimeout &) {
                 if (std::chrono::steady_clock::now() >= deadline)
                     throw;
                 continue;
             }
             if (!n) { diagnostic.ending = "early-EOF"; break; }
-            if (diagnostic.paced && !budget.take(n, diagnostic.paceWait, active))
+            if (paced && !budget.take(n, diagnostic.paceWait, active))
                 break;
             if (!send(bytes, n)) {
                 diagnostic.ending = errno == EAGAIN || errno == EWOULDBLOCK || errno == ETIMEDOUT ? "timeout" : "speaker-closed";
@@ -322,9 +401,14 @@ bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         diagnostic.ending = dynamic_cast<const ReadTimeout *>(&e) ? "timeout" : "cancelled";
         std::printf("yeney: queue HTTP read closed item=%s offset=%llu reason=%s\n",
                     item->descriptor().occurrence.c_str(),
-                    static_cast<unsigned long long>(reader.position()), e.what());
+                    static_cast<unsigned long long>(range.last - left + 1), e.what());
         request.disconnect();
     }
     return true;
+}
+bool serveWav(upnp::StreamRequest &request, const std::shared_ptr<Item> &item, std::chrono::milliseconds wait,
+              std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned,
+              const Pacing &pacing) {
+    return serveRow(request, item, Format::Wav, wait, std::move(resolve), audioPinned, pacing);
 }
 } // namespace queue_audio

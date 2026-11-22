@@ -172,7 +172,7 @@ struct QueueRoom::Impl {
     upnp::QueueOwnershipIO ownershipIO();
     Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
          std::shared_ptr<upnp::OwnSpeakerControl> s, std::string h, std::string m, const uint8_t *rawMac,
-         std::function<std::string()> url);
+         std::function<std::string()> url, queue_audio::Format);
     std::optional<yeney::FlacSourceInfo> sourceInfo(uint64_t occurrence,
                                                     std::optional<yeney::FlacSourceInfo> info);
     void relayEvents(bool enabled);

@@ -6,12 +6,6 @@
 
 namespace queue_audio {
 namespace {
-constexpr std::array<uint64_t, 5> numberLimits{1 << 7, 1 << 11, 1 << 16, 1 << 21, 1 << 26};
-
-unsigned numberWidth(uint64_t index) {
-    return 1 + (std::upper_bound(numberLimits.begin(), numberLimits.end(), index) - numberLimits.begin());
-}
-
 template<class Output>
 void bigEndian(Output out, uint64_t value, unsigned width) {
     while (width)
@@ -38,32 +32,10 @@ unsigned checksum(const std::vector<char> &bytes) {
 }
 }
 
-FlacLayout::FlacLayout(uint64_t samples, unsigned rate) : samples(samples), rate(rate) {
-    if (!samples || samples >= (1ull << 36) || !rate || rate >= (1u << 20))
-        throw std::invalid_argument("invalid FLAC row description");
-}
-
-uint64_t FlacLayout::frameCount() const {
-    return (samples + blockSize - 1) / blockSize;
-}
-
 unsigned FlacLayout::frameSamples(uint64_t index) const {
     if (index >= frameCount())
         throw std::out_of_range("FLAC frame index");
     return std::min<uint64_t>(blockSize, samples - index * blockSize);
-}
-
-uint64_t FlacLayout::offset(uint64_t index) const {
-    if (index > frameCount())
-        throw std::out_of_range("FLAC frame offset");
-    auto total = headerSize + std::min(samples, index * blockSize) * sampleBytes +
-                 index * (frameOverhead + 1);
-    for (auto limit : numberLimits) {
-        if (index <= limit)
-            break;
-        total += index - limit;
-    }
-    return total;
 }
 
 std::array<char, FlacLayout::headerSize> FlacLayout::header() const {
@@ -90,7 +62,7 @@ std::vector<char> FlacLayout::frame(uint64_t index, const char *pcm) const {
     std::vector<char> bytes{char(0xff), char(0xf8), char(0x60), char(0x1c)};
     const auto expectedSize = offset(index + 1) - offset(index);
     bytes.reserve(expectedSize);
-    auto width = numberWidth(index);
+    unsigned width = 1 + (std::upper_bound(numberLimits.begin(), numberLimits.end(), index) - numberLimits.begin());
     if (width > 1) {
         bytes.push_back(char((0xffu << (8 - width)) | (index >> (6 * (width - 1)))));
         while (--width)

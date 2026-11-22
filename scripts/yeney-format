@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+"""Display or set the queue format of installed YeneY rooms."""
+import os
+from pathlib import Path
+import subprocess
+import sys
+import time
+
+# The installed room services run from this checkout.
+sys.path.append("/opt/yeney/scripts")
+from install_devices import atomic_write, parse_rooms, read_text, setting
+
+KEY = "YENEY_QUEUE_FORMAT"
+FORMATS = ("flac", "wav")
+START_LINES = ("yeney: queue format=flac block=256", "yeney: queue format=wav")
+
+
+def run(*args, check=True):
+    return subprocess.run(args, check=check, capture_output=True, text=True, timeout=30)
+
+
+def restart(room):
+    unit = run("systemd-escape", "--template=yeney@.service", "--", room).stdout.strip()
+    run("systemctl", "restart", unit)
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        if run("systemctl", "is-active", "--quiet", unit, check=False).returncode == 0:
+            invocation = run("systemctl", "show", unit, "-p", "InvocationID", "--value").stdout.strip()
+            if invocation and invocation != "0" * 32:
+                log = run("journalctl", "--no-pager", "-o", "cat", "-u", unit,
+                          "_SYSTEMD_INVOCATION_ID=" + invocation, check=False).stdout
+                line = next((line for line in log.splitlines() if line in START_LINES), None)
+                if line:
+                    return line
+        time.sleep(.2)
+    raise RuntimeError(f"{room} did not log its queue format after restart")
+
+
+def main(args):
+    if args and (len(args) != 2 or args[0] not in FORMATS):
+        raise ValueError("Usage: yeney-format [<flac|wav> <room|all>]")
+    path = Path(os.environ.get("YENEY_CONFIG", "/etc/yeney/config"))
+    config = read_text(path)
+    rooms = parse_rooms(config, lambda message: print(message, file=sys.stderr))
+    enabled = sorted(room for room, active in rooms.items() if active)
+    if not args:
+        settings = {key.strip(): value.strip() for line in config.splitlines()
+                    if (pair := setting(line)) for key, value in [pair]}
+        for room in enabled:
+            form = settings.get(f"room.{room}.{KEY}", settings.get(KEY, "flac"))
+            print(f"{room}: {form if form in FORMATS else 'flac'}")
+        return
+
+    form, room = args
+    if room != "all" and room not in enabled:
+        raise ValueError(f"Unknown or disabled room {room!r}. Enabled rooms: {', '.join(enabled) or '(none)'}")
+    selected = enabled if room == "all" else [room]
+    if not selected:
+        raise ValueError("No enabled rooms.")
+    updates = {f"room.{name}.{KEY}": form for name in selected}
+    lines = config.splitlines(keepends=True)
+    remaining = set(updates)
+    for index, line in enumerate(lines):
+        pair = setting(line)
+        if pair and (key := pair[0].strip()) in updates:
+            end = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""
+            lines[index] = f"{line.split('=', 1)[0]}={form}{end}"
+            remaining.discard(key)
+    updated = "".join(lines)
+    if remaining and updated and not updated.endswith("\n"):
+        updated += "\n"
+    updated += "".join(f"{key}={form}\n" for key in sorted(remaining))
+    if updated != config:
+        atomic_write(path, updated)
+    for name in selected:
+        print(f"{name}: {restart(name)}", flush=True)
+
+
+if __name__ == "__main__":
+    try:
+        main(sys.argv[1:])
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"yeney-format: {error}", file=sys.stderr)
+        raise SystemExit(1)

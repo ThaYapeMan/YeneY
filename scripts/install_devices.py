@@ -68,7 +68,7 @@ def setting(line):
 
 def room_enable_key(key):
     return key.startswith('room.') and not key.rstrip(' \t\r').endswith(('.lms_volume', '.volume_max',
-        '.YENEY_PODCAST_TITLE_PLAIN', '.YENEY_PODCAST_ARTIST_SHOW', '.YENEY_PODCAST_ALBUM_PUBLISHER'))
+        '.YENEY_PODCAST_TITLE_PLAIN', '.YENEY_PODCAST_ARTIST_SHOW', '.YENEY_PODCAST_ALBUM_PUBLISHER', '.YENEY_QUEUE_FORMAT'))
 
 
 def parse_rooms(text, warn):

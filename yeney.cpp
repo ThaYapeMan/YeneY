@@ -21,6 +21,7 @@
 #include "upnp/title_format.h"
 #include "stream_display.h"
 #include "queue_lms_commands.h"
+#include "flac_writer.h"
 #include "upnp/list_rooms.h"
 #include "upnp/discovery.h"
 #include "upnp/xml.h"
@@ -555,7 +556,7 @@ static std::string lmsCapabilityText(const std::string& text)
     return result;
 }
 
-static bridge::LmsIdentity lmsIdentity(std::string product, const std::string& firmware)
+static bridge::LmsIdentity lmsIdentity(std::string product, const std::string& firmware, queue_audio::Format format)
 {
     constexpr std::string_view prefix = "Sonos ";
     constexpr std::string_view suffix = " (YeneY)";
@@ -582,15 +583,16 @@ static bridge::LmsIdentity lmsIdentity(std::string product, const std::string& f
     std::string version = bridge::firmwareVersion();
     const auto speakerVersion = lmsCapabilityText(firmware.substr(0, firmware.find('-')));
     if (!speakerVersion.empty()) version.insert(version.size() - 1, "; Sonos " + speakerVersion);
+    version.insert(version.size() - 1, std::string("; rows ") + queue_audio::formatName(format));
     return {std::move(model), std::move(version)};
 }
 
 // Runs yeney-core on a dedicated thread; returns when the
 // LMS connection is torn down (e.g. process shutdown).
 static void runPlayerClient(const char* server, std::string playerName,
-                            std::future<std::string> product, std::string firmware)
+                            std::future<std::string> product, std::string firmware, queue_audio::Format format)
 {
-    const auto identity = lmsIdentity(product.get(), firmware);
+    const auto identity = lmsIdentity(product.get(), firmware, format);
     if (gQueueRoom)
         bridge::runQueueCoreClient(server, gMac, playerName.c_str(), identity, *gQueueRoom);
     else
@@ -1119,6 +1121,11 @@ int main(int argc, char** argv)
     }
     if (!gPlayer->discover(room, ip ? ip : "")) return EXIT_FAILURE;
     const auto selectedSpeaker = gPlayer->speaker();
+    const auto queueFormat = queue_audio::queueFormat(selectedSpeaker.name);
+    if (queueFormat == queue_audio::Format::Flac)
+        printf("yeney: queue format=flac block=%u\n", queue_audio::FlacLayout::blockSize);
+    else
+        printf("yeney: queue format=wav\n");
     // Overlap the selected room's description read with the rest of startup.
     auto product = std::async(std::launch::async, upnp::deviceModel, selectedSpeaker.location);
     if (const auto source = findOption(argc, argv, "--position-source"))
@@ -1171,7 +1178,7 @@ int main(int argc, char** argv)
             gMac[0], gMac[1], gMac[2], gMac[3], gMac[4], gMac[5]);
         gQueueRoom = new bridge::QueueRoom(selectedSpeaker, gStreamServer,
             std::dynamic_pointer_cast<upnp::OwnSpeakerControl>(gPlayer), playback, gServer, rawMac, gMac,
-            [] { return SqueezeBoxURL(streamId.load()); });
+            [] { return SqueezeBoxURL(streamId.load()); }, queueFormat);
     } else {
         static auto* mode = new bridge::RoomStatus;
         bridge::ModeStatus initial;
@@ -1188,7 +1195,7 @@ int main(int argc, char** argv)
         gServer.substr(0, gServer.find(':')), volumeMac, bridge::roomVolumeSettings()));
     static StopTimer stopTimer;
     std::thread playerThread(runPlayerClient, gServer.empty() ? nullptr : gServer.c_str(),
-                             bridge::playerName().displayName, std::move(product), selectedSpeaker.firmware);
+                             bridge::playerName().displayName, std::move(product), selectedSpeaker.firmware, queueFormat);
 
     runBridgeLoop(status);
 

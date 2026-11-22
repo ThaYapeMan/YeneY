@@ -63,6 +63,7 @@ install: yeney-queue-dryrun smoke
 	install -d -m 0755 /var/lib/yeney
 	install -m 0755 yeney-queue-dryrun /usr/local/bin/yeney-queue-dryrun
 	install -m 0755 scripts/yeney-queue-suite /usr/local/bin/yeney-queue-suite
+	install -m 0755 scripts/yeney-format /usr/local/bin/yeney-format
 	install -m 0644 scripts/yeney_room_state.py /usr/local/bin/yeney_room_state.py
 	install -m 0755 scripts/yeney-stream-pacing-suite /usr/local/bin/yeney-stream-pacing-suite
 	install -m 0755 scripts/yeney-queue-device-suite /usr/local/bin/yeney-queue-device-suite
@@ -148,9 +149,9 @@ oct11-acquisition-test: tests/oct11_acquisition_test.cpp
 oct12-boundary-test: tests/oct12_boundary_test.cpp core_sonos.cpp core_shm.o $(CORE_LIB)
 	$(call compile-program,g++,-std=c++17 -O2 -Wall -Wextra -I. -Ithird_party/yeney-core -pthread -o $@ tests/oct12_boundary_test.cpp core_sonos.cpp core_shm.o $(CORE_LIB) -lFLAC)
 
-queue_route.o queue_item_store.o wav_writer.o: %.o: %.cpp
+queue_route.o queue_item_store.o wav_writer.o flac_writer.o: %.o: %.cpp
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. $(DEPFLAGS) -c -o $@ $<
-QUEUE_ITEM_OBJS = queue_item_store.o wav_writer.o queue_route.o
+QUEUE_ITEM_OBJS = queue_item_store.o wav_writer.o flac_writer.o queue_route.o
 libqueueitems.a: $(QUEUE_ITEM_OBJS)
 	ar rcs $@ $^
 queue-row-order-test: tests/queue_row_order_test.cpp libqueueitems.a

@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_metadata.h"
+#include "../wav_writer.h"
 #include <cstdio>
 #include <stdexcept>
 namespace upnp {
 std::string queueDidl(const QueueMetadata &m) {
-    if (!m.rate || m.url.compare(0, 7, "http://") || m.session.empty() || (!m.deferred && m.size < 44) || m.bits != 24 ||
-        m.channels != 2 || (!m.deferred && m.frames > (UINT32_MAX - 36ull) / 6) || (!m.deferred && m.size != 44 + 6 * m.frames))
+    using namespace queue_audio;
+    const auto flac = m.url.size() >= 5 && m.url.compare(m.url.size() - 5, 5, ".flac") == 0;
+    const auto format = flac ? Format::Flac : Format::Wav;
+    if (!m.rate || m.url.compare(0, 7, "http://") || m.session.empty() ||
+        m.bits != 24 || m.channels != 2 || (!m.deferred && m.size != rowLength(format, m.frames, m.rate)))
         throw std::invalid_argument("invalid finite queue metadata");
     auto seconds = m.playlistDuration.value_or(m.frames / m.rate);
     char duration[64];
@@ -33,8 +37,8 @@ std::string queueDidl(const QueueMetadata &m) {
            (m.artwork.empty() ? std::string{}
                               : "<upnp:albumArtURI>" + esc(m.artwork) + "</upnp:albumArtURI>") +
            "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
-           "<res protocolInfo=\"http-get:*:audio/wav:*\" duration=\"" +
-           declaredDuration + "\"" + (m.deferred ? std::string{} : " size=\"" + std::to_string(m.size) + "\"") + (m.deferred ? std::string{} : " sampleFrequency=\"" + std::to_string(m.rate) + "\"") + " bitsPerSample=\"24\" nrAudioChannels=\"2\">" + esc(m.url) +
+           "<res protocolInfo=\"http-get:*:audio/" + formatName(format) + ":*\" duration=\"" +
+           declaredDuration + "\"" + (m.deferred ? std::string{} : " size=\"" + std::to_string(m.size) + "\"") + (m.deferred ? std::string{} : " sampleFrequency=\"" + std::to_string(m.rate) + "\"") + " bitsPerSample=\"" + std::to_string(m.bits) + "\" nrAudioChannels=\"2\">" + esc(m.url) +
            "</res></item></DIDL-Lite>";
 }
 } // namespace upnp

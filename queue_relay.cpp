@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
+#include "wav_writer.h"
 namespace bridge {
 namespace {
 // Allow a speaker to recover from a short radio interruption. End the room
@@ -498,9 +499,10 @@ void QueueRoom::Impl::append() {
         metadata.artist = track.artist;
         metadata.album = track.album;
         metadata.artwork = track.artwork(host);
-        metadata.size = *length;
+        const auto &descriptor = record.item->descriptor();
         metadata.frames = (*length - 44) / 6;
-        metadata.rate = record.source.rate;
+        metadata.rate = descriptor.rate;
+        metadata.size = queue_audio::rowLength(route.formatFor(descriptor.kind), metadata.frames, metadata.rate);
         metadata.preciseDuration = record.estimated;
         const auto changes = upnp::sanitizeXmlFields({{"title", &metadata.title},
                                                       {"artist", &metadata.artist},

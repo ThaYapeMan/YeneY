@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
+#include "wav_writer.h"
 namespace bridge {
 void QueueRoom::Impl::reconcileWindow() {
     const auto &items = rowOwner.layout();
@@ -737,6 +738,9 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
         commands.push_back({'L', token});
         this->changed.notify_all();
     });
+    const auto kind = produced ? produced->item->descriptor().kind :
+        remotePlaybackSource(slot.track.id, slot.track.remote, slot.track.url)
+            ? queue_audio::PromiseKind::UpperBound : queue_audio::PromiseKind::Exact;
     upnp::QueueMetadata metadata;
     metadata.url = speaker->controllerUri() + route.publishDeferred(1, "lazy-" + std::to_string(slot.token) + "-" + std::to_string(++lazySerial),
         [lazy, token = slot.token](upnp::StreamRequest &request) {
@@ -747,7 +751,7 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
                 item ? "headers" : (ms >= 2990 ? "deadline" : "abandoned"),
                 (unsigned long long)token, (long long)ms, lazy->commandCount());
             return item;
-        }, [lazy](bool audio) { return audio ? lazy->readyAudio() : lazy->ready(); });
+        }, [lazy](bool audio) { return audio ? lazy->readyAudio() : lazy->ready(); }, kind);
     metadata.session = session + "-" + std::to_string(slot.token);
     metadata.title = slot.track.title; metadata.artist = slot.track.artist; metadata.album = slot.track.album;
     metadata.artwork = slot.track.artwork(host);
@@ -755,9 +759,10 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
     metadata.frames = uint64_t(slot.track.duration);
     metadata.deferred = true;
     if (produced) {
-        metadata.size = produced->item->contentLength().value();
-        metadata.frames = (metadata.size - 44) / 6;
-        metadata.rate = produced->item->descriptor().rate;
+        const auto &descriptor = produced->item->descriptor();
+        metadata.frames = (produced->item->contentLength().value() - 44) / 6;
+        metadata.rate = descriptor.rate;
+        metadata.size = queue_audio::rowLength(route.formatFor(kind), metadata.frames, metadata.rate);
         metadata.deferred = false;
         metadata.preciseDuration = produced->item->descriptor().kind == queue_audio::PromiseKind::UpperBound;
         if (!lazy->publish(produced->item, produced->stream)) throw std::logic_error("partial row declaration rejected");

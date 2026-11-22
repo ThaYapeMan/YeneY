@@ -2,6 +2,7 @@
 #pragma once
 #include "lms_identity.h"
 #include "playback_mode.h"
+#include "queue_format.h"
 #include "room_status.h"
 #include "third_party/yeney-core/core/player.h"
 #include "upnp/own_speaker_control.h"
@@ -13,7 +14,7 @@ class QueueRoom {
 public:
     QueueRoom(upnp::Speaker, std::shared_ptr<upnp::StreamServer>, std::shared_ptr<upnp::OwnSpeakerControl>,
               PlaybackSelection, std::string server, std::string mac, const uint8_t *,
-              std::function<std::string()> streamUri);
+              std::function<std::string()> streamUri, queue_audio::Format);
     ~QueueRoom();
     void shutdown();
     void statusPlayer(yeney::Player *);
