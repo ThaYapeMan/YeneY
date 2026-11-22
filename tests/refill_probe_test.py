@@ -363,11 +363,100 @@ def check_millisecond_figures():
         print(f"clock fixture {case['case']} join_gap_ms={gap:.3f} position_offset_ms={offset:.3f}")
 
 
+def check_field_joins():
+    fixture = json.loads((ROOT / 'tests/fixtures/refill-field-joins.json').read_text())
+    assert len(fixture) == 26
+    failures = []
+    for j, (case, join, duration, expected, samples) in enumerate(fixture):
+        answers = [dict(sent=sent / 1000, received=received / 1000,
+                        position_s=position / 1000, latency_ms=received - sent)
+                   for sent, received, position in samples]
+        gap = probe.seek_join(answers, 0, duration)
+        print(f'archive {1 + j // 13} {case} join {join}: {gap} ms, expected {expected:+.1f} ms')
+        if gap is None or abs(gap - expected) > 1.5:
+            failures.append((case, join, gap, expected))
+    assert not failures, failures
+
+
+def check_prediction():
+    for rate, block, target, expected in (
+        (44100, 4096, 369000, 104.40),
+        (44100, 4096, 18000, 111.56),
+        (44100, 4096, 1024000, 4096 / 44.1),
+        (48000, 4096, 20000, (4096 + 2560) / 48),
+        (44100, 256, 21000, (256 + 108) / 44.1),
+        (44100, 4096, 21013, (8192 - (926673 % 4096)) / 44.1),
+    ):
+        _, gap = probe.seek_prediction(rate, block, target)
+        assert math.isclose(gap, expected, abs_tol=.005), (rate, block, target, gap)
+        print(f'{rate} Hz, block {block}, target {target} ms: {gap:.6f} ms')
+
+
+def check_block_sizes(work):
+    helper = probe.audio_helper(work)
+    for block in (16, 256, 1024, 4096):
+        for mode in ('fixed-noseek', 'packed'):
+            frames = 3 * block + 3
+            pcm, media = work / 'block.pcm', work / 'block.flac'
+            pcm.write_bytes(bytes((0x34, 0x12)) * frames)
+            result = probe.audio_command(helper, mode, pcm, media, frames, 44100, 16, 1, block)
+            proof = tuple(map(int, result.split())) if mode != 'packed' else None
+            index, evidence = probe.verify_flac(helper, media, pcm, 2, 1, frames, work, proof,
+                                               mode == 'packed', block=block)
+            assert [sample for sample, _ in index] == [0, block, 2 * block, 3 * block]
+            assert evidence['decoded_bit_exact'] and evidence['range_bit_exact']
+            if proof:
+                assert evidence['predicted'] == evidence['written']
+            print(f'block {block} {mode}', json.dumps(evidence, sort_keys=True))
+
+
+def check_seek_verdict():
+    for fixed_offset in (False, True):
+        rows = []
+        for targets, _ in probe.SEEK_ACTIONS:
+            target = targets[-1] if targets else None
+            _, expected = probe.seek_prediction(44100, 4096, target)
+            observed = 104.5 if fixed_offset and targets else expected
+            answers = []
+            for i in range(8):
+                before, after = -.25 * (i + 1), .25 * (i + 1)
+                for time_s, pos in ((before, 40 + before - observed / 1000), (after, after)):
+                    answers.append(dict(sent=time_s - .001, received=time_s + .001,
+                                        position_s=pos, latency_ms=2))
+            gap = probe.seek_join(answers, 0, 40)
+            assert abs(gap - observed) < 1
+            rows.append(dict(targets=targets, join_ms=gap, difference_ms=gap - expected))
+        assert probe.seek_verdict([dict(rows=rows)])[-1] == ('H fails' if fixed_offset else 'H holds')
+
+
+def check_named_waits():
+    with mock.patch.object(probe.http.client, 'HTTPConnection', side_effect=TimeoutError):
+        try:
+            probe.track('127.0.0.1', 9000, 42, Path('unused'))
+        except TimeoutError as exc:
+            assert 'LMS' in str(exc) and '120' in str(exc) and 'track' in str(exc), str(exc)
+        else:
+            raise AssertionError('track timeout did not surface')
+    fake = mock.Mock()
+    fake.socket.return_value.receive.side_effect = TimeoutError
+    try:
+        probe.ws_check(fake)
+    except TimeoutError as exc:
+        assert 'speaker websocket' in str(exc) and '3' in str(exc) and 'position' in str(exc), str(exc)
+    else:
+        raise AssertionError('speaker timeout did not surface')
+
+
 def run():
     check_millisecond_figures()
+    check_field_joins()
+    check_prediction()
+    check_seek_verdict()
+    check_named_waits()
     with tempfile.TemporaryDirectory(prefix='refill-test-') as directory, DownloadServer() as downloads:
         work = Path(directory)
         check_stereo_fixed(work)
+        check_block_sizes(work)
         full, short = fixture(work, 180), fixture(work, 2)
         downloads.audio = full
         renderer = ProbeCoordinator(handler=Renderer)
