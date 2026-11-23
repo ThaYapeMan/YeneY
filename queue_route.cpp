@@ -21,6 +21,7 @@ struct Route::State {
     struct Entry {
         uint64_t epoch, revision;
         Format format;
+        unsigned bits;
         std::shared_ptr<Item> item;
         Resolver resolve;
         Ready ready;
@@ -40,6 +41,9 @@ Route::Route(std::string r, std::string s, Format format) {
 }
 Format Route::formatFor(PromiseKind kind) const {
     return kind == PromiseKind::Exact ? state->format : Format::Wav;
+}
+unsigned Route::bitsFor(const Descriptor &description) const {
+    return formatFor(description.kind) == Format::Flac ? description.bits : 24;
 }
 void Route::registerWith(upnp::StreamServer &server, std::string address, std::function<void()> activity) {
     state->speakerAddress = std::move(address);
@@ -61,18 +65,18 @@ std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t re
         throw std::logic_error("queue epoch revoked");
     const bool lazy = bool(resolve);
     const auto format = formatFor(item->descriptor().kind);
-    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, format, item, std::move(resolve), {}});
+    auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, format, bitsFor(item->descriptor()), item, std::move(resolve), {}});
     if (!inserted.second && (inserted.first->second.item != item || lazy || inserted.first->second.resolve))
         throw std::logic_error("immutable queue URL reused");
     return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/" +
            std::to_string(revision) + "/" + id + formatExtension(format);
 }
-std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, Ready ready, PromiseKind kind) {
+std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, Ready ready, PromiseKind kind, unsigned bits) {
     if (!token(identity) || !resolve) throw std::invalid_argument("invalid deferred route");
     const auto key = std::to_string(epoch) + "/1/" + identity;
     const auto format = formatFor(kind);
     std::lock_guard<std::mutex> lock(state->mutex);
-    if (state->revoked.count(epoch) || !state->entries.emplace(key, State::Entry{epoch, 1, format, {}, std::move(resolve), std::move(ready)}).second)
+    if (state->revoked.count(epoch) || !state->entries.emplace(key, State::Entry{epoch, 1, format, format == Format::Flac ? bits : 24, {}, std::move(resolve), std::move(ready)}).second)
         throw std::logic_error("deferred route reused");
     return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/1/" + identity + formatExtension(format);
 }
@@ -98,6 +102,7 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
     const auto prefix = "/yeney/q/" + state->session + "/";
     std::string key;
     Format format = Format::Wav;
+    unsigned bits = 24;
     const auto dot = path.rfind('.');
     if (path.compare(0, prefix.size(), prefix) == 0 && dot != std::string::npos && dot >= prefix.size())
         key = path.substr(prefix.size(), dot - prefix.size());
@@ -106,6 +111,7 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         auto i = state->entries.find(key);
         if (i != state->entries.end() && path.compare(dot, std::string::npos, formatExtension(i->second.format)) == 0) {
             format = i->second.format;
+            bits = i->second.bits;
             if (state->activity && r.peerAddress() == state->speakerAddress &&
                 (r.method() == upnp::StreamRequest::Method::Get || r.method() == upnp::StreamRequest::Method::Head))
                 state->activity();
@@ -140,10 +146,11 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         r.reply(404);
         return true;
     }
-    if (format == Format::Flac && item->descriptor().kind != PromiseKind::Exact) {
+    if ((format == Format::Flac && item->descriptor().kind != PromiseKind::Exact) ||
+        (bits == 16 && item->descriptor().bits != 16)) {
         r.disconnect();
         return true;
     }
-    return serveRow(r, item, format, std::chrono::seconds(15), std::move(resolve), audioPinned, state->pacing);
+    return serveRow(r, item, format, std::chrono::seconds(15), std::move(resolve), audioPinned, state->pacing, bits);
 }
 } // namespace queue_audio

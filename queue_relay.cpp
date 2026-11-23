@@ -502,7 +502,8 @@ void QueueRoom::Impl::append() {
         const auto &descriptor = record.item->descriptor();
         metadata.frames = (*length - 44) / 6;
         metadata.rate = descriptor.rate;
-        metadata.size = queue_audio::rowLength(route.formatFor(descriptor.kind), metadata.frames, metadata.rate);
+        metadata.bits = route.bitsFor(descriptor);
+        metadata.size = queue_audio::rowLength(route.formatFor(descriptor.kind), metadata.frames, metadata.rate, metadata.bits);
         metadata.preciseDuration = record.estimated;
         const auto changes = upnp::sanitizeXmlFields({{"title", &metadata.title},
                                                       {"artist", &metadata.artist},
@@ -515,7 +516,7 @@ void QueueRoom::Impl::append() {
             std::optional<queue_audio::QueueWindow::Slot> slot;
             { std::lock_guard<std::mutex> lock(sourceMutex); slot = window.find(rowOwner.sourceToken(owner).value()); }
             if (slot) {
-                auto row = makeRow(*slot);
+                auto row = makeRow(*slot, nullptr, metadata.bits);
                 rowOwner.declaredLazyRow(slot->token).publish(record.item, record.source.occurrence);
                 metadata.url = row.uri;
                 metadata.session = session + "-" + std::to_string(slot->token);

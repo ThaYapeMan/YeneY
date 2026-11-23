@@ -111,7 +111,7 @@ struct QueueRoom::Impl {
     bool acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot);
     void activateLazy(uint64_t token);
     Entry makeRow(const queue_audio::QueueWindow::Slot &slot,
-                  const Entry *produced = nullptr);
+                  const Entry *produced = nullptr, unsigned bits = 24);
 
     std::map<uint64_t, bool> remote;
     std::mutex mutex, sourceMutex;

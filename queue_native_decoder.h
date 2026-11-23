@@ -6,5 +6,6 @@ namespace bridge {
 // shared LMS stream remains responsible for Slimproto flow and status.
 std::unique_ptr<yeney::Decoder> nativeQueueDecoder(const yeney::DecoderConfig &,
     const std::string &host, const std::string &track, unsigned offsetMs,
-    std::function<void(const std::string &)> log = {}, unsigned port = 9000);
+    std::function<void(const std::string &)> log = {}, unsigned port = 9000,
+    std::function<void()> depth16 = {});
 }

@@ -207,7 +207,7 @@ public:
 bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &published, Format format,
               std::chrono::milliseconds wait,
               std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned,
-              const Pacing &pacing) {
+              const Pacing &pacing, unsigned bits) {
     auto item = published;
     const auto &description = item->descriptor();
     std::optional<FlacLayout> flac;
@@ -220,6 +220,7 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         upnp::StreamRequest &request;
         std::shared_ptr<Item> item;
         Format format;
+        unsigned bits;
         const std::optional<FlacLayout> &flac;
         unsigned status = 0;
         uint64_t length = 0, served = 0, bodyStart = UINT64_MAX, backpressure = 0;
@@ -237,15 +238,15 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             const auto produced = flac
                 ? flac->offset(frames == flac->totalSamples() ? flac->frameCount() : frames / FlacLayout::blockSize)
                 : 44 + frames * 6;
-            std::printf("yeney: queue HTTP method=%s item=%s range=%s form=%s status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu paced=%d pace_wait_ms=%lld\n",
+            std::printf("yeney: queue HTTP method=%s item=%s range=%s form=%s bits=%u status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu paced=%d pace_wait_ms=%lld\n",
                 request.method() == upnp::StreamRequest::Method::Get ? "GET" :
                 request.method() == upnp::StreamRequest::Method::Head ? "HEAD" : "OTHER",
-                item->descriptor().occurrence.c_str(), range.empty() ? "none" : range.c_str(), formatName(format), status,
+                item->descriptor().occurrence.c_str(), range.empty() ? "none" : range.c_str(), formatName(format), bits, status,
                 (unsigned long long)length, (unsigned long long)produced,
                 (unsigned long long)served, ending.c_str(), (unsigned long long)backpressure,
                 paced, static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(paceWait).count()));
         }
-    } diagnostic{request, item, format, flac};
+    } diagnostic{request, item, format, bits, flac};
     if (request.method() != upnp::StreamRequest::Method::Get &&
         request.method() != upnp::StreamRequest::Method::Head) {
         diagnostic.status = 405; diagnostic.ending = "complete";
@@ -261,7 +262,7 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
     const auto wavSize = *length;
     const auto frames = (wavSize - 44) / 6;
     if (format == Format::Flac) {
-        flac.emplace(frames, description.rate);
+        flac.emplace(frames, description.rate, bits);
         length = flac->size();
     }
     ByteRange range;
@@ -327,6 +328,7 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             if (produced && (produced->room() != published->room() ||
                 produced->descriptor().rate != published->descriptor().rate ||
                 produced->contentLength() != wavSize ||
+                (bits == 16 && produced->descriptor().bits != 16) ||
                 produced->descriptor().kind != published->descriptor().kind)) {
                 diagnostic.ending = "declaration-mismatch";
                 request.disconnect();

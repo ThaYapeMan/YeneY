@@ -18,8 +18,8 @@ inline uint64_t wavLength(uint64_t frames) {
         throw std::invalid_argument("WAV exceeds RIFF limit");
     return 44 + frames * 6;
 }
-inline uint64_t rowLength(Format format, uint64_t frames, unsigned rate) {
-    return format == Format::Flac ? FlacLayout(frames, rate).size() : wavLength(frames);
+inline uint64_t rowLength(Format format, uint64_t frames, unsigned rate, unsigned bits = 24) {
+    return format == Format::Flac ? FlacLayout(frames, rate, bits).size() : wavLength(frames);
 }
 std::array<char, 44> wavHeader(uint32_t rate, uint64_t frames);
 struct ByteRange {
@@ -39,7 +39,7 @@ struct Pacing {
 bool serveRow(upnp::StreamRequest &, const std::shared_ptr<Item> &, Format,
               std::chrono::milliseconds wait,
               std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned,
-              const Pacing &pacing);
+              const Pacing &pacing, unsigned bits = 24);
 
 // WAV entry point for callers that explicitly serve WAV.
 bool serveWav(upnp::StreamRequest &, const std::shared_ptr<Item> &,

@@ -26,6 +26,7 @@ struct QueueRecord {
     unsigned originMs = 0, seekPositionMs = 0;
     uint64_t parent = 0, segmentOffset = 0;
     bool estimated = false, productionComplete = false;
+    bool nativeSixteenBits = false;
     double duration = 0;
     uint32_t sourceOriginMs = 0;
     double strm = -1, decoded = -1, stmd = -1, audible = -1, stms = -1, end = -1;
@@ -111,6 +112,7 @@ public:
     void estimate(uint64_t occurrence, double duration, unsigned originMs);
     void trackDescriptor(const yeney::TrackDescriptor &) override;
     void sourceIdentity(uint64_t id, uint64_t token, const std::string &url, unsigned originMs, uint32_t gain = 0);
+    void nativeDepth16(uint64_t occurrence);
     void coreEvent(const std::string &, uint64_t, uint64_t) override;
     void resolvedItemBoundary(const yeney::ItemBoundary &) override;
     void trackBoundary(uint64_t, const yeney::Format &, bool) override;

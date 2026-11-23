@@ -303,7 +303,8 @@ Store::~Store() {
 }
 std::shared_ptr<Item> Store::create(Descriptor descriptor) {
     if (descriptor.occurrence.empty() || descriptor.occurrence.find('\0') != std::string::npos ||
-        !descriptor.rate || descriptor.rate > 655350 || descriptor.channels != 2 || descriptor.bits != 24)
+        !descriptor.rate || descriptor.rate > 655350 || descriptor.channels != 2 ||
+        (descriptor.bits != 24 && (descriptor.bits != 16 || descriptor.kind != PromiseKind::Exact)))
         throw std::invalid_argument("invalid item descriptor");
     if (descriptor.kind == PromiseKind::UpperBound && !descriptor.promisedFrames)
         throw std::invalid_argument("upper-bound item needs declared frames");
@@ -331,6 +332,8 @@ std::shared_ptr<Item> Store::publish(const std::shared_ptr<Item> &pending, uint6
         throw std::invalid_argument("publication conflicts with produced frames");
     auto descriptor = old.descriptor;
     descriptor.promisedFrames = promised;
+    if (descriptor.bits == 16 && kind != PromiseKind::Exact)
+        throw std::invalid_argument("16-bit queue row requires an exact promise");
     descriptor.kind = kind;
     ++descriptor.generation;
     const auto key = std::to_string(descriptor.generation) + ":" + descriptor.occurrence;
@@ -435,6 +438,14 @@ void Item::append(const yeney::Frame *frames, size_t count, bool processed) {
         throw std::invalid_argument("invalid item append");
     state->parked = false;
     try {
+        if (count && state->descriptor.bits == 16) {
+            if (processed)
+                throw SampleDepthFault("16-bit queue row received processed PCM");
+            for (size_t i = 0; i < count; ++i) {
+                if ((uint32_t(frames[i].left) | uint32_t(frames[i].right)) & 0xffff)
+                    throw SampleDepthFault("16-bit queue row contains a non-zero low byte");
+            }
+        }
         if (count > UINT64_MAX - state->produced)
             throw std::overflow_error("frame count overflow");
         auto actual = state->produced + count;

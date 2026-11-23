@@ -281,6 +281,25 @@
       "time_judging": true
     },
     {
+      "name": "queue-depth-real-lms",
+      "target": "navigation-targeted",
+      "command": "python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_QUEUE_DEPTH_REAL_LMS": "1"
+      },
+      "prerequisites": {
+        "full": "navigation-targeted"
+      },
+      "phase": "quiet",
+      "reason": "Check native source depth and lossless mixed-depth playback at the default queue settings.",
+      "seconds": 20,
+      "modes": [
+        "full"
+      ],
+      "label": "queue-depth-real-lms",
+      "time_judging": true
+    },
+    {
       "name": "refill-probe",
       "target": "main",
       "command": "python3 tests/refill_probe_test.py",
@@ -7715,6 +7734,7 @@
       "queue-mixed-real-lms",
       "queue-pacing-study-transport",
       "queue-pacing-study-joins",
+      "queue-depth-real-lms",
       "refill-probe",
       "build-upgrade",
       "build-header-touch",

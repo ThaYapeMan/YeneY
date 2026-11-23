@@ -61,6 +61,11 @@ void CoreQueueSink::work() {
             std::lock_guard<std::mutex> lock(mutex);
             records[active].fault = e.what();
             std::printf("yeney: pairing decision=re-produced reason=source-length-fault\n");
+        } catch (const SampleDepthFault &e) {
+            std::lock_guard<std::mutex> lock(mutex);
+            records[active].fault = e.what();
+            std::printf("yeney: queue sample depth fault occurrence=%llu reason=%s\n",
+                        (unsigned long long)active, e.what());
         } catch (const std::runtime_error &e) {
             std::lock_guard<std::mutex> lock(mutex);
             records[active].fault = e.what();
@@ -259,6 +264,12 @@ void CoreQueueSink::sourceIdentity(uint64_t id, uint64_t token, const std::strin
         record.gain = gain;
     });
 }
+void CoreQueueSink::nativeDepth16(uint64_t occurrence) {
+    enqueue([=] {
+        std::lock_guard<std::mutex> lock(mutex);
+        records[occurrence].nativeSixteenBits = true;
+    });
+}
 void CoreQueueSink::trackDescriptor(const yeney::TrackDescriptor &d) {
     enqueue([=] {
         uint64_t previous = 0;
@@ -325,6 +336,11 @@ void CoreQueueSink::trackBoundary(uint64_t frame, const yeney::Format &f, bool) 
             estimated = records.at(id);
         }
         Descriptor descriptor{std::to_string(id), f.rate, std::nullopt, 0};
+        // A predecessor tail, replay gain or an LMS transition may change the PCM.
+        if (!estimated.estimated && estimated.nativeSixteenBits && f.bits == 16 && !tail.item &&
+            !estimated.sourceUrl.empty() && !estimated.source.transition &&
+            (!estimated.gain || estimated.gain == 65536))
+            descriptor.bits = 16;
         if (estimated.estimated) {
             // Remote status duration can describe the remaining stream already.
             // The pre-start player clock can still belong to the previous run.

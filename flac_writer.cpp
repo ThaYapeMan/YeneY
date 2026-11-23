@@ -53,13 +53,13 @@ std::array<char, FlacLayout::headerSize> FlacLayout::header() const {
     bigEndian(bytes.begin() + 10, block, 2);
     bigEndian(bytes.begin() + 12, smallest, 3);
     bigEndian(bytes.begin() + 15, largest, 3);
-    bigEndian(bytes.begin() + 18, (uint64_t(rate) << 44) | (1ull << 41) | (23ull << 36) | samples, 8);
+    bigEndian(bytes.begin() + 18, (uint64_t(rate) << 44) | (1ull << 41) | (uint64_t(bits - 1) << 36) | samples, 8);
     return bytes;
 }
 
 std::vector<char> FlacLayout::frame(uint64_t index, const char *pcm) const {
     const auto count = frameSamples(index);
-    std::vector<char> bytes{char(0xff), char(0xf8), char(0x60), char(0x1c)};
+    std::vector<char> bytes{char(0xff), char(0xf8), char(0x60), char(bits == 16 ? 0x18 : 0x1c)};
     const auto expectedSize = offset(index + 1) - offset(index);
     bytes.reserve(expectedSize);
     unsigned width = 1 + (std::upper_bound(numberLimits.begin(), numberLimits.end(), index) - numberLimits.begin());
@@ -75,8 +75,12 @@ std::vector<char> FlacLayout::frame(uint64_t index, const char *pcm) const {
     for (unsigned channel = 0; channel < 2; ++channel) {
         bytes.push_back(0x02);
         for (unsigned sample = 0; sample < count; ++sample) {
-            const auto *littleEndian = pcm + sample * sampleBytes + channel * 3;
-            bytes.insert(bytes.end(), {littleEndian[2], littleEndian[1], littleEndian[0]});
+            const auto *littleEndian = pcm + sample * 6 + channel * 3;
+            bytes.insert(bytes.end(), {littleEndian[2], littleEndian[1]});
+            if (bits == 24)
+                bytes.push_back(littleEndian[0]);
+            else if (littleEndian[0])
+                throw std::runtime_error("16-bit FLAC row contains a non-zero low byte");
         }
     }
     bigEndian(std::back_inserter(bytes), checksum<16, 0x8005>(bytes), 2);

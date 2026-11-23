@@ -18,10 +18,11 @@ shared FLAC encoder. Same-rate gapless tracks retain a stream ID and encoder;
 new generations or rate changes create a new HTTP entity.
 
 In queue mode, every finite LMS track occupies one Sonos row. Exact-length
-rows use 24-bit FLAC in fixed 256-sample verbatim blocks by default, with
-the last block carrying the remaining samples. Their sample count
-determines the HTTP size and byte ranges. Rooms can select WAV for these
-rows. Rows with a length margin, including finite remote tracks and
+rows use FLAC in fixed 256-sample verbatim blocks by default, with
+the last block carrying the remaining samples. An original file decoded by
+YeneY at proven 16-bit depth without sample processing can use 16-bit
+FLAC. Other rows use 24 bits. Sample count and bit depth determine the
+HTTP size and byte ranges. Rooms can select 24-bit WAV for these rows. Rows with a length margin, including finite remote tracks and
 podcasts, use WAV. A join between these formats has yet to be measured on
 a speaker.
 

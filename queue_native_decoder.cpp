@@ -66,9 +66,9 @@ class NativePcmPayload {
     bool soundHeader = false;
     uint64_t soundSkip = 0;
     std::function<void()> provenOrigin;
-    std::function<void(uint64_t)> provenFrames;
+    std::function<void(uint64_t, unsigned)> provenFormat;
     bool framingMatches = false;
-    unsigned expectedWidth = 0, headerWidth = 0;
+    unsigned expectedWidth = 0, headerWidth = 0, headerBits = 0;
     size_t formatNeed = 0;
     std::string formatPrefix;
     std::optional<uint64_t> commonFrames;
@@ -80,8 +80,8 @@ class NativePcmPayload {
     }
 public:
     explicit NativePcmPayload(bool rawPcm, unsigned width, std::function<void()> origin,
-                              std::function<void(uint64_t)> frames)
-        : enabled(rawPcm), provenOrigin(std::move(origin)), provenFrames(std::move(frames)), expectedWidth(width) {}
+                              std::function<void(uint64_t, unsigned)> sourceFormat)
+        : enabled(rawPcm), provenOrigin(std::move(origin)), provenFormat(std::move(sourceFormat)), expectedWidth(width) {}
     void length(uint64_t bytes) { expected = bytes; }
     template<class Feed> bool feed(const char *bytes, size_t count, Feed consume) {
         received += count;
@@ -96,12 +96,14 @@ public:
                 const auto *b = reinterpret_cast<const uint8_t *>(formatPrefix.data());
                 if (wave) {
                     const auto kind = unsigned(b[0]) | unsigned(b[1]) << 8;
-                    if (kind == 1 || (kind == 65534 && formatPrefix.size() >= 40 && b[24] == 1 && !b[25]))
+                    if (kind == 1 || (kind == 65534 && formatPrefix.size() >= 40 && b[24] == 1 && !b[25])) {
                         headerWidth = unsigned(b[12]) | unsigned(b[13]) << 8;
+                        headerBits = unsigned(b[14]) | unsigned(b[15]) << 8;
+                    }
                 } else {
                     const auto channels = unsigned(b[0]) << 8 | b[1];
-                    const auto bits = unsigned(b[6]) << 8 | b[7];
-                    headerWidth = channels * ((bits+7)/8);
+                    headerBits = unsigned(b[6]) << 8 | b[7];
+                    headerWidth = channels * ((headerBits+7)/8);
                     commonFrames = uint32_t(b[2]) << 24 | uint32_t(b[3]) << 16 | uint32_t(b[4]) << 8 | b[5];
                 }
                 formatNeed = 0; formatPrefix.clear();
@@ -123,7 +125,7 @@ public:
                     provenOrigin();
                     if (headerWidth && headerWidth == expectedWidth && commonFrames &&
                         *commonFrames <= UINT64_MAX/headerWidth && *commonFrames*headerWidth == left-soundSkip)
-                        provenFrames(*commonFrames);
+                        provenFormat(*commonFrames, headerBits);
                 }
                 continue;
             }
@@ -168,7 +170,7 @@ public:
                         if (framingMatches) {
                             provenOrigin();
                             if (headerWidth && headerWidth == expectedWidth && !(left%headerWidth))
-                                provenFrames(left/headerWidth);
+                                provenFormat(left/headerWidth, headerBits);
                         }
                     } else {
                         if (left < 8) throw std::runtime_error("native AIFF sound framing");
@@ -209,6 +211,10 @@ class NativeDecoder final : public yeney::Decoder {
         return config;
     }
     std::unique_ptr<yeney::Decoder> decoder;
+    const char codec;
+    std::atomic<unsigned> pcmBits{0};
+    std::function<void()> depth16;
+    mutable bool reportedDepth = false;
     std::atomic<bool> stop{false};
     mutable std::mutex mutex;
     std::condition_variable changed;
@@ -351,8 +357,11 @@ class NativeDecoder final : public yeney::Decoder {
             bool fullResponse = false;
             NativePcmPayload representation(rawPcm, pcmWidth, [this, &fullResponse, offsetMs] {
                 if (fullResponse && !offsetMs) pcmOriginKnown->store(true);
-            }, [this, &fullResponse, offsetMs](uint64_t frames) {
-                if (fullResponse && !offsetMs) pcmFrames->store(frames);
+            }, [this, &fullResponse, offsetMs](uint64_t frames, unsigned bits) {
+                if (fullResponse && !offsetMs) {
+                    pcmBits.store(bits);
+                    pcmFrames->store(frames);
+                }
             });
             auto feed = [&](const char *data, size_t bytes) {
                 size_t consumed = 0;
@@ -451,8 +460,9 @@ class NativeDecoder final : public yeney::Decoder {
 public:
     NativeDecoder(const yeney::DecoderConfig &config, const std::string &host,
                   const std::string &track, unsigned offsetMs,
-                  std::function<void(const std::string &)> logger, unsigned port)
-        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown, movie, pcmFrames, fileFromStart, config.codec == 'l' && !offsetMs))), log(std::move(logger)) {
+                  std::function<void(const std::string &)> logger, unsigned port, std::function<void()> depthProof)
+        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown, movie, pcmFrames, fileFromStart, config.codec == 'l' && !offsetMs))),
+          codec(config.codec), depth16(std::move(depthProof)), log(std::move(logger)) {
         worker = std::thread([this, host, track, offsetMs, port, rawPcm = config.codec == 'p',
                               preload = config.codec == 'l' && !offsetMs,
                               pcmWidth = config.size >= '0' && config.size <= '3' &&
@@ -488,7 +498,17 @@ public:
     }
     bool sourceStart(uint64_t &frame) const override { return decoder->sourceStart(frame); }
     uint64_t warmupFrames() const override { return decoder->warmupFrames(); }
-    bool format(yeney::Format &f) const override { return decoder->format(f); }
+    bool format(yeney::Format &f) const override {
+        const bool ready = decoder->format(f);
+        // FLAC and ALAC report header depth through the decoder. The PCM
+        // decoder uses negotiated framing, so also require the container proof.
+        if (ready && depth16 && !reportedDepth && fileFromStart->load() && f.bits == 16 &&
+            !decoder->processed() && (codec == 'f' || codec == 'l' || (codec == 'p' && pcmBits == 16))) {
+            reportedDepth = true;
+            depth16();
+        }
+        return ready;
+    }
     std::optional<uint64_t> exactFrames() const override { return decoder->exactFrames(); }
     bool needsSuccessor() const override { return decoder->needsSuccessor(); }
     void successorRequested() override { decoder->successorRequested(); }
@@ -507,9 +527,9 @@ public:
 }
 std::unique_ptr<yeney::Decoder> nativeQueueDecoder(const yeney::DecoderConfig &config,
         const std::string &host, const std::string &track, unsigned offsetMs,
-        std::function<void(const std::string &)> log, unsigned port) {
+        std::function<void(const std::string &)> log, unsigned port, std::function<void()> depth16) {
     if (track.empty() || track.find_first_not_of("0123456789") != std::string::npos || !port || port > 65535)
         throw std::invalid_argument("invalid native source endpoint");
-    return std::make_unique<NativeDecoder>(config, host, track, offsetMs, std::move(log), port);
+    return std::make_unique<NativeDecoder>(config, host, track, offsetMs, std::move(log), port, std::move(depth16));
 }
 }

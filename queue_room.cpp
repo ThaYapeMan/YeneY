@@ -256,6 +256,9 @@ std::unique_ptr<yeney::Decoder> QueueRoom::decoder(const yeney::DecoderConfig &c
         return nativeQueueDecoder(config, host, source.id, source.startOffsetMs,
             [occurrence](const auto &line) {
                 logQueue("native input occurrence=" + std::to_string(occurrence) + " " + line);
+            }, 9000, [this, occurrence] {
+                if (impl->route.formatFor(queue_audio::PromiseKind::Exact) == queue_audio::Format::Flac)
+                    impl->queue.nativeDepth16(occurrence);
             });
     }
     impl->nativeInputOccurrence = 0;

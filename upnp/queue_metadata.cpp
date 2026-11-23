@@ -12,7 +12,8 @@ std::string queueDidl(const QueueMetadata &m) {
         throw std::invalid_argument("invalid finite queue format");
     const auto format = extension == ".flac" ? Format::Flac : Format::Wav;
     if (!m.rate || m.url.compare(0, 7, "http://") || m.session.empty() ||
-        m.bits != 24 || m.channels != 2 || (!m.deferred && m.size != rowLength(format, m.frames, m.rate)))
+        (m.bits != 24 && (format != Format::Flac || m.bits != 16)) || m.channels != 2 ||
+        (!m.deferred && m.size != rowLength(format, m.frames, m.rate, m.bits)))
         throw std::invalid_argument("invalid finite queue metadata");
     auto seconds = m.playlistDuration.value_or(m.frames / m.rate);
     char duration[64];

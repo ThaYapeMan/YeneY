@@ -45,7 +45,7 @@ before you rely on it.
 
 | Mode | How it plays | Used for |
 |---|---|---|
-| **Queue** (default) | One Sonos queue row per LMS track. Exact-length rows are served as 24-bit FLAC by default. WAV is selectable per room. Finite remote and podcast rows with a length margin use WAV. | Local music, podcasts, remote tracks with a known length |
+| **Queue** (default) | One Sonos queue row per LMS track. Exact-length rows are served as FLAC by default, with 16 bits available for proven unprocessed native 16-bit sources. WAV is selectable per room. Finite remote and podcast rows with a length margin use WAV. | Local music, podcasts, remote tracks with a known length |
 | **Stream** | One continuous 24-bit FLAC stream per room, paced on the Sonos clock | Live radio and sources without a length; chosen automatically in queue mode. Can be forced with `YENEY_PLAYBACK_MODE=stream` |
 
 ## YeneY compared with LMS-uPnP and Music Assistant
@@ -60,7 +60,7 @@ for Sonos and LMS only.
 |---|---|---|---|
 | Transport | Exact-length FLAC rows by default, WAV selectable per room. Continuous FLAC for live sources. | Continuous HTTP stream | Queued track URLs |
 | Plays the LMS library | ✔ | ✔ | ✘ its own library and sources |
-| Lossless 24-bit | ✔ 24-bit throughout; bit-perfect at 44.1/48 kHz with ReplayGain off | ~ FLAC by default; 24-bit can be set, not verified on Sonos | ✔ FLAC by default; 24-bit on current models |
+| Lossless 24-bit | ✔ Preserves 24-bit sources; bit-perfect at 44.1/48 kHz with ReplayGain off | ~ FLAC by default; 24-bit can be set, not verified on Sonos | ✔ FLAC by default; 24-bit on current models |
 | Hi-res sources (88.2–192 kHz) | ✔ YeneY's own converter, measured equal to SoX `rate -v` | ✔ resampled by LMS or the bridge | ✔ limited to 48 kHz |
 | Title, artist, album and artwork per track in the Sonos app | ✔ | ✔ | ✔ |
 | The whole playlist visible in the Sonos app | ✔ row for row, up to 500 rows by default | ✘ does not use the Sonos queue | ? the speaker holds a small window of tracks; what the app shows is not verified |

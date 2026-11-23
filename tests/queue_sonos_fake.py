@@ -503,7 +503,8 @@ class Handler(BaseHTTPRequestHandler):
             assert fields.get('album') in getattr(s, 'expected_albums', ['Album & fixture'])
             form = 'flac' if u.path.endswith('.flac') else 'wav'
             assert resource.text == uri and resource.attrib['protocolInfo'] == f'http-get:*:audio/{form}:*'
-            assert resource.attrib['bitsPerSample'] == '24' and resource.attrib['nrAudioChannels'] == '2'
+            assert resource.attrib['bitsPerSample'] in (('16', '24') if form == 'flac' else ('24',))
+            assert resource.attrib['nrAudioChannels'] == '2'
             insertion=before-1 if before else len(s.items)
             s.items.insert(insertion,dict(uri=uri, metadata=fields, resource=resource.attrib)); s.update += 1
             s.renumber_current()

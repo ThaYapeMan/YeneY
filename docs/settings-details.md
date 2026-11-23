@@ -245,7 +245,10 @@ Run `sudo yeney-format wav "Sonos Port"` to switch one room, or
 the room settings, restarts the selected services and prints each startup
 format line.
 
-Remote tracks and podcasts with a length margin use WAV in either setting.
+FLAC can use 16 bits for original files that YeneY decodes at proven
+16-bit depth without sample processing. Other FLAC rows and all WAV rows
+use 24 bits. Remote tracks and podcasts with a length margin use WAV in
+either setting.
 A playlist can contain both formats. The join between them has yet to be
 measured on a speaker.
 

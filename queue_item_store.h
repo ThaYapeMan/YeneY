@@ -17,7 +17,7 @@ struct Descriptor {
     uint32_t rate;
     std::optional<uint64_t> promisedFrames; // Exact or UpperBound; nullopt: sealed publication
     uint64_t generation;
-    unsigned channels = 2, bits = 24;
+    unsigned channels = 2, bits = 24; // Wire depth for exact FLAC; retained PCM stays 24-bit.
     PromiseKind kind = PromiseKind::Exact;
 };
 struct PublicationSuperseded : std::runtime_error {
@@ -29,6 +29,9 @@ struct ItemCancelled : std::runtime_error {
 struct LengthFault : std::runtime_error {
     const uint64_t expected, actual;
     LengthFault(uint64_t expected, uint64_t actual);
+};
+struct SampleDepthFault : std::runtime_error {
+    using std::runtime_error::runtime_error;
 };
 struct ReadTimeout : std::runtime_error {
     ReadTimeout() : std::runtime_error("item read timeout") {}
