@@ -11,12 +11,14 @@
 using queue_audio::FlacLayout;
 
 namespace {
-unsigned char sample(uint64_t byte) {
+unsigned char sample(uint64_t byte, unsigned bits) {
+    if (bits == 16 && byte % 3 == 0) return 0;
     return (byte ^ (byte >> 8) ^ (byte >> 16)) & 255;
 }
 
 struct Decode {
     const std::vector<char> &wire;
+    unsigned bits;
     size_t cursor = 0;
     uint64_t frames = 0;
 
@@ -32,12 +34,12 @@ struct Decode {
     static FLAC__StreamDecoderWriteStatus write(const FLAC__StreamDecoder *, const FLAC__Frame *frame,
                                                 const FLAC__int32 *const pcm[], void *opaque) {
         auto &self = *static_cast<Decode *>(opaque);
-        assert(frame->header.bits_per_sample == 24 && frame->header.channels == 2);
+        assert(frame->header.bits_per_sample == self.bits && frame->header.channels == 2);
         for (unsigned i = 0; i < frame->header.blocksize; ++i)
             for (unsigned channel = 0; channel < 2; ++channel)
                 for (unsigned byte = 0; byte < 3; ++byte) {
-                    const auto expected = sample((self.frames + i) * 6 + channel * 3 + byte);
-                    assert((uint32_t(pcm[channel][i]) >> (8 * byte) & 255) == expected);
+                    const auto expected = sample((self.frames + i) * 6 + channel * 3 + byte, self.bits);
+                    assert(((uint32_t(pcm[channel][i]) << (24 - self.bits)) >> (8 * byte) & 255) == expected);
                 }
         self.frames += frame->header.blocksize;
         return FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
@@ -48,8 +50,8 @@ struct Decode {
     }
 };
 
-void decode(const std::vector<char> &wire, uint64_t first, uint64_t total) {
-    Decode state{wire, 0, first};
+void decode(const std::vector<char> &wire, uint64_t first, uint64_t total, unsigned bits) {
+    Decode state{wire, bits, 0, first};
     std::unique_ptr<FLAC__StreamDecoder, decltype(&FLAC__stream_decoder_delete)>
         decoder(FLAC__stream_decoder_new(), FLAC__stream_decoder_delete);
     assert(decoder);
@@ -61,10 +63,10 @@ void decode(const std::vector<char> &wire, uint64_t first, uint64_t total) {
 }
 }
 
-int main() {
+void checkLayout(unsigned bits) {
     for (const unsigned rate : {44100, 48000}) {
         for (const uint64_t samples : {1, 255, 256, 257, 1000000, 16811890}) {
-            const FlacLayout layout(samples, rate);
+            const FlacLayout layout(samples, rate, bits);
             const auto info = layout.header();
             std::vector<char> wire(info.begin(), info.end());
             wire.reserve(layout.size());
@@ -73,18 +75,32 @@ int main() {
                     assert(layout.offset(index) == wire.size());
                 std::array<char, FlacLayout::blockSize * 6> pcm{};
                 for (size_t byte = 0; byte < pcm.size(); ++byte)
-                    pcm[byte] = sample(index * pcm.size() + byte);
+                    pcm[byte] = sample(index * pcm.size() + byte, bits);
                 const auto frame = layout.frame(index, pcm.data());
                 wire.insert(wire.end(), frame.begin(), frame.end());
             }
             assert(wire.size() == layout.size());
-            decode(wire, 0, samples);
+            decode(wire, 0, samples, bits);
             for (const auto index : {uint64_t(0), layout.frameCount() / 2, layout.frameCount() - 1}) {
                 std::vector<char> suffix(info.begin(), info.end());
                 suffix.insert(suffix.end(), wire.begin() + layout.offset(index), wire.end());
-                decode(suffix, index * FlacLayout::blockSize, samples);
+                decode(suffix, index * FlacLayout::blockSize, samples, bits);
             }
-            std::cout << "PASS " << rate << " Hz " << samples << " samples: size, offsets and libFLAC PCM\n";
+            std::cout << "PASS " << rate << " Hz " << bits << "-bit " << samples << " samples: size, offsets and libFLAC PCM\n";
         }
     }
+}
+
+int main() {
+    checkLayout(24);
+    checkLayout(16);
+    const FlacLayout layout(1, 44100, 16);
+    const std::array<char, 6> notSixteenBit{1, 0, 0, 0, 0, 0};
+    bool rejected = false;
+    try { layout.frame(0, notSixteenBit.data()); }
+    catch (const std::runtime_error &error) {
+        rejected = std::string(error.what()).find("non-zero low byte") != std::string::npos;
+    }
+    assert(rejected);
+    std::cout << "PASS 16-bit writer rejects a non-zero low byte\n";
 }

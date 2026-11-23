@@ -260,6 +260,7 @@ perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
 study_pacing = os.environ.get('YENEY_QUEUE_PACING_STUDY')
 mixed_rows = os.environ.get('YENEY_QUEUE_MIXED_REAL_LMS') == '1'
+depth_rows = os.environ.get('YENEY_QUEUE_DEPTH_REAL_LMS') == '1'
 nav_media = os.environ.get('YENEY_NAV_MEDIA', '')
 fullq_codec = os.environ.get('YENEY_FULLQ_CODEC', 'flac') if os.environ.get('YENEY_FULLQ') == '1' else 'flac'
 assert fullq_codec in ('flac', 'alac', 'wav', 'converted-flac')
@@ -270,6 +271,8 @@ fixture_count = 4 if scale_mb else 12 if os.environ.get('YENEY_FULLQ') == '1' el
 for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
     seconds = 360 if os.environ.get('YENEY_WS_LIFECYCLE') == '1' and i < 2 else 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
+    if depth_rows:
+        seconds = 4
     if study_pacing and i < 4:
         seconds = (48, 48, 30, 30)[i]
     if os.environ.get('YENEY_SEEK_RESTART_TIMING') == '1' and i < 2:
@@ -283,8 +286,17 @@ for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44
     if study_pacing or mixed_rows or os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
         np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
+    if depth_rows and i == 1:
+        packed = bytearray(len(source[44:]) * 3 // 2)
+        packed[::3] = bytes([17]) * (len(packed) // 3)
+        packed[1::3], packed[2::3] = source[44::2], source[45::2]
+        source = bytearray(source[:44]) + packed
+        struct.pack_into('<I', source, 4, len(source) - 8)
+        struct.pack_into('<IHH', source, 28, rate * 6, 6, 24)
+        struct.pack_into('<I', source, 40, len(packed))
     path.write_bytes(source)
-    subprocess.run(['flac','-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
+    depth_tags = ['-T', 'REPLAYGAIN_TRACK_GAIN=-4.40 dB', '-T', 'REPLAYGAIN_TRACK_PEAK=1.000000'] if depth_rows and i == 2 else []
+    subprocess.run(['flac', *depth_tags,'-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
                     '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
 if fullq_codec in ('alac', 'wav', 'converted-flac'):
     for i in range(fixture_count):
@@ -646,6 +658,10 @@ try:
             assert len(swaps) == replacements, ('Q8 unexpected replacements', swaps)
             print(f'Q8 seek_partial_replacements={replacements} expected=2', flush=True)
             assert replacements == 2, ('Q8 full to suffix to frame-zero history', replacements)
+        raise SystemExit(0)
+    if depth_rows:
+        from queue_depth_real_lms import run
+        run(globals())
         raise SystemExit(0)
     if mixed_rows:
         from queue_mixed_real_lms import run
