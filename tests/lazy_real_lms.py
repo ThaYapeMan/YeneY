@@ -66,7 +66,21 @@ def run(context):
         assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
         select_item(2)
         deferred=fetch(lazy)
-        assert deferred[:2]==natural[:2],label
+        if label == 'local' and url.path.endswith('.flac'):
+            # The original header is available for the natural row. An
+            # upcoming row must keep the depth it declared before activation.
+            natural_audio = RowReader(BytesIO(natural[1]))
+            lazy_audio = RowReader(BytesIO(deferred[1]))
+            assert (natural_audio.header.bits, lazy_audio.header.bits) == (16, 24)
+            assert lazy['resource']['bitsPerSample'] == str(lazy_audio.header.bits)
+            def headers_without_length(result):
+                return [(name, value) for name, value in result[0] if name.lower() != 'content-length']
+            assert headers_without_length(deferred) == headers_without_length(natural)
+            assert lazy_audio.read_pcm() == natural_audio.read_pcm(), label
+            identity = '16-bit natural and 24-bit deferred PCM identical'
+        else:
+            assert deferred[:2]==natural[:2],label
+            identity = 'headers/audio byte-identical to natural'
         assert deferred[2]<3,(label,deferred[2])
         time.sleep(.5)
         selections=[r['request'] for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
@@ -74,7 +88,7 @@ def run(context):
         log=(base/'bridge.log').read_text()
         assert 'queue lazy activated lms_index=2 lms_commands=1' in log
         assert 'queue lazy bound lms_index=2 lms_commands=1' in log
-        print(f'PASS real LMS lazy {label}: three upcoming parents; probes select zero; two-ahead GET selects once; headers/audio byte-identical to natural; headers_s={deferred[2]:.3f} deadline_s=3; no echo command',flush=True)
+        print(f'PASS real LMS lazy {label}: three upcoming parents; probes select zero; two-ahead GET selects once; {identity}; headers_s={deferred[2]:.3f} deadline_s=3; no echo command',flush=True)
     load(context['window_ids'])
     cli('playlist shuffle 1',mac)
     def shuffled_window():
