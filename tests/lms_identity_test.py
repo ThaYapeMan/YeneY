@@ -137,8 +137,8 @@ class LmsIdentityTest(unittest.TestCase):
                 self.assertIn('Firmware=' + self.firmware_text(expected), entries)
 
     def firmware_text(self, short_version):
-        return (self.version[:-1] + '; Sonos ' + short_version + ')'
-                if short_version else self.version)
+        sonos = '; Sonos ' + short_version if short_version else ''
+        return self.version[:-1] + sonos + '; rows flac)'
 
     def test_captured_rooms_and_complete_capabilities(self):
         versions = captured_rooms()

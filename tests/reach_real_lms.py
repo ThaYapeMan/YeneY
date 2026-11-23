@@ -6,6 +6,7 @@ import os
 import time
 
 from queue_sonos_fake import request
+from served_queue_audio import RowReader
 from timing_room_real_lms import app_position, query_clock
 
 
@@ -51,7 +52,7 @@ def run(c, case):
     def cache_audio():
         connection, response = request(items()[0]['uri'])
         with closing(connection), closing(response):
-            audio = response.read()
+            audio = RowReader(response).read_wav()
         assert audio.startswith(b'RIFF') and len(audio) == int.from_bytes(audio[4:8], 'little') + 8
 
     def wake():
@@ -107,7 +108,7 @@ def run(c, case):
         wait(lambda: bool(getattr(sonos, 'callback', '')), 3, 'AVTransport subscription available')
         connection, response = request(items()[0]['uri'])
         with closing(connection), closing(response):
-            assert response.read(16384).startswith(b'RIFF')
+            assert RowReader(response).read_wav(16384).startswith(b'RIFF')
         closed = time.monotonic()
         start_at = sonos.silence(2, after=1.5, action='GetPositionInfo', once=True)
         time.sleep(max(0, start_at - time.monotonic()))

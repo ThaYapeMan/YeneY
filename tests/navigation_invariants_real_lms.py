@@ -3,6 +3,7 @@
 import concurrent.futures
 import hashlib
 import http.client
+from served_queue_audio import RowHeader, RowReader
 import json
 import os
 import random
@@ -31,7 +32,7 @@ def run(c):
         try:
             conn.request('GET', url.path)
             r = conn.getresponse()
-            body = r.read(44 + 4096) if prefix else r.read(limit)
+            body = RowReader(r).read_wav(44 + 4096 if prefix else limit)
             assert r.status == 200 and len(body) > 44 and body[:4] == b'RIFF'
             return body
         finally:
@@ -271,13 +272,14 @@ def run(c):
             c['extra_remotes'].append(retained)
             retained.request('GET', urlsplit(uri).path)
             response = retained.getresponse()
-            header = response.read(44)
+            reader = RowReader(response)
+            header = reader.header.pcm_header
             assert response.status == 200 and header == reference[:44]
             gate = c['tap'].http_gate
             def verify_retained_before_switch():
                 wait(lambda: 'decision=fallback reason=landed-pcm-mismatch' in log()[mark:], 5, 'mismatch decision before speaker switch')
                 assert sonos.position['TrackURI'] == uri
-                assert header + response.read() == reference, 'failure dropped or changed the retained HTTP reader'
+                assert header + reader.read_pcm() == reference, 'failure dropped or changed the retained HTTP reader'
                 retained.close()
                 gate.retained_verified.set()
             gate.on_corruption = lambda: setattr(sonos, 'browse_hook', verify_retained_before_switch)
@@ -356,16 +358,26 @@ def run(c):
             print('R-B3 clock equation ' + repr(evidence), flush=True)
         body = fetch(row(0))
         assert (body == reference if reference is not None else body[44:] == reference_pcm), 'immutable full WAV changed'
-        offset = position * int.from_bytes(body[24:28], "little") * 6 + 44
+        rate = int.from_bytes(body[24:28], "little")
+        pcm_offset = position * rate * 6 + 44
         conn = http.client.HTTPConnection(urlsplit(uri).netloc, timeout=8)
         try:
+            info = None
+            if uri.endswith('.flac'):
+                conn.request('GET', urlsplit(uri).path, headers={'Range': 'bytes=0-41'})
+                probe = conn.getresponse()
+                assert probe.status == 206
+                info = RowHeader.read(probe)
+                probe.close()
+            offset, first = info.frame_range(position * rate) if info else (pcm_offset, position * rate)
+            length = info.frame_offset((info.samples + 255) // 256) if info else len(body)
             conn.request('GET', urlsplit(uri).path, headers={'Range': f'bytes={offset}-'})
             response = conn.getresponse()
-            ranged = response.read()
+            ranged = RowReader(response, info, first).read_pcm() if info else response.read()
             assert response.status == 206
-            assert response.getheader('Content-Range') == f'bytes {offset}-{len(body)-1}/{len(body)}'
-            assert int(response.getheader('Content-Length')) == len(body)-offset
-            assert ranged == body[offset:], 'Range PCM differs across seek attach'
+            assert response.getheader('Content-Range') == f'bytes {offset}-{length-1}/{length}'
+            assert int(response.getheader('Content-Length')) == length-offset
+            assert ranged == body[pcm_offset:], 'Range PCM differs across seek attach'
         finally:
             conn.close()
         assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
@@ -380,7 +392,7 @@ def run(c):
                 sonos.soap_delay = .6
                 with sonos.lock:
                     sonos.position['RelTime'] = f'{app_position//3600:02}:{app_position//60%60:02}:{app_position%60:02}'
-                sonos.read_audio(0)
+                sonos.read_audio()
                 assert fetch(row(0), True) == body[:44+4096], 'app PCM request dropped or changed'
                 expected = 1 if case in ('S4', 'S4c') else 0
                 if not expected:

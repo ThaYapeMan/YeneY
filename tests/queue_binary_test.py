@@ -21,6 +21,7 @@ from queue_sonos_fake import Coordinator, Handler, ROOT, request, SERVICES, PATH
 sys.path.insert(0, str(ROOT/'third_party/yeney-core/tests'))
 from fake_lms import LMS, HTTP, SongQueue
 from relay_audio import wav
+from served_queue_audio import RowReader
 
 def alac(seconds=24):
     # Repeat a complete independently encoded ALAC sample, rebuilding the MP4
@@ -276,6 +277,9 @@ class Binary:
         self.sonos.expected_albums=self.albums if expected_albums is None else expected_albums
         self.cli=CLI(self);self.lms=LMS();self.log=open(self.base/'bridge.log','w')
         env=dict(os.environ,YENEY_PLAYBACK_MODE=mode,YENEY_POLL='events',YENEY_QUEUE_DISK_MIB=str(queue_disk_mib),STATE_DIRECTORY=str(self.base))
+        if not remote_sources:
+            # Local fixture positions can cross a row faster than real time.
+            env.setdefault('YENEY_QUEUE_PACING', 'off')
         self.proc=subprocess.Popen([str(binary or ROOT/'yeney'),'--room=Study','--ip=127.0.0.1',
                                    '--server=127.0.0.1:'+str(self.lms.listener.getsockname()[1])]+list(player_options),stdout=self.log,stderr=self.log,env=env)
         try:
@@ -397,7 +401,7 @@ def window_history():
                 connection=http.client.HTTPConnection(url.netloc,timeout=10)
                 try:
                     connection.request('GET',url.path+('?' + url.query if url.query else ''))
-                    response=connection.getresponse();body=response.read()
+                    response=connection.getresponse();body=RowReader(response).read_wav()
                     assert response.status==200 and len(body)==44+44100*2*6
                     assert body[44:]==b'\0\xe8\x03\0\x18\xfc'*(44100*2)
                 finally:connection.close()
@@ -434,7 +438,7 @@ def window_playlist_edits():
         connection=http.client.HTTPConnection(moved.netloc,timeout=10)
         try:
             connection.request('GET',moved.path+('?' + moved.query if moved.query else ''))
-            response=connection.getresponse();audio=response.read()
+            response=connection.getresponse();audio=RowReader(response).read_wav()
             assert response.status==200 and audio[44:]==b'\0\xe8\x03\0\x18\xfc'*(44100*2)
         finally:connection.close()
         # Remove a retained history occurrence without disturbing playback.

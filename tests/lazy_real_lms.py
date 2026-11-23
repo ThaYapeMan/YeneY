@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Deferred lazy publication/activation against private loopback LMS 9.1.1."""
 import http.client
+from io import BytesIO
+from served_queue_audio import RowReader
 import time
 import socket
 import threading
@@ -32,7 +34,9 @@ def run(context):
             except http.client.IncompleteRead as error:
                 if not upper:raise
                 body=error.partial
-            assert response.status==200 and body[:4]==b'RIFF'
+            assert response.status == 200 and body[:4] == (b'fLaC' if url.path.endswith('.flac') else b'RIFF')
+            if body.startswith(b'fLaC'):
+                RowReader(BytesIO(body)).read_pcm()
             assert len(body)<=int(dict(headers)['Content-Length']) if upper else len(body)==int(dict(headers)['Content-Length'])
             return headers,body,elapsed
         finally:conn.close()
@@ -51,7 +55,8 @@ def run(context):
         before=len(proxy.records)
         # HEAD, a header-only GET, and invalid syntax must never select LMS.
         url=urlsplit(lazy['uri'])
-        for method,headers in [('HEAD',{}),('GET',{'Range':'bytes=0-43'}),('GET',{'Range':'bytes=broken'})]:
+        header_end = 41 if url.path.endswith('.flac') else 43
+        for method,headers in [('HEAD',{}),('GET',{'Range':f'bytes=0-{header_end}'}),('GET',{'Range':'bytes=broken'})]:
             conn=http.client.HTTPConnection(url.netloc,timeout=5)
             try:
                 conn.request(method,url.path+('?' + url.query if url.query else ''),headers=headers)

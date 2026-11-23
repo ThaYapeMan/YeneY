@@ -7,8 +7,7 @@ import subprocess
 import sys
 import time
 
-# The installed room services run from this checkout.
-sys.path.append("/opt/yeney/scripts")
+sys.path.append("/usr/local/lib/yeney")
 from install_devices import atomic_write, parse_rooms, read_text, setting
 
 KEY = "YENEY_QUEUE_FORMAT"
@@ -45,8 +44,8 @@ def main(args):
     rooms = parse_rooms(config, lambda message: print(message, file=sys.stderr))
     enabled = sorted(room for room, active in rooms.items() if active)
     if not args:
-        settings = {key.strip(): value.strip() for line in config.splitlines()
-                    if (pair := setting(line)) for key, value in [pair]}
+        pairs = (setting(line) for line in config.splitlines())
+        settings = {pair[0].strip(): pair[1].strip() for pair in pairs if pair}
         for room in enabled:
             form = settings.get(f"room.{room}.{KEY}", settings.get(KEY, "flac"))
             print(f"{room}: {form if form in FORMATS else 'flac'}")
@@ -73,8 +72,17 @@ def main(args):
     updated += "".join(f"{key}={form}\n" for key in sorted(remaining))
     if updated != config:
         atomic_write(path, updated)
+    failures = []
     for name in selected:
-        print(f"{name}: {restart(name)}", flush=True)
+        try:
+            line = restart(name)
+            print(f"{name}: {line}", flush=True)
+            if line != START_LINES[FORMATS.index(form)]:
+                failures.append(f"{name} started with a different queue format")
+        except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+            failures.append(f"{name}: {error}")
+    if failures:
+        raise RuntimeError(", ".join(failures))
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ from urllib.parse import urlsplit
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape, quoteattr
 
+from served_queue_audio import RowHeader, RowReader
+
 ROOT = Path(__file__).resolve().parents[1]
 SOAP = 'http://schemas.xmlsoap.org/soap/envelope/'
 SERVICES = {name: ('urn:schemas-sonos-com:service:Queue:1' if name == 'Queue' else
@@ -190,23 +192,44 @@ class Coordinator(ThreadingHTTPServer):
         self.transition_delay = .4 if profile == 'device' else 0
         self.echo_delay = .05 if profile == 'device' else .08
 
-    def read_audio(self, seconds=0):
+    def read_audio(self, seconds=None):
         uri = self.position['TrackURI']
         time.sleep(getattr(self, 'transition_delay', 0))
-        offset = 0
-        if seconds:
-            item = next(i for i in self.items if i['uri'] == uri)
-            offset = 44 + seconds * int(item['resource']['sampleFrequency']) * 6
+        offset = first = 0
+        info = None
+        if seconds or (seconds == 0 and uri.endswith('.flac')):
+            if uri.endswith('.flac'):
+                connection, response = request(uri, byte_range='bytes=0-41')
+                try:
+                    assert response.status == 206
+                    info = RowHeader.read(response)
+                finally:
+                    response.close()
+                    connection.close()
+                offset, first = info.frame_range(seconds * info.rate, speaker_seek=True)
+                if first == info.samples:
+                    return
+            else:
+                item = next(i for i in self.items if i['uri'] == uri)
+                offset = 44 + seconds * int(item['resource']['sampleFrequency']) * 6
         connection, response = request(uri, byte_range=f'bytes={offset}-' if offset else None)
         try:
-            header = response.read(44) if not offset else b''
-            first = response.read(1)
-            stamp = time.monotonic()
-            body = header + first + response.read(44 + 4096 - len(header) - 1)
+            assert response.status == (206 if offset else 200)
+            if info or not offset:
+                reader = RowReader(response, info, first)
+                header = b'' if offset else reader.header.pcm_header
+                first_byte = reader.read_pcm(1)
+                stamp = time.monotonic()
+                body = header + first_byte + reader.read_pcm(44 + 4096 - len(header) - 1)
+            else:
+                first_byte = response.read(1)
+                stamp = time.monotonic()
+                body = first_byte + response.read(44 + 4096 - 1)
             assert body
             self.audible_reads.append((stamp, uri, offset))
             self.audible_bodies.append(body)
         finally:
+            response.close()
             connection.close()
 
     def close(self):
@@ -329,7 +352,7 @@ class Handler(BaseHTTPRequestHandler):
                     else:
                         result, fault = self.action(service, action, args)
                     if action == 'Seek' and s.soap_delay and not getattr(s, 'fullq_audio', False):
-                        s.read_audio(sum(int(v)*w for v,w in zip(args['Target'].split(':'),(3600,60,1))) if args.get('Unit') == 'REL_TIME' else 0)
+                        s.read_audio(sum(int(v)*w for v,w in zip(args['Target'].split(':'),(3600,60,1))) if args.get('Unit') == 'REL_TIME' else None)
                     s.busy -= 1
             if silent:
                 self.withhold_answer()
@@ -459,7 +482,7 @@ class Handler(BaseHTTPRequestHandler):
             assert 0 <= before <= len(s.items)+1
             uri = a['EnqueuedURI']; u = urlsplit(uri)
             assert u.hostname == '127.0.0.1'
-            assert (getattr(s, 'legacy_queue_urls', False) and u.path == '/music/queue.wav') or u.path.startswith('/yeney/q/') and u.path.endswith('.wav') and not u.query and not u.path.startswith('/music/')
+            assert (getattr(s, 'legacy_queue_urls', False) and u.path == '/music/queue.wav') or u.path.startswith('/yeney/q/') and u.path.endswith(('.wav', '.flac')) and not u.query and not u.path.startswith('/music/')
             metadata = ET.fromstring(a['EnqueuedURIMetaData'])
             assert metadata.tag == '{urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/}DIDL-Lite'
             assert len(metadata) == 1 and metadata[0].tag.rsplit('}', 1)[-1] == 'item'
@@ -478,7 +501,8 @@ class Handler(BaseHTTPRequestHandler):
             assert fields['class'] == 'object.item.audioItem.musicTrack'
             assert fields['title'].startswith(getattr(s, 'expected_title_prefix', 'Title & '))
             assert fields.get('album') in getattr(s, 'expected_albums', ['Album & fixture'])
-            assert resource.text == uri and resource.attrib['protocolInfo'] == 'http-get:*:audio/wav:*'
+            form = 'flac' if u.path.endswith('.flac') else 'wav'
+            assert resource.text == uri and resource.attrib['protocolInfo'] == f'http-get:*:audio/{form}:*'
             assert resource.attrib['bitsPerSample'] == '24' and resource.attrib['nrAudioChannels'] == '2'
             insertion=before-1 if before else len(s.items)
             s.items.insert(insertion,dict(uri=uri, metadata=fields, resource=resource.attrib)); s.update += 1
@@ -528,8 +552,9 @@ class FiniteDeviceAudio:
     The control-only fixtures retain their explicit position controls. Audio
     acceptance attaches this model and calls tick from GetPositionInfo.
     """
-    def __init__(self, server, speed=1, progressive=False):
+    def __init__(self, server, speed=1, progressive=False, prefetch=True):
         self.audio_lock=threading.RLock();self.active=False
+        self.prefetch_enabled = prefetch
         self.progressive=progressive;self.real_eof=False
         self.server=server;self.speed=speed;self.cache={};self.requests=[]
         self.audio=bytearray();self.current=None;self.frame=0;self.stamp=time.monotonic()
@@ -549,23 +574,38 @@ class FiniteDeviceAudio:
         self.closed.set();self.reader.join(5)
         assert not self.reader.is_alive(),'device audio reader did not stop'
         if self.connection:self.response.close();self.connection.close();self.connection=None
-    def fetch(self, item, offset=0, resume=False):
-        if resume:
-            c,r=request(item['uri']);r.read(16384);r.close();c.close()
-            self.requests.append(('GET',item['uri'],0,'probe-closed'))
-        c,r=request(item['uri'],byte_range=f'bytes={offset}-' if offset else None)
+    def fetch(self, item):
+        uri = item['uri']
+        client, response = request(uri)
         try:
-            try:body=r.read()
-            except http.client.IncompleteRead as error:body=error.partial
-            self.requests.append(('GET',item['uri'],offset,r.status))
-            return body
-        finally:c.close()
-    def open_current(self,offset):
-        if self.connection:self.response.close();self.connection.close()
-        self.connection,self.response=request(self.current['uri'],byte_range=f'bytes={offset}-' if offset else None)
-        assert self.response.status==(206 if offset else 200)
-        self.requests.append(('GET',self.current['uri'],offset,self.response.status))
-        if not offset:assert self.response.read(44)==self.cache[self.current['uri']][:44]
+            assert response.status == 200
+            reader = RowReader(response)
+            response_length = int(response.getheader('Content-Length'))
+            assert response_length == reader.header.wire_length
+            try:
+                pcm = reader.read_pcm()
+            except http.client.IncompleteRead as error:
+                if reader.header.flac:
+                    raise
+                pcm = error.partial
+            self.requests.append(('GET', uri, 0, response.status))
+            return reader.header, pcm
+        finally:
+            response.close()
+            client.close()
+
+    def open_current(self, offset, first=0):
+        if self.connection:
+            self.response.close()
+            self.connection.close()
+        uri = self.current['uri']
+        self.connection, self.response = request(uri, byte_range=f'bytes={offset}-' if offset else None)
+        assert self.response.status == (206 if offset else 200)
+        self.requests.append(('GET', uri, offset, self.response.status))
+        previous = self.cache.get(uri)
+        self.row = RowReader(self.response, previous[0] if offset and previous else None, first)
+        if not offset and previous:
+            assert self.row.header == previous[0]
     @serialized_audio
     def pause(self):
         self.tick();self.paused=True
@@ -576,7 +616,8 @@ class FiniteDeviceAudio:
         if self.current:
             c,r=request(self.current['uri']);r.read(16384);r.close();c.close()
             self.requests.append(('GET',self.current['uri'],0,'probe-closed'))
-            self.open_current(44+self.frame*6)
+            offset, first = self.row.header.frame_range(self.frame)
+            self.open_current(offset, first)
         self.paused=False;self.stamp=time.monotonic();self.server.transport_state='PLAYING'
     @serialized_audio
     def transitioning(self):
@@ -586,9 +627,12 @@ class FiniteDeviceAudio:
     @serialized_audio
     def seek(self,seconds):
         self.tick()
-        body=self.cache[self.current['uri']];rate=int.from_bytes(body[24:28],'little')
-        self.frame=min((len(body)-44)//6,int(seconds*rate))
-        self.open_current(44+self.frame*6)
+        info = self.row.header
+        self.clock_frame = min(info.samples, int(seconds * info.rate))
+        offset, self.frame = info.frame_range(self.clock_frame, speaker_seek=True)
+        if self.frame < info.samples:
+            self.open_current(offset, self.frame)
+        self.stamp = time.monotonic()
         self.transitioning()
     @serialized_audio
     def tick(self):
@@ -603,40 +647,44 @@ class FiniteDeviceAudio:
         item=next((i for i in s.items if i['uri']==uri),None)
         if not item or 'resource' not in item:return
         if self.current is not item:
-            self.current=item;self.frame=0
+            self.current = item
+            self.frame = self.clock_frame = 0
+            if not self.progressive and uri not in self.cache:
+                self.cache[uri] = self.fetch(item)
+            self.open_current(0)
             if self.progressive:
-                if self.connection:self.response.close();self.connection.close()
-                self.connection,self.response=request(uri)
-                self.requests.append(('GET',uri,0,self.response.status))
-                self.cache[uri]=self.response.read(44)
-                assert len(self.cache[uri])==44
-                self.real_eof=False
-            else:
-                if uri not in self.cache:self.cache[uri]=self.fetch(item)
-                self.open_current(0)
-            self.stamp=time.monotonic();return
-        body=self.cache[uri];rate=int.from_bytes(body[24:28],'little')
-        declared=int.from_bytes(body[40:44],'little')//6
-        real=declared if self.progressive else (len(body)-44)//6
-        limit=min(declared,real)
-        target=min(limit,self.frame+int((now-self.stamp)*rate*self.speed))
-        index=s.items.index(item)
+                self.cache[uri] = self.row.header, None
+                self.real_eof = False
+            self.stamp = time.monotonic()
+            return
+        info = self.row.header
+        rate, declared = info.rate, info.samples
+        reference = self.cache[uri][1]
+        real = declared if self.progressive else len(reference) // 6
+        limit = min(declared, real)
+        advance = int((now - self.stamp) * rate * self.speed)
+        target = min(limit, self.frame + advance)
+        index = s.items.index(item)
+
         def consume(to):
-            count=(to-self.frame)*6
-            received=self.response.read(count) if count else b''
+            count = (to - self.frame) * 6
+            received = self.row.read_pcm(count) if count else b''
             if self.progressive:
-                assert len(received)%6==0
-                self.real_eof=len(received)<count
-            else:assert received==body[44+self.frame*6:44+to*6],'device Range changed PCM'
-            self.audio.extend(received);self.frame+=len(received)//6
+                assert len(received) % 6 == 0
+                self.real_eof = len(received) < count
+            else:
+                assert received == reference[self.frame * 6:to * 6], 'device Range changed PCM'
+            self.audio.extend(received)
+            self.frame += len(received) // 6
+            self.clock_frame += len(received) // 6
         threshold=max(0,declared-int(6.5*rate))
-        if index+1<len(s.items) and s.items[index+1]['uri'] not in self.cache and target>=threshold:
+        if self.prefetch_enabled and index+1<len(s.items) and s.items[index+1]['uri'] not in self.cache and target>=threshold:
             consume(max(self.frame,threshold))
             following=s.items[index+1]
             self.prefetch.append((uri,(declared-self.frame)/rate))
             self.cache[following['uri']]=self.fetch(following)
         consume(target);self.stamp=now
-        elapsed=self.frame//rate
+        elapsed=self.clock_frame//rate
         s.position['RelTime']=f'{elapsed//3600:02}:{elapsed//60%60:02}:{elapsed%60:02}'
         if self.frame==limit or self.real_eof:
             if index+1<len(s.items):

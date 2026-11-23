@@ -45,7 +45,7 @@ before you rely on it.
 
 | Mode | How it plays | Used for |
 |---|---|---|
-| **Queue** (default) | One Sonos queue row per LMS track. Local files are sent as exact-length 24-bit WAV; hi-res is converted by YeneY. Finite remote tracks and podcasts are queue rows too, with a 5 s length margin and lossless continuations | Local music, podcasts, remote tracks with a known length |
+| **Queue** (default) | One Sonos queue row per LMS track. Exact-length rows are served as 24-bit FLAC by default. WAV is selectable per room. Finite remote and podcast rows with a length margin use WAV. | Local music, podcasts, remote tracks with a known length |
 | **Stream** | One continuous 24-bit FLAC stream per room, paced on the Sonos clock | Live radio and sources without a length; chosen automatically in queue mode. Can be forced with `YENEY_PLAYBACK_MODE=stream` |
 
 ## YeneY compared with LMS-uPnP and Music Assistant
@@ -58,6 +58,7 @@ for Sonos and LMS only.
 
 | | YeneY | LMS-uPnP | Music Assistant (Sonos S2) |
 |---|---|---|---|
+| Transport | Exact-length FLAC rows by default, WAV selectable per room. Continuous FLAC for live sources. | Continuous HTTP stream | Queued track URLs |
 | Plays the LMS library | ✔ | ✔ | ✘ its own library and sources |
 | Lossless 24-bit | ✔ 24-bit throughout; bit-perfect at 44.1/48 kHz with ReplayGain off | ~ FLAC by default; 24-bit can be set, not verified on Sonos | ✔ FLAC by default; 24-bit on current models |
 | Hi-res sources (88.2–192 kHz) | ✔ YeneY's own converter, measured equal to SoX `rate -v` | ✔ resampled by LMS or the bridge | ✔ limited to 48 kHz |
@@ -203,6 +204,8 @@ artwork, the Material Skin icon and the older debug names are explained in
 | Setting | Values | Default |
 |---|---|---|
 | `YENEY_PLAYBACK_MODE` | `queue`: source-aware relay/stream on the coordinator · `stream`: explicit continuous transport · `auto`: stream, logged as `auto-phase4` | `queue` |
+| `YENEY_QUEUE_FORMAT` | `flac` or `wav` for exact-length queue rows. Use `yeney-format` to switch a room. | `flac` |
+| `YENEY_QUEUE_PACE_TAIL_MS` | Milliseconds at the end of each queue row exempt from the delivery rate limit | `0` |
 | `YENEY_QUEUE_PACING` | Limit the delivery rate of queue audio. Set to `off` to disable. | `on` |
 | `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |
 | `YENEY_QUEUE_NEXT_DELAY_S` | 1–120 seconds: request the remote successor only below this remaining audible time, after full production | `20` |

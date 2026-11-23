@@ -17,6 +17,14 @@ samples into little-endian 24-bit (or legacy 16-bit) PCM and sends them to the
 shared FLAC encoder. Same-rate gapless tracks retain a stream ID and encoder;
 new generations or rate changes create a new HTTP entity.
 
+In queue mode, every finite LMS track occupies one Sonos row. Exact-length
+rows use 24-bit FLAC in fixed 256-sample verbatim blocks by default, with
+the last block carrying the remaining samples. Their sample count
+determines the HTTP size and byte ranges. Rooms can select WAV for these
+rows. Rows with a length margin, including finite remote tracks and
+podcasts, use WAV. A join between these formats has yet to be measured on
+a speaker.
+
 LMS p/q/s/u commands feed the resume and stop-debounce state machines. StopTimer
 serializes device transport independently of the core event loop, including a
 400 ms q/s debounce. Held HTTP requests and legitimate device resumes retain

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """LMS controller navigation against private LMS and the fake Sonos queue."""
 import http.client
+from served_queue_audio import RowReader
 import re
 import time
 import threading
@@ -21,7 +22,7 @@ def run(context):
         try:
             conn.request('GET', url.path)
             response = conn.getresponse()
-            body = response.read()
+            body = RowReader(response).read_wav()
             assert response.status == 200 and body[:4] == b'RIFF'
             return body
         finally:
@@ -50,7 +51,7 @@ def run(context):
     release.set()
     proxy.request_hook = None
     response = conn.getresponse()
-    assert response.status == 200 and response.read(44)[:4] == b'RIFF'
+    assert response.status == 200 and RowReader(response).header.pcm_header[:4] == b'RIFF'
     wait(lambda: 'kind=next' in (base / 'bridge.log').read_text(), 15, 'early Next')
     wait(lambda: 'window lazy target producer adopted lms_commands=0' in (base / 'bridge.log').read_text(),
          5, 'controller producer adopted by waiting reader')

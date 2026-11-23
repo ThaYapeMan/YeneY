@@ -1,5 +1,6 @@
 """Real bridge overflow/late-overflow qualification on loopback only."""
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+import os
 import re
 import http.client
 import socket
@@ -7,6 +8,9 @@ import json
 import time
 from urllib.parse import urlsplit
 from queue_binary_test import Binary
+
+# Exercise the existing remote continuation framing and short-WAV EOF cases.
+os.environ["YENEY_QUEUE_FORMAT"] = "wav"
 
 def episode_items(host):
     # Upcoming lazy parents have no exact size and are not continuations of

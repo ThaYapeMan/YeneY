@@ -57,6 +57,8 @@ field-cold-test
 /core-queue-sink-test
 
 /queue-route-test
+/queue-flac-writer-test
+/queue-flac-http-test
 /queue-metadata-test
 /queue-actions-test
 /queue-ownership-test

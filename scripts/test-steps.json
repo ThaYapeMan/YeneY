@@ -1,7 +1,7 @@
 {
   "version": 2,
   "build_sets": {
-    "build-checks": ["all", "yeney-smoke-server"],
+    "build-checks": ["all", "yeney-smoke-server", "queue-flac-writer-test", "queue-flac-http-test"],
     "test-fast-run": [
       "yeney",
       "queue-native-decoder-test",
@@ -134,6 +134,95 @@
     ]
   },
   "steps": [
+    {
+      "name": "queue-flac-writer",
+      "label": "queue-flac-writer",
+      "target": "main",
+      "command": "./queue-flac-writer-test",
+      "environment": {},
+      "prerequisites": {
+        "fast": "build-checks",
+        "full": "build-checks"
+      },
+      "phase": "parallel",
+      "seconds": 3,
+      "modes": [
+        "fast",
+        "full"
+      ]
+    },
+    {
+      "name": "queue-flac-http",
+      "label": "queue-flac-http",
+      "target": "main",
+      "command": "./queue-flac-http-test",
+      "environment": {},
+      "prerequisites": {
+        "fast": "build-checks",
+        "full": "build-checks"
+      },
+      "phase": "parallel",
+      "seconds": 1,
+      "modes": [
+        "fast",
+        "full"
+      ]
+    },
+    {
+      "name": "queue-pacing-tail-crossing",
+      "label": "queue-pacing-tail-crossing",
+      "target": "main",
+      "command": "python3 tests/queue_pacing_tail_test.py",
+      "environment": {},
+      "prerequisites": {
+        "fast": "build-checks",
+        "full": "build-checks"
+      },
+      "phase": "quiet",
+      "seconds": 3,
+      "modes": [
+        "fast",
+        "full"
+      ],
+      "time_judging": true,
+      "reason": "Measure the elapsed time when a Range crosses into an unpaced tail."
+    },
+    {
+      "name": "queue-format-command",
+      "label": "queue-format-command",
+      "target": "main",
+      "command": "python3 tests/queue_format_command_test.py",
+      "environment": {},
+      "prerequisites": {
+        "fast": "build-checks",
+        "full": "build-checks"
+      },
+      "phase": "parallel",
+      "seconds": 1,
+      "modes": [
+        "fast",
+        "full"
+      ]
+    },
+    {
+      "name": "queue-mixed-real-lms",
+      "label": "queue-mixed-real-lms",
+      "target": "main",
+      "command": "python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_QUEUE_MIXED_REAL_LMS": "1"
+      },
+      "prerequisites": {
+        "full": "build-checks"
+      },
+      "phase": "quiet",
+      "seconds": 90,
+      "modes": [
+        "full"
+      ],
+      "time_judging": true,
+      "reason": "Natural real-time joins between an upper-bound WAV row and an exact FLAC row."
+    },
     {
       "name": "queue-body-pacing",
       "target": "main",
@@ -7619,6 +7708,11 @@
   "orders": {
     "full": [
       "queue-body-pacing",
+      "queue-flac-writer",
+      "queue-flac-http",
+      "queue-pacing-tail-crossing",
+      "queue-format-command",
+      "queue-mixed-real-lms",
       "queue-pacing-study-transport",
       "queue-pacing-study-joins",
       "refill-probe",
@@ -7854,6 +7948,10 @@
     ],
     "fast": [
       "queue-body-pacing",
+      "queue-flac-writer",
+      "queue-flac-http",
+      "queue-pacing-tail-crossing",
+      "queue-format-command",
       "refill-probe",
       "build-header-touch",
       "queue-smoke",

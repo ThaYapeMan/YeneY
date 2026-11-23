@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Generated-file scaling and functional cache-pressure experiments; no C2 override."""
 import http.client
+from served_queue_audio import RowReader
 import hashlib
 import json
 import os
@@ -27,9 +28,10 @@ def run(c):
         try:
             conn.request('GET', u.path)
             response = conn.getresponse()
-            body = response.read(45)
+            reader = RowReader(response)
+            body = reader.read_wav(45)
             stamp = time.monotonic()
-            body += response.read() if complete else response.read(4095)
+            body += reader.read_pcm(None if complete else 4095)
             assert response.status == 200 and body[:4] == b'RIFF'
             return stamp, body
         finally:

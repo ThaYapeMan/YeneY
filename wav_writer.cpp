@@ -258,7 +258,8 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         request.reply(503);
         return true;
     } // sealed assets are unpublished
-    const auto frames = (*length - 44) / 6;
+    const auto wavSize = *length;
+    const auto frames = (wavSize - 44) / 6;
     if (format == Format::Flac) {
         flac.emplace(frames, description.rate);
         length = flac->size();
@@ -325,7 +326,7 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             produced = resolve(request);
             if (produced && (produced->room() != published->room() ||
                 produced->descriptor().rate != published->descriptor().rate ||
-                produced->contentLength() != published->contentLength() ||
+                produced->contentLength() != wavSize ||
                 produced->descriptor().kind != published->descriptor().kind)) {
                 diagnostic.ending = "declaration-mismatch";
                 request.disconnect();

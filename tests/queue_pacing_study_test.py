@@ -5,15 +5,17 @@ import threading
 import time
 
 from queue_sonos_fake import request
+from served_queue_audio import RowHeader, RowReader
 
 
 class Fetch:
     """One audio request. The renderer drains its buffer at PCM play speed."""
 
-    def __init__(self, row, reference, offset, play_from):
+    def __init__(self, row, reference, offset, play_from, speaker_seek=False):
         self.row, self.reference, self.offset = row, reference, offset
         self.rate = int.from_bytes(reference[28:32], "little")
         self.play_from = play_from
+        self.speaker_seek = speaker_seek
         self.opened = time.monotonic()
         self.received = 0
         self.finished = None
@@ -37,12 +39,37 @@ class Fetch:
             self.failure = error
 
     def download(self):
-        byte_range = f"bytes={self.offset}-" if self.offset else None
+        info = None
+        wire_offset = self.offset
+        first = 0
+        if self.offset and self.row["uri"].endswith(".flac"):
+            probe, response = request(self.row["uri"], byte_range="bytes=0-41")
+            try:
+                assert response.status == 206
+                info = RowHeader.read(response)
+            finally:
+                response.close()
+                probe.close()
+            target, remainder = divmod(self.offset - 44, 6)
+            wire_offset, first = info.frame_range(target, speaker_seek=self.speaker_seek)
+            if self.speaker_seek:
+                self.offset = 44 + first * 6
+                remainder = 0
+        byte_range = f"bytes={wire_offset}-" if wire_offset else None
         client, response = request(self.row["uri"], byte_range=byte_range)
         try:
             self.sock = response.fp.raw._sock
-            assert response.status == (206 if self.offset else 200), response.status
-            assert int(response.getheader("Content-Length")) == len(self.reference) - self.offset
+            assert response.status == (206 if wire_offset else 200), response.status
+            reader = None
+            if self.row["uri"].endswith(".flac"):
+                reader = RowReader(response, info, first)
+                info = reader.header
+                wire_length = info.frame_offset((info.samples + 255) // 256)
+                if wire_offset and remainder:
+                    reader.read_pcm(remainder)
+            else:
+                wire_length = len(self.reference)
+            assert int(response.getheader("Content-Length")) == wire_length - wire_offset
             due = time.monotonic()
             while not self.cancelled.is_set() and self.cursor < len(self.reference):
                 now = time.monotonic()
@@ -51,7 +78,11 @@ class Fetch:
                 if now < due or self.received + size > 20_000_000 + consumed:
                     self.cancelled.wait(.005)
                     continue
-                chunk = response.read1(size)
+                if reader:
+                    header = reader.header.pcm_header[self.cursor:self.cursor + size] if self.cursor < 44 else b""
+                    chunk = header + reader.read_pcm(size - len(header))
+                else:
+                    chunk = response.read1(size)
                 if not chunk:
                     if self.cancelled.is_set():
                         return
@@ -136,8 +167,8 @@ def run(context, mode):
             assert row["metadata"]["title"] == f"Title & {i}"
         return rows, [expected_wav(base / f"input-{i}.wav") for i in indices]
 
-    def fetch(row, reference, offset, play_from):
-        download = Fetch(row, reference, offset, play_from)
+    def fetch(row, reference, offset, play_from, speaker_seek=False):
+        download = Fetch(row, reference, offset, play_from, speaker_seek)
         active.append(download)
         return download
 
@@ -165,7 +196,7 @@ def run(context, mode):
         play_from = time.monotonic() + .5
         rate = int.from_bytes(reference[28:32], "little")
         offset = 44 + seconds * rate if seconds else 0
-        return fetch(row, reference, offset, play_from), play_from
+        return fetch(row, reference, offset, play_from, speaker_seek=bool(seconds)), play_from
 
     def seek(row, seconds):
         mark = len(sonos.actions("Seek"))
@@ -215,7 +246,7 @@ def run(context, mode):
             play(download, 0, at, 2)
             assert download.received <= 1.05 * download.rate * (
                 2 + 2 * (time.monotonic() - download.opened)), download.received
-            print("PASS paced start matching WAV bytes", flush=True)
+            print("PASS paced start matching source PCM", flush=True)
             download.close()
             seek(first, 16)
             download, at = start(first, one, 16)

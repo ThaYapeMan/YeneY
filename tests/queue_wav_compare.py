@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import http.client
+import os
 from pathlib import Path
 from urllib.parse import urlsplit
 from queue_binary_test import Binary
@@ -28,6 +29,7 @@ def album(binary, legacy=False):
     return bodies
 
 if __name__=='__main__':
+    os.environ['YENEY_QUEUE_FORMAT'] = 'wav'
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--before',required=True);parser.add_argument('--after',required=True)
     args=parser.parse_args();before=album(args.before, legacy=True);after=album(args.after)

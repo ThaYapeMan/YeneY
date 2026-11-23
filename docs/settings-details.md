@@ -231,6 +231,24 @@ enabled legacy alias also keeps its previous effect. All timing/LampaStream and
 user-facing playback settings retain their names and defaults.
 
 
+## Queue audio format
+
+`YENEY_QUEUE_FORMAT` selects `flac` (default) or `wav` for exact-length
+rows. Each room reads its process environment, its
+`room.<name>.YENEY_QUEUE_FORMAT` setting, then the global
+`YENEY_QUEUE_FORMAT` setting in `/etc/yeney/config` at startup. Invalid
+values log a warning and use FLAC.
+
+Run `yeney-format` to list the enabled rooms and their configured choices.
+Run `sudo yeney-format wav "Sonos Port"` to switch one room, or
+`sudo yeney-format flac all` to switch all enabled rooms. The command saves
+the room settings, restarts the selected services and prints each startup
+format line.
+
+Remote tracks and podcasts with a length margin use WAV in either setting.
+A playlist can contain both formats. The join between them has yet to be
+measured on a speaker.
+
 ## Queue audio pacing
 
 Each room reads these settings at startup. They apply to queue HTTP bodies,
@@ -240,10 +258,11 @@ the corresponding default.
 | Setting | Values | Default |
 | --- | --- | --- |
 | `YENEY_QUEUE_PACING` | `on` or `off` | `on` |
-| `YENEY_QUEUE_PACE_RATE` | 1.0–8.0 times the item's PCM byte rate | `2.0` |
+| `YENEY_QUEUE_PACE_RATE` | 1.0–8.0 times the item's served byte rate | `2.0` |
 | `YENEY_QUEUE_PACE_FREE_MS` | 0–30000 ms of audio available at once | `2000` |
-| `YENEY_QUEUE_PACE_TAIL_MS` | 0–120000 ms at the end of an item | `20000` |
+| `YENEY_QUEUE_PACE_TAIL_MS` | 0–120000 ms at the end of an item | `0` |
 
 Each request starts with the free allowance. The allowance refills at the
-configured rate up to the same limit. A request that starts within the tail
-or serves an item shorter than the tail is unlimited.
+configured rate up to the same limit. Bytes in the configured tail are
+delivered without a rate limit, including when a request starts earlier
+and reaches the tail.

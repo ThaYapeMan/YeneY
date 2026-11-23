@@ -108,7 +108,7 @@ void check() {
     queue_audio::Config config;
     config.root = scratch.path;
     queue_audio::Store store("smoke", config);
-    queue_audio::Route route("smoke", "smoke-session");
+    queue_audio::Route route("smoke", "smoke-session", queue_audio::Format::Wav);
     upnp::HttpServer server(0);
     route.registerWith(server);
 

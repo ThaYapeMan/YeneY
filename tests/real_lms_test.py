@@ -259,6 +259,7 @@ install()
 perl_env=perl_environment(base)
 for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mkdir(parents=True,exist_ok=True)
 study_pacing = os.environ.get('YENEY_QUEUE_PACING_STUDY')
+mixed_rows = os.environ.get('YENEY_QUEUE_MIXED_REAL_LMS') == '1'
 nav_media = os.environ.get('YENEY_NAV_MEDIA', '')
 fullq_codec = os.environ.get('YENEY_FULLQ_CODEC', 'flac') if os.environ.get('YENEY_FULLQ') == '1' else 'flac'
 assert fullq_codec in ('flac', 'alac', 'wav', 'converted-flac')
@@ -279,7 +280,7 @@ for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44
     if scale_mb:
         seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
     source=bytearray(wav(rate,seconds,noise=True))
-    if study_pacing or os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
+    if study_pacing or mixed_rows or os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
         np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
     path.write_bytes(source)
@@ -447,6 +448,8 @@ try:
         # The podcast renderer consumes some episodes at 5× real play speed.
         # Its accelerated playback clock cannot use a real-time byte budget.
         env['YENEY_QUEUE_PACING'] = 'off'
+        # These fixture assertions exercise upper-bound WAV framing and EOF.
+        env['YENEY_QUEUE_FORMAT'] = 'wav'
     if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1':env['YENEY_LMS_ICON']=''
     if volume_only:env['YENEY_LMS_VOLUME']='speaker'
     bridge=subprocess.Popen([os.environ.get('YENEY_ACCEPTANCE_BINARY',str(ROOT/'yeney')),'--room=Study','--ip=127.0.0.1',f'--server=127.0.0.1:{tap.port}'],
@@ -491,7 +494,7 @@ try:
         print('IDENTITY CLI modelname: '+repr(cli('modelname ?',mac)), flush=True)
         expected = subprocess.check_output([binary, '--version'], text=True).strip()
         model='Sonos Play:1 (YeneY)'
-        lms_firmware=expected[:-1]+'; Sonos 86.10)'
+        lms_firmware=expected[:-1]+'; Sonos 86.10; rows '+env.get('YENEY_QUEUE_FORMAT', 'flac')+')'
         assert 'model:yeney' in fields and 'modelname:'+model in fields, fields
         assert 'firmware:'+lms_firmware in fields, (lms_firmware, fields)
         state=base/('stream-pacing-'+b'Study'.hex()+'.json')
@@ -643,6 +646,10 @@ try:
             assert len(swaps) == replacements, ('Q8 unexpected replacements', swaps)
             print(f'Q8 seek_partial_replacements={replacements} expected=2', flush=True)
             assert replacements == 2, ('Q8 full to suffix to frame-zero history', replacements)
+        raise SystemExit(0)
+    if mixed_rows:
+        from queue_mixed_real_lms import run
+        run(globals())
         raise SystemExit(0)
     if os.environ.get('YENEY_REAL_LMS_NAV_ONLY')=='1':
         from navigation_real_lms import run
@@ -797,11 +804,17 @@ try:
             import http.client
             from urllib.parse import urlsplit
             u=urlsplit(selected_item['uri']);c=http.client.HTTPConnection(u.netloc,timeout=8)
-            c.request('GET',u.path+('?' + u.query if u.query else ''));response=c.getresponse();body=response.read();c.close()
+            from served_queue_audio import RowReader
+            c.request('GET',u.path+('?' + u.query if u.query else ''))
+            response=c.getresponse()
+            served = RowReader(response)
+            body = served.read_wav()
+            served_length = served.header.wire_length
+            c.close()
             expected_frames=rate*4//(rate//target)
-            assert len(body)==44+expected_frames*6 and int(response.getheader('Content-Length'))==len(body),(len(body),resource)
+            assert len(body)==44+expected_frames*6 and int(response.getheader('Content-Length'))==served_length,(len(body),resource)
             assert struct.unpack_from('<I',body,24)[0]==target
-            if 'size' in resource:assert int(resource['size'])==len(body)
+            if 'size' in resource:assert int(resource['size'])==served_length
             collected.append(body[44:])
         raw=(source_pcm.astype(np.int64)*256).astype('<i4');raw.tofile(base/'native-reference.raw')
         if rate>48000:
@@ -829,7 +842,7 @@ try:
         assert seek_resource['duration'] == selected_item['resource']['duration']
         u=urlsplit(seek_uri);connection=http.client.HTTPConnection(u.netloc,timeout=8)
         connection.request('HEAD',u.path);response=connection.getresponse();response.read()
-        assert response.status==200 and int(response.getheader('Content-Length'))==44+len(collected[-1])
+        assert response.status==200 and int(response.getheader('Content-Length'))==served_length
         connection.close()
         assert len(sonos.actions('AddURIToQueue')) == seek_adds
         assert 'decision=in-item' in (base/'bridge.log').read_text(), (base/'bridge.log').read_text()[-4000:]

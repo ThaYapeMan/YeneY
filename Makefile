@@ -63,6 +63,8 @@ install: yeney-queue-dryrun smoke
 	install -d -m 0755 /var/lib/yeney
 	install -m 0755 yeney-queue-dryrun /usr/local/bin/yeney-queue-dryrun
 	install -m 0755 scripts/yeney-queue-suite /usr/local/bin/yeney-queue-suite
+	install -d -m 0755 /usr/local/lib/yeney
+	install -m 0644 scripts/install_devices.py /usr/local/lib/yeney/install_devices.py
 	install -m 0755 scripts/yeney-format /usr/local/bin/yeney-format
 	install -m 0644 scripts/yeney_room_state.py /usr/local/bin/yeney_room_state.py
 	install -m 0755 scripts/yeney-stream-pacing-suite /usr/local/bin/yeney-stream-pacing-suite
@@ -169,6 +171,12 @@ core-queue-sink-test: tests/core_queue_sink_test.cpp core_queue_sink.o libqueuei
 
 yeney-queue-dryrun: queue_dryrun.cpp core_queue_sink.o libqueueitems.a $(CORE_LIB)
 	$(call compile-program,g++,-std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread)
+
+queue-flac-writer-test: tests/queue_flac_writer_test.cpp flac_writer.o
+	$(call compile-program,g++,-std=c++17 -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o,$^) -lFLAC)
+
+queue-flac-http-test: tests/queue_flac_http_test.cpp libqueueitems.a upnp/http_server.o upnp/gena.o upnp/xml.o upnp/discovery.o upnp/http.o
+	$(call compile-program,g++,-std=c++17 -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread)
 
 queue-route-test: tests/queue_route_test.cpp libqueueitems.a upnp/http_server.o upnp/gena.o upnp/xml.o upnp/discovery.o upnp/http.o
 	$(call compile-program,g++,-std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread)
@@ -350,7 +358,7 @@ TEST_PROGRAMS = queue-native-decoder-test encoder-test resume-state-test streame
     sanitize-test room-status-test queue-source-test lms-icon-test lms-icon-connection-test volume- \
     test podcast-sink-test podcast-metadata-fixture queue-window-test consumption-diagnostic-test \
     seek-worker-test speaker-position-fit-test speaker-position-replay-test speaker-websocket- \
-    fixture websocket-timer-fixture native-mp4-fixture native-pcm-fixture
+    fixture websocket-timer-fixture native-mp4-fixture native-pcm-fixture queue-flac-writer-test queue-flac-http-test
 PROGRAMS = yeney-queue-dryrun yeney-smoke-server $(TEST_PROGRAMS)
 DEP_TARGETS = $(BRIDGE_OBJS) $(PROGRAMS)
 DEPS = $(addsuffix .d,$(DEP_TARGETS))

@@ -19,7 +19,7 @@ int main() {
         Config config;
         config.root = temp;
         Store store("Study", config);
-        Route route("Study", "random-session");
+        Route route("Study", "random-session", Format::Wav); // Fixed WAV protocol regression.
         upnp::HttpServer server(0);
         route.registerWith(server);
         assert(server.resource("queue").uri == "/yeney/q/");
@@ -304,7 +304,7 @@ int main() {
         assert(refused);
         std::string retained;
         {
-            Route temporary("Study", "retained-session");
+            Route temporary("Study", "retained-session", Format::Wav);
             temporary.registerWith(server);
             retained = temporary.publish("Study", 4, 1, item);
         }

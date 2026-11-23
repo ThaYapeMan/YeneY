@@ -8,6 +8,7 @@ strict retains the optional 600 ms per SOAP stress model; inherited retains
 FULLQ_DELAY (600 ms default) and FULLQ_ALL_SOAP overrides from FULLQ-01b.
 """
 import http.client
+from served_queue_audio import RowReader
 import hashlib
 import json
 import os
@@ -51,10 +52,11 @@ def run(c):
         try:
             conn.request('GET', u.path)
             reply = conn.getresponse()
-            header = reply.read(44)
-            first = reply.read(1)
+            reader = RowReader(reply)
+            header = reader.header.pcm_header
+            first = reader.read_pcm(1)
             stamp = time.monotonic()
-            body = header + first + (reply.read() if complete else reply.read(4096 - 1))
+            body = header + first + (reader.read_pcm(None if complete else 4096 - 1))
             assert reply.status == 200 and body[:4] == b'RIFF'
             return stamp, body
         finally:
@@ -182,7 +184,7 @@ def run(c):
                 try:
                     conn.request('GET', u.path)
                     response = conn.getresponse()
-                    body = response.read()
+                    body = RowReader(response).read_wav()
                     assert response.status == 200
                     identity(index, body)
                 finally:

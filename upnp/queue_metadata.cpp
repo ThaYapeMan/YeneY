@@ -6,8 +6,11 @@
 namespace upnp {
 std::string queueDidl(const QueueMetadata &m) {
     using namespace queue_audio;
-    const auto flac = m.url.size() >= 5 && m.url.compare(m.url.size() - 5, 5, ".flac") == 0;
-    const auto format = flac ? Format::Flac : Format::Wav;
+    const auto suffix = m.url.find_last_of("/.");
+    const auto extension = suffix != std::string::npos && m.url[suffix] == '.' ? m.url.substr(suffix) : "";
+    if (!extension.empty() && extension != ".wav" && extension != ".flac")
+        throw std::invalid_argument("invalid finite queue format");
+    const auto format = extension == ".flac" ? Format::Flac : Format::Wav;
     if (!m.rate || m.url.compare(0, 7, "http://") || m.session.empty() ||
         m.bits != 24 || m.channels != 2 || (!m.deferred && m.size != rowLength(format, m.frames, m.rate)))
         throw std::invalid_argument("invalid finite queue metadata");
