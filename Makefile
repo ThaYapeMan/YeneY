@@ -154,8 +154,11 @@ oct12-boundary-test: tests/oct12_boundary_test.cpp core_sonos.cpp core_shm.o $(C
 queue_route.o queue_item_store.o wav_writer.o flac_writer.o: %.o: %.cpp
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. $(DEPFLAGS) -c -o $@ $<
 QUEUE_ITEM_OBJS = queue_item_store.o wav_writer.o flac_writer.o queue_route.o
+# Recreate the archive so incremental builds use the same member order as clean builds.
 libqueueitems.a: $(QUEUE_ITEM_OBJS)
-	ar rcs $@ $^
+	rm -f $@.tmp
+	ar rcs $@.tmp $^
+	mv $@.tmp $@
 queue-row-order-test: tests/queue_row_order_test.cpp libqueueitems.a
 	$(call compile-program,g++,-std=c++17 -O2 -Wall -Wextra -I. $< libqueueitems.a -lFLAC -pthread -o $@)
 

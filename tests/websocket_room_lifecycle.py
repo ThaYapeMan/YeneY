@@ -9,6 +9,8 @@ import time
 from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 
+from served_queue_audio import RowReader
+
 
 def run(c):
     cli,mac,wait,sonos=(c[k] for k in ('cli','mac','wait','sonos'))
@@ -74,7 +76,7 @@ def run_transition(c, case):
         uri = urlsplit(items()[0]['uri'])
         with closing(http.client.HTTPConnection(uri.netloc, timeout=8)) as conn:
             conn.request('GET', uri.path)
-            wav = conn.getresponse().read()
+            wav = RowReader(conn.getresponse()).read_wav()
         assert len(wav) == int.from_bytes(wav[4:8], 'little') + 8
         rate = int.from_bytes(wav[24:28], 'little')
         end_seconds = (len(wav) - 44) // (rate * 6)
