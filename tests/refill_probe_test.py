@@ -219,12 +219,13 @@ class Download(BaseHTTPRequestHandler):
         self.wfile.write(self.server.audio)
 
 
-def fixture(work, seconds, rate=8000):
+def fixture(work, seconds, rate=8000, channels=1):
     path = work / f'{seconds}.flac'
     period = [round(15000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(rate)]
-    pcm = struct.pack(f'<{rate}h', *period) * seconds
+    samples = [sample for sample in period for _ in range(channels)]
+    pcm = struct.pack(f'<{len(samples)}h', *samples) * seconds
     subprocess.run(['flac', '--silent', '--force-raw-format', '--endian=little', '--sign=signed',
-                    f'--input-size={len(pcm)}', '--channels=1', '--bps=16', f'--sample-rate={rate}', '-o', path, '-'],
+                    f'--input-size={len(pcm)}', f'--channels={channels}', '--bps=16', f'--sample-rate={rate}', '-o', path, '-'],
                    input=pcm, check=True)
     return path.read_bytes()
 
@@ -715,10 +716,30 @@ def check_no_terminal():
     assert 'terminal' in output.getvalue() and '--answers' in output.getvalue()
 
 
+class ListenRenderer(Renderer):
+    def action(self, service, action, args):
+        if action == 'AddURIToQueue':
+            item, = ET.fromstring(args['EnqueuedURIMetaData'])
+            resource = item[-1]
+            assert resource.text == args['EnqueuedURI']
+            assert resource.get('sampleFrequency') == '44100'
+            assert resource.get('duration') == '0:00:20'
+            assert resource.get('nrAudioChannels') == '2'
+            self.server.items.append(dict(uri=args['EnqueuedURI'], duration=20,
+                                          bits=int(resource.get('bitsPerSample'))))
+            self.server.update += 1
+            return {}, None
+        if action == 'Play':
+            assert self.server.position['RelTime'] == '00:00:00'
+            self.server.listen_plays.append(self.server.position['TrackURI'])
+        return super().action(service, action, args)
+
+
 def check_listen_speaker(work, test):
     with DownloadServer() as downloads:
-        downloads.audio = fixture(work, 81, rate=44100)
-        renderer = ProbeCoordinator(handler=Renderer)
+        downloads.audio = fixture(work, 81, rate=44100, channels=2)
+        renderer = ProbeCoordinator(handler=ListenRenderer)
+        renderer.listen_plays = []
         renderer.crossfade = False
         renderer.realtime = True
         renderer.follow_controls = True
@@ -729,14 +750,18 @@ def check_listen_speaker(work, test):
         renderer.missing = set()
         renderer.av_control = AV_CONTROL
         api = LocalApi(renderer, port=0)
-        api.shape = 'tidy'
         api.rtt_ms = api.spike_ms = 0
         try:
             cases = ['wav', 'packed16', 'fixed16', 'fixed16-subset', 'fixed16-md5',
                      'fixed16-subset-md5', 'fixed16-256-subset', 'fixed24-256-subset']
             answers = 'y,y,n,r,y,n,y,y,y' if test == 'listen' else 'n,y,n,y,n,y,y,y'
-            args = SimpleNamespace(room='Study', lms_host='127.0.0.1', track_id=42, volume=None,
-                                   cases=cases, repeats=1, set='listen', answers=answers.split(','))
+            argv = ['yeney-refill-probe', '--speaker', '127.0.0.1', '--lms-host', '127.0.0.1',
+                    '--room', 'Study', '--track-id', '42', '--set', 'listen', '--answers', answers]
+            with mock.patch('sys.argv', argv), mock.patch.object(probe.os, 'geteuid', return_value=0), \
+                 mock.patch.object(probe, 'execute') as execute:
+                probe.main()
+            args, = execute.call_args.args
+            assert args.cases == cases
             records = probe.Records()
             speaker = probe.Speaker('127.0.0.1', records, renderer.server_port, api.server.server_port)
             experiment = probe.Experiment(args, work, speaker, records, SCALE, downloads.server_port)
@@ -752,7 +777,18 @@ def check_listen_speaker(work, test):
             assert [row['answer'] for row in rows] == expected
             assert [row['replays'] for row in rows] == [0, 0, 0, int(test == 'listen'), 0, 0, 0, 0]
             shown = [row for row in records.rows if row['kind'] == 'log' and 'NOW PLAYING' in str(row)]
-            assert len(shown) == len(cases) + int(test == 'listen')
+            order = cases.copy()
+            numbers = list(range(1, len(cases) + 1))
+            if test == 'listen':
+                order.insert(3, cases[3])
+                numbers.insert(3, 4)
+                assert renderer.listen_plays[3] == renderer.listen_plays[4]
+            assert [row['message'] for row in shown] == [
+                f'NOW PLAYING {case} ({number} of {len(cases)})' for case, number in zip(order, numbers)
+            ]
+            assert len(renderer.listen_plays) == len(order)
+            assert all(attempt['requests'] for run in experiment.results for attempt in run['attempts'])
+            assert 'bitDepth=24 sampleRate=44100' in table
             for case, answer in zip(cases, expected):
                 assert f'{case}\t1\t{answer}\t' in table
             if test == 'controls':
