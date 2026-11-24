@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Loopback exercise of the refill probe, including its cleanup paths."""
 import contextlib
+import hashlib
 import json
 import io
 import math
@@ -218,12 +219,12 @@ class Download(BaseHTTPRequestHandler):
         self.wfile.write(self.server.audio)
 
 
-def fixture(work, seconds):
+def fixture(work, seconds, rate=8000):
     path = work / f'{seconds}.flac'
-    period = [round(15000 * math.sin(2 * math.pi * 440 * i / 8000)) for i in range(8000)]
-    pcm = struct.pack('<8000h', *period) * seconds
+    period = [round(15000 * math.sin(2 * math.pi * 440 * i / rate)) for i in range(rate)]
+    pcm = struct.pack(f'<{rate}h', *period) * seconds
     subprocess.run(['flac', '--silent', '--force-raw-format', '--endian=little', '--sign=signed',
-                    f'--input-size={len(pcm)}', '--channels=1', '--bps=16', '--sample-rate=8000', '-o', path, '-'],
+                    f'--input-size={len(pcm)}', '--channels=1', '--bps=16', f'--sample-rate={rate}', '-o', path, '-'],
                    input=pcm, check=True)
     return path.read_bytes()
 
@@ -650,6 +651,134 @@ def run():
     print('PASS refill probe')
 
 
+LEGACY_CHECKSUMS = [
+    'b0cb1805264d6dcdf7e256016d2927f624e9ded97dd07b476445c62892455d78',
+    '945841747b4d452a7fd386c3411b59ad96f5fc58e735e92328a6be876f182c84',
+]
+
+
+def check_listen_writer(work, test):
+    helper = probe.audio_helper(work)
+    pcm, media = work / 'listen.pcm', work / 'listen.flac'
+    if test in ('baseline', 'unchanged'):
+        frames = 4099
+        pcm.write_bytes(bytes.fromhex('3412 78ef') * frames)
+        checksums = []
+        for mode in ('fixed', 'fixed-noseek'):
+            probe.audio_command(helper, mode, pcm, media, frames, 44100, 16, 2)
+            checksums.append(hashlib.sha256(media.read_bytes()).hexdigest())
+        print('Legacy refill and seek checksums:', *checksums)
+        if test == 'unchanged':
+            assert checksums == LEGACY_CHECKSUMS
+        return
+    for block, rate, bits, first, last in (
+        (4096, 44100, 16, 'fff8c918', 'fff87918'),
+        (256, 44100, 16, 'fff87918', 'fff87918'),
+        (256, 44100, 24, 'fff8791c', 'fff8791c'),
+        (256, 48000, 16, 'fff87a18', 'fff87a18'),
+    ):
+        frames = block + 17
+        width = bits // 8
+        pcm.write_bytes(bytes(range(width * 2)) * frames)
+        for enabled in (False, True):
+            flag = '--subset' if test == 'headers' else '--md5'
+            args = [flag] if enabled else []
+            probe.audio_command(helper, 'fixed-noseek', pcm, media, frames, rate, bits, 2, block, *args)
+            raw = media.read_bytes()
+            if test == 'headers':
+                tail = 42 + 10 + block * width * 2 + (2 if block != 4096 else 0)
+                expected = (first, last) if enabled else (
+                    'fff8c010' if block == 4096 else 'fff87010', 'fff87010')
+                assert (raw[42:46].hex(), raw[tail:tail + 4].hex()) == expected
+            else:
+                assert raw[26:42] == (hashlib.md5(pcm.read_bytes()).digest() if enabled else bytes(16))
+                decoded = work / 'md5-decoded.pcm'
+                decoded.unlink(missing_ok=True)
+                probe.audio_command(helper, media, decoded)
+
+
+def check_no_terminal():
+    with mock.patch('sys.argv', ['yeney-refill-probe', '--speaker', '127.0.0.1',
+                                '--lms-host', '127.0.0.1', '--room', 'Loopback',
+                                '--track-id', '42', '--set', 'listen']), \
+         mock.patch.object(probe.os, 'open', side_effect=OSError('no terminal')) as terminal, \
+         mock.patch.object(probe, 'Speaker') as speaker, \
+         contextlib.redirect_stderr(io.StringIO()) as output:
+        try:
+            probe.main()
+        except SystemExit as error:
+            assert error.code != 0
+        else:
+            raise AssertionError('expected refusal')
+    speaker.assert_not_called()
+    terminal.assert_called_once_with('/dev/tty', probe.os.O_RDWR)
+    assert 'terminal' in output.getvalue() and '--answers' in output.getvalue()
+
+
+def check_listen_speaker(work, test):
+    with DownloadServer() as downloads:
+        downloads.audio = fixture(work, 81, rate=44100)
+        renderer = ProbeCoordinator(handler=Renderer)
+        renderer.crossfade = False
+        renderer.realtime = True
+        renderer.follow_controls = True
+        renderer.fail_play = False
+        renderer.join_timer = None
+        renderer.stopped_bridge = False
+        renderer.mode_changes = []
+        renderer.missing = set()
+        renderer.av_control = AV_CONTROL
+        api = LocalApi(renderer, port=0)
+        api.shape = 'tidy'
+        api.rtt_ms = api.spike_ms = 0
+        try:
+            cases = ['wav', 'packed16', 'fixed16', 'fixed16-subset', 'fixed16-md5',
+                     'fixed16-subset-md5', 'fixed16-256-subset', 'fixed24-256-subset']
+            answers = 'y,y,n,r,y,n,y,y,y' if test == 'listen' else 'n,y,n,y,n,y,y,y'
+            args = SimpleNamespace(room='Study', lms_host='127.0.0.1', track_id=42, volume=None,
+                                   cases=cases, repeats=1, set='listen', answers=answers.split(','))
+            records = probe.Records()
+            speaker = probe.Speaker('127.0.0.1', records, renderer.server_port, api.server.server_port)
+            experiment = probe.Experiment(args, work, speaker, records, SCALE, downloads.server_port)
+            with mock.patch.object(probe, 'service', return_value=False):
+                experiment.run('test-unit')
+            path = work / 'listen.tar.gz'
+            experiment.archive(path)
+            with tarfile.open(path) as archive:
+                rows = json.load(archive.extractfile('answers.json'))
+                table = archive.extractfile('summary.txt').read().decode()
+            assert [row['case'] for row in rows] == cases
+            expected = ['heard' if answer == 'y' else 'silent' for answer in args.answers if answer != 'r']
+            assert [row['answer'] for row in rows] == expected
+            assert [row['replays'] for row in rows] == [0, 0, 0, int(test == 'listen'), 0, 0, 0, 0]
+            shown = [row for row in records.rows if row['kind'] == 'log' and 'NOW PLAYING' in str(row)]
+            assert len(shown) == len(cases) + int(test == 'listen')
+            for case, answer in zip(cases, expected):
+                assert f'{case}\t1\t{answer}\t' in table
+            if test == 'controls':
+                assert table.splitlines()[-1] == 'controls failed, the run proves nothing; check volume and room'
+            else:
+                assert 'rate and depth: silent to heard' in table.splitlines()[-1]
+                for case in cases[2:]:
+                    audio = experiment.media[case]
+                    raw = audio['path'].read_bytes()
+                    print(case, raw[:64].hex(' '), raw[42:46].hex(' '), json.dumps(audio['proof']))
+            assert renderer.items == renderer.original
+        finally:
+            api.close()
+            renderer.close()
+
+
+def check_probe04(test, work):
+    if test == 'no-terminal':
+        check_no_terminal()
+    elif test in ('listen', 'controls'):
+        check_listen_speaker(work, test)
+    else:
+        check_listen_writer(work, test)
+    print('PASS', test)
+
+
 class DownloadServer(ThreadingHTTPServer):
     def __init__(self):
         super().__init__(('127.0.0.1', 0), Download)
@@ -670,5 +799,11 @@ if __name__ == '__main__':
 
     if sys.argv[1:] == ['--field-joins']:
         check_field_joins()
+    elif len(sys.argv) == 3 and sys.argv[1] == '--probe04':
+        with tempfile.TemporaryDirectory() as directory:
+            check_probe04(sys.argv[2], Path(directory))
     else:
+        for test in ('headers', 'md5', 'unchanged', 'listen', 'controls', 'no-terminal'):
+            with tempfile.TemporaryDirectory() as directory:
+                check_probe04(test, Path(directory))
         run()
