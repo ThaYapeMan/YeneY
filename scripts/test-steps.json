@@ -309,7 +309,7 @@
         "full": "test-run"
       },
       "phase": "parallel",
-      "reason": "Loopback refill probe, FLAC block-size and PCM proofs, seek-chain predictions, named timeouts and restored play mode.",
+      "reason": "Loopback refill probe, FLAC block-size and PCM proofs, seek-chain predictions, listening answers and replays, named timeouts and restored play mode.",
       "seconds": 50,
       "modes": ["fast", "full"],
       "label": "refill-probe",

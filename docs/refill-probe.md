@@ -1,7 +1,7 @@
 # Queue refill probe
 
 Run this measurement from the YeneY checkout as root. It uses Python 3,
-the checkout's WebSocket reader, systemd, Make, a C++ compiler, and libFLAC.
+the checkout's WebSocket reader, systemd, Make, a C++ compiler, libFLAC, and the OpenSSL development library (libcrypto).
 Supply a mono or stereo FLAC track with at least 180 s of audio. The default
 set includes 16-bit cases and needs a 16-bit source. Allow room on disk for
 the LMS download, the generated WAV and FLAC forms, and verification files.
@@ -121,3 +121,56 @@ playback window and media request.
 
 The LMS download allows up to 120 s in total and prints
 `waiting for LMS to deliver the track` once after 10 s.
+
+
+## Listening for music
+
+The refill and seek sets measure position and requests. They cannot tell
+whether a row was audible. Use `--set listen` when someone in the room can
+hear the speaker and answer the terminal prompts.
+
+On 23 November 2026, a Play:1 running software 86.11 was silent on the
+bridge's verbatim 16-bit and 24-bit FLAC queue rows. The speaker reported
+playback, advanced its position, fetched the whole file and reported no
+error. WAV rows were audible. On 24 November, with the 44.1 kHz, 16-bit
+track 53454, the probe's WAV and libFLAC `packed16` rows were audible.
+Its `fixed16` row with a seek table was silent. Both FLAC files used
+4,096-sample blocks. The earlier position and request measurements had
+classified the FLAC forms as playing without a fault.
+
+Use the same speaker, room and LMS options as for the refill set. Add
+`--set listen --check` to check prerequisites and prepare the files.
+Remove `--check` for the listening run. The room must be stopped and
+ungrouped with crossfade off and the volume audible. Keep other room
+controls idle and stop LampaStream from following the room during the
+run. The probe stops an active room service and restarts it during cleanup.
+`--normal-play-mode` temporarily selects NORMAL and restores the original
+mode afterward.
+
+Each row contains 20 seconds of audio starting 60 seconds into the source.
+The probe starts it from the beginning, lets it run for 15 seconds, stops
+the speaker and asks whether you heard music. Answer `y` for heard,
+`n` for silent or `r` to hear the same row again. The controlling
+terminal accepts answers when output is piped through `tee`. The default
+eight cases take about four minutes including time to answer. Use
+`--cases` for a comma-separated subset in the desired order and
+`--repeats` to run that sequence again. Automated tests can use
+`--answers` with one `y` or `n` per case per repeat and optional `r`
+entries before each answer.
+
+The order is `wav`, `packed16`, `fixed16`, `fixed16-subset`,
+`fixed16-md5`, `fixed16-subset-md5`, `fixed16-256-subset`, and
+`fixed24-256-subset`. The six fixed cases use verbatim frames without a
+seek table. The subset switch writes the sample rate and bit depth into
+the frame headers. It tests the hypothesis that the speaker needs those
+fields explicitly. The MD5 switch writes the checksum of the interleaved
+PCM into STREAMINFO. The suffixes identify the switches and the smaller
+256-sample blocks. The probe verifies decoded PCM and the frame-offset
+suffix, and checks the first and last frame headers for the subset cases.
+
+The result table records the answer, replays, transport state, reported
+WebSocket quality, playback errors and HTTP requests. The closing line
+reports the controls and paired changes in answers. If either control
+was silent, check the volume and room before drawing conclusions.
+Keep the printed archive path and your run log. The archive contains
+`answers.json` alongside the raw records and summary.

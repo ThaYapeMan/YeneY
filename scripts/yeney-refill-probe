@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""Measure queue-item refill and position responses on one ungrouped speaker."""
+"""Measure queue-item refill, position responses and audibility on one ungrouped speaker."""
 import argparse
 import bisect
 import concurrent.futures
@@ -147,7 +147,7 @@ def audio_helper(work):
     helper = work / 'refill-audio'
     if not helper.exists():
         recipe = ('refill-audio: ' + str(SCRIPTS / 'yeney-refill-audio.cpp') +
-                  '\n\t$(CXX) -std=c++17 -O2 -Wall -Wextra $< -lFLAC -o $@\n')
+                  '\n\t$(CXX) -std=c++17 -O2 -Wall -Wextra $< -lFLAC -lcrypto -o $@\n')
         subprocess.run(['make', '-s', '-f', '-', 'refill-audio'], cwd=work, input=recipe,
                        text=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     return helper
@@ -262,6 +262,8 @@ def verify_flac(helper, media, pcm, width, channels, frames, work, proof, seek_t
                     # The range stream contains only a suffix of the original PCM.
                     settings = int.from_bytes(info[18:26], 'big') >> 36
                     info[18:26] = ((settings << 36) | (frames - sample)).to_bytes(8, 'big')
+                # A full-stream checksum cannot verify a suffix.
+                if sample:
                     info[26:42] = bytes(16)
                 part.write(info)
                 full.seek(offset)
@@ -384,6 +386,82 @@ def prepare_seek_audio(source, work, cases, rate):
         finally:
             pcm.unlink(missing_ok=True)
         media[case] = rows
+    original.unlink()
+    return media
+
+
+LISTEN_CASES = {
+    'wav': ('wav', 24, 0, ()),
+    'packed16': ('packed', 16, 4096, ()),
+    'fixed16': ('fixed-noseek', 16, 4096, ()),
+    'fixed16-subset': ('fixed-noseek', 16, 4096, ('--subset',)),
+    'fixed16-md5': ('fixed-noseek', 16, 4096, ('--md5',)),
+    'fixed16-subset-md5': ('fixed-noseek', 16, 4096, ('--subset', '--md5')),
+    'fixed16-256-subset': ('fixed-noseek', 16, 256, ('--subset',)),
+    'fixed24-256-subset': ('fixed-noseek', 24, 256, ('--subset',)),
+}
+LISTEN_SECONDS = 20
+LISTEN_START = 60
+AUDIBILITY_NOTICE = 'This set measures position and requests. It cannot tell whether a row was audible.'
+
+
+def verify_frame_headers(path, index, rate, bits, channels, frames, block):
+    headers = {}
+    with path.open('rb') as stream:
+        for name, (sample, offset) in (('first', index[0]), ('last', index[-1])):
+            block_code = 0xc0 if min(block, frames - sample) == 4096 else 0x70
+            rate_code = {44100: 9, 48000: 10}[rate]
+            depth_code = {16: 8, 24: 12}[bits]
+            expected = bytes((0xff, 0xf8, block_code | rate_code, ((channels - 1) << 4) | depth_code))
+            stream.seek(offset)
+            actual = stream.read(4)
+            if actual != expected:
+                raise ValueError(f'{path.name} {name} frame header: expected {expected.hex(" ")}, '
+                                 f'found {actual.hex(" ")}')
+            headers[f'{name}_frame_header'] = actual.hex(' ')
+    return headers
+
+
+def prepare_listen_audio(source, work, cases):
+    helper = audio_helper(work)
+    original = work / 'listen-source.pcm'
+    rate, _, source_bits, source_channels = source_audio(source, original, helper,
+                                                         LISTEN_START + LISTEN_SECONDS)
+    frames = LISTEN_SECONDS * rate
+    media = {}
+    pcm = work / 'listen-row.pcm'
+    for case in cases:
+        mode, bits, block, flags = LISTEN_CASES[case]
+        if bits == 16 and source_bits != 16:
+            raise ValueError(f'{case} requires a 16-bit source (track is {source_bits}-bit)')
+        width = bits // 8
+        channels = 2 if mode == 'wav' else source_channels
+        written_pcm(original, pcm, width, frames, channels, LISTEN_START * rate)
+        path = work / f'{case}.{"wav" if mode == "wav" else "flac"}'
+        index, evidence = [], {}
+        if mode == 'wav':
+            with path.open('wb') as output, pcm.open('rb') as stream:
+                output.write(wav_header(rate, frames))
+                shutil.copyfileobj(stream, output)
+        else:
+            try:
+                result = audio_command(helper, mode, pcm, path, frames, rate, bits, channels, block, *flags)
+                proof = tuple(map(int, result.split())) if mode == 'fixed-noseek' else None
+                index, evidence = verify_flac(helper, path, pcm, width, channels, frames,
+                                              work, proof, mode == 'packed', block)
+                if '--md5' in flags:
+                    with path.open('rb') as stream:
+                        stream.seek(26)
+                        if not any(stream.read(16)):
+                            raise ValueError('STREAMINFO MD5 is missing')
+                    evidence['md5_verified'] = True
+                if '--subset' in flags:
+                    evidence.update(verify_frame_headers(path, index, rate, bits, channels, frames, block))
+            except ValueError as exc:
+                raise ValueError(f'{case}: {exc}') from exc
+        media[case] = dict(path=path, frames=frames, rate=rate, bits=bits, channels=channels,
+                           index=index, proof=evidence)
+    pcm.unlink()
     original.unlink()
     return media
 
@@ -1097,21 +1175,29 @@ class Experiment:
     def seek_set(self):
         return getattr(self.args, 'set', 'refill') == 'seek'
 
+    @property
+    def listen_set(self):
+        return getattr(self.args, 'set', 'refill') == 'listen'
+
     def prepare(self):
         if self.seek_set:
             self.prepare_chains()
             return
         source = self.work / 'source.flac'
         track(self.args.lms_host, self.lms_port, self.args.track_id, source, self.records.log)
-        self.media = prepare_audio(source, self.work, self.args.cases, self.minimum)
+        if self.listen_set:
+            self.media = prepare_listen_audio(source, self.work, self.args.cases)
+        else:
+            self.media = prepare_audio(source, self.work, self.args.cases, self.minimum)
         self.sizes = {}
         for name, audio in self.media.items():
             size = audio['path'].stat().st_size
             proof = audio['proof']
             self.sizes[name] = dict(bytes=size, samples=audio['frames'], bits=audio['bits'], **proof)
-            self.records.log(f'{name} {size} B, {audio["frames"]} samples, {audio["bits"]}-bit')
-            if proof:
-                self.records.log(name + ' proof ' + ' '.join(f'{key}={value}' for key, value in proof.items()))
+            if not self.listen_set or getattr(self.args, 'check', False):
+                self.records.log(f'{name} {size} B, {audio["frames"]} samples, {audio["bits"]}-bit')
+                if proof:
+                    self.records.log(name + ' proof ' + ' '.join(f'{key}={value}' for key, value in proof.items()))
         if 'bound' in self.args.cases:
             packed = self.media['packed16']
             if packed['path'].stat().st_size >= 44 + 6 * packed['frames']:
@@ -1224,7 +1310,12 @@ class Experiment:
 
     def add_items(self, case, repeat=None):
         uris = []
-        rows = self.media[case] if self.seek_set else (self.media[form] for form in CASES[case])
+        if self.seek_set:
+            rows = self.media[case]
+        elif self.listen_set:
+            rows = [self.media[case]]
+        else:
+            rows = (self.media[form] for form in CASES[case])
         for row, media in enumerate(rows, 1):
             path, frames, rate = (media[key] for key in ('path', 'frames', 'rate'))
             bound = 44 + 6 * frames if case == 'bound' else None
@@ -1527,7 +1618,117 @@ class Experiment:
                        < start + (i + 5) * self.scale], expected)
                 for i in range(0, duration, 5)]
 
+    def listen(self, result, count):
+        case = result['case']
+        uri, = self.add_items(case)
+        path = urlsplit(uri).path
+        result.update(replays=0, attempts=[])
+        while True:
+            start = self.t()
+            self.choose(uri)
+            self.records.log(f'NOW PLAYING {case} ({len(self.results)} of {count})')
+            play_sent = self.t()
+            states, errors = [], []
+            try:
+                self.speaker.av('Play', Speed=1)
+                started = self.t()
+                for second in range(15):
+                    self.wait(started, second)
+                    state, status = self.transport()
+                    states.append(state)
+                    if status.upper() not in ('', 'OK'):
+                        errors.append(status)
+                self.wait(started, 15)
+            except Exception as exc:
+                errors.append(error_text(exc))
+                self.wait(play_sent, 15)
+            finally:
+                end = self.t()
+                self.speaker.av('Stop')
+            quality, requests = [], []
+            for row in list(self.records.rows):
+                if not start <= row['time'] < end:
+                    continue
+                if row['kind'] == 'requests' and row.get('path') == path and row['event'] == 'open':
+                    requests.append(f'{row["method"]} {row["range"] or "full"}')
+                if row['kind'] != 'speaker' or row.get('protocol') != 'websocket':
+                    continue
+                raw = row.get('raw')
+                if not isinstance(raw, list) or len(raw) != 2 or not isinstance(raw[1], dict):
+                    continue
+                body = raw[1]
+                if ws_error(raw):
+                    errors.append(str(body.get('errorCode') or body.get('reason') or 'websocket playback error'))
+                current = body.get('currentItem')
+                track = current.get('track') if isinstance(current, dict) else None
+                values = track.get('quality') if isinstance(track, dict) else None
+                if isinstance(values, dict) and 'bitDepth' in values and 'sampleRate' in values:
+                    line = f'bitDepth={values["bitDepth"]} sampleRate={values["sampleRate"]}'
+                    if 'lossless' in values:
+                        line += f' lossless={str(values["lossless"]).lower()}'
+                    quality.append(line)
+            result['attempts'].append(dict(states=list(dict.fromkeys(states)), quality=list(dict.fromkeys(quality)),
+                                           errors=list(dict.fromkeys(errors)), requests=requests))
+            answer = self.listen_answer(case)
+            if answer != 'r':
+                result['answer'] = 'heard' if answer == 'y' else 'silent'
+                return
+            result['replays'] += 1
+
+    def listen_answer(self, case):
+        if self.scripted_answers is not None:
+            return next(self.scripted_answers)
+        prompt = f'{case}: did you hear music? [y = yes, n = no, r = play it again]'
+        tty = self.args.terminal
+        while True:
+            print(prompt, flush=True)
+            answer = tty.readline()
+            if not answer:
+                raise ValueError('listening ended before a terminal answer was received')
+            answer = answer.strip().lower()
+            if answer in ('y', 'n', 'r'):
+                return answer
+
+    def listen_summary(self):
+        table = ['case\trepeat\tanswer\treplays\ttransport state\twebsocket quality\tplayback errors\taudio requests']
+
+        def cell(run, key):
+            attempts = [', '.join(' '.join(str(value).split()) for value in attempt[key]) or '—'
+                        for attempt in run.get('attempts', [])]
+            return ' / '.join(attempts) or '—'
+
+        for run in self.results:
+            table.append('\t'.join([run['case'], str(run['repeat']), run.get('answer', '—'),
+                                    str(run.get('replays', 0)), *(cell(run, key) for key in
+                                    ('states', 'quality', 'errors', 'requests'))]))
+        heard = {(run['repeat'], run['case']): run.get('answer') for run in self.results}
+        controls = [run for run in self.results if run['case'] in ('wav', 'packed16')]
+        if any(run.get('answer') == 'silent' for run in controls):
+            closing = 'controls failed, the run proves nothing; check volume and room'
+        else:
+            comparisons = []
+            for repeat in range(1, self.args.repeats + 1):
+                answers = {case: heard.get((repeat, case)) for case in LISTEN_CASES}
+                names = [case for case in ('wav', 'packed16') if answers[case] == 'heard']
+                parts = ['controls heard: ' + (', '.join(names) or 'none')]
+                for label, pairs in (
+                    ('rate and depth', (('fixed16', 'fixed16-subset'),
+                                        ('fixed16-md5', 'fixed16-subset-md5'))),
+                    ('MD5', (('fixed16', 'fixed16-md5'),
+                             ('fixed16-subset', 'fixed16-subset-md5'))),
+                ):
+                    for before, after in pairs:
+                        if answers[before] and answers[after]:
+                            parts.append(f'{label}: {answers[before]} to {answers[after]} ({before} → {after})')
+                comparisons.append((f'repeat {repeat}: ' if self.args.repeats > 1 else '') + '. '.join(parts))
+            closing = ' | '.join(comparisons)
+        return '\n'.join([*table, closing]) + '\n'
+
     def run(self, name):
+        if self.listen_set:
+            count = len(self.args.cases) * self.args.repeats
+            self.records.log(f'{count} cases, expected duration about {count * 30 / 60:.0f} min')
+            self.scripted_answers = iter(self.args.answers) if self.args.answers is not None else None
         if self.seek_set:
             count = len(self.args.cases) * self.args.repeats
             self.records.log(f'{count} chains, expected duration about {count * 277 / 60:.0f} min')
@@ -1569,21 +1770,26 @@ class Experiment:
                         changed = True
                         self.speaker.set_volume(self.args.volume)
                     count = len(self.args.cases) * self.args.repeats
-                    if not self.seek_set:
+                    if not self.seek_set and not self.listen_set:
                         self.records.log(f'{count} cases, expected duration about {count * 145 / 60:.0f} min')
                     with Questions(self.speaker, self.records, self.scale):
                         for repeat in range(1, self.args.repeats + 1):
                             for case in self.args.cases:
                                 result = dict(case=case, repeat=repeat)
                                 self.results.append(result)
-                                self.records.log(f'{case} repeat {repeat}')
+                                if not self.listen_set:
+                                    self.records.log(f'{case} repeat {repeat}')
                                 try:
                                     if self.seek_set:
                                         self.measure_chain(result)
+                                    elif self.listen_set:
+                                        self.listen(result, count)
                                     else:
                                         self.measure(result)
                                 except Exception as exc:
                                     result['error'] = error_text(exc)
+                                    if self.listen_set:
+                                        raise
                                     self.records.log(f'{case}: FAIL {result["error"]}')
                                 finally:
                                     if self.measurements and self.measurements[-1]['result'] is result:
@@ -1681,7 +1887,11 @@ class Experiment:
             if case != 'wav':
                 table.append(case + '\t' + '\t'.join(render(row[key] - baseline[key])
                              if key in row and key in baseline else '—' for key, _ in delta))
-        summary_text = self.seek_summary() if self.seek_set else '\n'.join(table) + '\n'
+        if self.listen_set:
+            summary_text = self.listen_summary()
+        else:
+            measurements = self.seek_summary() if self.seek_set else '\n'.join(table) + '\n'
+            summary_text = AUDIBILITY_NOTICE + '\n' + measurements
         print(summary_text, end='')
         rows = list(self.records.rows)
         tags = []
@@ -1716,6 +1926,11 @@ class Experiment:
             'probe.log': json_lines('log'),
             'versions.txt': f'YeneY {program}\nrefill probe {VERSION}\n',
         }
+        if self.listen_set:
+            files['answers.json'] = json.dumps([
+                {key: row[key] for key in ('case', 'repeat', 'answer', 'replays')}
+                for row in self.results if 'answer' in row
+            ], indent=2) + '\n'
         with destination.open('xb') as stream, tarfile.open(fileobj=stream, mode='w:gz') as archive:
             for name, value in files.items():
                 data = self.records.redact(value).encode()
@@ -1738,14 +1953,15 @@ def main():
     parser.add_argument('--lms-host', type=ipaddress.IPv4Address, required=True)
     parser.add_argument('--track-id', type=int, required=True)
     parser.add_argument('--volume', type=int)
-    parser.add_argument('--set', choices=('refill', 'seek'), default='refill')
+    parser.add_argument('--set', choices=('refill', 'seek', 'listen'), default='refill')
     parser.add_argument('--track-id-48', type=int)
     parser.add_argument('--cases')
+    parser.add_argument('--answers')
     parser.add_argument('--repeats', type=int, default=1)
     parser.add_argument('--normal-play-mode', action='store_true')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
-    cases = CASES if args.set == 'refill' else SEEK_CASES
+    cases = {'refill': CASES, 'seek': SEEK_CASES, 'listen': LISTEN_CASES}[args.set]
     if args.cases is None:
         args.cases = [case for case in cases if case != 'fixed16-4096-48k' or args.track_id_48 is not None]
     else:
@@ -1757,8 +1973,25 @@ def main():
     if (args.track_id < 1 or args.repeats < 1 or args.volume is not None and not 0 <= args.volume <= 100 or
             len(set(args.cases)) != len(args.cases) or any(case not in cases for case in args.cases)):
         parser.error('invalid track id, volume, repeat count, or cases')
-    if os.geteuid() != 0:
-        parser.error('run as root')
+    if args.answers is not None:
+        if args.set != 'listen':
+            parser.error('--answers requires --set listen')
+        args.answers = [answer.strip().lower() for answer in args.answers.split(',')]
+        if (any(answer not in ('y', 'n', 'r') for answer in args.answers) or args.answers[-1] == 'r' or
+                sum(answer != 'r' for answer in args.answers) != len(args.cases) * args.repeats):
+            parser.error('--answers needs one y or n per case and repeat, with optional r before each answer')
+    with contextlib.ExitStack() as terminal:
+        if args.set == 'listen' and not args.check and args.answers is None:
+            try:
+                args.terminal = terminal.enter_context(os.fdopen(os.open('/dev/tty', os.O_RDWR)))
+            except OSError:
+                parser.error('--set listen requires a terminal or --answers before playback')
+        if os.geteuid() != 0:
+            parser.error('run as root')
+        return execute(args)
+
+
+def execute(args):
     os.umask(0o077)
     name = unit(args.room)
     records = Records()
