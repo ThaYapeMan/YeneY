@@ -96,8 +96,8 @@ void frameNumber(Bytes &header, uint32_t number) {
         header.push_back(0x80 | ((number >> (6 * (part - 1))) & 0x3f));
 }
 
-unsigned frameSize(uint32_t index, unsigned count, unsigned width, unsigned channels, bool explicitSize) {
-    return 7 + numberWidth(index) + (explicitSize ? 2 : 0) + channels * (1 + count * width);
+unsigned frameSize(uint32_t index, unsigned count, unsigned width, unsigned channels, bool explicitSize, unsigned rateBytes) {
+    return 7 + rateBytes + numberWidth(index) + (explicitSize ? 2 : 0) + channels * (1 + count * width);
 }
 
 template<unsigned Bits, unsigned Polynomial>
@@ -160,12 +160,29 @@ std::array<uint8_t, 16> audioMd5(PcmFile &pcm) {
 
 void fixed(PcmFile &pcm, const char *path, bool seekTable, unsigned blockSize,
            bool subset, bool md5) {
-    unsigned rateCode = 0, depthCode = 0;
+    unsigned rateCode = 0, rateBytes = 0, rateValue = 0;
+    const unsigned depthCode = subset ? (pcm.bits == 16 ? 4 : 6) : 0;
     if (subset) {
-        if (pcm.rate != 44100 && pcm.rate != 48000)
-            throw std::runtime_error("explicit FLAC frame headers require 44100 or 48000 Hz");
-        rateCode = pcm.rate == 44100 ? 9 : 10;
-        depthCode = pcm.bits == 16 ? 4 : 6;
+        constexpr unsigned rates[] = {0, 88200, 176400, 192000, 8000, 16000,
+                                      22050, 24000, 32000, 44100, 48000, 96000};
+        const auto rate = std::find(std::begin(rates), std::end(rates), pcm.rate);
+        if (rate != std::end(rates)) {
+            rateCode = rate - std::begin(rates);
+        } else if (pcm.rate % 1000 == 0 && pcm.rate / 1000 <= 255) {
+            rateCode = 12;
+            rateBytes = 1;
+            rateValue = pcm.rate / 1000;
+        } else if (pcm.rate <= 65535) {
+            rateCode = 13;
+            rateBytes = 2;
+            rateValue = pcm.rate;
+        } else if (pcm.rate % 10 == 0 && pcm.rate / 10 <= 65535) {
+            rateCode = 14;
+            rateBytes = 2;
+            rateValue = pcm.rate / 10;
+        } else {
+            throw std::runtime_error("sample rate cannot be stated in a FLAC frame header");
+        }
     }
     const unsigned frames = (pcm.frames + blockSize - 1) / blockSize;
     const auto points = seekTable ? std::min(frames, 100u) : 0;
@@ -173,7 +190,7 @@ void fixed(PcmFile &pcm, const char *path, bool seekTable, unsigned blockSize,
     unsigned smallest = UINT32_MAX, largest = 0;
     for (unsigned i = 0; i < frames; ++i) {
         const auto count = std::min<uint64_t>(blockSize, pcm.frames - uint64_t(i) * blockSize);
-        const auto size = frameSize(i, count, pcm.width(), pcm.channels, count != 4096);
+        const auto size = frameSize(i, count, pcm.width(), pcm.channels, count != 4096, rateBytes);
         smallest = std::min(smallest, size);
         largest = std::max(largest, size);
         offsets.push_back(offsets.back() + size);
@@ -209,6 +226,7 @@ void fixed(PcmFile &pcm, const char *path, bool seekTable, unsigned blockSize,
         frameNumber(frame, i);
         if (count != 4096)
             bigEndian(frame, count - 1, 2);
+        bigEndian(frame, rateValue, rateBytes);
         frame.push_back(crc<8, 0x07>(frame));
         for (unsigned channel = 0; channel < pcm.channels; ++channel) {
             frame.push_back(0x02); // verbatim, zero wasted bits
@@ -286,20 +304,20 @@ int main(int argc, char **argv) {
         const auto blockSize = argc >= 9 ? std::stoul(argv[8], &blockEnd) : 4096;
         if (blockSize < 16 || blockSize > 4096 || (argc >= 9 && argv[8][blockEnd] != '\0'))
             throw std::runtime_error("FLAC block size must be an integer from 16 to 4096");
-        bool subset = false, md5 = false;
+        bool legacyHeader = false, md5 = false;
         for (int i = 9; i < argc; ++i) {
             const std::string flag = argv[i];
-            if (flag == "--subset" && !subset)
-                subset = true;
+            if (flag == "--legacy-header" && !legacyHeader)
+                legacyHeader = true;
             else if (flag == "--md5" && !md5)
                 md5 = true;
             else
                 throw std::runtime_error("invalid fixed FLAC switch: " + flag);
         }
-        if (mode == "packed" && !subset && !md5)
+        if (mode == "packed" && !legacyHeader && !md5)
             packed(pcm, argv[3], blockSize);
         else if (mode == "fixed" || mode == "fixed-noseek")
-            fixed(pcm, argv[3], mode == "fixed", blockSize, subset, md5);
+            fixed(pcm, argv[3], mode == "fixed", blockSize, !legacyHeader, md5);
         else
             return 2;
         return 0;

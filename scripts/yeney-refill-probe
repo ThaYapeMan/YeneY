@@ -101,12 +101,13 @@ def hms(seconds):
     return f'{s // 3600:02}:{s // 60 % 60:02}:{s % 60:02}'
 
 
-def wav_header(rate, frames):
-    size = frames * 6
+def wav_header(rate, frames, bits=24):
+    stride = 2 * (bits // 8)
+    size = frames * stride
     if size + 36 > 0xffffffff:
         raise ValueError('track exceeds the RIFF size limit')
     return struct.pack('<4sI8sIHHIIHH4sI', b'RIFF', size + 36, b'WAVEfmt ',
-                       16, 1, 2, rate, rate * 6, 6, 24, b'data', size)
+                       16, 1, 2, rate, rate * stride, stride, bits, b'data', size)
 
 
 def source_audio(source, pcm, helper, minimum):
@@ -332,6 +333,8 @@ SEEK_CASES = {
     'fixed24-256': ('fixed-noseek', 24, 256, 44100),
     'packed16-4096': ('packed', 16, 4096, 44100),
     'packed16-1024': ('packed', 16, 1024, 44100),
+    'packed16-256': ('packed', 16, 256, 44100),
+    'packed24-256': ('packed', 24, 256, 44100),
     'fixed16-4096-ms': ('fixed-noseek', 16, 4096, 44100),
     'fixed16-4096-48k': ('fixed-noseek', 16, 4096, 48000),
 }
@@ -393,16 +396,134 @@ def prepare_seek_audio(source, work, cases, rate):
 LISTEN_CASES = {
     'wav': ('wav', 24, 0, ()),
     'packed16': ('packed', 16, 4096, ()),
-    'fixed16': ('fixed-noseek', 16, 4096, ()),
-    'fixed16-subset': ('fixed-noseek', 16, 4096, ('--subset',)),
-    'fixed16-md5': ('fixed-noseek', 16, 4096, ('--md5',)),
-    'fixed16-subset-md5': ('fixed-noseek', 16, 4096, ('--subset', '--md5')),
-    'fixed16-256-subset': ('fixed-noseek', 16, 256, ('--subset',)),
-    'fixed24-256-subset': ('fixed-noseek', 24, 256, ('--subset',)),
+    'fixed16': ('fixed-noseek', 16, 4096, ('--legacy-header',)),
+    'fixed16-subset': ('fixed-noseek', 16, 4096, ()),
+    'fixed16-md5': ('fixed-noseek', 16, 4096, ('--legacy-header', '--md5')),
+    'fixed16-subset-md5': ('fixed-noseek', 16, 4096, ('--md5',)),
+    'fixed16-256-subset': ('fixed-noseek', 16, 256, ()),
+    'fixed24-256-subset': ('fixed-noseek', 24, 256, ()),
 }
 LISTEN_SECONDS = 20
 LISTEN_START = 60
 AUDIBILITY_NOTICE = 'This set measures position and requests. It cannot tell whether a row was audible.'
+
+
+PLAIN_QUESTION = ('did you hear music?',)
+JOIN_QUESTIONS = ('did you hear music before the change?', 'did you hear music after the change?',
+                  'was the change clean (no gap, click or repeat)?')
+SEEK_QUESTIONS = ('did you hear music before?', 'did you hear music after?')
+PAUSE_QUESTIONS = (*SEEK_QUESTIONS, 'did it continue where it had stopped?')
+MIX_CASES = {
+    'wav': ('plain', ('wav24',), None),
+    'fixed16-256': ('plain', ('fixed',), None),
+    'packed16-256': ('plain', ('packed',), None),
+    'packed24-256': ('plain', ('packed24',), None),
+    'wav-wav': ('join', ('wav', 'wav'), None),
+    'fixed-fixed': ('join', ('fixed', 'fixed'), None),
+    'packed-packed': ('join', ('packed', 'packed'), None),
+    'fixed-packed': ('join', ('fixed', 'packed'), None),
+    'packed-fixed': ('join', ('packed', 'fixed'), None),
+    'packed-nosize': ('plain', ('packed',), 'omit'),
+    'packed-fixedsize': ('plain', ('packed',), 'fixed'),
+    'fixed-packed-nosize': ('join', ('fixed', 'packed'), 'omit'),
+    'fixed-seek': ('seek', ('fixed',), None),
+    'packed-seek': ('seek', ('packed',), None),
+    'fixed-pause': ('pause', ('fixed',), None),
+    'packed-pause': ('pause', ('packed',), None),
+}
+MIX_ACTIONS = {
+    'plain': (20, 15, 'one row runs for 15 s; listen for music', PLAIN_QUESTION),
+    'join': (20, 30, 'two rows follow each other after 20 s; listen at the change', JOIN_QUESTIONS),
+    'seek': (40, 12, 'after 6 s the position moves to 20 s; listen before and after', SEEK_QUESTIONS),
+    'pause': (40, 21, 'after 8 s there is a 5 s pause; listen where the music resumes', PAUSE_QUESTIONS),
+}
+MIX_GROUPS = {
+    'plain rows': tuple(MIX_CASES)[:4],
+    'joins': tuple(MIX_CASES)[4:9],
+    'description size': tuple(MIX_CASES)[9:12],
+    'seek and pause': tuple(MIX_CASES)[12:],
+}
+MIX_NOTICE = 'Position figures and requests cannot tell whether a row was audible. Only the answers can.'
+
+
+def packed_size_table(source, work, log):
+    helper = audio_helper(work)
+    original, pcm = work / 'size-source.pcm', work / 'size-row.pcm'
+    rate, _, _, _ = source_audio(source, original, helper, 120)
+    frames = 60 * rate
+    try:
+        written_pcm(original, pcm, 2, frames, 2, 60 * rate)
+        wav = work / 'size-wav.wav'
+        with wav.open('wb') as output, pcm.open('rb') as stream:
+            output.write(wav_header(rate, frames, 16))
+            shutil.copyfileobj(stream, output)
+        wav_bytes = wav.stat().st_size
+        sizes = {}
+        for mode, blocks in (('packed', (256, 1024, 4096)), ('fixed', (256,))):
+            for block in blocks:
+                form = f'{mode}-{block}'
+                path = work / f'size-{form}.flac'
+                writer = mode if mode == 'packed' else 'fixed-noseek'
+                audio_command(helper, writer, pcm, path, frames, rate, 16, 2, block)
+                sizes[form] = path.stat().st_size
+        sizes['wav'] = wav_bytes
+        log('16-bit sizes, source seconds 60–120')
+        log('form\tbytes\t% of WAV')
+        for form, length in sizes.items():
+            log(f'{form}\t{length}\t{100 * length / wav_bytes:.2f}')
+    finally:
+        original.unlink(missing_ok=True)
+        pcm.unlink(missing_ok=True)
+
+
+def prepare_mix_audio(source, work, cases):
+    helper = audio_helper(work)
+    original, pcm = work / 'mix-source.pcm', work / 'mix-row.pcm'
+    rate, _, source_bits, source_channels = source_audio(source, original, helper, 100)
+    prepared = {}
+
+    def row(form, seconds, number):
+        key = form, seconds, number
+        if key in prepared:
+            return dict(prepared[key])
+        bits = 24 if form in ('wav24', 'packed24') else 16
+        if bits == 16 and source_bits != 16:
+            raise ValueError(f'{form} requires a 16-bit source (track is {source_bits}-bit)')
+        is_wav = form.startswith('wav')
+        channels = 2 if is_wav else source_channels
+        width, frames = bits // 8, seconds * rate
+        written_pcm(original, pcm, width, frames, channels, (60 + number * seconds) * rate)
+        path = work / f'mix-{form}-{seconds}-{number}.{"wav" if is_wav else "flac"}'
+        index, evidence = [], {}
+        if is_wav:
+            with path.open('wb') as output, pcm.open('rb') as stream:
+                output.write(wav_header(rate, frames, bits))
+                shutil.copyfileobj(stream, output)
+        else:
+            mode = 'fixed-noseek' if form == 'fixed' else 'packed'
+            encoded = audio_command(helper, mode, pcm, path, frames, rate, bits, channels, 256)
+            proof = tuple(map(int, encoded.split())) if form == 'fixed' else None
+            index, evidence = verify_flac(helper, path, pcm, width, channels, frames,
+                                          work, proof, mode == 'packed', 256)
+        prepared[key] = dict(path=path, frames=frames, rate=rate, bits=bits, channels=channels,
+                             index=index, proof=evidence)
+        return dict(prepared[key])
+
+    media = {}
+    try:
+        for case in cases:
+            action, forms, size = MIX_CASES[case]
+            seconds = MIX_ACTIONS[action][0]
+            rows = [row(form, seconds, number) for number, form in enumerate(forms)]
+            if size == 'omit':
+                rows[-1]['description_size'] = None
+            elif size == 'fixed':
+                rows[-1]['description_size'] = row('fixed', seconds, 0)['path'].stat().st_size
+            media[case] = rows
+    finally:
+        original.unlink(missing_ok=True)
+        pcm.unlink(missing_ok=True)
+    return media
 
 
 def verify_frame_headers(path, index, rate, bits, channels, frames, block):
@@ -455,7 +576,7 @@ def prepare_listen_audio(source, work, cases):
                         if not any(stream.read(16)):
                             raise ValueError('STREAMINFO MD5 is missing')
                     evidence['md5_verified'] = True
-                if '--subset' in flags:
+                if mode == 'fixed-noseek' and '--legacy-header' not in flags:
                     evidence.update(verify_frame_headers(path, index, rate, bits, channels, frames, block))
             except ValueError as exc:
                 raise ValueError(f'{case}: {exc}') from exc
@@ -564,7 +685,8 @@ class MediaHandler(BaseHTTPRequestHandler):
         self.connection.settimeout(3)
         self.close_connection = True
         request_range = self.headers.get('Range', '')
-        event = dict(path=self.path, method=self.command, range=request_range)
+        event = dict(path=self.path, method=self.command, range=request_range,
+                     opened=time.monotonic() - self.server.records.clock)
         self.server.records.add('requests', event='open', **event)
         total = 0
         status = 416
@@ -848,8 +970,10 @@ def metadata(uri, mime, rate, frames, length, channels, bits):
     duration = f'{seconds // 3600}:{seconds // 60 % 60:02}:{seconds % 60:02}'
     if frames % rate:
         duration += f'.{(frames % rate) * 1_000_000_000 // rate:09}'
-    ET.SubElement(item, 'res', protocolInfo=f'http-get:*:{mime}:*', duration=duration,
-                  size=str(length), sampleFrequency=str(rate), bitsPerSample=str(bits),
+    attributes = dict(protocolInfo=f'http-get:*:{mime}:*', duration=duration)
+    if length is not None:
+        attributes['size'] = str(length)
+    ET.SubElement(item, 'res', attributes, sampleFrequency=str(rate), bitsPerSample=str(bits),
                   nrAudioChannels=str(channels)).text = uri
     return ET.tostring(document, encoding='unicode')
 
@@ -1179,12 +1303,27 @@ class Experiment:
     def listen_set(self):
         return getattr(self.args, 'set', 'refill') == 'listen'
 
+    @property
+    def mix_set(self):
+        return getattr(self.args, 'set', 'refill') == 'mix'
+
     def prepare(self):
         if self.seek_set:
             self.prepare_chains()
             return
         source = self.work / 'source.flac'
         track(self.args.lms_host, self.lms_port, self.args.track_id, source, self.records.log)
+        if self.mix_set:
+            packed_size_table(source, self.work, self.records.log)
+            self.media = prepare_mix_audio(source, self.work, self.args.cases)
+            self.sizes = {case: [dict(bytes=row['path'].stat().st_size, samples=row['frames'],
+                                      bits=row['bits'], **row['proof']) for row in rows]
+                          for case, rows in self.media.items()}
+            return
+        packed = (any(LISTEN_CASES[case][0] == 'packed' for case in self.args.cases) if self.listen_set else
+                  any('packed' in form for case in self.args.cases for form in CASES[case]))
+        if packed:
+            packed_size_table(source, self.work, self.records.log)
         if self.listen_set:
             self.media = prepare_listen_audio(source, self.work, self.args.cases)
         else:
@@ -1213,6 +1352,8 @@ class Experiment:
                 continue
             source = self.work / f'source-{rate}.flac'
             track(self.args.lms_host, self.lms_port, track_id, source, self.records.log)
+            if any(SEEK_CASES[case][0] == 'packed' for case in cases):
+                packed_size_table(source, self.work, self.records.log)
             self.media.update(prepare_seek_audio(source, self.work, cases, rate))
             source.unlink()
             for case in cases:
@@ -1310,7 +1451,7 @@ class Experiment:
 
     def add_items(self, case, repeat=None):
         uris = []
-        if self.seek_set:
+        if self.seek_set or self.mix_set:
             rows = self.media[case]
         elif self.listen_set:
             rows = [self.media[case]]
@@ -1328,8 +1469,10 @@ class Experiment:
             uri = f'http://{self.server.server_address[0]}:{self.server.server_port}{route}'
             self.own.add(uri)
             uris.append(uri)
+            description_size = media.get('description_size', item.length)
             self.speaker.av('AddURIToQueue', EnqueuedURI=uri,
-                            EnqueuedURIMetaData=metadata(uri, mime, rate, frames, item.length, media['channels'], media['bits']),
+                            EnqueuedURIMetaData=metadata(uri, mime, rate, frames, description_size,
+                                                         media['channels'], media['bits']),
                             DesiredFirstTrackNumberEnqueued=0, EnqueueAsNext=0)
         rows, _ = self.speaker.browse()
         indices = [next(i for i, row in enumerate(rows, 1) if uri in row) for uri in uris]
@@ -1618,6 +1761,180 @@ class Experiment:
                        < start + (i + 5) * self.scale], expected)
                 for i in range(0, duration, 5)]
 
+    def listening_status(self, start, end):
+        quality, errors = [], []
+        for row in list(self.records.rows):
+            if not start <= row['time'] < end:
+                continue
+            if row['kind'] != 'speaker' or row.get('protocol') != 'websocket':
+                continue
+            raw = row.get('raw')
+            if not isinstance(raw, list) or len(raw) != 2 or not isinstance(raw[1], dict):
+                continue
+            body = raw[1]
+            if ws_error(raw):
+                errors.append(str(body.get('errorCode') or body.get('reason') or 'websocket playback error'))
+            current = body.get('currentItem')
+            track = current.get('track') if isinstance(current, dict) else None
+            values = track.get('quality') if isinstance(track, dict) else None
+            if isinstance(values, dict) and 'bitDepth' in values and 'sampleRate' in values:
+                line = f'bitDepth={values["bitDepth"]} sampleRate={values["sampleRate"]}'
+                if 'lossless' in values:
+                    line += f' lossless={str(values["lossless"]).lower()}'
+                quality.append(line)
+        return list(dict.fromkeys(quality)), list(dict.fromkeys(errors))
+
+    def mix(self, result, count):
+        case = result['case']
+        action, _, _ = MIX_CASES[case]
+        duration, run_time, instruction, questions = MIX_ACTIONS[action]
+        uris = self.add_items(case)
+        paths = [urlsplit(uri).path for uri in uris]
+        result.update(replays=0, attempts=[], answers={})
+        while True:
+            self.choose(uris[0])
+            self.records.log(instruction)
+            self.records.log(f'NOW PLAYING {case} ({len(self.results)} of {count})')
+            start = self.t()
+            attempt = dict(start=start, paths=paths, states=[], errors=[])
+            result['attempts'].append(attempt)
+            try:
+                self.speaker.av('Play', Speed=1)
+                started = self.t()
+                state, status = self.transport()
+                attempt['states'].append(state)
+                if status.upper() not in ('', 'OK'):
+                    attempt['errors'].append(status)
+                if action == 'join':
+                    anchor, _ = self.advance(*uris, started, started + 26 * self.scale, 0)
+                    self.wait(anchor, 10)
+                    points = playing_answers(self.questions(started, self.t(), 'websocket'))
+                    quick = [row for row in points if row['latency_ms'] is not None and row['latency_ms'] < 30]
+                    gap = join_gap(quick, anchor, duration, self.scale)
+                    attempt['join_ms'] = None if gap is None else gap / self.scale
+                elif action == 'seek':
+                    self.wait(started, 6)
+                    sought = self.seek(20)
+                    attempt['seek'] = sought
+                    self.wait(sought['acknowledged'], 6)
+                    attempt['after_seek'] = self.first_positions(sought['acknowledged'])
+                elif action == 'pause':
+                    self.wait(started, 8)
+                    paused = self.t()
+                    attempt['before_pause'] = {
+                        protocol: next((row['position_s'] for row in reversed(self.questions(
+                            started, paused, protocol)) if row['position_s'] is not None), None)
+                        for protocol in ('UPnP', 'websocket')}
+                    self.speaker.av('Pause')
+                    state, status = self.transport()
+                    attempt['states'].append(state)
+                    if status.upper() not in ('', 'OK'):
+                        attempt['errors'].append(status)
+                    self.wait(paused, 5)
+                    resumed = self.t()
+                    self.speaker.av('Play', Speed=1)
+                    acknowledged = self.t()
+                    self.wait(resumed, 8)
+                    attempt['after_resume'] = self.first_positions(acknowledged)
+                else:
+                    self.wait(started, run_time)
+            except Exception as exc:
+                attempt['errors'].append(error_text(exc))
+                self.wait(start, run_time)
+            finally:
+                attempt['end'] = self.t()
+                self.speaker.av('Stop')
+            quality, errors = self.listening_status(start, attempt['end'])
+            attempt['quality'] = quality
+            attempt['errors'].extend(errors)
+            attempt['states'] = list(dict.fromkeys(attempt['states'] + [
+                row['state'] for row in self.questions(start, attempt['end']) if row.get('state')]))
+            for index, question in enumerate(questions):
+                answer = self.listen_answer(case, question, replay=index == 0)
+                if answer == 'r':
+                    result['replays'] += 1
+                    break
+                result['answers'][question] = 'yes' if answer == 'y' else 'no'
+            else:
+                return
+
+    def first_positions(self, since):
+        return {protocol: next((row['position_s'] for row in sorted(
+                    self.questions(since, self.t(), protocol), key=lambda row: row['sent'])
+                    if row['position_s'] is not None), None)
+                for protocol in ('UPnP', 'websocket')}
+
+    def mix_summary(self):
+        table = [MIX_NOTICE, 'case\trepeat\tanswers\treplays\ttransport state\twebsocket quality'
+                 '\tplayback errors\taudio requests\tjoin_ms\tposition observations']
+        closes = {row['opened']: row for row in self.records.rows
+                  if row['kind'] == 'requests' and row['event'] == 'close'}
+        for run in self.results:
+            for attempt in run.get('attempts', []):
+                requests = []
+                for row in self.records.rows:
+                    if (row['kind'] != 'requests' or row['event'] != 'open' or
+                            row['path'] not in attempt['paths'] or
+                            not attempt['start'] <= row['time'] < attempt['end']):
+                        continue
+                    after_seek = row['time'] >= attempt.get('seek', {}).get('sent', math.inf)
+                    closed = closes.get(row['opened'])
+                    requests.append(dict(row=attempt['paths'].index(row['path']) + 1, method=row['method'],
+                                         range=row['range'], bytes_sent=closed['size'] if closed else None,
+                                         after_seek=after_seek))
+                attempt['requests'] = requests
+
+            def attempts_cell(format_attempt):
+                return ' / '.join(format_attempt(attempt) or '—' for attempt in run.get('attempts', [])) or '—'
+
+            def request_cell(attempt):
+                return ', '.join(
+                    f'row {r["row"]} {r["method"]} {r["range"] or "full"} '
+                    f'{r["bytes_sent"] if r["bytes_sent"] is not None else "—"} B' + (' after seek' if r['after_seek'] else '')
+                    for r in attempt['requests'])
+
+            answers = run.get('answers', {})
+            cells = [
+                run['case'], str(run['repeat']),
+                '; '.join(f'{question} {answer}' for question, answer in answers.items()) or '—',
+                str(run.get('replays', 0)),
+                *(attempts_cell(lambda attempt: ', '.join(attempt.get(key, [])))
+                  for key in ('states', 'quality', 'errors')),
+                attempts_cell(request_cell),
+                attempts_cell(lambda attempt: f'{attempt["join_ms"]:.1f}'
+                              if attempt.get('join_ms') is not None else '—'),
+                attempts_cell(lambda attempt: ', '.join(
+                    f'{key}={json.dumps(attempt[key])}' for key in ('after_seek', 'before_pause', 'after_resume')
+                    if key in attempt)),
+            ]
+            table.append('\t'.join(' '.join(cell.split()) for cell in cells))
+        controls = [run for run in self.results if run['case'] in ('wav', 'wav-wav')]
+        if any('no' in run.get('answers', {}).values() for run in controls):
+            table.append('controls failed, the run proves nothing; check volume and room')
+            return '\n'.join(table) + '\n'
+        for repeat in range(1, self.args.repeats + 1):
+            runs = [run for run in self.results if run['repeat'] == repeat]
+            if self.args.repeats > 1:
+                table.append(f'Repeat {repeat}')
+            passed = [run['case'] for run in controls if run['repeat'] == repeat and
+                      len(run.get('answers', {})) == len(MIX_ACTIONS[MIX_CASES[run['case']][0]][3]) and
+                      all(answer == 'yes' for answer in run['answers'].values())]
+            table.append('Controls passed: ' + (', '.join(passed) or 'none'))
+            for group, cases in MIX_GROUPS.items():
+                yes, no = [], []
+                for run in runs:
+                    if run['case'] not in cases:
+                        continue
+                    answers = run.get('answers', {})
+                    refused = [question for question, answer in answers.items() if answer == 'no']
+                    if refused:
+                        no.append(f'{run["case"]} ({", ".join(refused)})')
+                    elif len(answers) == len(MIX_ACTIONS[MIX_CASES[run['case']][0]][3]):
+                        yes.append(run['case'])
+                table.append(f'{group}, all yes: ' + (', '.join(yes) or '—'))
+                table.append(f'{group}, no answers: ' + (', '.join(no) or '—'))
+        return '\n'.join(table) + '\n'
+
     def listen(self, result, count):
         case = result['case']
         uri, = self.add_items(case)
@@ -1645,28 +1962,14 @@ class Experiment:
             finally:
                 end = self.t()
                 self.speaker.av('Stop')
-            quality, requests = [], []
+            quality, ws_errors = self.listening_status(start, end)
+            errors.extend(ws_errors)
+            requests = []
             for row in list(self.records.rows):
                 if not start <= row['time'] < end:
                     continue
                 if row['kind'] == 'requests' and row.get('path') == path and row['event'] == 'open':
                     requests.append(f'{row["method"]} {row["range"] or "full"}')
-                if row['kind'] != 'speaker' or row.get('protocol') != 'websocket':
-                    continue
-                raw = row.get('raw')
-                if not isinstance(raw, list) or len(raw) != 2 or not isinstance(raw[1], dict):
-                    continue
-                body = raw[1]
-                if ws_error(raw):
-                    errors.append(str(body.get('errorCode') or body.get('reason') or 'websocket playback error'))
-                current = body.get('currentItem')
-                track = current.get('track') if isinstance(current, dict) else None
-                values = track.get('quality') if isinstance(track, dict) else None
-                if isinstance(values, dict) and 'bitDepth' in values and 'sampleRate' in values:
-                    line = f'bitDepth={values["bitDepth"]} sampleRate={values["sampleRate"]}'
-                    if 'lossless' in values:
-                        line += f' lossless={str(values["lossless"]).lower()}'
-                    quality.append(line)
             result['attempts'].append(dict(states=list(dict.fromkeys(states)), quality=list(dict.fromkeys(quality)),
                                            errors=list(dict.fromkeys(errors)), requests=requests))
             answer = self.listen_answer(case)
@@ -1675,10 +1978,14 @@ class Experiment:
                 return
             result['replays'] += 1
 
-    def listen_answer(self, case):
+    def listen_answer(self, case, question=PLAIN_QUESTION[0], replay=True):
+        accepted = ('y', 'n', 'r') if replay else ('y', 'n')
+        options = 'y = yes, n = no' + (', r = play it again' if replay else '')
+        prompt = f'{case}: {question} [{options}]'
         if self.scripted_answers is not None:
+            if self.mix_set:
+                self.records.log(prompt)
             return next(self.scripted_answers)
-        prompt = f'{case}: did you hear music? [y = yes, n = no, r = play it again]'
         tty = self.args.terminal
         while True:
             print(prompt, flush=True)
@@ -1686,7 +1993,7 @@ class Experiment:
             if not answer:
                 raise ValueError('listening ended before a terminal answer was received')
             answer = answer.strip().lower()
-            if answer in ('y', 'n', 'r'):
+            if answer in accepted:
                 return answer
 
     def listen_summary(self):
@@ -1725,9 +2032,11 @@ class Experiment:
         return '\n'.join([*table, closing]) + '\n'
 
     def run(self, name):
-        if self.listen_set:
+        if self.listen_set or self.mix_set:
             count = len(self.args.cases) * self.args.repeats
-            self.records.log(f'{count} cases, expected duration about {count * 30 / 60:.0f} min')
+            seconds = (sum(MIX_ACTIONS[MIX_CASES[case][0]][1] + 10 for case in self.args.cases)
+                       if self.mix_set else 30 * len(self.args.cases))
+            self.records.log(f'{count} cases, expected duration about {seconds * self.args.repeats / 60:.0f} min')
             self.scripted_answers = iter(self.args.answers) if self.args.answers is not None else None
         if self.seek_set:
             count = len(self.args.cases) * self.args.repeats
@@ -1770,25 +2079,27 @@ class Experiment:
                         changed = True
                         self.speaker.set_volume(self.args.volume)
                     count = len(self.args.cases) * self.args.repeats
-                    if not self.seek_set and not self.listen_set:
+                    if not (self.seek_set or self.listen_set or self.mix_set):
                         self.records.log(f'{count} cases, expected duration about {count * 145 / 60:.0f} min')
                     with Questions(self.speaker, self.records, self.scale):
                         for repeat in range(1, self.args.repeats + 1):
                             for case in self.args.cases:
                                 result = dict(case=case, repeat=repeat)
                                 self.results.append(result)
-                                if not self.listen_set:
+                                if not (self.listen_set or self.mix_set):
                                     self.records.log(f'{case} repeat {repeat}')
                                 try:
                                     if self.seek_set:
                                         self.measure_chain(result)
                                     elif self.listen_set:
                                         self.listen(result, count)
+                                    elif self.mix_set:
+                                        self.mix(result, count)
                                     else:
                                         self.measure(result)
                                 except Exception as exc:
                                     result['error'] = error_text(exc)
-                                    if self.listen_set:
+                                    if self.listen_set or self.mix_set:
                                         raise
                                     self.records.log(f'{case}: FAIL {result["error"]}')
                                 finally:
@@ -1887,7 +2198,9 @@ class Experiment:
             if case != 'wav':
                 table.append(case + '\t' + '\t'.join(render(row[key] - baseline[key])
                              if key in row and key in baseline else '—' for key, _ in delta))
-        if self.listen_set:
+        if self.mix_set:
+            summary_text = self.mix_summary()
+        elif self.listen_set:
             summary_text = self.listen_summary()
         else:
             measurements = self.seek_summary() if self.seek_set else '\n'.join(table) + '\n'
@@ -1926,7 +2239,12 @@ class Experiment:
             'probe.log': json_lines('log'),
             'versions.txt': f'YeneY {program}\nrefill probe {VERSION}\n',
         }
-        if self.listen_set:
+        if self.mix_set:
+            files['answers.json'] = json.dumps([
+                {key: row[key] for key in ('case', 'repeat', 'answers', 'replays')}
+                for row in self.results if row.get('answers')
+            ], indent=2) + '\n'
+        elif self.listen_set:
             files['answers.json'] = json.dumps([
                 {key: row[key] for key in ('case', 'repeat', 'answer', 'replays')}
                 for row in self.results if 'answer' in row
@@ -1953,7 +2271,7 @@ def main():
     parser.add_argument('--lms-host', type=ipaddress.IPv4Address, required=True)
     parser.add_argument('--track-id', type=int, required=True)
     parser.add_argument('--volume', type=int)
-    parser.add_argument('--set', choices=('refill', 'seek', 'listen'), default='refill')
+    parser.add_argument('--set', choices=('refill', 'seek', 'listen', 'mix'), default='refill')
     parser.add_argument('--track-id-48', type=int)
     parser.add_argument('--cases')
     parser.add_argument('--answers')
@@ -1961,7 +2279,7 @@ def main():
     parser.add_argument('--normal-play-mode', action='store_true')
     parser.add_argument('--check', action='store_true')
     args = parser.parse_args()
-    cases = {'refill': CASES, 'seek': SEEK_CASES, 'listen': LISTEN_CASES}[args.set]
+    cases = {'refill': CASES, 'seek': SEEK_CASES, 'listen': LISTEN_CASES, 'mix': MIX_CASES}[args.set]
     if args.cases is None:
         args.cases = [case for case in cases if case != 'fixed16-4096-48k' or args.track_id_48 is not None]
     else:
@@ -1974,18 +2292,26 @@ def main():
             len(set(args.cases)) != len(args.cases) or any(case not in cases for case in args.cases)):
         parser.error('invalid track id, volume, repeat count, or cases')
     if args.answers is not None:
-        if args.set != 'listen':
-            parser.error('--answers requires --set listen')
+        if args.set not in ('listen', 'mix'):
+            parser.error('--answers requires --set listen or --set mix')
         args.answers = [answer.strip().lower() for answer in args.answers.split(',')]
-        if (any(answer not in ('y', 'n', 'r') for answer in args.answers) or args.answers[-1] == 'r' or
-                sum(answer != 'r' for answer in args.answers) != len(args.cases) * args.repeats):
-            parser.error('--answers needs one y or n per case and repeat, with optional r before each answer')
+        tokens = iter(args.answers)
+        for case in args.cases * args.repeats:
+            questions = MIX_ACTIONS[MIX_CASES[case][0]][3] if args.set == 'mix' else PLAIN_QUESTION
+            for index in range(len(questions)):
+                answer = next(tokens, None)
+                while index == 0 and answer == 'r':
+                    answer = next(tokens, None)
+                if answer not in ('y', 'n'):
+                    parser.error('--answers needs one y or n per question, with r only before the first answer of a case')
+        if next(tokens, None) is not None:
+            parser.error('--answers has extra answers')
     with contextlib.ExitStack() as terminal:
-        if args.set == 'listen' and not args.check and args.answers is None:
+        if args.set in ('listen', 'mix') and not args.check and args.answers is None:
             try:
                 args.terminal = terminal.enter_context(os.fdopen(os.open('/dev/tty', os.O_RDWR)))
             except OSError:
-                parser.error('--set listen requires a terminal or --answers before playback')
+                parser.error(f'--set {args.set} requires a terminal or --answers before playback')
         if os.geteuid() != 0:
             parser.error('run as root')
         return execute(args)

@@ -147,7 +147,7 @@ class Renderer(Device):
                             info = int.from_bytes(body[18:26], 'big')
                             assert ((info >> 36) & 31) + 1 == row['bits']
                     elif not offset:
-                        assert body.startswith(b'RIFF') and int.from_bytes(body[34:36], 'little') == 24
+                        self.check_wav(body, row)
             except Exception as exc:
                 s.errors.append('probe media request: ' + repr(exc))
 
@@ -166,6 +166,10 @@ class Renderer(Device):
         s.join_timer = threading.Timer(max(0, duration - target) * SCALE, join)
         s.join_timer.daemon = True
         s.join_timer.start()
+
+    @staticmethod
+    def check_wav(body, row):
+        assert body.startswith(b'RIFF') and int.from_bytes(body[34:36], 'little') == 24
 
     @staticmethod
     def media_offset(row, seconds):
@@ -690,8 +694,8 @@ def check_listen_writer(work, test):
         width = bits // 8
         pcm.write_bytes(bytes(range(width * 2)) * frames)
         for enabled in (False, True):
-            flag = '--subset' if test == 'headers' else '--md5'
-            args = [flag] if enabled else []
+            args = (['--legacy-header'] if not enabled else []) if test == 'headers' else (
+                ['--md5'] if enabled else [])
             probe.audio_command(helper, 'fixed-noseek', pcm, media, frames, rate, bits, 2, block, *args)
             raw = media.read_bytes()
             if test == 'headers':
@@ -745,7 +749,7 @@ class ListenRenderer(Renderer):
 
 def check_listen_speaker(work, test):
     with DownloadServer() as downloads:
-        downloads.audio = fixture(work, 81, rate=44100, channels=2)
+        downloads.audio = fixture(work, 120, rate=44100, channels=2)
         renderer = ProbeCoordinator(handler=ListenRenderer)
         renderer.listen_plays = []
         renderer.crossfade = False
@@ -816,6 +820,18 @@ def check_listen_speaker(work, test):
 def check_probe05(test, work):
     if test == 'fixed':
         check_listen_writer(work, 'unchanged')
+        fixture(work, 2, rate=44100, channels=2)
+        source = work / '2.flac'
+        refill_work, seek_work = work / 'refill', work / 'seek'
+        refill_work.mkdir()
+        seek_work.mkdir()
+        refill = probe.prepare_audio(source, refill_work, ['fixed16'], 2)['fixed16']
+        with mock.patch.object(probe, 'ROW_SECONDS', 1), mock.patch.object(probe, 'SEEK_ACTIONS', ()):
+            seek, = probe.prepare_seek_audio(source, seek_work, ['fixed16-4096'], 44100)['fixed16-4096']
+        for row in (refill, seek):
+            headers = probe.verify_frame_headers(row['path'], row['index'], 44100, 16, 2, row['frames'], 4096)
+            assert headers == {'first_frame_header': 'ff f8 c9 18', 'last_frame_header': 'ff f8 79 18'}
+            print(row['path'].name, headers, flush=True)
     elif test in ('listen-baseline', 'listen-bytes'):
         fixture(work, 81, rate=44100, channels=2)
         media = probe.prepare_listen_audio(work / '81.flac', work, probe.LISTEN_CASES)
@@ -897,12 +913,16 @@ class MixRenderer(Renderer):
             resource = item[-1]
             attrs = dict(resource.attrib)
             assert resource.text == args['EnqueuedURI']
-            self.server.descriptions.append((resource.text, attrs))
+            self.server.descriptions.append((resource.text, attrs, probe_http_length(resource.text)))
             self.server.items.append(dict(uri=resource.text, duration=probe.position(attrs['duration']),
                                           bits=int(attrs['bitsPerSample'])))
             self.server.update += 1
             return {}, None
         return super().action(service, action, args)
+
+    @staticmethod
+    def check_wav(body, row):
+        assert body.startswith(b'RIFF') and int.from_bytes(body[34:36], 'little') == row['bits']
 
     @staticmethod
     def media_offset(row, seconds):
@@ -915,7 +935,7 @@ class MixRenderer(Renderer):
         if not header[4] & 0x80:
             return Renderer.media_offset(dict(row, size=probe_http_length(row['uri'])),
                                          seconds * 44100 / 8000)
-        frame = seconds * 44100 // block
+        frame = int(seconds * 44100) // block
         return 42 + sum(12 + (i >= 128) + (i >= 2048) + block * 4 for i in range(frame))
 
 
@@ -956,7 +976,7 @@ def check_mix_speaker(work, test):
         renderer.missing = set()
         renderer.av_control = AV_CONTROL
         api = LocalApi(renderer, port=0)
-        api.rtt_ms = api.spike_ms = 0
+        api.rtt_ms = api.spike_ms = api.buffering_seconds = 0
         try:
             records = probe.Records()
             speaker = probe.Speaker('127.0.0.1', records, renderer.server_port, api.server.server_port)
@@ -982,13 +1002,31 @@ def check_mix_speaker(work, test):
                 assert list(row['answers'].values()) == answers
                 line = next(line for line in table.splitlines() if line.startswith(case + '\t'))
                 assert all(f'{question} {answer}' in line for question, answer in row['answers'].items())
-            descriptions = [attrs for _, attrs in renderer.descriptions]
+            descriptions = [attrs for _, attrs, _ in renderer.descriptions]
             assert 'size' not in descriptions[14] and 'size' not in descriptions[17]
+            for case, index in (('packed-nosize', 14), ('packed-fixedsize', 15), ('fixed-packed-nosize', 17)):
+                assert renderer.descriptions[index][2] == experiment.media[case][-1]['path'].stat().st_size
             fixed = experiment.media['fixed16-256'][0]['path'].stat().st_size
             assert descriptions[15]['size'] == str(fixed)
             assert descriptions[16]['size'] == str(experiment.media['fixed-packed-nosize'][0]['path'].stat().st_size)
-            for case in ('packed-nosize', 'packed-fixedsize', 'fixed-packed-nosize'):
-                assert experiment.media[case][-1]['path'].stat().st_size > 0
+            assert [attrs['bitsPerSample'] for attrs in descriptions[:6]] == ['24', '16', '16', '24', '16', '16']
+            for case, run in zip(MIX_ORDER, experiment.results):
+                for attempt in run['attempts']:
+                    assert attempt['requests'] and all(request['bytes_sent'] is not None
+                                                       for request in attempt['requests'])
+                    if case.endswith('-seek'):
+                        assert any(request['after_seek'] and request['range'] for request in attempt['requests'])
+                    if case.endswith('-pause'):
+                        assert all(attempt[key]['websocket'] is not None for key in ('before_pause', 'after_resume'))
+                if case in MIX_ORDER[4:9] or case == 'fixed-packed-nosize':
+                    assert run['attempts'][0]['join_ms'] is not None
+            for number, (case, row) in enumerate(zip(MIX_ORDER, rows)):
+                prompts = [line for line in messages if line.startswith(case + ': did ') or
+                           line.startswith(case + ': was ')]
+                expected_prompts = list(row['answers'])
+                if replay and number == 0:
+                    expected_prompts.insert(0, expected_prompts[0])
+                assert [line.split(': ', 1)[1].split(' [', 1)[0] for line in prompts] == expected_prompts
             assert renderer.items == renderer.original
             assert not renderer.errors, renderer.errors
             if not replay:
@@ -1039,7 +1077,11 @@ if __name__ == '__main__':
         with tempfile.TemporaryDirectory() as directory:
             check_probe04(sys.argv[2], Path(directory))
     else:
-        for test in ('headers', 'md5', 'unchanged', 'listen', 'controls', 'no-terminal'):
+        for test in ('headers', 'md5', 'listen', 'controls', 'no-terminal'):
             with tempfile.TemporaryDirectory() as directory:
                 check_probe04(test, Path(directory))
+        for test in ('fixed', 'listen-bytes', 'packed256', 'sizes', 'mix-no-terminal',
+                     'mix', 'mix-wav-control', 'mix-join-control'):
+            with tempfile.TemporaryDirectory() as directory:
+                check_probe05(test, Path(directory))
         run()

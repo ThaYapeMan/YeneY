@@ -85,7 +85,8 @@ resamples. Use `--cases` and `--repeats` within the selected set.
 | `wav` | 24-bit WAV |
 | `fixed16-4096`, `fixed16-1024`, `fixed16-256` | Fixed-size 16-bit FLAC, block size in the chain name |
 | `fixed24-256` | Fixed-size 24-bit FLAC, 256 samples per block |
-| `packed16-4096`, `packed16-1024` | Packed 16-bit FLAC, block size in the chain name |
+| `packed16-4096`, `packed16-1024`, `packed16-256` | Packed 16-bit FLAC, block size in the chain name |
+| `packed24-256` | Packed 24-bit FLAC, 256 samples per block |
 | `fixed16-4096-48k` | Optional fixed-size 16-bit FLAC at 48 kHz |
 | `fixed16-4096-ms` | Unavailable pending verification of the Sonos WebSocket seek reference |
 
@@ -161,12 +162,19 @@ entries before each answer.
 The order is `wav`, `packed16`, `fixed16`, `fixed16-subset`,
 `fixed16-md5`, `fixed16-subset-md5`, `fixed16-256-subset`, and
 `fixed24-256-subset`. The six fixed cases use verbatim frames without a
-seek table. The subset switch writes the sample rate and bit depth into
-the frame headers. It tests the hypothesis that the speaker needs those
-fields explicitly. The MD5 switch writes the checksum of the interleaved
-PCM into STREAMINFO. The suffixes identify the switches and the smaller
-256-sample blocks. The probe verifies decoded PCM and the frame-offset
-suffix, and checks the first and last frame headers for the subset cases.
+seek table. The sample rate and bit depth are now written in frame
+headers by default. The listen cases `fixed16` and `fixed16-md5` pass
+`--legacy-header` to preserve the original form that refers to STREAMINFO
+for these fields. The listen set keeps the same eight files byte for
+byte. The MD5 switch writes the checksum of the interleaved PCM into
+STREAMINFO. The probe verifies decoded PCM and the frame-offset suffix,
+and checks the first and last frame headers for the subset cases.
+
+On 25 November, the owner heard the fixed rows with explicit frame
+headers on the Study Play:1, both with and without MD5. The two legacy
+header controls were silent. The measurements of fixed rows from
+21 to 24 November were made on silent rows. From PROBE-05 onward, fixed
+rows in the refill and seek sets use explicit frame headers.
 
 The result table records the answer, replays, transport state, reported
 WebSocket quality, playback errors and HTTP requests. The closing line
@@ -174,3 +182,48 @@ reports the controls and paired changes in answers. If either control
 was silent, check the volume and room before drawing conclusions.
 Keep the printed archive path and your run log. The archive contains
 `answers.json` alongside the raw records and summary.
+
+
+## Listening to mixed queue rows
+
+Use `--set mix --normal-play-mode` with a native 16-bit FLAC track of
+at least 120 s. The default set takes about eight minutes plus time to
+answer and replay. Use `--cases` and `--repeats` to select and repeat
+cases. The terminal asks one question at a time after stopping the
+speaker. Answer `y` for yes or `n` for no. At the first question, `r`
+replays the case from the beginning. Tests can pass these responses in
+order with `--answers`.
+
+| Cases | What happens |
+| --- | --- |
+| `wav`, `fixed16-256`, `packed16-256`, `packed24-256` | A single row runs for 15 s. The WAV control is 24-bit. |
+| `wav-wav`, `fixed-fixed`, `packed-packed`, `fixed-packed`, `packed-fixed` | Two contiguous 20 s cuts run until 10 s into the second row. |
+| `packed-nosize`, `packed-fixedsize`, `fixed-packed-nosize` | The packed row's description omits size or gives the corresponding fixed file's size. HTTP responses give the true file length throughout. |
+| `fixed-seek`, `packed-seek` | Play 6 s, seek to 20 s, then play 6 s. |
+| `fixed-pause`, `packed-pause` | Play 8 s, pause 5 s, then resume for 8 s. |
+
+The cuts start 60 s into the track. FLAC rows use blocks of 256 samples.
+Fixed rows state the rate and bit depth in each frame and omit a seek
+table. Packed rows use libFLAC and include its seek table. The joins and
+other cases use 16-bit rows except for the plain 24-bit WAV and packed
+24-bit controls.
+
+The archive contains the answers in `answers.json` and the speaker's
+transport state, WebSocket quality, errors and HTTP requests in the
+summary and raw records. The HTTP counts are bytes written by the
+server. For joins, `join_ms` is positive when the beginning of the second
+row falls after the end predicted by the first row's reported position.
+The archive also marks requests after each seek and records positions
+before pausing and just after resuming. Only the listener's answers can
+establish audibility. If either WAV control fails, the closing line asks
+the listener to check the volume and room. Keep the archive and the run
+log together.
+
+The imitation speaker accepts descriptions without size as a test
+assumption. That behavior was not derived from a speaker capture.
+
+Runs that prepare packed files, and every mix run, print a 16-bit size
+table for seconds 60 through 120 of the test track. It compares packed
+FLAC at block sizes 256, 1,024 and 4,096, fixed FLAC at 256 and 16-bit
+WAV, using stereo PCM for all five entries. The table gives the actual
+file lengths and each as a percentage of the WAV length.
