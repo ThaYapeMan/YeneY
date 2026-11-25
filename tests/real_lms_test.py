@@ -261,6 +261,7 @@ for name in ('library','prefs/plugin','cache','log','playlists'): (base/name).mk
 study_pacing = os.environ.get('YENEY_QUEUE_PACING_STUDY')
 mixed_rows = os.environ.get('YENEY_QUEUE_MIXED_REAL_LMS') == '1'
 depth_rows = os.environ.get('YENEY_QUEUE_DEPTH_REAL_LMS') == '1'
+packed_rows = os.environ.get('YENEY_QUEUE_PACKED_REAL_LMS')
 nav_media = os.environ.get('YENEY_NAV_MEDIA', '')
 fullq_codec = os.environ.get('YENEY_FULLQ_CODEC', 'flac') if os.environ.get('YENEY_FULLQ') == '1' else 'flac'
 assert fullq_codec in ('flac', 'alac', 'wav', 'converted-flac')
@@ -271,6 +272,8 @@ fixture_count = 4 if scale_mb else 12 if os.environ.get('YENEY_FULLQ') == '1' el
 for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
     seconds = 360 if os.environ.get('YENEY_WS_LIFECYCLE') == '1' and i < 2 else 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
+    if packed_rows:
+        seconds = 300 if packed_rows == 'benchmark' and i < 3 else 8
     if depth_rows:
         seconds = 4
     if study_pacing and i < 4:
@@ -283,10 +286,10 @@ for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44
     if scale_mb:
         seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
     source=bytearray(wav(rate,seconds,noise=True))
-    if study_pacing or mixed_rows or os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
+    if study_pacing or mixed_rows or packed_rows or os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
         np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
-    if depth_rows and i == 1:
+    if (depth_rows and i == 1) or packed_rows == 'benchmark':
         packed = bytearray(len(source[44:]) * 3 // 2)
         packed[::3] = bytes([17]) * (len(packed) // 3)
         packed[1::3], packed[2::3] = source[44::2], source[45::2]
@@ -661,6 +664,10 @@ try:
         raise SystemExit(0)
     if depth_rows:
         from queue_depth_real_lms import run
+        run(globals())
+        raise SystemExit(0)
+    if packed_rows:
+        from queue_packed_real_lms import run
         run(globals())
         raise SystemExit(0)
     if mixed_rows:
