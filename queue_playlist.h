@@ -3,6 +3,7 @@
 #include "lms_artwork.h"
 #include "queue_lms_cli.h"
 #include <map>
+#include <charconv>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
@@ -11,7 +12,7 @@ struct PlaylistEntry {
     std::string id, title, artist, album, url;
     std::string artworkUrl, remote;
     double duration = 0, liveEdge = -1;
-    unsigned startOffsetMs = 0;
+    unsigned startOffsetMs = 0, sampleRate = 0;
     std::string plainTitle() const {
         if (url.compare(0, 10, "podcast://")) return title;
         // Native Podcast scanUrl can store getCurrentTitle's player formatting
@@ -100,7 +101,13 @@ public:
                     entry->duration = std::stod(value);
                 else if (key == "live_edge")
                     entry->liveEdge = std::stod(value);
-                else if (key == "remote")
+                else if (key == "samplerate") {
+                    unsigned rate = 0;
+                    const auto end = value.data() + value.size();
+                    const auto parsed = std::from_chars(value.data(), end, rate);
+                    if (parsed.ec == std::errc{} && parsed.ptr == end)
+                        entry->sampleRate = rate;
+                } else if (key == "remote")
                     entry->remote = value;
             }
         }
@@ -111,7 +118,7 @@ public:
     }
     PlaylistSnapshot read(const std::string &host, const std::string &mac, unsigned port = 9090) {
         std::string reply;
-        if (!controlLms(host, mac, "status 0 60000 tags:alKudV", port, &reply))
+        if (!controlLms(host, mac, "status 0 60000 tags:alKudVT", port, &reply))
             throw std::runtime_error("playlist-cli-unavailable");
         return parse(reply);
     }

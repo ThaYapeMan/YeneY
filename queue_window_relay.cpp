@@ -731,7 +731,7 @@ void QueueRoom::Impl::activateLazy(uint64_t token) {
 }
 
 QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::Slot &slot,
-                                             const Entry *produced, unsigned bits) {
+                                             const Entry *produced, unsigned bits, unsigned knownRate) {
     const auto lazy = rowOwner.prepareLazyRow([this, token = slot.token] {
         std::lock_guard<std::mutex> lock(mutex);
         if (closing) return;
@@ -742,7 +742,10 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
         remotePlaybackSource(slot.track.id, slot.track.remote, slot.track.url)
             ? queue_audio::PromiseKind::UpperBound : queue_audio::PromiseKind::Exact;
     upnp::QueueMetadata metadata;
-    metadata.bits = produced ? route.bitsFor(produced->item->descriptor()) : bits;
+    const auto rate = produced ? produced->item->descriptor().rate : (knownRate ? knownRate : slot.track.sampleRate);
+    const auto format = route.formatFor(kind, rate);
+    metadata.bits = format == queue_audio::Format::Flac ?
+        (produced ? produced->item->descriptor().bits : bits) : 24;
     metadata.url = speaker->controllerUri() + route.publishDeferred(1, "lazy-" + std::to_string(slot.token) + "-" + std::to_string(++lazySerial),
         [lazy, token = slot.token](upnp::StreamRequest &request) {
             const auto start = std::chrono::steady_clock::now();
@@ -752,7 +755,7 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
                 item ? "headers" : (ms >= 2990 ? "deadline" : "abandoned"),
                 (unsigned long long)token, (long long)ms, lazy->commandCount());
             return item;
-        }, [lazy](bool audio) { return audio ? lazy->readyAudio() : lazy->ready(); }, kind, metadata.bits);
+        }, [lazy](bool audio) { return audio ? lazy->readyAudio() : lazy->ready(); }, kind, metadata.bits, rate);
     metadata.session = session + "-" + std::to_string(slot.token);
     metadata.title = slot.track.title; metadata.artist = slot.track.artist; metadata.album = slot.track.album;
     metadata.artwork = slot.track.artwork(host);
@@ -763,7 +766,7 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
         const auto &descriptor = produced->item->descriptor();
         metadata.frames = (produced->item->contentLength().value() - 44) / 6;
         metadata.rate = descriptor.rate;
-        metadata.size = queue_audio::rowLength(route.formatFor(kind), metadata.frames, metadata.rate, metadata.bits);
+        metadata.size = queue_audio::rowLength(format, metadata.frames, metadata.rate, metadata.bits);
         metadata.deferred = false;
         metadata.preciseDuration = produced->item->descriptor().kind == queue_audio::PromiseKind::UpperBound;
         if (!lazy->publish(produced->item, produced->stream)) throw std::logic_error("partial row declaration rejected");

@@ -23,8 +23,9 @@ public:
     // A deferred row supplies retained audio for an audio lookup and for its resolver.
     using Ready = std::function<std::shared_ptr<Item>(bool audio)>;
     std::string publishDeferred(uint64_t epoch, const std::string &identity, Resolver, Ready = {},
-                                PromiseKind = PromiseKind::Exact, unsigned bits = 24);
-    Format formatFor(PromiseKind) const;
+                                PromiseKind = PromiseKind::Exact, unsigned bits = 24, unsigned rate = 0);
+    Format formatFor(PromiseKind, unsigned rate) const;
+    bool flacEnabled() const;
     unsigned bitsFor(const Descriptor &) const;
     void revoke(uint64_t epoch);
     bool serve(upnp::StreamRequest &);

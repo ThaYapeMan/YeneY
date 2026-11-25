@@ -14,9 +14,11 @@ public:
     static constexpr unsigned blockSize = 256;
     static constexpr unsigned headerSize = 42;
 
+    static constexpr bool supportsRate(unsigned rate) { return rate == 44100 || rate == 48000; }
+
     FlacLayout(uint64_t samples, unsigned rate, unsigned bits = 24)
         : samples(samples), rate(rate), bits(bits) {
-        if (!samples || samples >= (1ull << 36) || !rate || rate >= (1u << 20) || (bits != 16 && bits != 24))
+        if (!samples || samples >= (1ull << 36) || !supportsRate(rate) || (bits != 16 && bits != 24))
             throw std::invalid_argument("invalid FLAC row description");
     }
     uint64_t totalSamples() const { return samples; }
@@ -41,7 +43,7 @@ public:
 
 private:
     static constexpr std::array<uint64_t, 5> numberLimits{1 << 7, 1 << 11, 1 << 16, 1 << 21, 1 << 26};
-    static constexpr unsigned frameOverhead = 10; // Excluding the encoded frame number.
+    static constexpr unsigned frameOverhead = 11; // Excluding the encoded frame number.
     uint64_t samples;
     unsigned rate, bits;
 };

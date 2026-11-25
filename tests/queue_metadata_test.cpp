@@ -76,8 +76,8 @@ int main() {
         m.session = "test";
         m.rate = 44100;
         m.frames = 257;
-        // Two FLAC frames, each with 11 overhead bytes and six bytes per sample.
-        m.size = (std::string(extension) == "flac" ? 42 + 22 : 44) + 6 * m.frames;
+        // Two FLAC frames, each with 12 overhead bytes and six bytes per sample.
+        m.size = (std::string(extension) == "flac" ? 42 + 24 : 44) + 6 * m.frames;
         auto text = upnp::queueDidl(m);
         assert(text.find(std::string("protocolInfo=\"http-get:*:audio/") + extension + ":*\"") != std::string::npos);
         assert(text.find("bitsPerSample=\"24\"") != std::string::npos);

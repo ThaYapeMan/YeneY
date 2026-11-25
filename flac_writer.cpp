@@ -40,7 +40,6 @@ unsigned FlacLayout::frameSamples(uint64_t index) const {
 
 std::array<char, FlacLayout::headerSize> FlacLayout::header() const {
     std::array<char, headerSize> bytes{'f', 'L', 'a', 'C', char(0x80), 0, 0, 34};
-    const auto block = std::min<uint64_t>(samples, blockSize);
     const auto last = frameCount() - 1;
     const auto lastSize = offset(last + 1) - offset(last);
     auto smallest = lastSize;
@@ -49,8 +48,8 @@ std::array<char, FlacLayout::headerSize> FlacLayout::header() const {
         smallest = std::min(smallest, offset(1) - offset(0));
         largest = std::max(largest, offset(last) - offset(last - 1));
     }
-    bigEndian(bytes.begin() + 8, block, 2);
-    bigEndian(bytes.begin() + 10, block, 2);
+    bigEndian(bytes.begin() + 8, blockSize, 2);
+    bigEndian(bytes.begin() + 10, blockSize, 2);
     bigEndian(bytes.begin() + 12, smallest, 3);
     bigEndian(bytes.begin() + 15, largest, 3);
     bigEndian(bytes.begin() + 18, (uint64_t(rate) << 44) | (1ull << 41) | (uint64_t(bits - 1) << 36) | samples, 8);
@@ -59,7 +58,7 @@ std::array<char, FlacLayout::headerSize> FlacLayout::header() const {
 
 std::vector<char> FlacLayout::frame(uint64_t index, const char *pcm) const {
     const auto count = frameSamples(index);
-    std::vector<char> bytes{char(0xff), char(0xf8), char(0x60), char(bits == 16 ? 0x18 : 0x1c)};
+    std::vector<char> bytes{char(0xff), char(0xf8), char(rate == 44100 ? 0x79 : 0x7a), char(bits == 16 ? 0x18 : 0x1c)};
     const auto expectedSize = offset(index + 1) - offset(index);
     bytes.reserve(expectedSize);
     unsigned width = 1 + (std::upper_bound(numberLimits.begin(), numberLimits.end(), index) - numberLimits.begin());
@@ -70,7 +69,7 @@ std::vector<char> FlacLayout::frame(uint64_t index, const char *pcm) const {
     } else {
         bytes.push_back(char(index));
     }
-    bytes.push_back(char(count - 1));
+    bigEndian(std::back_inserter(bytes), count - 1, 2);
     bytes.push_back(char(checksum<8, 0x07>(bytes)));
     for (unsigned channel = 0; channel < 2; ++channel) {
         bytes.push_back(0x02);

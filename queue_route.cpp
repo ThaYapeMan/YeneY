@@ -39,11 +39,12 @@ Route::Route(std::string r, std::string s, Format format) {
     state = std::make_shared<State>(std::move(r), std::move(s), format);
     state->pacing.log();
 }
-Format Route::formatFor(PromiseKind kind) const {
-    return kind == PromiseKind::Exact ? state->format : Format::Wav;
+bool Route::flacEnabled() const { return state->format == Format::Flac; }
+Format Route::formatFor(PromiseKind kind, unsigned rate) const {
+    return kind == PromiseKind::Exact && FlacLayout::supportsRate(rate) ? state->format : Format::Wav;
 }
 unsigned Route::bitsFor(const Descriptor &description) const {
-    return formatFor(description.kind) == Format::Flac ? description.bits : 24;
+    return formatFor(description.kind, description.rate) == Format::Flac ? description.bits : 24;
 }
 void Route::registerWith(upnp::StreamServer &server, std::string address, std::function<void()> activity) {
     state->speakerAddress = std::move(address);
@@ -64,17 +65,17 @@ std::string Route::publish(const std::string &owner, uint64_t epoch, uint64_t re
     if (state->revoked.count(epoch))
         throw std::logic_error("queue epoch revoked");
     const bool lazy = bool(resolve);
-    const auto format = formatFor(item->descriptor().kind);
+    const auto format = formatFor(item->descriptor().kind, item->descriptor().rate);
     auto inserted = state->entries.emplace(key, State::Entry{epoch, revision, format, bitsFor(item->descriptor()), item, std::move(resolve), {}});
     if (!inserted.second && (inserted.first->second.item != item || lazy || inserted.first->second.resolve))
         throw std::logic_error("immutable queue URL reused");
     return "/yeney/q/" + state->session + "/" + std::to_string(epoch) + "/" +
            std::to_string(revision) + "/" + id + formatExtension(format);
 }
-std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, Ready ready, PromiseKind kind, unsigned bits) {
+std::string Route::publishDeferred(uint64_t epoch, const std::string &identity, Resolver resolve, Ready ready, PromiseKind kind, unsigned bits, unsigned rate) {
     if (!token(identity) || !resolve) throw std::invalid_argument("invalid deferred route");
     const auto key = std::to_string(epoch) + "/1/" + identity;
-    const auto format = formatFor(kind);
+    const auto format = formatFor(kind, rate);
     std::lock_guard<std::mutex> lock(state->mutex);
     if (state->revoked.count(epoch) || !state->entries.emplace(key, State::Entry{epoch, 1, format, format == Format::Flac ? bits : 24, {}, std::move(resolve), std::move(ready)}).second)
         throw std::logic_error("deferred route reused");
@@ -146,7 +147,7 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         r.reply(404);
         return true;
     }
-    if ((format == Format::Flac && item->descriptor().kind != PromiseKind::Exact) ||
+    if ((format == Format::Flac && (item->descriptor().kind != PromiseKind::Exact || !FlacLayout::supportsRate(item->descriptor().rate))) ||
         (bits == 16 && item->descriptor().bits != 16)) {
         r.disconnect();
         return true;
