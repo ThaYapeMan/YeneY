@@ -27,6 +27,13 @@ struct Decode {
     unsigned bits;
     size_t cursor = 0;
     uint64_t frames = 0;
+    std::vector<uint64_t> *offsets = nullptr;
+
+    static FLAC__StreamDecoderTellStatus tell(const FLAC__StreamDecoder *, FLAC__uint64 *position,
+                                               void *opaque) {
+        *position = static_cast<Decode *>(opaque)->cursor;
+        return FLAC__STREAM_DECODER_TELL_STATUS_OK;
+    }
 
     static FLAC__StreamDecoderReadStatus read(const FLAC__StreamDecoder *, FLAC__byte target[],
                                                size_t *count, void *opaque) {
@@ -37,7 +44,7 @@ struct Decode {
         return *count ? FLAC__STREAM_DECODER_READ_STATUS_CONTINUE : FLAC__STREAM_DECODER_READ_STATUS_END_OF_STREAM;
     }
 
-    static FLAC__StreamDecoderWriteStatus write(const FLAC__StreamDecoder *, const FLAC__Frame *frame,
+    static FLAC__StreamDecoderWriteStatus write(const FLAC__StreamDecoder *decoder, const FLAC__Frame *frame,
                                                 const FLAC__int32 *const pcm[], void *opaque) {
         auto &self = *static_cast<Decode *>(opaque);
         assert(frame->header.bits_per_sample == self.bits && frame->header.channels == 2);
@@ -48,6 +55,11 @@ struct Decode {
                     assert(((uint32_t(pcm[channel][i]) << (24 - self.bits)) >> (8 * byte) & 255) == expected);
                 }
         self.frames += frame->header.blocksize;
+        if (self.offsets) {
+            FLAC__uint64 position = 0;
+            assert(FLAC__stream_decoder_get_decode_position(decoder, &position));
+            self.offsets->push_back(position);
+        }
         return FLAC__STREAM_DECODER_WRITE_STATUS_CONTINUE;
     }
 
@@ -56,13 +68,20 @@ struct Decode {
     }
 };
 
-void decode(const std::vector<char> &wire, uint64_t first, uint64_t total, unsigned bits) {
-    Decode state{wire, bits, 0, first};
+void decode(const std::vector<char> &wire, uint64_t first, uint64_t total, unsigned bits,
+            std::vector<uint64_t> *offsets = nullptr) {
+    Decode state{wire, bits, 0, first, offsets};
     std::unique_ptr<FLAC__StreamDecoder, decltype(&FLAC__stream_decoder_delete)>
         decoder(FLAC__stream_decoder_new(), FLAC__stream_decoder_delete);
     assert(decoder);
-    assert(FLAC__stream_decoder_init_stream(decoder.get(), Decode::read, nullptr, nullptr, nullptr,
+    assert(FLAC__stream_decoder_init_stream(decoder.get(), Decode::read, nullptr, Decode::tell, nullptr,
         nullptr, Decode::write, nullptr, Decode::error, &state) == FLAC__STREAM_DECODER_INIT_STATUS_OK);
+    if (offsets) {
+        FLAC__uint64 position = 0;
+        assert(FLAC__stream_decoder_process_until_end_of_metadata(decoder.get()));
+        assert(FLAC__stream_decoder_get_decode_position(decoder.get(), &position));
+        offsets->push_back(position);
+    }
     assert(FLAC__stream_decoder_process_until_end_of_stream(decoder.get()));
     assert(FLAC__stream_decoder_finish(decoder.get()));
     assert(state.frames == total);
@@ -149,13 +168,12 @@ void checkPacked(unsigned bits, const std::string &directory) {
         std::vector<char> wire(packed->size());
         assert(packed->read(0, wire.data(), wire.size()) == wire.size());
         compareProbe(wire, directory, rate, bits, frames, true);
-        decode(wire, 0, frames, bits);
+        std::vector<uint64_t> offsets;
+        decode(wire, 0, frames, bits, &offsets);
         assert(packed->frames() == (frames + 255) / 256);
-        for (size_t index = 0; index < packed->frames(); ++index) {
-            assert((uint8_t(wire.at(packed->offset(index))) == 0xff));
-            assert((uint8_t(wire.at(packed->offset(index) + 1)) & 0xfe) == 0xf8);
-        }
-        assert(packed->offset(packed->frames()) == wire.size());
+        assert(offsets.size() == packed->frames() + 1);
+        for (size_t index = 0; index < offsets.size(); ++index)
+            assert(packed->offset(index) == offsets[index]);
         std::cout << "PASS packed " << rate << " Hz " << bits << "-bit bytes, PCM and frame table\n";
     }
 }

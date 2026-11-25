@@ -151,9 +151,9 @@ oct11-acquisition-test: tests/oct11_acquisition_test.cpp
 oct12-boundary-test: tests/oct12_boundary_test.cpp core_sonos.cpp core_shm.o $(CORE_LIB)
 	$(call compile-program,g++,-std=c++17 -O2 -Wall -Wextra -I. -Ithird_party/yeney-core -pthread -o $@ tests/oct12_boundary_test.cpp core_sonos.cpp core_shm.o $(CORE_LIB) -lFLAC)
 
-queue_route.o queue_item_store.o wav_writer.o flac_writer.o: %.o: %.cpp
+queue_route.o queue_item_store.o wav_writer.o flac_writer.o packed_flac.o: %.o: %.cpp
 	g++ -std=c++17 -g -O2 -Wall -Wextra -I. $(DEPFLAGS) -c -o $@ $<
-QUEUE_ITEM_OBJS = queue_item_store.o wav_writer.o flac_writer.o queue_route.o
+QUEUE_ITEM_OBJS = queue_item_store.o wav_writer.o flac_writer.o packed_flac.o queue_route.o
 # Recreate the archive so incremental builds use the same member order as clean builds.
 libqueueitems.a: $(QUEUE_ITEM_OBJS)
 	rm -f $@.tmp

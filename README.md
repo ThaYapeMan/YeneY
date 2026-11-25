@@ -204,7 +204,7 @@ artwork, the Material Skin icon and the older debug names are explained in
 | Setting | Values | Default |
 |---|---|---|
 | `YENEY_PLAYBACK_MODE` | `queue`: source-aware relay/stream on the coordinator · `stream`: explicit continuous transport · `auto`: stream, logged as `auto-phase4` | `queue` |
-| `YENEY_QUEUE_FORMAT` | `flac` or `wav` for exact-length queue rows. Use `yeney-format` to switch a room. | `flac` |
+| `YENEY_QUEUE_FORMAT` | `flac-fixed-packed`, `flac-fixed`, or `wav` for queue rows. Use `yeney-format` to switch a room. | `flac-fixed-packed` |
 | `YENEY_QUEUE_PACE_TAIL_MS` | Milliseconds at the end of each queue row exempt from the delivery rate limit | `0` |
 | `YENEY_QUEUE_PACING` | Limit the delivery rate of queue audio. Set to `off` to disable. | `on` |
 | `YENEY_QUEUE_POLL_MS` | Queue steady speaker poll interval, 100–2000 ms; starts and joins use 100 ms windows | `500` |

@@ -5,6 +5,7 @@
 #include <FLAC/stream_decoder.h>
 #include <FLAC/stream_encoder.h>
 #include <algorithm>
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
@@ -168,6 +169,14 @@ struct ItemState {
     bool finished = false, protectedItem = false, interrupted = false, parked = false;
     unsigned responses = 0;
     std::exception_ptr fault;
+    std::chrono::steady_clock::time_point created = std::chrono::steady_clock::now();
+    int64_t producedMs = -1;
+    std::array<std::shared_ptr<const PackedFlac>, 2> packed;
+    std::array<int64_t, 2> packedMs{-1, -1};
+    int64_t elapsedMs() const {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - created).count();
+    }
     std::deque<RamChunk> ram;
     std::vector<HistoryChunk> history;
     ItemState(Descriptor d, uint64_t id) : descriptor(std::move(d)), serial(id) {}
@@ -182,6 +191,8 @@ struct StoreState {
     uint64_t serial = 0, disk = 0, encodedReserved = 0;
     size_t ram = 0;
     bool stopped = false;
+    std::deque<std::weak_ptr<ItemState>> packJobs;
+    std::shared_ptr<std::atomic<uint64_t>> packedBytes = std::make_shared<std::atomic<uint64_t>>(0);
     int lockFd = -1;
     ~StoreState() {
         if (lockFd >= 0)
@@ -198,6 +209,7 @@ struct StoreState {
         for (const auto &chunk : item.ram)
             ram -= chunk.bytes.capacity();
         item.ram.clear();
+        item.packed = {};
         changed.notify_all();
     }
     void space(uint64_t amount, const ItemState *writing) {
@@ -291,11 +303,55 @@ Store::Store(const std::string &room, Config c) : state(std::make_shared<StoreSt
     for (const auto &entry : std::filesystem::directory_iterator(state->directory))
         if (entry.path().filename() != ".lock")
             std::filesystem::remove_all(entry.path());
+    if (state->config.packRows) packer = std::thread([this] { packRows(); });
+}
+void Store::packRows() {
+    std::unique_lock<std::mutex> lock(state->mutex);
+    while (true) {
+        state->changed.wait(lock, [&] { return state->stopped || !state->packJobs.empty(); });
+        if (state->stopped) return;
+        auto target = state->packJobs.front().lock();
+        state->packJobs.pop_front();
+        if (!target || target->fault) continue;
+        const auto &description = target->descriptor;
+        auto budget = state->packedBytes;
+        const auto cap = state->config.diskBytes;
+        lock.unlock();
+        for (auto bits : {description.bits, 24u}) {
+            const auto index = bits == 16 ? 0 : 1;
+            try {
+                auto item = std::shared_ptr<Item>(new Item(state, target));
+                auto reader = item->reader(44);
+                const auto allowance = cap - std::min(cap, budget->load());
+                auto data = PackedFlac::encode(state->directory, target->produced, description.rate, bits,
+                    [&](char *output, size_t size) { return reader.read(output, size); }, allowance);
+                const auto size = data->size();
+                budget->fetch_add(size);
+                auto copy = std::shared_ptr<const PackedFlac>(data.get(),
+                    [backing = data, budget, size](const PackedFlac *) { budget->fetch_sub(size); });
+                std::lock_guard<std::mutex> guard(state->mutex);
+                if (!state->stopped && !target->fault) {
+                    target->packed[index] = std::move(copy);
+                    target->packedMs[index] = target->elapsedMs();
+                }
+            } catch (const std::exception &error) {
+                std::fprintf(stderr, "yeney: queue packed unavailable occurrence=%s bits=%u reason=%s\n",
+                    description.occurrence.c_str(), bits, error.what());
+            }
+            if (bits == 24) break;
+        }
+        lock.lock();
+    }
 }
 Store::~Store() {
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->stopped = true;
+        state->packJobs.clear();
+        state->changed.notify_all();
+    }
+    if (packer.joinable()) packer.join();
     std::lock_guard<std::mutex> lock(state->mutex);
-    state->stopped = true;
-    state->changed.notify_all();
     if (state->lockFd >= 0) {
         close(state->lockFd);
         state->lockFd = -1;
@@ -421,6 +477,11 @@ std::optional<uint64_t> Item::contentLength() const {
         return wavLength(*state->descriptor.promisedFrames);
     return state->finished ? std::optional<uint64_t>(wavLength(state->produced)) : std::nullopt;
 }
+Item::WireState Item::wireState(unsigned bits) const {
+    std::lock_guard<std::mutex> lock(store->mutex);
+    const auto index = bits == 16 ? 0 : 1;
+    return {state->packed[index], state->producedMs >= 0, state->producedMs, state->packedMs[index]};
+}
 bool Item::finished() const {
     std::lock_guard<std::mutex> lock(store->mutex);
     store->check(*state);
@@ -493,6 +554,12 @@ void Item::finish() {
         while (!state->ram.empty())
             store->spill(*state, lock);
         state->finished = true;
+        state->producedMs = state->elapsedMs();
+        if (store->config.packRows && state->descriptor.kind == PromiseKind::Exact &&
+            state->descriptor.promisedFrames && FlacLayout::supportsRate(state->descriptor.rate)) {
+            try { store->packJobs.emplace_back(state); }
+            catch (const std::bad_alloc &) { }
+        }
     } catch (...) {
         store->fail(*state, std::current_exception());
         throw;

@@ -233,24 +233,32 @@ user-facing playback settings retain their names and defaults.
 
 ## Queue audio format
 
-`YENEY_QUEUE_FORMAT` selects `flac` (default) or `wav` for exact-length
-rows. Each room reads its process environment, its
-`room.<name>.YENEY_QUEUE_FORMAT` setting, then the global
-`YENEY_QUEUE_FORMAT` setting in `/etc/yeney/config` at startup. Invalid
-values log a warning and use FLAC.
+Choose `flac-fixed-packed` (the default), `flac-fixed`, or `wav` with
+`YENEY_QUEUE_FORMAT`. The room reads its process environment, its
+`room.<name>.YENEY_QUEUE_FORMAT` setting, and then the global setting in
+`/etc/yeney/config`. An invalid value logs a warning and uses the default.
+The older `flac` spelling is an alias for `flac-fixed-packed`.
 
-Run `yeney-format` to list the enabled rooms and their configured choices.
-Run `sudo yeney-format wav "Sonos Port"` to switch one room, or
-`sudo yeney-format flac all` to switch all enabled rooms. The command saves
-the room settings, restarts the selected services and prints each startup
+Run `yeney-format` to list enabled rooms. Run
+`sudo yeney-format flac-fixed "Sonos Port"` to keep that room on fixed
+FLAC, or `sudo yeney-format wav "Sonos Port"` to select WAV. The command
+saves the setting, restarts the selected service and prints its startup
 format line.
 
-FLAC can use 16 bits for original files that YeneY decodes at proven
-16-bit depth without sample processing. Other FLAC rows and all WAV rows
-use 24 bits. Remote tracks and podcasts with a length margin use WAV in
-either setting.
-A playlist can contain both formats. The join between them has yet to be
-measured on a speaker.
+Fixed FLAC uses blocks of 256 samples with sample rate and depth stated
+in each frame, and a byte length computed from the frame count. When
+packing is enabled, production completion queues an encoder job. A room
+uses the packed copy if it is ready when the first HEAD or GET gets a
+length. Otherwise it uses fixed FLAC for that row. Both choices stay
+stable for the life of the row. The request log identifies the wire
+format, depth, packing choice and reason for that choice.
+
+FLAC uses 16 bits for original files that YeneY decodes at proven 16-bit
+depth without sample processing. Other FLAC rows and all WAV rows use
+24 bits. Exact rows at rendered rates other than 44.1 and 48 kHz and
+uncertain-length rows use WAV in both FLAC settings. Packed copies are
+temporary files bounded per room. The history store continues to retain
+its own audio independently.
 
 ## Queue audio pacing
 

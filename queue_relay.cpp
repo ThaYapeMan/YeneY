@@ -122,6 +122,7 @@ void QueueRoom::Impl::release(bool stop, bool cleanupSpeaker) {
     navigationDeadline = {};
     rowOwner.clearNavigationTarget();
     publishedWindowIndex.reset();
+    for (const auto &uri : owned) route.retire(uri);
     auto cleanupOwned = std::move(owned);
     owned.clear();
     std::set<uint64_t> parents;

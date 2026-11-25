@@ -13,6 +13,7 @@ class StreamRequest;
 }
 namespace queue_audio {
 class Item;
+class PackedFlac;
 inline uint64_t wavLength(uint64_t frames) {
     if (frames > (uint64_t(UINT32_MAX) - 36) / 6)
         throw std::invalid_argument("WAV exceeds RIFF limit");
@@ -39,7 +40,7 @@ struct Pacing {
 bool serveRow(upnp::StreamRequest &, const std::shared_ptr<Item> &, Format,
               std::chrono::milliseconds wait,
               std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned,
-              const Pacing &pacing, unsigned bits = 24);
+              const Pacing &pacing, unsigned bits = 24, std::shared_ptr<const PackedFlac> packed = {});
 
 // WAV entry point for callers that explicitly serve WAV.
 bool serveWav(upnp::StreamRequest &, const std::shared_ptr<Item> &,

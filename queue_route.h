@@ -28,6 +28,7 @@ public:
     bool flacEnabled() const;
     unsigned bitsFor(const Descriptor &) const;
     void revoke(uint64_t epoch);
+    void retire(const std::string &uri);
     bool serve(upnp::StreamRequest &);
 };
 } // namespace queue_audio

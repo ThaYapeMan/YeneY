@@ -27,7 +27,7 @@ def run(context):
             reader = RowReader(response)
             assert reader.header.bits == bits, reader.header
             if "size" in row["resource"]:
-                assert int(row["resource"]["size"]) == reader.header.wire_length
+                assert int(row["resource"]["size"]) == reader.header.declared_length
             return reader.read_pcm()
 
     first, second = load((0, 1))

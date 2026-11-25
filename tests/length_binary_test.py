@@ -35,7 +35,7 @@ class Lengths(unittest.TestCase):
                         connection.request('GET',u.path+('?' + u.query if u.query else ''));response=connection.getresponse();served=RowReader(response);wave=served.read_wav();connection.close()
                         target=rate if rate<=48000 else 48000;factor=rate//target
                         expected=(len(values)+1000+factor-1)//factor
-                        self.assertEqual(len(wave),44+expected*6);self.assertEqual(int(item['resource']['size']),served.header.wire_length)
+                        self.assertEqual(len(wave),44+expected*6);self.assertEqual(int(item['resource']['size']),served.header.declared_length)
                         log=(h.base/'bridge.log').read_text();self.assertEqual(log.count('source-short padded '),1)
                         self.assertNotIn('relay fault=',log);self.assertFalse(h.packets('STMn'));self.assertEqual(len(h.sonos.actions('Stop')),0)
                         h.state(1,math.ceil(expected/target),'STOPPED')

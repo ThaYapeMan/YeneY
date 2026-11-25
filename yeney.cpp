@@ -1122,8 +1122,9 @@ int main(int argc, char** argv)
     if (!gPlayer->discover(room, ip ? ip : "")) return EXIT_FAILURE;
     const auto selectedSpeaker = gPlayer->speaker();
     const auto queueFormat = queue_audio::queueFormat(selectedSpeaker.name);
-    if (queueFormat == queue_audio::Format::Flac)
-        printf("yeney: queue format=flac block=%u\n", queue_audio::FlacLayout::blockSize);
+    if (queueFormat != queue_audio::Format::Wav)
+        printf("yeney: queue format=%s block=%u\n", queue_audio::queueFormatName(queueFormat),
+               queue_audio::FlacLayout::blockSize);
     else
         printf("yeney: queue format=wav\n");
     // Overlap the selected room's description read with the rest of startup.

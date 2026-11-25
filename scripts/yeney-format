@@ -11,8 +11,10 @@ sys.path.append("/usr/local/lib/yeney")
 from install_devices import atomic_write, parse_rooms, read_text, setting
 
 KEY = "YENEY_QUEUE_FORMAT"
-FORMATS = ("flac", "wav")
-START_LINES = ("yeney: queue format=flac block=256", "yeney: queue format=wav")
+FORMATS = ("flac-fixed-packed", "flac-fixed", "wav")
+ALIASES = {"flac": "flac-fixed-packed"}
+START_LINES = tuple("yeney: queue format=" + value + (" block=256" if value != "wav" else "")
+                    for value in FORMATS)
 
 
 def run(*args, check=True):
@@ -37,8 +39,8 @@ def restart(room):
 
 
 def main(args):
-    if args and (len(args) != 2 or args[0] not in FORMATS):
-        raise ValueError("Usage: yeney-format [<flac|wav> <room|all>]")
+    if args and (len(args) != 2 or args[0] not in (*FORMATS, *ALIASES)):
+        raise ValueError("Usage: yeney-format [<flac-fixed-packed|flac-fixed|wav> <room|all>]")
     path = Path(os.environ.get("YENEY_CONFIG", "/etc/yeney/config"))
     config = read_text(path)
     rooms = parse_rooms(config, lambda message: print(message, file=sys.stderr))
@@ -47,11 +49,13 @@ def main(args):
         pairs = (setting(line) for line in config.splitlines())
         settings = {pair[0].strip(): pair[1].strip() for pair in pairs if pair}
         for room in enabled:
-            form = settings.get(f"room.{room}.{KEY}", settings.get(KEY, "flac"))
-            print(f"{room}: {form if form in FORMATS else 'flac'}")
+            form = settings.get(f"room.{room}.{KEY}", settings.get(KEY, FORMATS[0]))
+            form = ALIASES.get(form, form)
+            print(f"{room}: {form if form in FORMATS else FORMATS[0]}")
         return
 
     form, room = args
+    form = ALIASES.get(form, form)
     if room != "all" and room not in enabled:
         raise ValueError(f"Unknown or disabled room {room!r}. Enabled rooms: {', '.join(enabled) or '(none)'}")
     selected = enabled if room == "all" else [room]

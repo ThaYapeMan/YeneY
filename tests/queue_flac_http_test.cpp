@@ -26,7 +26,7 @@ int main() {
         std::vector<yeney::Frame> pcm(frames, {0x12345600, -0x12345600});
         auto item = store.create({"exact", 44100, frames, 1});
         auto url = route.publish("Study", 1, 1, item);
-        auto get = [&](const std::string &path, const std::string &method = "GET", const std::string &range = "") {
+        auto get = [&](const std::string &path, const std::string &method = "GET", const std::string &range = "", Route *on = nullptr) {
             std::string wire;
             upnp::HttpRequestIO io;
             io.send = [&](const char *bytes, size_t count) { wire.append(bytes, count); return true; };
@@ -35,7 +35,11 @@ int main() {
             io.sendTimeout = [](unsigned) {};
             auto request = upnp::httpRequestFromHeaders(method + " " + path + " HTTP/1.1\r\nHost: localhost\r\n" +
                 (range.empty() ? "" : "Range: bytes=" + range + "\r\n") + "\r\n", io);
-            assert(request && route.serve(*request));
+            if (on) {
+                assert(request && on->serve(*request));
+            } else {
+                assert(request && route.serve(*request));
+            }
             return wire;
         };
         const auto body = [](const std::string &wire) { return wire.substr(wire.find("\r\n\r\n") + 4); };
@@ -119,6 +123,28 @@ int main() {
         const auto middle = packed->offset(1) + 1;
         assert(body(get(readyUrl, "GET", std::to_string(middle) + "-")) == expected.substr(middle));
         std::cout << "PASS HEAD locks fixed and packed forms, and packed HTTP serves its own length and byte ranges\n";
+        Route fixedRoute("Study", "fixed-setting", Format::Flac);
+        const auto fixedUrl = fixedRoute.publish("Study", 1, 1, prepared);
+        assert(body(get(fixedUrl, "GET", "", &fixedRoute)) == bytes);
+
+        setenv("YENEY_QUEUE_PACING", "on", 1);
+        setenv("YENEY_QUEUE_PACE_RATE", "2", 1);
+        setenv("YENEY_QUEUE_PACE_FREE_MS", "2000", 1);
+        setenv("YENEY_QUEUE_PACE_TAIL_MS", "0", 1);
+        Route pacedRoute("Study", "paced-packed", Format::FlacPacked);
+        const std::vector<yeney::Frame> silence(8 * 44100);
+        const auto pacedItem = store.create({"paced", 44100, silence.size(), 1});
+        const auto pacedUrl = pacedRoute.publish("Study", 1, 1, pacedItem);
+        pacedItem->append(silence.data(), silence.size(), false);
+        pacedItem->finish();
+        const auto pacedCopy = awaitPacked(pacedItem);
+        const auto started = std::chrono::steady_clock::now();
+        const auto pacedBody = body(get(pacedUrl, "GET", "", &pacedRoute));
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        assert(pacedBody.size() == pacedCopy->size());
+        assert(elapsed >= 2800ms && elapsed < 5s);
+        std::cout << "PASS packed 8 s row at twice its average wire rate, elapsed="
+                  << std::chrono::duration<double>(elapsed).count() << " s\n";
         const auto remote = store.create({"remote", 44100, frames, 1, 2, 24, PromiseKind::UpperBound});
         const auto remoteUrl = route.publish("Study", 1, 1, remote);
         assert(remoteUrl == "/yeney/q/session/1/1/remote.wav");

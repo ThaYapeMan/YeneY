@@ -207,7 +207,7 @@ public:
 bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &published, Format format,
               std::chrono::milliseconds wait,
               std::function<std::shared_ptr<Item>(upnp::StreamRequest &)> resolve, bool audioPinned,
-              const Pacing &pacing, unsigned bits) {
+              const Pacing &pacing, unsigned bits, std::shared_ptr<const PackedFlac> packed) {
     auto item = published;
     const auto &description = item->descriptor();
     std::optional<FlacLayout> flac;
@@ -222,6 +222,7 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
         Format format;
         unsigned bits;
         const std::optional<FlacLayout> &flac;
+        const std::shared_ptr<const PackedFlac> &packed;
         unsigned status = 0;
         uint64_t length = 0, served = 0, bodyStart = UINT64_MAX, backpressure = 0;
         std::string ending = "cancelled";
@@ -235,18 +236,18 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
             if (range.find_first_not_of("bytes=0123456789-, ") != std::string::npos || range.size() > 128)
                 range = "invalid";
             const auto frames = item->producedFrames();
-            const auto produced = flac
+            const auto produced = packed ? packed->size() : flac
                 ? flac->offset(frames == flac->totalSamples() ? flac->frameCount() : frames / FlacLayout::blockSize)
                 : 44 + frames * 6;
-            std::printf("yeney: queue HTTP method=%s item=%s range=%s form=%s bits=%u status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu paced=%d pace_wait_ms=%lld\n",
+            std::printf("yeney: queue HTTP method=%s item=%s range=%s form=%s bits=%u pack=%s status=%u content_length=%llu produced_bytes=%llu served_bytes=%llu end=%s backpressure_retries=%llu paced=%d pace_wait_ms=%lld\n",
                 request.method() == upnp::StreamRequest::Method::Get ? "GET" :
                 request.method() == upnp::StreamRequest::Method::Head ? "HEAD" : "OTHER",
-                item->descriptor().occurrence.c_str(), range.empty() ? "none" : range.c_str(), formatName(format), bits, status,
+                item->descriptor().occurrence.c_str(), range.empty() ? "none" : range.c_str(), formatName(format), bits, packed ? "packed" : flac ? "fixed" : "-", status,
                 (unsigned long long)length, (unsigned long long)produced,
                 (unsigned long long)served, ending.c_str(), (unsigned long long)backpressure,
                 paced, static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(paceWait).count()));
         }
-    } diagnostic{request, item, format, bits, flac};
+    } diagnostic{request, item, format, bits, flac, packed};
     if (request.method() != upnp::StreamRequest::Method::Get &&
         request.method() != upnp::StreamRequest::Method::Head) {
         diagnostic.status = 405; diagnostic.ending = "complete";
@@ -261,7 +262,8 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
     } // sealed assets are unpublished
     const auto wavSize = *length;
     const auto frames = (wavSize - 44) / 6;
-    if (format == Format::Flac) {
+    if (packed) length = packed->size();
+    else if (format == Format::Flac) {
         flac.emplace(frames, description.rate, bits);
         length = flac->size();
     }
@@ -350,10 +352,14 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
     std::optional<Reader> wavReader;
     std::optional<FlacReader> flacReader;
     if (flac) flacReader.emplace(*item, *flac, range.first);
-    else wavReader.emplace(item->reader(range.first));
+    else if (!packed) wavReader.emplace(item->reader(range.first));
     const double playRate = frames ? double(*length) * description.rate / frames : double(description.rate) * 6;
     const auto tailBytes = static_cast<uint64_t>(std::min<double>(*length, playRate * pacing.tailMs / 1000));
-    const auto tailStart = *length - tailBytes;
+    const auto tailFrames = uint64_t(description.rate) * pacing.tailMs / 1000;
+    const auto tailStart = packed ?
+        (tailFrames >= frames ? 0 : (!tailFrames ? *length :
+         packed->offset((frames - tailFrames + FlacLayout::blockSize - 1) / FlacLayout::blockSize))) :
+        *length - tailBytes;
     diagnostic.paced = pacing.enabled && range.first < tailStart;
     ByteBudget budget(playRate, pacing);
     auto active = [&] {
@@ -380,7 +386,8 @@ bool serveRow(upnp::StreamRequest &request, const std::shared_ptr<Item> &publish
                     : sizeof(bytes);
                 const auto count = std::min<uint64_t>(left, limit);
                 if (!active()) break;
-                n = flacReader ? flacReader->read(bytes, count, 100ms)
+                n = packed ? packed->read(offset, bytes, count) :
+                    flacReader ? flacReader->read(bytes, count, 100ms)
                                : wavReader->read(bytes, count, 100ms);
             } catch (const ReadTimeout &) {
                 if (std::chrono::steady_clock::now() >= deadline)

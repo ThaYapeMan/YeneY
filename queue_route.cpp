@@ -18,6 +18,11 @@ struct Route::State {
     const Pacing pacing = Pacing::environment();
     const Format format;
     std::mutex mutex;
+    struct Wire {
+        std::mutex mutex;
+        bool decided = false;
+        std::shared_ptr<const PackedFlac> packed;
+    };
     struct Entry {
         uint64_t epoch, revision;
         Format format;
@@ -25,6 +30,7 @@ struct Route::State {
         std::shared_ptr<Item> item;
         Resolver resolve;
         Ready ready;
+        std::shared_ptr<Wire> wire = std::make_shared<Wire>();
     };
     std::map<std::string, Entry> entries;
     std::set<uint64_t> revoked;
@@ -39,9 +45,9 @@ Route::Route(std::string r, std::string s, Format format) {
     state = std::make_shared<State>(std::move(r), std::move(s), format);
     state->pacing.log();
 }
-bool Route::flacEnabled() const { return state->format == Format::Flac; }
+bool Route::flacEnabled() const { return state->format != Format::Wav; }
 Format Route::formatFor(PromiseKind kind, unsigned rate) const {
-    return kind == PromiseKind::Exact && FlacLayout::supportsRate(rate) ? state->format : Format::Wav;
+    return flacEnabled() && kind == PromiseKind::Exact && FlacLayout::supportsRate(rate) ? Format::Flac : Format::Wav;
 }
 unsigned Route::bitsFor(const Descriptor &description) const {
     return formatFor(description.kind, description.rate) == Format::Flac ? description.bits : 24;
@@ -91,6 +97,14 @@ void Route::revoke(uint64_t epoch) {
             ++i;
     }
 }
+void Route::retire(const std::string &uri) {
+    const auto prefix = "/yeney/q/" + state->session + "/";
+    const auto first = uri.find(prefix);
+    const auto last = uri.rfind('.');
+    if (first == std::string::npos || last == std::string::npos || last <= first + prefix.size()) return;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->entries.erase(uri.substr(first + prefix.size(), last - first - prefix.size()));
+}
 bool Route::serve(upnp::StreamRequest &r) { return serve(state, r); }
 bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
     if (r.path().compare(0, 9, "/yeney/q/") != 0)
@@ -104,6 +118,7 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
     std::string key;
     Format format = Format::Wav;
     unsigned bits = 24;
+    std::shared_ptr<State::Wire> wire;
     const auto dot = path.rfind('.');
     if (path.compare(0, prefix.size(), prefix) == 0 && dot != std::string::npos && dot >= prefix.size())
         key = path.substr(prefix.size(), dot - prefix.size());
@@ -113,6 +128,7 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         if (i != state->entries.end() && path.compare(dot, std::string::npos, formatExtension(i->second.format)) == 0) {
             format = i->second.format;
             bits = i->second.bits;
+            wire = i->second.wire;
             if (state->activity && r.peerAddress() == state->speakerAddress &&
                 (r.method() == upnp::StreamRequest::Method::Get || r.method() == upnp::StreamRequest::Method::Head))
                 state->activity();
@@ -152,6 +168,29 @@ bool Route::serve(const std::shared_ptr<State> &state, upnp::StreamRequest &r) {
         r.disconnect();
         return true;
     }
-    return serveRow(r, item, format, std::chrono::seconds(15), std::move(resolve), audioPinned, state->pacing, bits);
+    std::shared_ptr<const PackedFlac> packed;
+    const bool head = r.method() == upnp::StreamRequest::Method::Head;
+    if (wire && (head || r.method() == upnp::StreamRequest::Method::Get) &&
+        !r.aborted() && !r.peerClosed() && item->contentLength()) {
+        std::lock_guard<std::mutex> lock(wire->mutex);
+        if (!wire->decided) {
+            const auto ready = item->wireState(bits);
+            const auto &description = item->descriptor();
+            const char *reason;
+            if (description.kind != PromiseKind::Exact) reason = "uncertain";
+            else if (state->format == Format::Wav || state->format == Format::Flac) reason = "setting";
+            else if (format != Format::Flac) reason = "rate";
+            else if (!ready.produced) reason = "not-produced";
+            else if (!ready.copy) reason = "packing";
+            else { reason = "ready"; wire->packed = ready.copy; }
+            wire->decided = true;
+            std::printf("yeney: queue row form occurrence=%s pack=%s reason=%s produced_ms=%lld packed_ms=%lld request=%s\n",
+                description.occurrence.c_str(), wire->packed ? "packed" : "fixed", reason,
+                static_cast<long long>(ready.producedMs), static_cast<long long>(ready.packedMs), head ? "HEAD" : "GET");
+        }
+        packed = wire->packed;
+    }
+    return serveRow(r, item, format, std::chrono::seconds(15), std::move(resolve), audioPinned,
+                    state->pacing, bits, std::move(packed));
 }
 } // namespace queue_audio

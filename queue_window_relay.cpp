@@ -492,6 +492,7 @@ void QueueRoom::Impl::reconcileWindow() {
             token = rowOwner.sourceToken(owner).value();
         }
         releaseWindowParent(token, rowOwner.navigationFirst());
+        route.retire(entry.uri);
         owned.erase(entry.uri);
     }
     std::vector<Entry> reordered;
@@ -509,7 +510,7 @@ void QueueRoom::Impl::reconcileWindow() {
         // A cached target may have a newer LMS producer clock while serving
         // its retained older audio. Retire both when the parent leaves.
         if (entry.owner && entry.owner != entry.stream) queue.releaseParent(entry.stream);
-        for (const auto &uri : parent.uris) owned.erase(uri);
+        for (const auto &uri : parent.uris) { route.retire(uri); owned.erase(uri); }
     }
     rowOwner.commitLayout(std::move(reordered));
     if (lmsNavigation) {

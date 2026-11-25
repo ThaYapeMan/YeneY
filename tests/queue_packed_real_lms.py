@@ -27,28 +27,23 @@ def run(context):
         cli(album, mac)
         wait(lambda: len(items()) == 3 and sonos.transport_state == 'PLAYING', 15, 'three local rows')
         rows = items()
-        for index in (1, 2):
-            wait(lambda: position() == rows[index]['uri'], 45, f'natural join {index}')
-            wait(lambda: int(cli('playlist index ?', mac)[-1]) == index, 8, f'LMS follows join {index}')
-        wait(lambda: sonos.transport_state == 'STOPPED', 45, 'all three rows consumed')
-        assert model.audio == b''.join(expected), (len(model.audio), [len(part) for part in expected])
-        assert not sonos.errors, sonos.errors
-        log = decisions()
-        print('\n'.join(log), flush=True)
-        if mode == 'benchmark':
-            with open(f'/proc/{bridge.pid}/status') as status:
-                print(next(line.strip() for line in status if line.startswith('VmHWM:')), flush=True)
-            print(f'PASS five-minute-track album, elapsed {time.monotonic()-start:.2f} s', flush=True)
+        if mode != 'controls':
+            for index in (1, 2):
+                wait(lambda: position() == rows[index]['uri'], 45, f'natural join {index}')
+                wait(lambda: int(cli('playlist index ?', mac)[-1]) == index, 8, f'LMS follows join {index}')
+            wait(lambda: sonos.transport_state == 'STOPPED', 45, 'all three rows consumed')
+            assert model.audio == b''.join(expected), (len(model.audio), [len(part) for part in expected])
+            assert not sonos.errors, sonos.errors
+            log = decisions()
+            print('\n'.join(log), flush=True)
+            if mode == 'benchmark':
+                with open(f'/proc/{bridge.pid}/status') as status:
+                    print(next(line.strip() for line in status if line.startswith('VmHWM:')), flush=True)
+                print(f'PASS five-minute-track album, elapsed {time.monotonic()-start:.2f} s', flush=True)
+                return
+            assert [re.search(r'pack=(\w+)', line)[1] for line in log] == ['fixed', 'packed', 'packed'], log
+            print('PASS real LMS cold fixed row and two packed successors, sample-exact joins and LMS indices', flush=True)
             return
-        assert [re.search(r'pack=(\w+)', line)[1] for line in log] == ['fixed', 'packed', 'packed'], log
-        print('PASS real LMS cold fixed row and two packed successors, sample-exact joins and LMS indices', flush=True)
-        cli('stop', mac)
-        wait(lambda: not items(), 10, 'album cleanup')
-        sonos.flac_restart_capture = 'port'
-        model.audio.clear()
-        cli(album, mac)
-        wait(lambda: len(items()) == 3 and model.current is not None and model.frame >= 2 * 44100,
-             15, 'second cold start')
         wait(lambda: model.current is not None and model.current['uri'] == items()[0]['uri'] and
              model.frame >= 6 * 44100, 10, 'prefetch lead before Next')
         cli('playlist index 1', mac)
@@ -59,10 +54,20 @@ def run(context):
         # Exercise the capture shape on the packed row now selected by LMS.
         before = len(model.requests)
         model.seek(3)
+        wait(lambda: sonos.transport_state == 'PLAYING', 3, 'seek rebuffering ends')
+        time.sleep(1)
         model.pause()
+        sonos.notify_transport()
+        wait(lambda: cli('mode ?', mac)[-1] == 'pause', 4, 'LMS follows pause')
         time.sleep(5)
+        sonos.flac_restart_capture = 'port'
         model.resume()
-        assert any(offset and offset % 16384 == 0 for _, _, offset, _ in model.requests[before:])
+        sonos.notify_transport()
+        wait(lambda: cli('mode ?', mac)[-1] == 'play', 4, 'LMS follows resume')
+        sequences = [(method, offset, code) for method, _, offset, code in model.requests[before:]]
+        assert any(offset and offset % 16384 == 0 for _, offset, _ in sequences)
+        assert sum(code == 'probe-closed' for _, _, code in sequences) >= 2
+        print('Captured restart request shapes:', sequences, flush=True)
         assert not sonos.errors, sonos.errors
         print('PASS real LMS Next and capture-based seek and pause requests', flush=True)
     finally:

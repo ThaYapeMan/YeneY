@@ -43,7 +43,7 @@ class Fetch:
         wire_offset = self.offset
         first = 0
         if self.offset and self.row["uri"].endswith(".flac"):
-            probe, response = request(self.row["uri"], byte_range="bytes=0-41")
+            probe, response = request(self.row["uri"], byte_range="bytes=0-4095")
             try:
                 assert response.status == 206
                 info = RowHeader.read(response)
@@ -64,9 +64,12 @@ class Fetch:
             if self.row["uri"].endswith(".flac"):
                 reader = RowReader(response, info, first)
                 info = reader.header
-                wire_length = info.frame_offset((info.samples + 255) // 256)
-                if wire_offset and remainder:
-                    reader.read_pcm(remainder)
+                wire_length = info.wire_length
+                if wire_offset:
+                    if info.packed_length and not self.speaker_seek:
+                        remainder += (target - first) * 6
+                    if remainder:
+                        reader.read_pcm(remainder)
             else:
                 wire_length = len(self.reference)
             assert int(response.getheader("Content-Length")) == wire_length - wire_offset

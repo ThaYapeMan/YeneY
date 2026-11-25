@@ -10,26 +10,32 @@
 
 namespace queue_audio {
 
-enum class Format { Wav, Flac };
+enum class Format { Wav, Flac, FlacPacked };
+
+inline const char *queueFormatName(Format format) {
+    if (format == Format::Wav) return "wav";
+    return format == Format::Flac ? "flac-fixed" : "flac-fixed-packed";
+}
 
 inline const char *formatName(Format format) {
-    return format == Format::Flac ? "flac" : "wav";
+    return format == Format::Wav ? "wav" : "flac";
 }
 
 inline const char *formatExtension(Format format) {
-    return format == Format::Flac ? ".flac" : ".wav";
+    return format == Format::Wav ? ".wav" : ".flac";
 }
 
 inline Format queueFormat(const std::string &room = {}) {
     const auto parse = [](std::string_view value) {
         if (value == "wav") return Format::Wav;
-        if (value != "flac")
-            std::printf("yeney: queue invalid YENEY_QUEUE_FORMAT; using flac\n");
-        return Format::Flac;
+        if (value == "flac-fixed") return Format::Flac;
+        if (value != "flac" && value != "flac-fixed-packed")
+            std::printf("yeney: queue invalid YENEY_QUEUE_FORMAT; using flac-fixed-packed\n");
+        return Format::FlacPacked;
     };
     if (const auto *value = std::getenv("YENEY_QUEUE_FORMAT"))
         return parse(value);
-    if (room.empty()) return Format::Flac;
+    if (room.empty()) return Format::FlacPacked;
 
     const auto trim = [](const std::string &value) {
         const auto first = value.find_first_not_of(" \t\r");
@@ -48,7 +54,7 @@ inline Format queueFormat(const std::string &room = {}) {
         if (key == roomKey) local = trim(line.substr(delimiter + 1));
         if (key == "YENEY_QUEUE_FORMAT") global = trim(line.substr(delimiter + 1));
     }
-    return parse(local.value_or(global.value_or("flac")));
+    return parse(local.value_or(global.value_or("flac-fixed-packed")));
 }
 
 } // namespace queue_audio

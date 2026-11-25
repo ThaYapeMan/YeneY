@@ -28,7 +28,11 @@ QueueRoom::Impl::Impl(upnp::Speaker r, std::shared_ptr<upnp::StreamServer> http,
                       const uint8_t *rawMac, std::function<std::string()> url, queue_audio::Format format)
     : room(std::move(r)), host(std::move(h)), mac(std::move(m)), session(streamSessionToken()),
       streamUrl(std::move(url)), speaker(std::move(s)),
-      queue(room.name, queue_audio::Config::environment(), 60), paths(queue, rawMac), window(queueRows(room.name)),
+      queue(room.name, [format] {
+          auto config = queue_audio::Config::environment();
+          config.packRows = format == queue_audio::Format::FlacPacked;
+          return config;
+      }(), 60), paths(queue, rawMac), window(queueRows(room.name)),
       route(room.name, session, format), coordinator(room, logQueue),
       actions([this](const auto &name, const auto &args) {
           return coordinator.read([&] {

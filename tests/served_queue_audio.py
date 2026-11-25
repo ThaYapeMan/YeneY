@@ -69,6 +69,8 @@ class RowHeader:
     samples: int
     bits: int
     flac: bool
+    packed_length: int = 0
+    seek_points: tuple = ()
 
     @classmethod
     def read(cls, source):
@@ -82,17 +84,42 @@ class RowHeader:
             return cls(wire, rate, samples, 24, False)
         assert magic == b"fLaC", magic
         wire = magic + source.read(38)
-        assert len(wire) == 42 and wire[4:8] == b"\x80\0\0\x22", wire
+        assert len(wire) == 42 and wire[4] & 0x7f == 0 and wire[5:8] == b"\0\0\x22", wire
         packed = int.from_bytes(wire[18:26], "big")
         rate, channels = packed >> 44, 1 + ((packed >> 41) & 7)
         samples, bits = packed & ((1 << 36) - 1), 1 + ((packed >> 36) & 31)
         assert samples > 0 and rate > 0 and bits in (16, 24) and channels == 2
-        assert wire[8:12] == b"\x01\0\x01\0"
-        return cls(wire, rate, samples, bits, True)
+        if wire[4] & 0x80:
+            assert wire[8:12] == b"\x01\0\x01\0"
+            return cls(wire, rate, samples, bits, True)
+        points = []
+        last = False
+        while not last:
+            header = source.read(4)
+            assert len(header) == 4
+            last = bool(header[0] & 0x80)
+            size = int.from_bytes(header[1:], "big")
+            body = source.read(size)
+            assert len(body) == size
+            wire += header + body
+            if header[0] & 0x7f == 3:
+                points = [(sample, offset) for sample, offset, _ in struct.iter_unpack(">QQH", body)
+                          if sample < samples]
+        assert points
+        content_range = source.getheader("Content-Range")
+        total = int(content_range.rsplit("/", 1)[1] if content_range else source.getheader("Content-Length"))
+        return cls(wire, rate, samples, bits, True, total,
+                   tuple((sample, offset + len(wire)) for sample, offset in points))
 
     @property
     def wire_length(self):
-        return self.frame_offset((self.samples + 255) // 256) if self.flac else 44 + 6 * self.samples
+        return self.packed_length or self.declared_length
+
+    @property
+    def declared_length(self):
+        if not self.flac:
+            return 44 + 6 * self.samples
+        return self.frame_offset((self.samples + 255) // 256)
 
     @property
     def pcm_header(self):
@@ -111,6 +138,12 @@ class RowHeader:
         """Return the Range start and the first sample to deliver."""
         if not self.flac:
             return 44 + sample * 6, sample
+        if self.packed_length:
+            if sample >= self.samples:
+                return self.wire_length, self.samples
+            first, offset = max((point for point in self.seek_points if point[0] <= sample),
+                                default=(0, len(self.wire)))
+            return offset, first
         if speaker_seek:
             sample = min(self.samples, (sample // 256 + 2) * 256)
         index = (self.samples + 255) // 256 if sample == self.samples else sample // 256
@@ -157,16 +190,111 @@ def _read_flac_frame(source, info, index):
     return pcm
 
 
+_DecoderRead = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                               ctypes.POINTER(ctypes.c_size_t), ctypes.c_void_p)
+_DecoderWrite = ctypes.CFUNCTYPE(ctypes.c_int, ctypes.c_void_p, ctypes.c_void_p,
+                                ctypes.POINTER(ctypes.POINTER(ctypes.c_int32)), ctypes.c_void_p)
+_DecoderError = ctypes.CFUNCTYPE(None, ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p)
+
+
+class PackedDecoder:
+    """Reference decoder for packed streams and frame-boundary ranges."""
+
+    def __init__(self, source, header, resync=False):
+        self.lib = ctypes.CDLL(ctypes.util.find_library("FLAC"))
+        self.lib.FLAC__stream_decoder_new.restype = ctypes.c_void_p
+        for name in ("delete", "get_state", "process_single", "process_until_end_of_metadata"):
+            getattr(self.lib, "FLAC__stream_decoder_" + name).argtypes = (ctypes.c_void_p,)
+        init = self.lib.FLAC__stream_decoder_init_stream
+        init.argtypes = (ctypes.c_void_p, _DecoderRead, *([ctypes.c_void_p] * 4),
+                         _DecoderWrite, ctypes.c_void_p, _DecoderError, ctypes.c_void_p)
+        self.decoder = self.lib.FLAC__stream_decoder_new()
+        assert self.decoder
+        self.state = {"failure": None, "current": None, "sample": None}
+        state = self.state
+        # The metadata was already read by RowHeader. Prefix a copy with the
+        # MD5 cleared because this may be the tail of the original stream.
+        prefix = bytearray(header.wire)
+        prefix[26:42] = bytes(16)
+
+        @_DecoderRead
+        def read(_decoder, destination, count, _data):
+            try:
+                if prefix:
+                    body = bytes(prefix[:count[0]])
+                    del prefix[:len(body)]
+                else:
+                    body = source.read(count[0])
+                ctypes.memmove(destination, body, len(body))
+                count[0] = len(body)
+                return 0 if body else 1
+            except Exception as error:
+                state["failure"] = error
+                return 2
+
+        @_DecoderWrite
+        def write(_decoder, frame, channels, _data):
+            try:
+                fields = ctypes.cast(frame, ctypes.POINTER(ctypes.c_uint))
+                count, number_type = fields[0], fields[5]
+                number = ctypes.cast(frame + 24, ctypes.POINTER(ctypes.c_uint64))[0] if number_type else fields[6] * 256
+                state["sample"] = number
+                result = bytearray(count * 6)
+                shift = 24 - header.bits
+                for ch in range(2):
+                    for i in range(count):
+                        sample = channels[ch][i] << shift
+                        for byte in range(3):
+                            result[6 * i + ch * 3 + byte] = sample >> (8 * byte) & 255
+                state["current"] = result
+                return 0
+            except Exception as error:
+                state["failure"] = error
+                return 1
+
+        @_DecoderError
+        def error(_decoder, status, _data):
+            if resync and state["sample"] is None and status in (0, 1, 2):
+                return
+            state["failure"] = ValueError(f"libFLAC rejected queue response: {status}")
+
+        self.callbacks = read, write, error
+        assert init(self.decoder, read, None, None, None, None, write, None, error, None) == 0
+        assert self.lib.FLAC__stream_decoder_process_until_end_of_metadata(self.decoder)
+
+    def frame(self):
+        self.state["current"] = None
+        while self.state["current"] is None:
+            assert self.lib.FLAC__stream_decoder_process_single(self.decoder)
+            if self.state["failure"]:
+                raise self.state["failure"]
+            if self.lib.FLAC__stream_decoder_get_state(self.decoder) == 4:
+                raise EOFError("FLAC ended before the declared sample count")
+        return self.state["current"]
+
+    def __del__(self):
+        if getattr(self, "decoder", None):
+            self.lib.FLAC__stream_decoder_delete(self.decoder)
+            self.decoder = None
+
+
 class RowReader:
     """Keep partial FLAC blocks across sequential reads and decode either row form."""
 
-    def __init__(self, source, header=None, first_sample=0):
+    def __init__(self, source, header=None, first_sample=0, resync=False):
         self.source = source
         self.header = header or RowHeader.read(source)
         self.remaining = (self.header.samples - first_sample) * 6
         self.index = first_sample // 256
         self.buffer = bytearray()
         self.skip = first_sample % 256 if header and header.flac else 0
+        self.start = first_sample
+        self.packed = PackedDecoder(source, self.header, resync) if self.header.packed_length or resync else None
+        if resync:
+            self.buffer = self.packed.frame()
+            self.start = self.packed.state["sample"]
+            self.remaining = (self.header.samples - self.start) * 6
+            self.skip = 0
 
     def read_pcm(self, size=None):
         if not self.header.flac:
@@ -175,7 +303,7 @@ class RowReader:
         result = bytearray()
         while len(result) < size:
             if not self.buffer:
-                self.buffer = _read_flac_frame(self.source, self.header, self.index)
+                self.buffer = self.packed.frame() if self.packed else _read_flac_frame(self.source, self.header, self.index)
                 self.index += 1
                 if self.skip:
                     del self.buffer[:self.skip * 6]

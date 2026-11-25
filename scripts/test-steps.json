@@ -205,6 +205,42 @@
       ]
     },
     {
+      "name": "queue-packed-real-lms",
+      "label": "queue-packed-real-lms",
+      "target": "main",
+      "command": "python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_QUEUE_PACKED_REAL_LMS": "1"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Real LMS cold fixed row and two packed successors with sample-exact joins.",
+      "seconds": 40,
+      "modes": [
+        "full"
+      ]
+    },
+    {
+      "name": "queue-packed-capture-controls",
+      "label": "queue-packed-capture-controls",
+      "target": "main",
+      "command": "python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_QUEUE_PACKED_REAL_LMS": "controls"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Real LMS Next and the captured seek and pause restart requests.",
+      "seconds": 40,
+      "modes": [
+        "full"
+      ]
+    },
+    {
       "name": "queue-mixed-real-lms",
       "label": "queue-mixed-real-lms",
       "target": "main",
@@ -7731,6 +7767,8 @@
       "queue-flac-http",
       "queue-pacing-tail-crossing",
       "queue-format-command",
+      "queue-packed-real-lms",
+      "queue-packed-capture-controls",
       "queue-mixed-real-lms",
       "queue-pacing-study-transport",
       "queue-pacing-study-joins",

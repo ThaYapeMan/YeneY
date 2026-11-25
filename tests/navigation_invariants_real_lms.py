@@ -364,16 +364,22 @@ def run(c):
         try:
             info = None
             if uri.endswith('.flac'):
-                conn.request('GET', urlsplit(uri).path, headers={'Range': 'bytes=0-41'})
+                conn.request('GET', urlsplit(uri).path, headers={'Range': 'bytes=0-4095'})
                 probe = conn.getresponse()
                 assert probe.status == 206
                 info = RowHeader.read(probe)
                 probe.close()
             offset, first = info.frame_range(position * rate) if info else (pcm_offset, position * rate)
-            length = info.frame_offset((info.samples + 255) // 256) if info else len(body)
+            length = info.wire_length if info else len(body)
             conn.request('GET', urlsplit(uri).path, headers={'Range': f'bytes={offset}-'})
             response = conn.getresponse()
-            ranged = RowReader(response, info, first).read_pcm() if info else response.read()
+            if info:
+                reader = RowReader(response, info, first)
+                if info.packed_length:
+                    reader.read_pcm((position * rate - first) * 6)
+                ranged = reader.read_pcm()
+            else:
+                ranged = response.read()
             assert response.status == 206
             assert response.getheader('Content-Range') == f'bytes {offset}-{length-1}/{length}'
             assert int(response.getheader('Content-Length')) == length-offset

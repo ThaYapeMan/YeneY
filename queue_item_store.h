@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <thread>
+#include "packed_flac.h"
 
 namespace queue_audio {
 enum class PromiseKind { Exact, UpperBound };
@@ -41,6 +43,7 @@ struct Config {
     size_t ramBytes = 8 * 1024 * 1024;
     uint64_t diskBytes = 256ull * 1024 * 1024;
     uint64_t estimatedDiskBytes = 8ull * 1024 * 1024 * 1024;
+    bool packRows = false;
     static Config environment(); // YENEY_QUEUE_DISK_MIB; invalid values fail
 };
 struct StoreState;
@@ -60,6 +63,13 @@ public:
     uint64_t producedFrames() const;
     bool finished() const;
     bool evicted() const;
+    struct WireState {
+        std::shared_ptr<const PackedFlac> copy;
+        bool produced;
+        int64_t producedMs, packedMs;
+    };
+    WireState wireState(unsigned bits) const;
+    std::shared_ptr<const PackedFlac> packed(unsigned bits) const { return wireState(bits).copy; }
     // Hold already admitted audio for one HTTP response. Automatic quota
     // eviction still applies to other history; explicit cancellation wins.
     static std::shared_ptr<Item> retainAudio(const std::shared_ptr<Item> &);
@@ -89,6 +99,8 @@ public:
 };
 class Store {
     std::shared_ptr<StoreState> state;
+    std::thread packer;
+    void packRows();
 
 public:
     explicit Store(const std::string &room, Config config = Config::environment());

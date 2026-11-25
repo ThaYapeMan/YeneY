@@ -199,7 +199,7 @@ class Coordinator(ThreadingHTTPServer):
         info = None
         if seconds or (seconds == 0 and uri.endswith('.flac')):
             if uri.endswith('.flac'):
-                connection, response = request(uri, byte_range='bytes=0-41')
+                connection, response = request(uri, byte_range='bytes=0-122879')
                 try:
                     assert response.status == 206
                     info = RowHeader.read(response)
@@ -595,7 +595,7 @@ class FiniteDeviceAudio:
             response.close()
             client.close()
 
-    def open_current(self, offset, first=0):
+    def open_current(self, offset, first=0, resync=False):
         if self.connection:
             self.response.close()
             self.connection.close()
@@ -604,9 +604,41 @@ class FiniteDeviceAudio:
         assert self.response.status == (206 if offset else 200)
         self.requests.append(('GET', uri, offset, self.response.status))
         previous = self.cache.get(uri)
-        self.row = RowReader(self.response, previous[0] if offset and previous else None, first)
+        self.row = RowReader(self.response, previous[0] if offset and previous else None, first, resync)
         if not offset and previous:
             assert self.row.header == previous[0]
+    def capture_restart(self, action, sample):
+        profile = getattr(self.server, 'flac_restart_capture', None)
+        if not profile or not self.row.header.flac:
+            return False
+        from pathlib import Path
+        import json
+        patterns = json.loads((Path(__file__).parent / 'fixtures/flac-02-restart-pattern.json').read_text())
+        info = self.row.header
+        case = ('packed' if info.packed_length else 'fixed') + '-' + action
+        captured = patterns[profile][case][0]
+        uri = self.current['uri']
+        if self.connection:
+            self.response.close()
+            self.connection.close()
+            self.connection = None
+        client, response = request(uri)
+        try:
+            assert response.status == 200
+            assert len(response.read(min(info.wire_length, captured['probe_bytes']))) == min(
+                info.wire_length, captured['probe_bytes'])
+        finally:
+            response.close()
+            client.close()
+        self.requests.append(('GET', uri, 0, 'probe-closed'))
+        position, _ = info.frame_range(sample)
+        offset = position // 16384 * 16384
+        if offset >= info.wire_length:
+            return True
+        self.open_current(offset, resync=bool(offset))
+        self.frame = self.row.start
+        return True
+
     @serialized_audio
     def pause(self):
         self.tick();self.paused=True
@@ -614,7 +646,7 @@ class FiniteDeviceAudio:
         self.server.transport_state='PAUSED_PLAYBACK'
     @serialized_audio
     def resume(self):
-        if self.current:
+        if self.current and not self.capture_restart('pause', self.frame):
             c,r=request(self.current['uri']);r.read(16384);r.close();c.close()
             self.requests.append(('GET',self.current['uri'],0,'probe-closed'))
             offset, first = self.row.header.frame_range(self.frame)
@@ -630,9 +662,10 @@ class FiniteDeviceAudio:
         self.tick()
         info = self.row.header
         self.clock_frame = min(info.samples, int(seconds * info.rate))
-        offset, self.frame = info.frame_range(self.clock_frame, speaker_seek=True)
-        if self.frame < info.samples:
-            self.open_current(offset, self.frame)
+        if not self.capture_restart('seek', self.clock_frame):
+            offset, self.frame = info.frame_range(self.clock_frame, speaker_seek=True)
+            if self.frame < info.samples:
+                self.open_current(offset, self.frame)
         self.stamp = time.monotonic()
         self.transitioning()
     @serialized_audio
