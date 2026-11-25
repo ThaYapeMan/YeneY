@@ -652,25 +652,33 @@ def run():
     print('PASS refill probe')
 
 
-LEGACY_CHECKSUMS = [
-    'b0cb1805264d6dcdf7e256016d2927f624e9ded97dd07b476445c62892455d78',
-    '945841747b4d452a7fd386c3411b59ad96f5fc58e735e92328a6be876f182c84',
-]
+LISTEN_CHECKSUMS = {
+  "wav": "87d12294b2ec6c3c9ef437ba85530d696545d01b449080875690cdb4cb3e0efa",
+  "packed16": "3fb42dd3900f4b92c1672bec27531c2101ee04e186e03045959a599ab8fce45a",
+  "fixed16": "cf572dfc14a1cb52d4df154491343bb30d7b780e5177d494447723e100201119",
+  "fixed16-subset": "57fa449ff9a36e4a1273e04eedc1ac62ebce607ca65e1689a2a51deaa1e2171b",
+  "fixed16-md5": "aa07858c6d62721717caf665343cd8c612b5e016da507e92d250934e58a42996",
+  "fixed16-subset-md5": "4b2de68199535be91dc4bb4ec5e4a98b7a43825e7238be840ea24640bc2722a3",
+  "fixed16-256-subset": "965da67ec692b36feef3961d5c905ebf363ec568d74f31819f160fc40f7f8f24",
+  "fixed24-256-subset": "12c752a8aac6d5ed406e792a95e66e4c7e770ad5da91ceaded67b4e682ecadbc"
+}
 
 
 def check_listen_writer(work, test):
     helper = probe.audio_helper(work)
     pcm, media = work / 'listen.pcm', work / 'listen.flac'
-    if test in ('baseline', 'unchanged'):
+    if test == 'unchanged':
         frames = 4099
         pcm.write_bytes(bytes.fromhex('3412 78ef') * frames)
-        checksums = []
-        for mode in ('fixed', 'fixed-noseek'):
-            probe.audio_command(helper, mode, pcm, media, frames, 44100, 16, 2)
-            checksums.append(hashlib.sha256(media.read_bytes()).hexdigest())
-        print('Legacy refill and seek checksums:', *checksums)
-        if test == 'unchanged':
-            assert checksums == LEGACY_CHECKSUMS
+        for mode, start in (('fixed', 46), ('fixed-noseek', 42)):
+            for flags, expected in (((), ('fff8c918', 'fff87918')),
+                                    (('--legacy-header',), ('fff8c010', 'fff87010'))):
+                probe.audio_command(helper, mode, pcm, media, frames, 44100, 16, 2, 4096, *flags)
+                raw = media.read_bytes()
+                if mode == 'fixed':
+                    start = 46 + int.from_bytes(raw[43:46], 'big')
+                tail = start + 10 + 4096 * 4
+                assert (raw[start:start + 4].hex(), raw[tail:tail + 4].hex()) == expected
         return
     for block, rate, bits, first, last in (
         (4096, 44100, 16, 'fff8c918', 'fff87918'),
@@ -805,6 +813,194 @@ def check_listen_speaker(work, test):
             renderer.close()
 
 
+def check_probe05(test, work):
+    if test == 'fixed':
+        check_listen_writer(work, 'unchanged')
+    elif test in ('listen-baseline', 'listen-bytes'):
+        fixture(work, 81, rate=44100, channels=2)
+        media = probe.prepare_listen_audio(work / '81.flac', work, probe.LISTEN_CASES)
+        checksums = {case: hashlib.sha256(row['path'].read_bytes()).hexdigest()
+                     for case, row in media.items()}
+        print(json.dumps(checksums, indent=2))
+        if test == 'listen-bytes':
+            assert checksums == LISTEN_CHECKSUMS
+    elif test == 'packed256':
+        helper = probe.audio_helper(work)
+        for bits in (16, 24):
+            pcm, path = work / 'row.pcm', work / 'row.flac'
+            frames = 3 * 256 + 17
+            pcm.write_bytes(bytes(range(bits // 8)) * frames)
+            probe.audio_command(helper, 'packed', pcm, path, frames, 44100, bits, 1, 256)
+            index, proof = probe.verify_flac(helper, path, pcm, bits // 8, 1, frames, work,
+                                            None, True, 256)
+            assert [sample for sample, _ in index] == [0, 256, 512, 768]
+            assert proof['decoded_bit_exact'] and proof['seek_points'] > 0
+            print(bits, index, proof, flush=True)
+        for bits in (16, 24):
+            assert probe.SEEK_CASES[f'packed{bits}-256'] == ('packed', bits, 256, 44100)
+    elif test == 'sizes':
+        fixture(work, 120, rate=44100, channels=2)
+        lines = []
+        probe.packed_size_table(work / '120.flac', work, lines.append)
+        assert lines[0].startswith('16-bit sizes')
+        assert lines[1] == 'form\tbytes\t% of WAV'
+        rows = [line.split('\t') for line in lines[2:]]
+        assert [row[0] for row in rows] == ['packed-256', 'packed-1024', 'packed-4096', 'fixed-256', 'wav']
+        for name, size, percent in rows:
+            path = work / f'size-{name}.{"wav" if name == "wav" else "flac"}'
+            assert int(size) == path.stat().st_size
+            assert float(percent) == round(100 * int(size) / (44 + 60 * 44100 * 4), 2)
+        assert int(rows[-1][1]) == 44 + 60 * 44100 * 4
+        print('\n'.join(lines))
+    elif test == 'mix-no-terminal':
+        with mock.patch('sys.argv', mix_argv()), \
+             mock.patch.object(probe.os, 'open', side_effect=OSError('no terminal')) as terminal, \
+             mock.patch.object(probe, 'Speaker') as speaker, \
+             contextlib.redirect_stderr(io.StringIO()) as output:
+            try:
+                probe.main()
+            except SystemExit as error:
+                assert error.code != 0
+            else:
+                raise AssertionError('expected refusal')
+        speaker.assert_not_called()
+        terminal.assert_called_once_with('/dev/tty', probe.os.O_RDWR)
+        assert 'terminal' in output.getvalue() and '--answers' in output.getvalue()
+    else:
+        check_mix_speaker(work, test)
+    print('PASS', test)
+
+
+def mix_argv():
+    return ['yeney-refill-probe', '--speaker', '127.0.0.1', '--lms-host', '127.0.0.1',
+            '--room', 'Study', '--track-id', '42', '--set', 'mix']
+
+
+MIX_ORDER = ('wav', 'fixed16-256', 'packed16-256', 'packed24-256',
+             'wav-wav', 'fixed-fixed', 'packed-packed', 'fixed-packed', 'packed-fixed',
+             'packed-nosize', 'packed-fixedsize', 'fixed-packed-nosize',
+             'fixed-seek', 'packed-seek', 'fixed-pause', 'packed-pause')
+MIX_QUESTIONS = (
+    ('did you hear music?',),
+    ('did you hear music before the change?', 'did you hear music after the change?',
+     'was the change clean (no gap, click or repeat)?'),
+    ('did you hear music before?', 'did you hear music after?'),
+    ('did you hear music before?', 'did you hear music after?', 'did it continue where it had stopped?'),
+)
+MIX_COUNTS = (1, 1, 1, 1, 3, 3, 3, 3, 3, 1, 1, 3, 2, 2, 3, 3)
+
+
+class MixRenderer(Renderer):
+    def action(self, service, action, args):
+        if action == 'AddURIToQueue':
+            item, = ET.fromstring(args['EnqueuedURIMetaData'])
+            resource = item[-1]
+            attrs = dict(resource.attrib)
+            assert resource.text == args['EnqueuedURI']
+            self.server.descriptions.append((resource.text, attrs))
+            self.server.items.append(dict(uri=resource.text, duration=probe.position(attrs['duration']),
+                                          bits=int(attrs['bitsPerSample'])))
+            self.server.update += 1
+            return {}, None
+        return super().action(service, action, args)
+
+    @staticmethod
+    def media_offset(row, seconds):
+        if not seconds:
+            return 0
+        connection, response = request(row['uri'])
+        with contextlib.closing(connection), contextlib.closing(response):
+            header = response.read(42)
+        block = int.from_bytes(header[8:10], 'big')
+        if not header[4] & 0x80:
+            return Renderer.media_offset(dict(row, size=probe_http_length(row['uri'])),
+                                         seconds * 44100 / 8000)
+        frame = seconds * 44100 // block
+        return 42 + sum(12 + (i >= 128) + (i >= 2048) + block * 4 for i in range(frame))
+
+
+def probe_http_length(uri):
+    connection, response = request(uri, method='HEAD')
+    with contextlib.closing(connection), contextlib.closing(response):
+        return int(response.getheader('Content-Length'))
+
+
+def check_mix_speaker(work, test):
+    counts = MIX_COUNTS
+    expected = [['yes'] * count for count in counts]
+    replay = test == 'mix'
+    if replay:
+        expected[7][1] = 'no'
+    elif test == 'mix-wav-control':
+        expected[0][0] = 'no'
+    else:
+        expected[4][-1] = 'no'
+    tokens = ['r'] if replay else []
+    tokens += [answer[0] for group in expected for answer in group]
+    with mock.patch('sys.argv', mix_argv() + ['--answers', ','.join(tokens)]), \
+         mock.patch.object(probe.os, 'geteuid', return_value=0), \
+         mock.patch.object(probe, 'execute') as execute:
+        probe.main()
+    args, = execute.call_args.args
+    assert args.cases == list(MIX_ORDER)
+    with DownloadServer() as downloads:
+        downloads.audio = fixture(work, 120, rate=44100, channels=2)
+        renderer = ProbeCoordinator(handler=MixRenderer)
+        renderer.descriptions = []
+        renderer.crossfade = False
+        renderer.realtime = renderer.follow_controls = True
+        renderer.fail_play = False
+        renderer.join_timer = None
+        renderer.stopped_bridge = False
+        renderer.mode_changes = []
+        renderer.missing = set()
+        renderer.av_control = AV_CONTROL
+        api = LocalApi(renderer, port=0)
+        api.rtt_ms = api.spike_ms = 0
+        try:
+            records = probe.Records()
+            speaker = probe.Speaker('127.0.0.1', records, renderer.server_port, api.server.server_port)
+            experiment = probe.Experiment(args, work, speaker, records, SCALE, downloads.server_port)
+            with mock.patch.object(probe, 'service', return_value=False):
+                experiment.run('test-unit')
+            path = work / 'mix.tar.gz'
+            experiment.archive(path)
+            with tarfile.open(path) as archive:
+                rows = json.load(archive.extractfile('answers.json'))
+                table = archive.extractfile('summary.txt').read().decode()
+            assert [row['case'] for row in rows] == list(MIX_ORDER)
+            assert [row['replays'] for row in rows] == [int(replay)] + [0] * 15
+            messages = [row['message'] for row in records.rows if row['kind'] == 'log']
+            order = list(enumerate(MIX_ORDER, 1))
+            if replay:
+                order.insert(0, order[0])
+            assert [line for line in messages if line.startswith('NOW PLAYING ')] == [
+                f'NOW PLAYING {case} ({number} of 16)' for number, case in order]
+            for case, row, answers in zip(MIX_ORDER, rows, expected):
+                group = 2 if case.endswith('-seek') else 3 if case.endswith('-pause') else 0 if len(answers) == 1 else 1
+                assert list(row['answers']) == list(MIX_QUESTIONS[group])
+                assert list(row['answers'].values()) == answers
+                line = next(line for line in table.splitlines() if line.startswith(case + '\t'))
+                assert all(f'{question} {answer}' in line for question, answer in row['answers'].items())
+            descriptions = [attrs for _, attrs in renderer.descriptions]
+            assert 'size' not in descriptions[14] and 'size' not in descriptions[17]
+            fixed = experiment.media['fixed16-256'][0]['path'].stat().st_size
+            assert descriptions[15]['size'] == str(fixed)
+            assert descriptions[16]['size'] == str(experiment.media['fixed-packed-nosize'][0]['path'].stat().st_size)
+            for case in ('packed-nosize', 'packed-fixedsize', 'fixed-packed-nosize'):
+                assert experiment.media[case][-1]['path'].stat().st_size > 0
+            assert renderer.items == renderer.original
+            assert not renderer.errors, renderer.errors
+            if not replay:
+                assert table.splitlines()[-1] == 'controls failed, the run proves nothing; check volume and room'
+            else:
+                print('SCRIPTED ANSWERS AGAINST THE IMITATION SPEAKER AND NOT A FINDING')
+                print(table)
+        finally:
+            api.close()
+            renderer.close()
+
+
 def check_probe04(test, work):
     if test == 'no-terminal':
         check_no_terminal()
@@ -835,6 +1031,10 @@ if __name__ == '__main__':
 
     if sys.argv[1:] == ['--field-joins']:
         check_field_joins()
+    elif sys.argv[1:2] == ['--probe05']:
+        for test in sys.argv[2:]:
+            with tempfile.TemporaryDirectory() as directory:
+                check_probe05(test, Path(directory))
     elif len(sys.argv) == 3 and sys.argv[1] == '--probe04':
         with tempfile.TemporaryDirectory() as directory:
             check_probe04(sys.argv[2], Path(directory))
