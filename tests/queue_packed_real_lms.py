@@ -14,9 +14,11 @@ def run(context):
     mode = os.environ['YENEY_QUEUE_PACKED_REAL_LMS']
     sonos.flac_restart_capture = 'study'
     model = FiniteDeviceAudio(sonos, progressive=True, prefetch=False,
-                              speed=20 if mode == 'benchmark' else 1)
+                              speed=8 if mode == 'benchmark' else 1)
     sonos.device_audio = model
-    expected = [expected_wav(base / f'input-{i}.wav')[44:] for i in range(3)]
+    paths = [base / f'input-{i}.wav' for i in range(3)]
+    expected = [(path.read_bytes() if mode == 'benchmark' else expected_wav(path))[44:] for path in paths]
+    limit = 60 if mode == 'benchmark' else 45
     position = lambda: sonos.position['TrackURI']
     decisions = lambda: [line for line in (base / 'bridge.log').read_text().splitlines()
                          if 'queue row form occurrence=' in line]
@@ -27,11 +29,11 @@ def run(context):
         cli(album, mac)
         wait(lambda: len(items()) == 3 and sonos.transport_state == 'PLAYING', 15, 'three local rows')
         rows = items()
-        if mode != 'controls':
+        if mode not in ('controls', 'fixed-controls'):
             for index in (1, 2):
-                wait(lambda: position() == rows[index]['uri'], 45, f'natural join {index}')
+                wait(lambda: position() == rows[index]['uri'], limit, f'natural join {index}')
                 wait(lambda: int(cli('playlist index ?', mac)[-1]) == index, 8, f'LMS follows join {index}')
-            wait(lambda: sonos.transport_state == 'STOPPED', 45, 'all three rows consumed')
+            wait(lambda: sonos.transport_state == 'STOPPED', limit, 'all three rows consumed')
             assert model.audio == b''.join(expected), (len(model.audio), [len(part) for part in expected])
             assert not sonos.errors, sonos.errors
             log = decisions()
@@ -44,14 +46,19 @@ def run(context):
             assert [re.search(r'pack=(\w+)', line)[1] for line in log] == ['fixed', 'packed', 'packed'], log
             print('PASS real LMS cold fixed row and two packed successors, sample-exact joins and LMS indices', flush=True)
             return
-        wait(lambda: model.current is not None and model.current['uri'] == items()[0]['uri'] and
-             model.frame >= 6 * 44100, 10, 'prefetch lead before Next')
-        cli('playlist index 1', mac)
-        wait(lambda: int(cli('playlist index ?', mac)[-1]) == 1 and position() == items()[1]['uri'] and
-             model.current is not None and model.current['uri'] == position() and model.frame > 0,
-             10, 'LMS Next')
-        assert model.row.header.packed_length, decisions()
-        # Exercise the capture shape on the packed row now selected by LMS.
+        if mode == 'fixed-controls':
+            wait(lambda: model.current is not None and model.frame >= 44100,
+                 7, 'fixed cold start at frame zero')
+            assert not model.row.header.packed_length, decisions()
+        else:
+            wait(lambda: model.current is not None and model.current['uri'] == items()[0]['uri'] and
+                 model.frame >= 6 * 44100, 10, 'prefetch lead before Next')
+            cli('playlist index 1', mac)
+            wait(lambda: int(cli('playlist index ?', mac)[-1]) == 1 and position() == items()[1]['uri'] and
+                 model.current is not None and model.current['uri'] == position() and model.frame > 0,
+                 10, 'LMS Next')
+            assert model.row.header.packed_length, decisions()
+        # Exercise the seek and resume request shape on the selected row.
         before = len(model.requests)
         model.seek(3)
         wait(lambda: sonos.transport_state == 'PLAYING', 3, 'seek rebuffering ends')
@@ -69,7 +76,7 @@ def run(context):
         assert sum(code == 'probe-closed' for _, _, code in sequences) >= 2
         print('Captured restart request shapes:', sequences, flush=True)
         assert not sonos.errors, sonos.errors
-        print('PASS real LMS Next and capture-based seek and pause requests', flush=True)
+        print(f'PASS real LMS {mode} capture-based seek and pause requests', flush=True)
     finally:
         model.close()
         del sonos.device_audio

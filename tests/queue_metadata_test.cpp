@@ -7,7 +7,7 @@ int main() {
     std::map<unsigned, std::string> reference;
     for (const char *setting : {static_cast<const char *>(nullptr), "artist-title", "title"}) {
         if (setting) setenv("YENEY_TITLE_FORMAT", setting, 1); else unsetenv("YENEY_TITLE_FORMAT");
-        for (unsigned rate : {44100, 48000}) {
+        for (unsigned rate : {32000, 44100, 48000}) {
             upnp::QueueMetadata m;
             m.url = "http://localhost/yeney/q/test/1/3/2.wav";
             m.session = "test";

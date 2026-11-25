@@ -241,6 +241,24 @@
       ]
     },
     {
+      "name": "queue-fixed-capture-controls",
+      "label": "queue-fixed-capture-controls",
+      "target": "main",
+      "command": "python3 tests/real_lms_test.py",
+      "environment": {
+        "YENEY_QUEUE_PACKED_REAL_LMS": "fixed-controls"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "parallel",
+      "reason": "Capture-based seek and pause requests on a cold fixed row.",
+      "seconds": 40,
+      "modes": [
+        "full"
+      ]
+    },
+    {
       "name": "queue-mixed-real-lms",
       "label": "queue-mixed-real-lms",
       "target": "main",
@@ -7769,6 +7787,7 @@
       "queue-format-command",
       "queue-packed-real-lms",
       "queue-packed-capture-controls",
+      "queue-fixed-capture-controls",
       "queue-mixed-real-lms",
       "queue-pacing-study-transport",
       "queue-pacing-study-joins",
