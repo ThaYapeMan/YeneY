@@ -5,6 +5,11 @@
 #include <array>
 #include <cassert>
 #include <iostream>
+#include <fstream>
+#include <iomanip>
+#include <openssl/sha.h>
+#include "test_temp.h"
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -63,7 +68,46 @@ void decode(const std::vector<char> &wire, uint64_t first, uint64_t total, unsig
 }
 }
 
-void checkLayout(unsigned bits) {
+namespace {
+std::string sha256(const std::vector<char> &bytes) {
+    unsigned char hash[SHA256_DIGEST_LENGTH];
+    SHA256(reinterpret_cast<const unsigned char *>(bytes.data()), bytes.size(), hash);
+    std::ostringstream text;
+    for (auto byte : hash)
+        text << std::hex << std::setfill('0') << std::setw(2) << unsigned(byte);
+    return text.str();
+}
+
+void compareProbe(const std::vector<char> &wire, const std::string &directory,
+                  unsigned rate, unsigned bits, uint64_t samples) {
+    const auto pcm = directory + "/audio.pcm";
+    const auto out = directory + "/reference.flac";
+    {
+        std::ofstream stream(pcm, std::ios::binary);
+        for (uint64_t frame = 0; frame < samples; ++frame)
+            for (unsigned channel : {0, 1})
+                for (unsigned byte = bits == 16; byte < 3; ++byte)
+                    stream.put(sample(frame * 6 + channel * 3 + byte, bits));
+        assert(stream.good());
+    }
+    const auto command = "'" + directory + "/helper' fixed-noseek '" + pcm + "' '" + out + "' " +
+        std::to_string(samples) + " " + std::to_string(rate) + " " + std::to_string(bits) + " 2 256";
+    assert(std::system(command.c_str()) == 0);
+    std::ifstream stream(out, std::ios::binary);
+    const std::vector<char> reference((std::istreambuf_iterator<char>(stream)), {});
+    const auto actualHash = sha256(wire);
+    const auto expectedHash = sha256(reference);
+    std::cout << rate << " Hz " << bits << "-bit " << samples << " samples SHA256 bridge="
+              << actualHash << " probe=" << expectedHash << std::endl;
+    if (wire != reference) {
+        const auto mismatch = std::mismatch(wire.begin(), wire.end(), reference.begin(), reference.end());
+        std::cerr << "first differing offset=" << mismatch.first - wire.begin() << std::endl;
+        assert(wire == reference);
+    }
+}
+}
+
+void checkLayout(unsigned bits, const std::string &directory) {
     for (const unsigned rate : {44100, 48000}) {
         for (const uint64_t samples : {1, 255, 256, 257, 1000000, 16811890}) {
             const FlacLayout layout(samples, rate, bits);
@@ -80,6 +124,7 @@ void checkLayout(unsigned bits) {
                 wire.insert(wire.end(), frame.begin(), frame.end());
             }
             assert(wire.size() == layout.size());
+            compareProbe(wire, directory, rate, bits, samples);
             decode(wire, 0, samples, bits);
             for (const auto index : {uint64_t(0), layout.frameCount() / 2, layout.frameCount() - 1}) {
                 std::vector<char> suffix(info.begin(), info.end());
@@ -92,8 +137,14 @@ void checkLayout(unsigned bits) {
 }
 
 int main() {
-    checkLayout(24);
-    checkLayout(16);
+    auto directory = testTempRoot() + "/yeney-flac-writer-XXXXXX";
+    assert(mkdtemp(directory.data()));
+    const auto command = "g++ -std=c++17 -O2 scripts/yeney-refill-audio.cpp -lFLAC -lcrypto -o '" +
+        directory + "/helper'";
+    assert(std::system(command.c_str()) == 0);
+    checkLayout(24, directory);
+    checkLayout(16, directory);
+    std::filesystem::remove_all(directory);
     const FlacLayout layout(1, 44100, 16);
     const std::array<char, 6> notSixteenBit{1, 0, 0, 0, 0, 0};
     bool rejected = false;

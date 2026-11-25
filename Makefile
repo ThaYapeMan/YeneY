@@ -176,7 +176,7 @@ yeney-queue-dryrun: queue_dryrun.cpp core_queue_sink.o libqueueitems.a $(CORE_LI
 	$(call compile-program,g++,-std=c++17 -g -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread)
 
 queue-flac-writer-test: tests/queue_flac_writer_test.cpp flac_writer.o
-	$(call compile-program,g++,-std=c++17 -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o,$^) -lFLAC)
+	$(call compile-program,g++,-std=c++17 -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o,$^) -lFLAC -lcrypto)
 
 queue-flac-http-test: tests/queue_flac_http_test.cpp libqueueitems.a upnp/http_server.o upnp/gena.o upnp/xml.o upnp/discovery.o upnp/http.o
 	$(call compile-program,g++,-std=c++17 -O2 -Wall -Wextra -I. -o $@ $(filter %.cpp %.o %.a,$^) -lFLAC -pthread)

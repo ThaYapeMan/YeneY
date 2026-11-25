@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_route.h"
+#include "flac_writer.h"
 #include "test_temp.h"
 #include "upnp/http_server.h"
 #include <cassert>
@@ -79,6 +80,20 @@ int main() {
         const auto invalid = get(url, "GET", std::to_string(last + 1) + "-");
         assert(invalid == "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */" +
             std::to_string(bytes.size()) + "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        const auto layout = FlacLayout(frames, 44100);
+        for (auto start : {layout.offset(1), layout.offset(1) + 31}) {
+            const auto partial = get(url, "GET", std::to_string(start) + "-");
+            assert(body(partial) == bytes.substr(start));
+            assert(partial.find("Content-Length: " + std::to_string(bytes.size() - start) + "\r\n") != std::string::npos);
+        }
+        const auto otherRate = store.create({"other-rate", 32000, frames, 1});
+        const auto otherUrl = route.publish("Study", 1, 1, otherRate);
+        otherRate->append(pcm.data(), pcm.size(), false);
+        otherRate->finish();
+        std::cout << "32 kHz exact row: " << otherUrl << std::endl;
+        assert(otherUrl == "/yeney/q/session/1/1/other-rate.wav");
+        assert(get(otherUrl, "HEAD").find("Content-Type: audio/wav\r\n") != std::string::npos);
+        assert(body(get(otherUrl)).compare(0, 4, "RIFF") == 0);
         const auto remote = store.create({"remote", 44100, frames, 1, 2, 24, PromiseKind::UpperBound});
         const auto remoteUrl = route.publish("Study", 1, 1, remote);
         assert(remoteUrl == "/yeney/q/session/1/1/remote.wav");
