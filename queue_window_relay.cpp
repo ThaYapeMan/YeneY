@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "queue_room_internal.h"
 #include "wav_writer.h"
+#include "third_party/yeney-core/core/decimator.h"
 namespace bridge {
 void QueueRoom::Impl::reconcileWindow() {
     const auto &items = rowOwner.layout();
@@ -743,7 +744,17 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
         remotePlaybackSource(slot.track.id, slot.track.remote, slot.track.url)
             ? queue_audio::PromiseKind::UpperBound : queue_audio::PromiseKind::Exact;
     upnp::QueueMetadata metadata;
-    const auto rate = produced ? produced->item->descriptor().rate : (knownRate ? knownRate : slot.track.sampleRate);
+    auto rate = produced ? produced->item->descriptor().rate : knownRate;
+    if (!rate) {
+        rate = slot.track.sampleRate;
+        const auto cap = paths.conversionRate();
+        if (cap && rate > cap) {
+            try { rate = yeney::Decimator::targetRate(rate, cap); }
+            catch (const std::runtime_error &) {
+                // A rate the decoder cannot convert is not a known FLAC rate.
+            }
+        }
+    }
     const auto format = route.formatFor(kind, rate);
     metadata.bits = format == queue_audio::Format::Flac ?
         (produced ? produced->item->descriptor().bits : bits) : 24;
