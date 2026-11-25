@@ -1,0 +1,58 @@
+{
+  "study": {
+    "fixed-seek": [
+      {
+        "probe_bytes": 57344,
+        "range_start": 3571712
+      }
+    ],
+    "packed-seek": [
+      {
+        "probe_bytes": 57344,
+        "range_start": 2621440
+      },
+      {
+        "probe_bytes": 73728,
+        "range_start": 2621440
+      }
+    ],
+    "fixed-pause": [
+      {
+        "probe_bytes": 65536,
+        "range_start": 3227648
+      }
+    ],
+    "packed-pause": [
+      {
+        "probe_bytes": 57344,
+        "range_start": 2375680
+      }
+    ]
+  },
+  "port": {
+    "fixed-seek": [
+      {
+        "probe_bytes": 98304,
+        "range_start": 3571712
+      }
+    ],
+    "packed-seek": [
+      {
+        "probe_bytes": 122880,
+        "range_start": 2621440
+      }
+    ],
+    "fixed-pause": [
+      {
+        "probe_bytes": 65536,
+        "range_start": 3227648
+      }
+    ],
+    "packed-pause": [
+      {
+        "probe_bytes": 57344,
+        "range_start": 2375680
+      }
+    ]
+  }
+}

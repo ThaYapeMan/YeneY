@@ -92,11 +92,13 @@ class LmsIdentityTest(unittest.TestCase):
                                 log.seek(0)
                                 text = log.read()
                                 expected_line = 'queue format=' + expected_format
-                                if expected_format == 'flac':
+                                if expected_format.startswith('flac-'):
                                     expected_line += ' block=256'
                                 self.assertEqual(sum(expected_line in line for line in text.splitlines()), 1)
                                 if queue_format == 'invalid':
                                     self.assertIn('invalid YENEY_QUEUE_FORMAT', text)
+                                else:
+                                    self.assertNotIn('invalid YENEY_QUEUE_FORMAT', text)
                             return caps
                 except (OSError, struct.error) as error:
                     log.seek(0)
@@ -117,11 +119,12 @@ class LmsIdentityTest(unittest.TestCase):
                     self.assertEqual([x for x in entries if x.startswith('Model=')], ['Model=yeney'])
 
     def test_room_queue_format(self):
-        for setting, expected in (('wav', 'wav'), ('flac', 'flac'), ('invalid', 'flac')):
+        for setting, expected in (('wav', 'wav'), ('flac', 'flac-fixed-packed'), ('invalid', 'flac-fixed-packed'),
+                                  ('flac-fixed', 'flac-fixed'), ('flac-fixed-packed', 'flac-fixed-packed')):
             with self.subTest(setting=setting):
                 entries = self.hello('queue', 'Sonos Play:1', '86.11',
                                      queue_format=setting, expected_format=expected).split(',')
-                self.assertIn('Firmware=' + self.version[:-1] + '; Sonos 86.11; rows ' + expected + ')',
+                self.assertIn('Firmware=' + self.version[:-1] + '; Sonos 86.11; rows ' + expected.split('-')[0] + ')',
                               entries)
 
     def test_model_text_table(self):

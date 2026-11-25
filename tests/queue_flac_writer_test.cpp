@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 #include "flac_writer.h"
+#include "packed_flac.h"
 #include <FLAC/stream_decoder.h>
 #include <algorithm>
 #include <array>
@@ -79,7 +80,7 @@ std::string sha256(const std::vector<char> &bytes) {
 }
 
 void compareProbe(const std::vector<char> &wire, const std::string &directory,
-                  unsigned rate, unsigned bits, uint64_t samples) {
+                  unsigned rate, unsigned bits, uint64_t samples, bool packed = false) {
     const auto pcm = directory + "/audio.pcm";
     const auto out = directory + "/reference.flac";
     {
@@ -90,7 +91,7 @@ void compareProbe(const std::vector<char> &wire, const std::string &directory,
                     stream.put(sample(frame * 6 + channel * 3 + byte, bits));
         assert(stream.good());
     }
-    const auto command = "'" + directory + "/helper' fixed-noseek '" + pcm + "' '" + out + "' " +
+    const auto command = "'" + directory + "/helper' " + (packed ? "packed" : "fixed-noseek") + " '" + pcm + "' '" + out + "' " +
         std::to_string(samples) + " " + std::to_string(rate) + " " + std::to_string(bits) + " 2 256";
     assert(std::system(command.c_str()) == 0);
     std::ifstream stream(out, std::ios::binary);
@@ -136,6 +137,29 @@ void checkLayout(unsigned bits, const std::string &directory) {
     }
 }
 
+void checkPacked(unsigned bits, const std::string &directory) {
+    for (unsigned rate : {44100, 48000}) {
+        uint64_t offset = 0;
+        const uint64_t frames = 60 * rate;
+        const auto packed = queue_audio::PackedFlac::encode(directory, frames, rate, bits,
+            [&](char *target, size_t size) {
+                for (size_t i = 0; i < size; ++i) target[i] = sample(offset++, bits);
+                return size;
+            }, 64 * 1024 * 1024);
+        std::vector<char> wire(packed->size());
+        assert(packed->read(0, wire.data(), wire.size()) == wire.size());
+        compareProbe(wire, directory, rate, bits, frames, true);
+        decode(wire, 0, frames, bits);
+        assert(packed->frames() == (frames + 255) / 256);
+        for (size_t index = 0; index < packed->frames(); ++index) {
+            assert((uint8_t(wire.at(packed->offset(index))) == 0xff));
+            assert((uint8_t(wire.at(packed->offset(index) + 1)) & 0xfe) == 0xf8);
+        }
+        assert(packed->offset(packed->frames()) == wire.size());
+        std::cout << "PASS packed " << rate << " Hz " << bits << "-bit bytes, PCM and frame table\n";
+    }
+}
+
 int main() {
     auto directory = testTempRoot() + "/yeney-flac-writer-XXXXXX";
     assert(mkdtemp(directory.data()));
@@ -144,6 +168,8 @@ int main() {
     assert(std::system(command.c_str()) == 0);
     checkLayout(24, directory);
     checkLayout(16, directory);
+    checkPacked(16, directory);
+    checkPacked(24, directory);
     std::filesystem::remove_all(directory);
     const FlacLayout layout(1, 44100, 16);
     const std::array<char, 6> notSixteenBit{1, 0, 0, 0, 0, 0};

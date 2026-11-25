@@ -27,7 +27,7 @@ unit = next(arg for arg in sys.argv if arg.startswith("yeney@"))
 room = "Sonos Port" if "Port" in unit else "Study"
 settings = dict(line.split("=", 1) for line in config.read_text().splitlines() if "=" in line)
 form = settings[f"room.{room}.YENEY_QUEUE_FORMAT"]
-print("yeney: queue format=" + (form + " block=256" if form == "flac" else form))
+print("yeney: queue format=" + (form + " block=256" if form.startswith("flac-") else form))
 """,
             }.items():
                 tool = root / name
@@ -45,7 +45,7 @@ print("yeney: queue format=" + (form + " block=256" if form == "flac" else form)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Sonos Port", result.stdout)
             self.assertIn("Study", result.stdout)
-            self.assertEqual(result.stdout.count("flac"), 2)
+            self.assertEqual(result.stdout.count("flac-fixed-packed"), 2)
             self.assertEqual(config.read_text(), initial)
             self.assertFalse(calls.exists())
 
@@ -58,10 +58,13 @@ print("yeney: queue format=" + (form + " block=256" if form == "flac" else form)
 
             result = command("flac", "all")
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.count("queue format=flac block=256"), 2)
-            self.assertIn("room.Study.YENEY_QUEUE_FORMAT=flac", config.read_text())
-            self.assertIn("room.Sonos Port.YENEY_QUEUE_FORMAT=flac", config.read_text())
+            self.assertEqual(result.stdout.count("queue format=flac-fixed-packed block=256"), 2)
+            self.assertIn("room.Study.YENEY_QUEUE_FORMAT=flac-fixed-packed", config.read_text())
+            self.assertIn("room.Sonos Port.YENEY_QUEUE_FORMAT=flac-fixed-packed", config.read_text())
             self.assertIn("restart yeney@Study.service", calls.read_text())
+            result = command("flac-fixed", "Study")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("queue format=flac-fixed block=256", result.stdout)
             before = config.read_text(), calls.read_text()
             result = command("wav", "Nobody")
             self.assertNotEqual(result.returncode, 0)

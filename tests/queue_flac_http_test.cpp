@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <future>
 #include <iostream>
+#include <thread>
 
 using namespace queue_audio;
 using namespace std::chrono_literals;
@@ -17,9 +18,10 @@ int main() {
     assert(mkdtemp(temp.data()));
     {
         Config config;
+        config.packRows = true;
         config.root = temp;
         Store store("Study", config);
-        Route route("Study", "session");
+        Route route("Study", "session", Format::FlacPacked);
         constexpr size_t frames = 1537;
         std::vector<yeney::Frame> pcm(frames, {0x12345600, -0x12345600});
         auto item = store.create({"exact", 44100, frames, 1});
@@ -94,6 +96,29 @@ int main() {
         assert(otherUrl == "/yeney/q/session/1/1/other-rate.wav");
         assert(get(otherUrl, "HEAD").find("Content-Type: audio/wav\r\n") != std::string::npos);
         assert(body(get(otherUrl)).compare(0, 4, "RIFF") == 0);
+        const auto awaitPacked = [&](const std::shared_ptr<Item> &row) {
+            for (auto tries = 0; tries < 300 && !row->packed(24); ++tries)
+                std::this_thread::sleep_for(10ms);
+            assert(row->packed(24));
+            return row->packed(24);
+        };
+        awaitPacked(item);
+        assert(body(get(url)) == bytes);
+        assert(get(url, "HEAD").find("Content-Length: " + std::to_string(bytes.size()) + "\r\n") != std::string::npos);
+        const auto prepared = store.create({"prepared", 44100, frames, 1});
+        const auto readyUrl = route.publish("Study", 1, 1, prepared);
+        prepared->append(pcm.data(), pcm.size(), false);
+        prepared->finish();
+        const auto packed = awaitPacked(prepared);
+        assert(packed->size() != layout.size());
+        assert(get(readyUrl, "HEAD").find("Content-Length: " + std::to_string(packed->size()) + "\r\n") != std::string::npos);
+        const auto packedBody = body(get(readyUrl));
+        std::string expected(packed->size(), '\0');
+        assert(packed->read(0, expected.data(), expected.size()) == expected.size());
+        assert(packedBody == expected);
+        const auto middle = packed->offset(1) + 1;
+        assert(body(get(readyUrl, "GET", std::to_string(middle) + "-")) == expected.substr(middle));
+        std::cout << "PASS HEAD locks fixed and packed forms, and packed HTTP serves its own length and byte ranges\n";
         const auto remote = store.create({"remote", 44100, frames, 1, 2, 24, PromiseKind::UpperBound});
         const auto remoteUrl = route.publish("Study", 1, 1, remote);
         assert(remoteUrl == "/yeney/q/session/1/1/remote.wav");
