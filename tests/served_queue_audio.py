@@ -86,9 +86,8 @@ class RowHeader:
         packed = int.from_bytes(wire[18:26], "big")
         rate, channels = packed >> 44, 1 + ((packed >> 41) & 7)
         samples, bits = packed & ((1 << 36) - 1), 1 + ((packed >> 36) & 31)
-        block = min(256, samples)
         assert samples > 0 and rate > 0 and bits in (16, 24) and channels == 2
-        assert wire[8:12] == block.to_bytes(2, "big") * 2
+        assert wire[8:12] == b"\x01\0\x01\0"
         return cls(wire, rate, samples, bits, True)
 
     @property
@@ -106,7 +105,7 @@ class RowHeader:
     def frame_offset(self, index):
         """Wire byte offset of a fixed FLAC block or the end of the row."""
         extra = sum(max(0, index - limit) for limit in (128, 2048, 65536, 2097152, 67108864))
-        return 42 + min(self.samples, 256 * index) * (self.bits // 4) + 11 * index + extra
+        return 42 + min(self.samples, 256 * index) * (self.bits // 4) + 12 * index + extra
 
     def frame_range(self, sample, *, speaker_seek=False):
         """Return the Range start and the first sample to deliver."""
@@ -122,7 +121,7 @@ def _read_flac_frame(source, info, index):
     fixed = source.read(5)
     if len(fixed) != 5:
         raise EOFError(f"incomplete FLAC frame header {index}")
-    assert fixed[:3] == b"\xff\xf8\x60", ("FLAC frame header", index, fixed)
+    assert fixed[:3] == bytes((0xff, 0xf8, {44100: 0x79, 48000: 0x7a}[info.rate])), ("FLAC frame header", index, fixed)
     expected_depth = 0x1c if info.bits == 24 else 0x18
     assert fixed[3] == expected_depth, (index, fixed[3], info.bits)
     lead = fixed[4]
@@ -137,10 +136,10 @@ def _read_flac_frame(source, info, index):
         assert byte & 0xc0 == 0x80
         number = (number << 6) | (byte & 0x3f)
     assert number == index, ("out-of-order FLAC frame", index, number)
-    size_crc = source.read(2)
-    if len(size_crc) != 2:
+    size_crc = source.read(3)
+    if len(size_crc) != 3:
         raise EOFError(f"incomplete FLAC frame header CRC {index}")
-    count = size_crc[0] + 1
+    count = int.from_bytes(size_crc[:2], "big") + 1
     assert count == min(256, info.samples - index * 256), ("FLAC sample count", count, index)
     header = fixed + continuation + size_crc
     assert _crc8(header) == 0, ("FLAC header CRC", index)
