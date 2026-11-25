@@ -268,7 +268,8 @@ assert fullq_codec in ('flac', 'alac', 'wav', 'converted-flac')
 scale_mb = int(os.environ.get('YENEY_FULLQ_SCALE_MB', '0'))
 assert scale_mb in (0, 4, 16, 40)
 assert not scale_mb or os.environ.get('YENEY_FULLQ_EXPERIMENT') == 'scale'
-fixture_count = 4 if scale_mb else 12 if os.environ.get('YENEY_FULLQ') == '1' else 8
+playqueue_case = os.environ.get('YENEY_PLAYQUEUE_CASE')
+fixture_count = 20 if playqueue_case else 4 if scale_mb else 12 if os.environ.get('YENEY_FULLQ') == '1' else 8
 for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
     seconds = 360 if os.environ.get('YENEY_WS_LIFECYCLE') == '1' and i < 2 else 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
@@ -283,12 +284,14 @@ for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44
             seconds = 100
     if os.environ.get('YENEY_TIMING_03E_STEADY') and i < 2:
         seconds = 180
+    if playqueue_case and i == 0:
+        seconds = 105
     if scale_mb:
         seconds = (scale_mb*1000000 + rate*4-1)//(rate*4)
     source=bytearray(wav(rate,seconds,noise=True))
-    if study_pacing or mixed_rows or packed_rows or os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
+    if playqueue_case or study_pacing or mixed_rows or packed_rows or os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS')=='1' or os.environ.get('YENEY_FULLQ')=='1':
         # Distinct PCM makes a same-rate wrong-track binding observable.
-        np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8((i+1)*17)
+        np.frombuffer(source,dtype=np.uint8,offset=44)[:] ^= np.uint8(((i+1)*17) % 256)
     if (depth_rows and i == 1) or packed_rows == 'benchmark':
         packed = bytearray(len(source[44:]) * 3 // 2)
         packed[::3] = bytes([17]) * (len(packed) // 3)
@@ -300,7 +303,8 @@ for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44
     path.write_bytes(source)
     depth_tags = ['-T', 'REPLAYGAIN_TRACK_GAIN=-4.40 dB', '-T', 'REPLAYGAIN_TRACK_PEAK=1.000000'] if depth_rows and i == 2 else []
     subprocess.run(['flac', *depth_tags,'-s','-f','-T',f'TITLE=Title & {i}','-T','ARTIST=Artist <one>',
-                    '-T','ALBUM=Album & fixture','-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
+                    '-T', 'ALBUM=Other album' if playqueue_case and i == 19 else 'ALBUM=Album & fixture',
+                    '-T',f'TRACKNUMBER={i+1}', '-o',str(base/f'library/{i}.flac'),str(path)],check=True)
 if fullq_codec in ('alac', 'wav', 'converted-flac'):
     for i in range(fixture_count):
         source = base / f'input-{i}.wav'
@@ -438,6 +442,9 @@ try:
     (base/'library.json').write_text(json.dumps(tracks,indent=2))
     ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('0.flac','1.flac','2.flac','3.flac')]
     window_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in tuple(f'{i}.flac' for i in range(fixture_count))]
+    if playqueue_case:
+        window_ids = [next(t['id'] for t in tracks if t.get('url', '').endswith(f'/{i}.flac'))
+                      for i in range(fixture_count)]
     alac_ids=[t['id'] for t in tracks if t.get('url','').rsplit('/',1)[-1] in ('4.m4a','5.m4a')]
     assert len(ids)==4 and len(alac_ids)==2,tracks
     if nav_media:
@@ -607,6 +614,10 @@ try:
     if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY')=='1':
         from podcast_real_lms import run
         run(globals())
+        raise SystemExit(0)
+    if playqueue_case:
+        from playqueue_real_lms import run
+        run(globals(), playqueue_case)
         raise SystemExit(0)
     if os.environ.get('YENEY_ROOM_TRANSITION_CASE'):
         from websocket_room_lifecycle import run_transition
