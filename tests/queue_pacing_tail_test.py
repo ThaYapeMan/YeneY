@@ -11,7 +11,7 @@ class QueuePacingTail(unittest.TestCase):
             with self.subTest(form=form), Fixture(YENEY_QUEUE_FORMAT=form,
                                                   YENEY_QUEUE_PACE_TAIL_MS="20000") as fixture:
                 length = LENGTH if form == "wav" else 42 + 32 * RATE + sum(
-                    11 + (i >= 128) + (i >= 2048) for i in range((32 * 44100 + 255) // 256))
+                    12 + (i >= 128) + (i >= 2048) for i in range((32 * 44100 + 255) // 256))
                 with fixture.request(f"bytes={length - 23 * RATE}-") as (response, _):
                     start = time.monotonic()
                     self.assertEqual(len(response.read()), 23 * RATE)

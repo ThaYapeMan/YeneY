@@ -20,7 +20,7 @@ def length(seconds, form):
         return 44 + samples * 6
     frames = (samples + 255) // 256
     number_bytes = frames + sum(max(0, frames - limit) for limit in (128, 2048, 65536))
-    return 42 + samples * 6 + frames * 10 + number_bytes
+    return 42 + samples * 6 + frames * 11 + number_bytes
 
 
 class Fixture:
