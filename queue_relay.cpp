@@ -114,6 +114,7 @@ void QueueRoom::Impl::releaseWindowParent(uint64_t token, uint64_t before) {
         queue.releaseParent(source);
 }
 void QueueRoom::Impl::release(bool stop, bool cleanupSpeaker) {
+    finishSnapshotRefusal("released");
     queue.extrapolateSpeakerClock(false);
     const auto &items = rowOwner.layout();
     generationRebuildEdits.reset();
@@ -168,7 +169,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
     const bool navigationTimeout = c == 'Z';
     if (navigationTimeout) c = 'q';
     if (c == 'H') {
-        const auto snapshot = reader.read(host, mac);
+        const auto snapshot = readPlaylist();
         const auto audible = std::find_if(items.begin(), items.end(), [&](const auto &i) { return i.stream == current; });
         if (snapshot.mode == "pause" && audible != items.end() &&
             snapshot.index < snapshot.entries.size() && snapshot.entries[snapshot.index].url == audible->sourceUrl) {
@@ -206,7 +207,7 @@ void QueueRoom::Impl::command(char c, uint64_t next) {
         queue_audio::PlaylistSnapshot snapshot;
         bool known = false;
         try {
-            snapshot = reader.read(host, mac);
+            snapshot = readPlaylist();
             known = true;
         } catch (const std::exception &e) {
             logQueue("resume echo verification unavailable: " + std::string(e.what()));
@@ -691,9 +692,9 @@ void QueueRoom::Impl::run() {
                     navigationDeadline = std::chrono::steady_clock::now() +
                         std::chrono::milliseconds(queue_audio::QueueWindow::settleMs);
                     try {
-                        const auto snapshot = reader.read(host, mac);
+                        const auto snapshot = readPlaylist();
                         if (snapshot.mode == "stop") {
-                            const auto fresh = reader.read(host, mac);
+                            const auto fresh = readPlaylist();
                             if (fresh.mode == "stop") {
                                 command('Z', rowOwner.navigationFirst()); // Confirmed user stop cancels owned requests.
                                 if (snapshot.entries.empty() && fresh.entries.empty())
@@ -705,9 +706,9 @@ void QueueRoom::Impl::run() {
                     // A standalone q is explicit LMS stop authority. Status can
                     // lag it, but an empty status alone is never clear authority.
                     try {
-                        const auto snapshot = reader.read(host, mac);
+                        const auto snapshot = readPlaylist();
                         if (snapshot.entries.empty()) {
-                            const auto fresh = reader.read(host, mac);
+                            const auto fresh = readPlaylist();
                             if (fresh.entries.empty()) {
                                 lmsNavigation = navigationSelecting = false;
                                 logQueue("window rebuild reason=clear lms_commands=0");

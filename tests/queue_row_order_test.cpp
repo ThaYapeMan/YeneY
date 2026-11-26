@@ -117,6 +117,7 @@ void snapshotOrder() {
     auto partial = known;
     partial.entries.pop_back();
     assert(QueueRowOwner::snapshotDecision(known, partial, true) == Decision::RejectShort);
+    assert(QueueRowOwner::snapshotDecision(known, partial, true, true) == Decision::ConfirmReplacement);
     queue_audio::PlaylistSnapshot empty;
     assert(QueueRowOwner::snapshotDecision(known, empty, true) == Decision::RejectShort);
     assert(QueueRowOwner::snapshotDecision(known, empty, false) == Decision::ConfirmClear);

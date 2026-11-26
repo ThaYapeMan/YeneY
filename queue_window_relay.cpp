@@ -14,7 +14,7 @@ void QueueRoom::Impl::reconcileWindow() {
     nextWindowPoll = now + std::chrono::milliseconds(pollMs);
     queue_audio::PlaylistSnapshot snapshot;
     try {
-        snapshot = reader.read(host, mac);
+        snapshot = readPlaylist();
     } catch (const std::exception &) {
         // A failed read supplies no evidence of an LMS edit. Keep the last
         // confirmed window; the next ordinary worker poll may try a new read.
@@ -591,39 +591,111 @@ void QueueRoom::Impl::reconcileWindow() {
     }
     publish();
 }
-bool QueueRoom::Impl::acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot) {
+queue_audio::PlaylistSnapshot QueueRoom::Impl::readPlaylist(bool confirming) {
+    std::this_thread::sleep_until(nextPlaylistRead);
+    unsigned timeout = 0;
+    if (confirming && snapshotRefusal && snapshotRefusal->request == rowOwner.currentRequest()) {
+        const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+            snapshotRefusal->deadline - PlaylistClock::now()).count();
+        if (remaining <= 0) throw std::runtime_error("playlist-confirmation-expired");
+        timeout = unsigned(remaining);
+    }
+    const auto deferNextRead = [this] {
+        nextPlaylistRead = PlaylistClock::now() + std::chrono::milliseconds(250);
+    };
+    logQueue("playlist status read");
+    try {
+        auto snapshot = reader.read(host, mac, 9090, timeout);
+        deferNextRead();
+        return snapshot;
+    } catch (...) {
+        deferNextRead();
+        throw;
+    }
+}
+void QueueRoom::Impl::finishSnapshotRefusal(const char *decision) {
+    if (!snapshotRefusal) return;
+    if (!snapshotRefusal->expired)
+        logQueue(std::string("window snapshot refusal ended decision=") + decision);
+    snapshotRefusal.reset();
+}
+bool QueueRoom::Impl::snapshotRetryExpired() {
+    if (!snapshotRefusal || snapshotRefusal->request != rowOwner.currentRequest()) return false;
+    if (!snapshotRefusal->expired && PlaylistClock::now() >= snapshotRefusal->deadline) {
+        snapshotRefusal->expired = true;
+        logQueue("window snapshot refusal ended decision=retain-last-confirmed reason=retry-expired");
+    }
+    return snapshotRefusal->expired;
+}
+bool QueueRoom::Impl::acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot, bool admittingStart) {
     const auto known = playlist.entries.size();
     const auto busy = [this] {
         std::lock_guard<std::mutex> lock(mutex);
         return selecting || lmsNavigation || navigationSelecting || rowOwner.hasSelections() ||
             selectionDeferred.load() || !commands.empty() || windowDirty ||
             navigationDeadline != std::chrono::steady_clock::time_point{} ||
-            std::chrono::steady_clock::now() < ownUntil;
+            PlaylistClock::now() < ownUntil;
+    };
+    const auto request = rowOwner.currentRequest();
+    if (snapshotRefusal && snapshotRefusal->request != request)
+        finishSnapshotRefusal("superseded");
+    // LMS publishes the load revision after it installs the complete list and
+    // jumps to the selected entry. A q+s admission distinguishes this jump
+    // from an ordinary decode-ahead start. An independent read corroborates
+    // the selected index, revision and ordered entries.
+    const auto startsNewRevision = [&](const auto &candidate) {
+        return admittingStart && selectedRequest == request &&
+            (navigationSelecting || selectedNewPlay) && candidate.mode == "play" &&
+            !candidate.revision.empty() && candidate.revision != playlist.revision;
     };
     using Decision = queue_audio::QueueRowOwner::SnapshotDecision;
-    const auto decision = rowOwner.snapshotDecision(playlist, snapshot, snapshot.entries.size() < known && busy());
-    if (decision == Decision::ConfirmReplacement) {
-        auto fresh = reader.read(host, mac);
-        if (rowOwner.confirmsReplacement(snapshot, fresh)) {
-            snapshot = std::move(fresh);
-            logQueue("window snapshot accepted reason=new-playlist-generation");
-            return true;
+    const auto decision = rowOwner.snapshotDecision(playlist, snapshot,
+        snapshot.entries.size() < known && busy(), startsNewRevision(snapshot));
+    if (decision == Decision::Accept) {
+        finishSnapshotRefusal("accepted");
+        return true;
+    }
+    if (snapshotRetryExpired()) {
+        // A clear that becomes idle has new authority to seek a fresh empty
+        // read. The expired start itself cannot authorize another retry.
+        if (decision != Decision::ConfirmClear) return false;
+        finishSnapshotRefusal("idle-clear");
+    }
+    const bool empty = snapshot.entries.empty();
+    if (!snapshotRefusal) {
+        snapshotRefusal = SnapshotRefusal{PlaylistClock::now() + std::chrono::seconds(1), request};
+        logQueue("window snapshot rejected reason=" + std::string(empty ? "unconfirmed-clear" : "short-in-flight") +
+                 " known=" + std::to_string(known) + " received=" + std::to_string(snapshot.entries.size()) +
+                 " waiting=" + (empty ? "fresh-empty-and-idle" : "confirmed-playlist-revision"));
+    }
+    if (PlaylistClock::now() < snapshotRefusal->deadline) {
+        if (decision == Decision::ConfirmReplacement || decision == Decision::ConfirmClear) {
+            std::optional<queue_audio::PlaylistSnapshot> fresh;
+            try {
+                fresh = readPlaylist(true);
+            } catch (const std::exception &) {
+                // An unavailable confirmation leaves the previous window in place.
+            }
+            if (request != rowOwner.currentRequest()) {
+                finishSnapshotRefusal("superseded");
+                return false;
+            }
+            if (snapshotRetryExpired()) return false;
+            if (fresh && decision == Decision::ConfirmReplacement && rowOwner.confirmsReplacement(snapshot, *fresh) &&
+                (!startsNewRevision(snapshot) || startsNewRevision(*fresh))) {
+                snapshot = std::move(*fresh);
+                finishSnapshotRefusal("confirmed-replacement");
+                logQueue("window snapshot accepted reason=new-playlist-generation");
+                return true;
+            }
+            if (fresh && decision == Decision::ConfirmClear && fresh->entries.empty() && !busy()) {
+                snapshot = std::move(*fresh);
+                finishSnapshotRefusal("confirmed-clear");
+                return true;
+            }
         }
     }
-    if (decision == Decision::RejectShort || decision == Decision::ConfirmReplacement) {
-        logQueue("window snapshot rejected reason=short-in-flight known=" + std::to_string(known) +
-                 " received=" + std::to_string(snapshot.entries.size()));
-        return false;
-    }
-    if (decision == Decision::ConfirmClear) {
-        auto fresh = reader.read(host, mac);
-        if (!fresh.entries.empty() || busy()) {
-            logQueue("window snapshot rejected reason=unconfirmed-clear");
-            return false;
-        }
-        snapshot = std::move(fresh);
-    }
-    return true;
+    return false;
 }
 void QueueRoom::Impl::arbitrateSelection(uint64_t token, const std::string &reason) {
     const auto slot = window.find(token);
@@ -633,10 +705,10 @@ void QueueRoom::Impl::arbitrateSelection(uint64_t token, const std::string &reas
         logQueue("selection bind lms_index=" + std::to_string(slot->index) + " reason=owned-selection lms_commands=0");
         return;
     }
-    auto snapshot = reader.read(host, mac);
+    auto snapshot = readPlaylist();
     if (snapshot.entries.size() < playlist.entries.size()) {
         logQueue("window snapshot rejected reason=selection-short");
-        snapshot = reader.read(host, mac);
+        snapshot = readPlaylist();
     }
     if (snapshot.entries.size() >= playlist.entries.size() && snapshot.index < snapshot.entries.size() &&
         snapshot.index == slot->index && snapshot.mode != "stop") {

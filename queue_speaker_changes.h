@@ -20,7 +20,7 @@ class SpeakerChanges {
     std::string sid;
     uint32_t sequence = 0;
     bool sequenced = false;
-    struct EditEcho { std::string uri, ordinal, count, transport; };
+    struct EditEcho { std::string uri, ordinal, count, transport; bool logged = false; };
     std::deque<EditEcho> edits;
     struct TrackEcho { unsigned index; uint64_t token; EditEcho expected; bool stoppedPending = false; };
     std::deque<TrackEcho> tracks;
@@ -126,7 +126,7 @@ public:
             const auto found = fields.find(name);
             return found == fields.end() || found->second == expected;
         };
-        for (const auto &edit : edits) {
+        for (auto &edit : edits) {
             // LastChange may contain only the changed ordinal/count, with the
             // unchanged URI omitted. Never swallow state-only app controls or
             // a playback error as queue feedback.
@@ -137,8 +137,11 @@ public:
                 (state.empty() || state == "PLAYING" || state == "TRANSITIONING" ||
                  (edit.uri.empty() && state == "STOPPED")) &&
                 (field("TransportStatus").empty() || field("TransportStatus") == "OK")) {
-                std::printf("yeney: queue self-edit echo fenced tracks=%s ordinal=%s\n",
-                            edit.count.c_str(), edit.ordinal.c_str());
+                if (!edit.logged) {
+                    std::printf("yeney: queue self-edit echo fenced tracks=%s ordinal=%s\n",
+                                edit.count.c_str(), edit.ordinal.c_str());
+                    edit.logged = true;
+                }
                 return false;
             }
         }

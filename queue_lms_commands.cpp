@@ -40,7 +40,7 @@ void QueueRoom::Impl::speakerCommand(const std::string &command, const std::stri
     if (command == "pause 0" && source == queue.latestOccurrence() && queue.queueItemProduced(source)) {
         try {
             resumeEchoUntil = 0;
-            resumeSnapshot = reader.read(host, mac);
+            resumeSnapshot = readPlaylist();
             resumeEchoUntil = milliseconds() + 3000;
         } catch (const std::exception &e) {
             logQueue("resume echo snapshot unavailable: " + std::string(e.what()));

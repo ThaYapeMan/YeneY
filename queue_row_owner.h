@@ -313,8 +313,11 @@ public:
     enum class SnapshotDecision { Accept, RejectShort, ConfirmReplacement, ConfirmClear };
 
     static SnapshotDecision snapshotDecision(const PlaylistSnapshot &known,
-                                             const PlaylistSnapshot &received, bool busy) {
+                                             const PlaylistSnapshot &received, bool busy,
+                                             bool startsNewRevision = false) {
         if (busy && received.entries.size() < known.entries.size()) {
+            if (!received.entries.empty() && startsNewRevision)
+                return SnapshotDecision::ConfirmReplacement;
             const bool disjoint = !received.entries.empty() &&
                 std::none_of(received.entries.begin(), received.entries.end(), [&](const auto &track) {
                     return std::any_of(known.entries.begin(), known.entries.end(),
@@ -330,7 +333,7 @@ public:
         return fresh.revision == received.revision && fresh.index == received.index &&
             fresh.entries.size() == received.entries.size() &&
             std::equal(fresh.entries.begin(), fresh.entries.end(), received.entries.begin(),
-                [](const auto &a, const auto &b) { return a.url == b.url; });
+                [](const auto &a, const auto &b) { return a.id == b.id && a.url == b.url; });
     }
 
     static std::optional<uint64_t> seekWithin(const Entry &row, const QueueRecord &producer, uint64_t seekMs) {

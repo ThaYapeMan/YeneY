@@ -108,7 +108,10 @@ struct QueueRoom::Impl {
     void selectionPublished(unsigned index);
     uint64_t lazySerial = 0;
     void arbitrateSelection(uint64_t token, const std::string &reason);
-    bool acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot);
+    queue_audio::PlaylistSnapshot readPlaylist(bool confirming = false);
+    bool acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot, bool admittingStart = false);
+    void finishSnapshotRefusal(const char *decision);
+    bool snapshotRetryExpired();
     void activateLazy(uint64_t token);
     Entry makeRow(const queue_audio::QueueWindow::Slot &slot,
                   const Entry *produced = nullptr, unsigned bits = 24, unsigned knownRate = 0);
@@ -126,6 +129,14 @@ struct QueueRoom::Impl {
     std::optional<uint64_t> generationRebuildEdits;
     queue_audio::PlaylistSnapshot playlist;
     queue_audio::PlaylistReader reader;
+    using PlaylistClock = std::chrono::steady_clock;
+    PlaylistClock::time_point nextPlaylistRead{};
+    struct SnapshotRefusal {
+        PlaylistClock::time_point deadline;
+        uint64_t request;
+        bool expired = false;
+    };
+    std::optional<SnapshotRefusal> snapshotRefusal;
     std::string state = "STOPPED", fault, transportStatus;
     std::chrono::steady_clock::time_point playAt{};
     bool waitingForPlay = false;

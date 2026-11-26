@@ -146,7 +146,8 @@ SoapResult QueueCoordinator::request(const std::string &service, const std::stri
     if (!http.status && readOnly && waitForRead) throw QueueReadUnanswered(action, http.error);
     if (http.status && answered) answered();
     auto result = parseSoap(http.body, action);
-    const bool poll = action == "GetPositionInfo" || action == "GetTransportInfo" || action == "GetMediaInfo";
+    const bool poll = action == "GetPositionInfo" || action == "GetTransportInfo" || action == "GetMediaInfo" ||
+        action == "GetZoneGroupState" || action == "Browse";
     if (log && (!poll || !http.error.empty() || http.status != 200 || !result.ok))
         log("queue SOAP action=" + action + " HTTP=" + std::to_string(http.status) +
             " fault=" + result.faultCode +

@@ -143,6 +143,7 @@ void QueueRoom::Impl::selectPath() {
     const auto &items = rowOwner.layout();
     if (!selecting || selectedRequest != rowOwner.currentRequest())
         return;
+    if (!selectionKnown && snapshotRetryExpired()) return;
     {
         std::lock_guard<std::mutex> lock(mutex);
         if (std::chrono::steady_clock::now() < cancelledHeaderUntil) return;
@@ -167,8 +168,8 @@ void QueueRoom::Impl::selectPath() {
         queue_audio::PlaylistEntry track;
         selectedIndex = -1;
         try {
-            auto snapshot = reader.read(host, mac);
-            if (!acceptSnapshot(snapshot)) return;
+            auto snapshot = readPlaylist(true);
+            if (!acceptSnapshot(snapshot, true) || selectedRequest != rowOwner.currentRequest()) return;
             for (const auto &pending : rowOwner.selectionSnapshot()) {
                 if (pending.second.phase != Selection::Producing ||
                     !pending.second.commandRequest || pending.second.commandRequest->load() != selectedRequest) continue;
@@ -267,6 +268,10 @@ void QueueRoom::Impl::selectPath() {
                 selectedIndex = int(index);
             }
         } catch (const std::exception &e) {
+            if (snapshotRefusal && snapshotRefusal->request == selectedRequest) {
+                snapshotRetryExpired();
+                return;
+            }
             logQueue("source metadata unavailable; using stream: " + std::string(e.what()));
         }
         if (selectedRequest != rowOwner.currentRequest()) {

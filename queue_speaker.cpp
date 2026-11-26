@@ -446,7 +446,7 @@ void QueueRoom::Impl::observe() {
     std::optional<int64_t> pauseTime;
     if (mutation == "pause 1" && pathReason == "remote-finite") {
         try {
-            const auto snapshot = reader.read(host, mac);
+            const auto snapshot = readPlaylist();
             const auto owner = it->owner ? it->owner : it->stream;
             const auto before = queue.audibleElapsedMs(owner);
             if (before && snapshot.index < snapshot.entries.size() &&
@@ -517,7 +517,7 @@ void QueueRoom::Impl::observe() {
         int64_t observedTime = -1;
         do {
             try {
-                auto snapshot = reader.read(host, mac);
+                auto snapshot = readPlaylist();
                 observedTime = snapshot.timeMs;
                 acknowledged = std::abs(observedTime - *pauseTime) <= 1250;
                 if (acknowledged) break;

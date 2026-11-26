@@ -116,9 +116,10 @@ public:
             throw std::runtime_error("playlist-incomplete");
         return out;
     }
-    PlaylistSnapshot read(const std::string &host, const std::string &mac, unsigned port = 9090) {
+    PlaylistSnapshot read(const std::string &host, const std::string &mac, unsigned port = 9090,
+                          unsigned timeoutMs = 0) {
         std::string reply;
-        if (!controlLms(host, mac, "status 0 60000 tags:alKudVT", port, &reply))
+        if (!controlLms(host, mac, "status 0 60000 tags:alKudVT", port, &reply, timeoutMs))
             throw std::runtime_error("playlist-cli-unavailable");
         return parse(reply);
     }
