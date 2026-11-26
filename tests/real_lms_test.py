@@ -417,7 +417,12 @@ volume_only=os.environ.get('YENEY_REAL_LMS_VOLUME_ONLY')=='1'
 extra_remotes=[]
 lms_log=(base/'lms.log').open('w');bridge_log=(base/'bridge.log').open('w')
 try:
-    command=['perl',str(LMS_HOME/'slimserver.pl'),'--prefsdir',str(base/'prefs'),'--cachedir',str(base/'cache'),
+    lms_source = LMS_HOME
+    if playqueue_case in ('half-built', 'unconfirmed'):
+        from playqueue_real_lms import instrument_lms
+        lms_source = instrument_lms(LMS_HOME, base / 'instrumented-lms')
+        perl_env['YENEY_PLAYQUEUE_STAGE'] = str(base / 'half-built.status')
+    command=['perl',str(lms_source/'slimserver.pl'),'--prefsdir',str(base/'prefs'),'--cachedir',str(base/'cache'),
              '--logdir',str(base/'log'),'--httpport','9000','--httpaddr','127.0.0.1','--cliport','19090',
              '--cliaddr','127.0.0.1','--playeraddr','127.0.0.1','--streamaddr','127.0.0.1',
              '--advertiseaddr','127.0.0.1','--norestart']
@@ -464,6 +469,8 @@ try:
     sonos.follow_controls=True;sonos.consume_stream=True
     sonos.volume=20;sonos.muted=0
     sonos.expected_title_prefix='';sonos.expected_albums=['Album & fixture','No Album','',None,'Audiophile Recordings volume 3','The Absence']+[f'Native {k} {r}' for k in ('flac','alac') for r in (88200,96000)]
+    if playqueue_case:
+        sonos.expected_albums.append('Other album')
     tap=Tap()
     env=dict(os.environ,YENEY_LMS_VOLUME='off',YENEY_VOLUME_MAX='100',YENEY_PLAYBACK_MODE='queue',YENEY_STREAM_PACING='sonos',YENEY_START_LEAD_MS='1000',YENEY_TIMING_PROBE='1',YENEY_POLL='events',YENEY_QUEUE_DISK_MIB=os.environ.get('YENEY_FULLQ_QUOTA_MIB', '256' if nav_media else '64'),STATE_DIRECTORY=str(base))
     if os.environ.get('YENEY_REAL_LMS_PODCAST_ONLY') == '1':
