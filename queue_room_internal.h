@@ -130,7 +130,7 @@ struct QueueRoom::Impl {
     queue_audio::PlaylistSnapshot playlist;
     queue_audio::PlaylistReader reader;
     using PlaylistClock = std::chrono::steady_clock;
-    PlaylistClock::time_point nextPlaylistRead{};
+    std::deque<PlaylistClock::time_point> playlistReads;
     struct SnapshotRefusal {
         PlaylistClock::time_point deadline;
         uint64_t request;

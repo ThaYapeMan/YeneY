@@ -230,9 +230,10 @@ feed menu name and settings; omit source URLs, tokens and descriptions.
 - I2: Empty or short snapshots of the known playlist during navigation, restart or window edits are
   stale evidence until LMS confirms them. For an overlapping replacement, a new LMS playback start
   must expose a changed playlist revision, and a fresh read must agree on the revision, index and
-  ordered entries. Disjoint replacements require two matching reads. Space playlist reads at least
-  250 ms apart and bound confirmation to one second. If a start cannot be confirmed, retain the last
-  confirmed window and wait for the next LMS request. Clearing requires a fresh empty read
+  ordered entries. Disjoint replacements require two matching reads. Space confirmation retries
+  by at least 250 ms, defer them if four reads already occurred in the past second, and stop them
+  after one second. If a start cannot be confirmed, retain the last confirmed window and wait for
+  the next LMS request. Clearing requires a fresh empty read
   and no navigation or edit in flight; genuine user clear still stops.
 - I3: A valid frame-zero target from the same source is always paired, including
   unfinished decode-ahead and previous selections of the same index. The fresh

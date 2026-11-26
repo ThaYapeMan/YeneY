@@ -592,24 +592,32 @@ void QueueRoom::Impl::reconcileWindow() {
     publish();
 }
 queue_audio::PlaylistSnapshot QueueRoom::Impl::readPlaylist(bool confirming) {
-    std::this_thread::sleep_until(nextPlaylistRead);
+    auto ready = PlaylistClock::now();
+    const bool retry = confirming && snapshotRefusal &&
+        snapshotRefusal->request == rowOwner.currentRequest();
     unsigned timeout = 0;
-    if (confirming && snapshotRefusal && snapshotRefusal->request == rowOwner.currentRequest()) {
+    if (retry) {
+        if (!playlistReads.empty())
+            ready = std::max(ready, playlistReads.back() + std::chrono::milliseconds(250));
+        if (playlistReads.size() == 4)
+            ready = std::max(ready, playlistReads.front() + std::chrono::seconds(1));
+        if (ready >= snapshotRefusal->deadline)
+            throw std::runtime_error("playlist-confirmation-expired");
+        std::this_thread::sleep_until(ready);
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
             snapshotRefusal->deadline - PlaylistClock::now()).count();
         if (remaining <= 0) throw std::runtime_error("playlist-confirmation-expired");
         timeout = unsigned(remaining);
     }
-    const auto deferNextRead = [this] {
-        nextPlaylistRead = PlaylistClock::now() + std::chrono::milliseconds(250);
-    };
+    if (playlistReads.size() == 4) playlistReads.pop_front();
+    playlistReads.push_back(PlaylistClock::now());
     logQueue("playlist status read");
     try {
         auto snapshot = reader.read(host, mac, 9090, timeout);
-        deferNextRead();
+        playlistReads.back() = PlaylistClock::now();
         return snapshot;
     } catch (...) {
-        deferNextRead();
+        playlistReads.back() = PlaylistClock::now();
         throw;
     }
 }
@@ -681,6 +689,11 @@ bool QueueRoom::Impl::acceptSnapshot(queue_audio::PlaylistSnapshot &snapshot, bo
                 return false;
             }
             if (snapshotRetryExpired()) return false;
+            if (fresh && fresh->entries.size() >= known) {
+                snapshot = std::move(*fresh);
+                finishSnapshotRefusal("accepted-fresh");
+                return true;
+            }
             if (fresh && decision == Decision::ConfirmReplacement && rowOwner.confirmsReplacement(snapshot, *fresh) &&
                 (!startsNewRevision(snapshot) || startsNewRevision(*fresh))) {
                 snapshot = std::move(*fresh);
