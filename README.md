@@ -56,6 +56,20 @@ of many. [Music Assistant](https://www.music-assistant.io) is a music server of 
 own with a Sonos player provider; it does not play the LMS library. YeneY is built
 for Sonos and LMS only.
 
+**Only YeneY does this**
+
+| | YeneY | LMS-uPnP | Music Assistant (Sonos S2) |
+|---|---|---|---|
+| Next, Previous and seeking in the Sonos app | ✔ ([known faults](#known-problems)) | ✘ not possible in this design | ~ Next and Previous; seeking is switched off |
+| The whole playlist visible in the Sonos app | ✔ row for row, up to 500 rows by default | ✘ does not use the Sonos queue | ? the speaker holds a small window of tracks; what the app shows is not verified |
+| Tap any row in the Sonos app | ✔ | ✘ | ? not verified |
+| A seek from the server keeps the track's row | ✔ | not applicable | ✘ the queue is loaded again |
+| A move from the server (Next, Previous, jump) | ✔ one command to the speaker | ~ a new address per track | ~ the queue is loaded again |
+| Playback position reported to the server | ✔ milliseconds, from the speaker's own clock | ~ polled from the speaker, whole seconds | ~ milliseconds as they arrive, used for the progress bar |
+| Timing export for other programs (lighting) | ✔ | ✘ | ✘ |
+
+**Level, or a different approach**
+
 | | YeneY | LMS-uPnP | Music Assistant (Sonos S2) |
 |---|---|---|---|
 | Transport | Exact-length FLAC rows by default, WAV selectable per room. Continuous FLAC for live sources. | Continuous HTTP stream | Queued track URLs |
@@ -63,20 +77,19 @@ for Sonos and LMS only.
 | Lossless 24-bit | ✔ Preserves 24-bit sources; bit-perfect at 44.1/48 kHz with ReplayGain off | ~ FLAC by default; 24-bit can be set, not verified on Sonos | ✔ FLAC by default; 24-bit on current models |
 | Hi-res sources (88.2–192 kHz) | ✔ YeneY's own converter, measured equal to SoX `rate -v` | ✔ resampled by LMS or the bridge | ✔ limited to 48 kHz |
 | Title, artist, album and artwork per track in the Sonos app | ✔ | ✔ | ✔ |
-| The whole playlist visible in the Sonos app | ✔ row for row, up to 500 rows by default | ✘ does not use the Sonos queue | ? the speaker holds a small window of tracks; what the app shows is not verified |
 | Gapless | ✔ | ✔ (not for tracks of unknown length) | ✔ |
 | Play, pause and stop in the Sonos app reach the server | ✔ | ✔ | ✔ (its own pause is sent as a stop) |
-| Next, Previous and seeking in the Sonos app | ✔ ([one known fault](#known-problems)) | ✘ not possible in this design | ~ Next and Previous; seeking is switched off |
-| Tap any row in the Sonos app | ✔ | ✘ | ? not verified |
-| A seek from the server keeps the track's row | ✔ | not applicable | ✘ the queue is loaded again |
-| Playback position reported to the server | ✔ milliseconds, from the speaker's own clock | ~ polled from the speaker, whole seconds | ~ milliseconds as they arrive, used for the progress bar |
 | Volume both ways | ✔ optional, with a maximum | ✔ | ✔ |
-| Sonos groups | ~ plays through the group's leading room; a member room stops cleanly | ✔ follows groups | ✔ makes and follows groups |
-| Synchronises with other LMS players | ✘ not yet | ~ start only | not applicable |
+| Sonos rooms playing in sync with each other | ✔ group them in the Sonos app; YeneY plays through the group's leading room, a member room stops cleanly | ✔ follows groups | ✔ makes and follows groups |
+| Grouping from the server, and sync with players of other makes | ✘ not yet; the millisecond position this needs is in place | ~ with other LMS players at the start only | ~ with AirPlay speakers, by switching the Sonos speaker to AirPlay |
 | Home Assistant | ✔ through the LMS integration; shown as linked to the Sonos device | ✔ through the LMS integration | ✔ its own integration |
-| Song titles on internet radio | ~ at the start of a stream | ✔ | ? not verified |
-| Timing export for other programs (lighting) | ✔ | ✘ | ✘ |
 | Automated tests in the repository | ✔ | ✘ | ✔ |
+
+**Where the others are ahead**
+
+| | YeneY | LMS-uPnP | Music Assistant (Sonos S2) |
+|---|---|---|---|
+| Song titles on internet radio | ~ at the start of a stream | ~ follows the songs on MP3 and AAC stations; not lossless | ? not verified |
 | Packaging | ✘ build from source on Linux | ✔ LMS plugin for all platforms | ✔ Home Assistant add-on and container |
 | Other speaker brands | ✘ Sonos only | ✔ any UPnP/DLNA renderer | ✔ many brands |
 | Maturity | new | mature, years of use on many devices | stable, widely used |
@@ -85,8 +98,8 @@ for Sonos and LMS only.
 
 How this table was made: LMS-uPnP was read at version 3.4.10 (October 2026) and
 Music Assistant at revision `2506795` of its server (19 November 2026), from their
-source and documentation. Music Assistant was not run on our speakers. Corrections
-are welcome.
+source and documentation; the radio row was read again on 27 November 2026. Music
+Assistant was not run on our speakers. Corrections are welcome.
 
 ### Which one should I use?
 
@@ -307,7 +320,7 @@ Yes, for noncommercial use, under the
 
 ## Known problems
 
-As of 19 November 2026:
+As of 27 November 2026:
 
 - **End of a playlist.** After the last track the room can stay on "playing" in
   LMS, and a new start inside the same playlist can then fail. Starting another
@@ -316,11 +329,14 @@ As of 19 November 2026:
   about a second, when that track had been prepared as the gapless follow-on.
 - **Repeat and shuffle set on the speaker itself** are not yet overruled by LMS;
   switch them off in the Sonos app.
+- **A seek soon after a track starts** can wait some seconds: a track arrives from
+  LMS at about eleven times play speed, and the seek waits for its target.
 - **A seek far ahead early in a track** can show 0:00 in the Sonos app for that
   track.
 - **A speaker on Sonos's own radio link** answers position questions slowly for
-  about 20 s after a start, skip or seek; LMS can be 0.1–0.2 s behind in that time.
-- **Sonos rooms do not yet play in sync** with other LMS players.
+  about 5 s after a start, skip or seek; LMS can be 0.1–0.2 s behind in that time.
+- **Sync with other LMS players, and grouping from LMS,** are not there yet. Sonos
+  rooms play in sync with each other when you group them in the Sonos app.
 - **Crossfade** is not available in queue mode.
 - **Internet radio** shows the title at the start of a stream and does not follow
   song changes.
