@@ -627,9 +627,13 @@ def run(c):
         with sonos.lock:
             sonos.position['RelTime'] = '00:00:08'
         wait(lambda: float(cli('time ?', mac)[-1]) >= 5, 5, 'restart clock')
+        restart_uri = sonos.position['TrackURI']
+        mark = len(log())
         cli('button jump_rew', mac)
-        wait(lambda: 'kind=previous' in log()[mark:], 15, 'index-zero restart')
-        assert sonos.position['RelTime'] == '00:00:00', 'LMS Previous must reset the same retained URI to frame zero'
+        wait(lambda: ('kind=previous' in log()[mark:] or
+                      'lms_index=0 position_ms=0 decision=in-item' in log()[mark:]) and
+             sonos.position['RelTime'] == '00:00:00', 15, 'index-zero restart')
+        assert sonos.position['TrackURI'] == restart_uri, 'LMS Previous changed the retained URI'
         injected = []
         def transient(wire):
             if b' status 0 60000 ' in wire and not injected:

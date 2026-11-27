@@ -124,6 +124,7 @@ class Coordinator(ThreadingHTTPServer):
         self.requests, self.errors, self.snapshots = [], [], {}
         self.audible_reads = []
         self.audible_bodies = []
+        self.audible_actions = []
         self.item_ids = {}
         self.soap_delay = 0
         self.silent_from = self.silent_until = 0
@@ -192,7 +193,7 @@ class Coordinator(ThreadingHTTPServer):
         self.transition_delay = .4 if profile == 'device' else 0
         self.echo_delay = .05 if profile == 'device' else .08
 
-    def read_audio(self, seconds=None):
+    def read_audio(self, seconds=None, *, action_at=None):
         uri = self.position['TrackURI']
         time.sleep(getattr(self, 'transition_delay', 0))
         offset = first = 0
@@ -228,6 +229,8 @@ class Coordinator(ThreadingHTTPServer):
             assert body
             self.audible_reads.append((stamp, uri, offset))
             self.audible_bodies.append(body)
+            if action_at is not None:
+                self.audible_actions.append((action_at, uri))
         finally:
             response.close()
             connection.close()
@@ -374,7 +377,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send(f'<s:Envelope xmlns:s="{SOAP}"><s:Body><u:{action}Response xmlns:u="{urn}">'
                           f'{values}</u:{action}Response></s:Body></s:Envelope>')
                 if getattr(s, 'fullq_audio', False) and action in ('Seek', 'Play') and s.transport_state == 'PLAYING':
-                    s.read_audio()
+                    s.read_audio(action_at=now)
         except (ET.ParseError, UnicodeError):
             with s.lock:
                 s.busy = max(0, s.busy-1)

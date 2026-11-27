@@ -203,7 +203,11 @@ def run(c):
                 return_start = time.monotonic()
                 cli('playlist index 11', mac)
                 wait(lambda: sonos.position['TrackURI'] == items()[11]['uri'], 20, 'Q4 LMS return')
-                wait(lambda: any(r[0] >= return_start and r[1] == immutable[11] for r in sonos.audible_reads), 15, 'Q4 LMS return audible')
+                # An earlier Seek to the same URI can finish its delayed
+                # audio read after this LMS command. Match the SOAP action
+                # that started the read, before issuing the next move.
+                wait(lambda: any(at >= return_start and uri == immutable[11]
+                                 for at, uri in sonos.audible_actions), 15, 'Q4 LMS return audible')
             mark, soapmark, climark = len(text()), len(sonos.requests), len(proxy.records)
             move_start = time.monotonic()
             if app: c['select_item'](0)
