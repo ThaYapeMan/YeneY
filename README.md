@@ -329,8 +329,8 @@ As of 27 November 2026:
   about a second, when that track had been prepared as the gapless follow-on.
 - **Repeat and shuffle set on the speaker itself** are not yet overruled by LMS;
   switch them off in the Sonos app.
-- **A seek soon after a track starts** can wait some seconds: a track arrives from
-  LMS at about eleven times play speed, and the seek waits for its target.
+- **A seek soon after a track starts** can wait for its target. A three-minute
+  44.1 kHz row arrived at about 214 times play speed in a loopback test.
 - **A seek far ahead early in a track** can show 0:00 in the Sonos app for that
   track.
 - **A speaker on Sonos's own radio link** answers position questions slowly for
@@ -368,6 +368,8 @@ also [How YeneY works](docs/how-it-works.md),
 - [Music Assistant](https://www.music-assistant.io): a music server with its own
   Sonos support.
 - [Lyrion Music Server](https://lyrion.org): the music server YeneY plays from.
+- [yeney-core](https://github.com/ThaYapeMan/yeney-core): the player library inside
+  YeneY; it receives LMS's audio and counts it exactly.
 - [LampaStream](https://github.com/ThaYapeMan/LampaStream): music-reactive Philips
   Hue lighting that uses YeneY's timing.
 - [janbar/noson](https://github.com/janbar/noson): the Sonos library by

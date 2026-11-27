@@ -376,9 +376,11 @@ Tail-moov ALAC jump cost grows by 0.2696 s per source MB (3.709 MB/s equivalent)
 WAV jump cost grows by 0.5214 s per source MB (1.918 MB/s equivalent); fitted fixed overhead is 0.700 s.
 
 The byte counts are taken at first decoder PCM output, before the renderer transition. Input-EOF records identify the whole-source publication barrier; raw WAV can decode PCM earlier while its finite output declaration remains pending until EOF. Effective
-whole-input rates include the existing input pacing and decoder backpressure;
-they are not link bandwidth. Prepared Next results isolate the cost after
-production. ALAC metadata-at-EOF and WAV raw-PCM finite-length publication changes
+whole-input rates reflect the player poll cadence and decoder backpressure in
+the revisions measured for this table. The current core continues while input
+or decoded audio can move and waits for readiness when blocked. The historical
+rates measure end-to-end input progress. Prepared Next results isolate the cost
+after production. ALAC metadata-at-EOF and WAV raw-PCM finite-length publication changes
 belong to `yeney-core`. Their existing 12-row C2 audible-latency assertions
 remain enabled and failing; no ALAC/WAV C2 timing check is added to `make test`.
 
