@@ -16,26 +16,33 @@ class BytesDecoder final : public yeney::Decoder {
     std::deque<uint8_t> bytes;
     bool finished = false;
     std::function<std::optional<uint64_t>()> origin;
+    std::function<void()> progress;
+    static constexpr size_t capacity = 32;
 public:
-    explicit BytesDecoder(const yeney::DecoderConfig &config) : origin(config.pcmSourceStart) {}
+    explicit BytesDecoder(const yeney::DecoderConfig &config)
+        : origin(config.pcmSourceStart), progress(config.notifyProgress) {}
     bool sourceStart(uint64_t &frame) const override {
         if (origin) if (auto value = origin()) { frame = *value; return true; }
         return false;
     }
     size_t feed(const uint8_t *data, size_t size) override {
         std::lock_guard<std::mutex> lock(mutex);
-        size = std::min(size, size_t(32) - bytes.size());
+        size = std::min(size, capacity - bytes.size());
         bytes.insert(bytes.end(), data, data + size);
         return size;
     }
     void finish() override { std::lock_guard<std::mutex> lock(mutex); finished = true; }
     size_t take(yeney::Frame *out, size_t size) override {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
+        const bool wasFull = bytes.size() == capacity;
         size = std::min(size, bytes.size());
         for (size_t i = 0; i < size; ++i) {
             out[i].left = out[i].right = bytes.front();
             bytes.pop_front();
         }
+        lock.unlock();
+        if (wasFull && size && progress)
+            progress();
         return size;
     }
     bool format(yeney::Format &) const override { return true; }
