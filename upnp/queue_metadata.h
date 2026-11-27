@@ -12,6 +12,7 @@ struct QueueMetadata {
     bool deferred = false;
     bool preciseDuration = false; // estimated items; preserve local DIDL wire
     std::optional<uint64_t> playlistDuration;
+    bool omitSize = false; // First request chooses the FLAC representation.
 };
 // Finite music metadata keeps the plain LMS title and separate artist/album.
 // Always emit title/creator/artist/album, even empty: Sonos discards DIDL

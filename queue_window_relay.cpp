@@ -864,6 +864,7 @@ QueueRoom::Impl::Entry QueueRoom::Impl::makeRow(const queue_audio::QueueWindow::
         metadata.frames = (produced->item->contentLength().value() - 44) / 6;
         metadata.rate = descriptor.rate;
         metadata.size = queue_audio::rowLength(format, metadata.frames, metadata.rate, metadata.bits);
+        metadata.omitSize = route.canPack(format);
         metadata.deferred = false;
         metadata.preciseDuration = produced->item->descriptor().kind == queue_audio::PromiseKind::UpperBound;
         if (!lazy->publish(produced->item, produced->stream)) throw std::logic_error("partial row declaration rejected");

@@ -505,7 +505,9 @@ void QueueRoom::Impl::append() {
         metadata.frames = (*length - 44) / 6;
         metadata.rate = descriptor.rate;
         metadata.bits = route.bitsFor(descriptor);
-        metadata.size = queue_audio::rowLength(route.formatFor(descriptor.kind, descriptor.rate), metadata.frames, metadata.rate, metadata.bits);
+        const auto rowFormat = route.formatFor(descriptor.kind, descriptor.rate);
+        metadata.size = queue_audio::rowLength(rowFormat, metadata.frames, metadata.rate, metadata.bits);
+        metadata.omitSize = route.canPack(rowFormat);
         metadata.preciseDuration = record.estimated;
         const auto changes = upnp::sanitizeXmlFields({{"title", &metadata.title},
                                                       {"artist", &metadata.artist},

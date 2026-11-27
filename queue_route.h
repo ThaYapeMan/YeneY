@@ -26,6 +26,7 @@ public:
                                 PromiseKind = PromiseKind::Exact, unsigned bits = 24, unsigned rate = 0);
     Format formatFor(PromiseKind, unsigned rate) const;
     bool flacEnabled() const;
+    bool canPack(Format rowFormat) const;
     unsigned bitsFor(const Descriptor &) const;
     void revoke(uint64_t epoch);
     void retire(const std::string &uri);

@@ -46,6 +46,9 @@ Route::Route(std::string r, std::string s, Format format) {
     state->pacing.log();
 }
 bool Route::flacEnabled() const { return state->format != Format::Wav; }
+bool Route::canPack(Format rowFormat) const {
+    return state->format == Format::FlacPacked && rowFormat == Format::Flac;
+}
 Format Route::formatFor(PromiseKind kind, unsigned rate) const {
     return flacEnabled() && kind == PromiseKind::Exact && FlacLayout::supportsRate(rate) ? Format::Flac : Format::Wav;
 }

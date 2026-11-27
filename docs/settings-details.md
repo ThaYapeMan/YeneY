@@ -251,7 +251,9 @@ packing is enabled, production completion queues an encoder job. A room
 uses the packed copy if it is ready when the first HEAD or GET gets a
 length. Otherwise it uses fixed FLAC for that row. Both choices stay
 stable for the life of the row. The request log identifies the wire
-format, depth, packing choice and reason for that choice.
+format, depth, packing choice and reason for that choice. FLAC rows
+eligible for packing omit the byte size in queue metadata. Their HTTP
+responses give the exact length of the selected form.
 
 FLAC uses 16 bits for original files that YeneY decodes at proven 16-bit
 depth without sample processing. Other FLAC rows and all WAV rows use

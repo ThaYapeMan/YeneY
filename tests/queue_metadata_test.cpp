@@ -82,6 +82,12 @@ int main() {
         assert(text.find(std::string("protocolInfo=\"http-get:*:audio/") + extension + ":*\"") != std::string::npos);
         assert(text.find("bitsPerSample=\"24\"") != std::string::npos);
         assert(text.find("size=\"" + std::to_string(m.size) + "\"") != std::string::npos);
+        if (std::string(extension) == "flac") {
+            m.omitSize = true;
+            const auto pending = upnp::queueDidl(m);
+            assert(pending.find(" size=\"") == std::string::npos);
+            assert(pending.find(" sampleFrequency=\"44100\"") != std::string::npos);
+        }
         ++m.size;
         bool rejected = false;
         try { upnp::queueDidl(m); } catch (const std::invalid_argument &) { rejected = true; }

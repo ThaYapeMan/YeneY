@@ -42,7 +42,10 @@ std::string queueDidl(const QueueMetadata &m) {
                               : "<upnp:albumArtURI>" + esc(m.artwork) + "</upnp:albumArtURI>") +
            "<upnp:class>object.item.audioItem.musicTrack</upnp:class>"
            "<res protocolInfo=\"http-get:*:audio/" + formatName(format) + ":*\" duration=\"" +
-           declaredDuration + "\"" + (m.deferred ? std::string{} : " size=\"" + std::to_string(m.size) + "\"") + (m.deferred ? std::string{} : " sampleFrequency=\"" + std::to_string(m.rate) + "\"") + " bitsPerSample=\"" + std::to_string(m.bits) + "\" nrAudioChannels=\"2\">" + esc(m.url) +
+           declaredDuration + "\"" +
+           (m.deferred || m.omitSize ? std::string{} : " size=\"" + std::to_string(m.size) + "\"") +
+           (m.deferred ? std::string{} : " sampleFrequency=\"" + std::to_string(m.rate) + "\"") +
+           " bitsPerSample=\"" + std::to_string(m.bits) + "\" nrAudioChannels=\"2\">" + esc(m.url) +
            "</res></item></DIDL-Lite>";
 }
 } // namespace upnp
