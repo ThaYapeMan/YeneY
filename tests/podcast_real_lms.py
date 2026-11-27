@@ -32,6 +32,12 @@ def run(g):
         pcm=raw.read_bytes()
         references[i]=b''.join(pcm[n+1:n+4] for n in range(0,len(pcm),4))
     source_ranges=[]
+    hold_episode = threading.Event()
+    prefix_sent = threading.Event()
+    allow_paused_bytes = threading.Event()
+    paused_bytes_sent = threading.Event()
+    allow_episode_eof = threading.Event()
+    encoded_chunk_bytes = 512 * 1024
     class Handler(BaseHTTPRequestHandler):
         def log_message(self,*args):pass
         def do_HEAD(self):self.respond(False)
@@ -49,13 +55,14 @@ def run(g):
                 if send:self.wfile.write(data)
                 return
             media_path=urlsplit(self.path).path
-            media=media_items[int(media_path.split('/')[1].split('.')[0])]
+            episode = int(media_path.split('/')[1].split('.')[0])
+            media=media_items[episode]
             start,end=0,len(media)-1
             ranged=bool(self.headers.get('Range'))
             if ranged:
                 first,last=self.headers['Range'].split('=')[1].split('-')
                 start=int(first);end=min(int(last) if last else end,end)
-            if send:source_ranges.append((int(media_path.split('/')[1].split('.')[0]),start,end))
+            if send:source_ranges.append((episode,start,end))
             self.send_response(206 if ranged else 200)
             self.send_header('Content-Type','audio/flac' if media_path.endswith('.flac') else 'audio/mpeg')
             self.send_header('Accept-Ranges','bytes')
@@ -63,7 +70,18 @@ def run(g):
             if ranged:self.send_header('Content-Range',f'bytes {start}-{end}/{len(media)}')
             self.end_headers()
             if send:
-                try:self.wfile.write(media[start:end+1])
+                try:
+                    middle = start + encoded_chunk_bytes
+                    final = middle + encoded_chunk_bytes
+                    if hold_episode.is_set() and episode == 3 and start and final <= end:
+                        self.wfile.write(media[start:middle])
+                        prefix_sent.set()
+                        allow_paused_bytes.wait()
+                        self.wfile.write(media[middle:final])
+                        paused_bytes_sent.set()
+                        allow_episode_eof.wait()
+                        start = final
+                    self.wfile.write(media[start:end+1])
                 except (BrokenPipeError,ConnectionResetError):pass
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler)
     origin=f'http://127.0.0.1:{server.server_port}'
@@ -141,6 +159,7 @@ def run(g):
                 wait(bookmark_saved,5,'native bookmark menu published')
                 (base/'podcast-bookmark-menu.txt').write_text(repr(bookmark))
                 print('PASS native podcast saved bookmark: real STAT time 100 s, stop stores progress, continue menu selected',flush=True)
+                hold_episode.set()
             mark=len((base/'bridge.log').read_text());starts=len(packets('STMs'));decoded_reports=len(packets('STMd'))
             now=time.monotonic();range_mark=len(source_ranges)
             cli('podcasts playlist play item_id:'+ident+'.'+str(i)+('.0' if i==3 else ''),mac)
@@ -151,6 +170,7 @@ def run(g):
                 # have independent, genuinely disk-backed receive capacity.
                 from queue_sonos_fake import FiniteDeviceAudio
                 model=FiniteDeviceAudio(sonos,speed=1,progressive=True);sonos.device_audio=model;model.start()
+                wait(prefix_sent.is_set, 5, 'ranged source prefix sent and EOF held')
                 wait(lambda:len(model.audio)>3.2*44100*6,10,'partial producer actual speaker audio')
                 assert 'queue item-end' not in (base/'bridge.log').read_text()[mark:]
                 kept=[e['uri'] for e in items()];adds=len(sonos.actions('AddURIToQueue'))
@@ -158,6 +178,8 @@ def run(g):
                 paused_frame=model.frame
                 wait(lambda:cli('mode ?',mac)[-1]=='pause',5,'partial producer app pause')
                 paused=time.monotonic()
+                allow_paused_bytes.set()
+                wait(paused_bytes_sent.is_set, 5, 'another encoded chunk sent during pause')
                 assert abs(float(cli('time ?',mac)[-1])-(100+model.frame//44100))<1.25,'partial pause position differs from speaker'
                 print('PARTIAL PAUSE 120 real seconds: native status='+repr(cli('status 0 60000 tags:alKudV',mac)),flush=True)
                 for _ in range(12):time.sleep(10)
@@ -166,6 +188,7 @@ def run(g):
                 assert not any(r.get('command')=='q' and r['when']>=paused for r in g['tap'].records),'native buffer-full pause must not discard a disk-backed producer'
                 with sonos.lock:model.resume()
                 wait(lambda:cli('mode ?',mac)[-1]=='play',5,'partial producer app resume')
+                allow_episode_eof.set()
                 assert abs(float(cli('time ?',mac)[-1])-(100+model.frame//44100))<1.25
                 model.speed=5
                 assert len(sonos.actions('AddURIToQueue'))==adds
@@ -311,4 +334,6 @@ def run(g):
             cli('stop',mac)
         finally:radio.close()
     finally:
+        allow_paused_bytes.set()
+        allow_episode_eof.set()
         server.shutdown();server.server_close();thread.join()
