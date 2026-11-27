@@ -51,6 +51,8 @@ class CoreQueueSink : public yeney::Sink {
     struct Job {
         double seconds;
         std::function<void()> run;
+        std::vector<yeney::Frame> pcm;
+        bool processed = false;
     };
     Store store;
     const uint64_t continuationLimit;

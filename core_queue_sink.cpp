@@ -37,7 +37,7 @@ void CoreQueueSink::enqueue(std::function<void()> run, double seconds) {
         return;
     }
     staged += seconds;
-    jobs.push_back({seconds, std::move(run)});
+    jobs.push_back({seconds, std::move(run), {}});
     changed.notify_all();
 }
 void CoreQueueSink::work() {
@@ -53,7 +53,10 @@ void CoreQueueSink::work() {
             busy = true;
         }
         try {
-            job.run();
+            if (job.run)
+                job.run();
+            else
+                append(job.pcm, job.processed);
         } catch (const ItemCancelled &) {
             // A queued job may still reference an item retired by LMS flush.
             // Drop that job; cancellation must not poison the next producer.
@@ -495,12 +498,23 @@ size_t CoreQueueSink::write(const yeney::Frame *p, size_t n, bool processed) {
     if (closing || !workerFault.empty())
         return 0;
     n = std::min(n, size_t(std::max(0.0, budget - staged) * rate));
-    if (!n || jobs.size() >= 8192)
+    if (!n)
         return 0;
-    std::vector<yeney::Frame> data(p, p + n);
+    constexpr size_t decoderBatch = 1024;
     const double seconds = double(n) / rate;
+    // Adjacent PCM with the same DSP provenance can share a storage job.
+    // Control jobs stay in order and separate PCM on either side of a boundary.
+    if (!jobs.empty() && !jobs.back().run && jobs.back().processed == processed &&
+        jobs.back().pcm.size() + n <= decoderBatch) {
+        auto &tail = jobs.back();
+        tail.pcm.insert(tail.pcm.end(), p, p + n);
+        tail.seconds += seconds;
+    } else {
+        if (jobs.size() >= 8192)
+            return 0;
+        jobs.push_back({seconds, {}, std::vector<yeney::Frame>(p, p + n), processed});
+    }
     staged += seconds;
-    jobs.push_back({seconds, [this, data = std::move(data), processed] { append(data, processed); }});
     submitted += n;
     changed.notify_all();
     return n;
