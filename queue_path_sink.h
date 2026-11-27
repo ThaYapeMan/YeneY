@@ -21,6 +21,12 @@ class QueuePathSink : public yeney::Sink {
 public:
     std::function<void(uint64_t)> describeSource;
     explicit QueuePathSink(queue_audio::CoreQueueSink &q, const uint8_t *mac) : relay(q), stream(mac) {}
+    void setProgressCallback(const std::function<void()> &callback) override {
+        yeney::Sink::setProgressCallback(callback);
+        relay.setProgressCallback(callback);
+        stream.setProgressCallback(callback);
+    }
+    unsigned clockPollMs() const override { return target().clockPollMs(); }
     bool isRelay() const { return relayPath; }
     void waitBoundary(bool alreadyStopped = false) {
         boundary = alreadyStopped;
@@ -37,6 +43,7 @@ public:
         reset = fresh;
         // Release publishes nextRelay/start/reset before the core takes ready.
         ready = true;
+        notifyProgress();
     }
     bool takePlaybackReset() override {
         if (!ready || !reset.exchange(false))

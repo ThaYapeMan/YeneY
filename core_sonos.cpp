@@ -26,7 +26,12 @@ extern "C" int sonos_output_running() { return coreRunning.load(); }
 extern "C" uint64_t get_sb_time_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
-static void stopCore(int sig) { coreStop.store(true); std::signal(sig, SIG_DFL); }
+static volatile std::sig_atomic_t coreStopDescriptor = -1;
+static void stopCore(int sig) {
+    coreStop.store(true);
+    yeney::Player::notify(coreStopDescriptor);
+    std::signal(sig, SIG_DFL);
+}
 CoreSonosSink::CoreSonosSink(const uint8_t* mac, uint64_t (*clock)()) : clockMs(clock ? clock : get_sb_time_ms) {
     if (mac && timing_probe::publishEnabled()) {
         try {
@@ -159,6 +164,11 @@ bool CoreSonosSink::outputEmpty(uint64_t submitted) const {
     // The feeder may be empty while encoded HTTP/Sonos audio still plays.
     return audibleFrames() >= submitted && drained(submitted);
 }
+unsigned CoreSonosSink::clockPollMs() const {
+    std::lock_guard<std::mutex> lock(mutex);
+    // The speaker's audible clock advances between feeder completions.
+    return !paused && streamRate && started > audible ? 2 : 0;
+}
 void CoreSonosSink::feed() {
     while (running.load()) {
         Batch b;
@@ -189,6 +199,7 @@ void CoreSonosSink::feed() {
             first = b.first - streamBase;
             started = std::max(started, b.first + b.frames);
         }
+        notifyProgress();
         if (tap && generation.load() == b.generation)
             timing_probe::diagnostics().mapFrames(get_squeezebox_stream_id(), b.rate, b.shmGeneration,
                 first, b.shmFirst, b.frames, b.exported);
@@ -202,6 +213,7 @@ void CoreSonosSink::feed() {
             if (ok && generation.load() == b.generation) handed = std::max(handed, b.first + b.frames);
             inflight = false;
         }
+        notifyProgress();
     }
 }
 void runCoreClient(const char* server, const uint8_t* mac, const char* name, const bridge::LmsIdentity& identity) {
@@ -229,7 +241,9 @@ void runCoreClient(const char* server, const uint8_t* mac, const char* name, con
         };
         config.startOnSubmit = true;
         yeney::Player player(config, sink);
+        coreStopDescriptor = player.armStopNotification();
         player.run(coreStop);
+        coreStopDescriptor = -1;
     } catch (const std::exception& error) {
         printf("core: fatal: %s\n", error.what());
         std::exit(1);

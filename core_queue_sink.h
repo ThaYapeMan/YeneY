@@ -138,11 +138,15 @@ public:
     void beginRender();
     void restartCached();
     uint64_t latestOccurrence() const { return latestProducer.load(); }
-    void resumeReceivedStart() { startRequested = true; }
+    void resumeReceivedStart() {
+        startRequested = true;
+        notifyProgress();
+    }
     bool takeQueueStart() override { return startRequested.exchange(false); }
     void confirmCachedStart() {
         refetchRequested = true;
         cachedStartRequested = true;
+        notifyProgress();
     }
     bool takeQueueCachedStart() override { return cachedStartRequested.exchange(false); }
     bool takeQueueRefetch() override { return refetchRequested.exchange(false); }
@@ -156,7 +160,10 @@ public:
     bool queueEndRequiresPlayed(uint64_t) const override;
     bool queueItemProduced(uint64_t) const override;
     bool queuePrefixProduced(uint64_t, uint64_t) const override;
-    void failQueueTrack() { queueFailed = true; }
+    void failQueueTrack() {
+        queueFailed = true;
+        notifyProgress();
+    }
     bool takeQueueFailure() override { return queueFailed.exchange(false); }
     bool takeAudibleState(yeney::AudibleState &) override;
     std::optional<uint32_t> audibleElapsedMs(uint64_t occurrence) const override;

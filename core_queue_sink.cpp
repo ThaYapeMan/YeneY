@@ -98,6 +98,7 @@ void CoreQueueSink::work() {
             busy = false;
             changed.notify_all();
         }
+        notifyProgress();
     }
 }
 std::string CoreQueueSink::workerError() const {
@@ -937,6 +938,7 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
         speakerElapsed=uint32_t(std::min<uint64_t>(UINT32_MAX,total*1000/r.source.rate));
         if(speakerState!=state)speakerStates.push_back({r.parent,state});
         speakerState=state;paused=true;
+        notifyProgress();
         return;
     }
     if (produced <= r.prefixFrames)
@@ -997,6 +999,7 @@ void CoreQueueSink::speakerPosition(uint64_t id, uint64_t frame, yeney::Playback
     paused = state != yeney::PlaybackState::Playing;
     const bool estimatedEpisode = r.estimated;
     lock.unlock();
+    notifyProgress();
     if (changed || estimatedEpisode) enqueue([this, changed, id] {
         bool deadline=false;
         {
@@ -1106,6 +1109,7 @@ void CoreQueueSink::advanceAudible(uint64_t frame) {
                 audibleSignals.push_back({audibleId, r.first + r.prefixFrames});
         }
     }
+    notifyProgress();
 }
 bool CoreQueueSink::awaitingPublication(uint64_t id) const {
     std::lock_guard<std::mutex> lock(mutex);

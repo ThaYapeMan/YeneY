@@ -8,7 +8,11 @@ extern "C" void yeney_stream_track_changed() __attribute__((weak));
 namespace bridge {
 namespace queue_room_detail {
 std::atomic_bool roomStop{false};
-void stopRoom(int) { roomStop = true; }
+static volatile std::sig_atomic_t roomStopDescriptor = -1;
+void stopRoom(int) {
+    roomStop = true;
+    yeney::Player::notify(roomStopDescriptor);
+}
 void logQueue(const std::string &s) {
     std::printf("yeney: %s%s\n", s.compare(0, 6, "queue ") == 0 ? "" : "queue ", queueUriLog(s).c_str());
 }
@@ -316,7 +320,9 @@ void runQueueCoreClient(const char *server, const uint8_t *mac, const char *name
     config.log = [](const auto &line) { std::printf("core: %s\n", line.c_str()); if ((line.rfind("STMs ", 0) == 0 || line.rfind("STMt ", 0) == 0) && yeney_stream_track_changed) yeney_stream_track_changed(); };
     yeney::Player player(config, room.sink());
     room.statusPlayer(&player);
+    roomStopDescriptor = player.armStopNotification();
     player.run(roomStop);
+    roomStopDescriptor = -1;
     room.shutdown();
     room.statusPlayer(nullptr);
     icon.shutdown();

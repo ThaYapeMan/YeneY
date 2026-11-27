@@ -68,6 +68,7 @@ public:
     // playTiming callback unset; encoder/HTTP handoff time is not audible time.
     void contentPosition(uint64_t frame, bool known) override { bridge::consumptionContent().set(frame, known); }
     bool paced() const override { return false; }
+    unsigned clockPollMs() const override;
 };
 void runCoreClient(const char* server, const uint8_t* mac, const char* name, const bridge::LmsIdentity& identity);
 extern "C" int sonos_output_running();
