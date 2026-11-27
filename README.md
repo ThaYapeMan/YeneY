@@ -374,6 +374,8 @@ also [How YeneY works](docs/how-it-works.md),
   Hue lighting that uses YeneY's timing.
 - [janbar/noson](https://github.com/janbar/noson): the Sonos library by
   Jean-Luc Barriere that YeneY started from; no longer included.
+- [Sonos developer documentation](https://docs.sonos.com/): Sonos's own reference for
+  controlling its speakers; useful for anyone who wants to understand or check the design.
 
 ## License
 
