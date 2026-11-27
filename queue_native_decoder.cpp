@@ -210,7 +210,6 @@ class NativeDecoder final : public yeney::Decoder {
         if (preload) config.mp4Metadata = [metadata] { return metadata->get(); };
         return config;
     }
-    std::unique_ptr<yeney::Decoder> decoder;
     const char codec;
     std::atomic<unsigned> pcmBits{0};
     std::function<void()> depth16;
@@ -218,7 +217,10 @@ class NativeDecoder final : public yeney::Decoder {
     std::atomic<bool> stop{false};
     mutable std::mutex mutex;
     std::condition_variable changed;
+    std::atomic<uint64_t> inputProgress{0};
+    std::function<void()> notifyPlayer;
     std::string failure;
+    std::unique_ptr<yeney::Decoder> decoder;
     std::thread worker;
     std::function<void(const std::string &)> log;
     std::atomic<uint64_t> ingested{0};
@@ -226,6 +228,14 @@ class NativeDecoder final : public yeney::Decoder {
     std::atomic<bool> sharedEof{false};
     bool announced = false;
     const std::chrono::steady_clock::time_point started = std::chrono::steady_clock::now();
+
+    void inputChanged() {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            ++inputProgress;
+        }
+        changed.notify_one();
+    }
 
     bool wait(int socket, short events) {
         auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -366,6 +376,7 @@ class NativeDecoder final : public yeney::Decoder {
             auto feed = [&](const char *data, size_t bytes) {
                 size_t consumed = 0;
                 while (!stop && consumed < bytes) {
+                    const auto progress = inputProgress.load();
                     const auto credit = allowance.load();
                     const size_t permitted = (sharedEof || independentInput) ? bytes - consumed :
                         size_t(std::min<uint64_t>(bytes - consumed, credit > supplied ? credit - supplied : 0));
@@ -376,8 +387,9 @@ class NativeDecoder final : public yeney::Decoder {
                     if (!count) {
                         if (!decoder->error().empty()) return false;
                         std::unique_lock<std::mutex> lock(mutex);
-                        changed.wait_for(lock, std::chrono::microseconds(independentInput ? 100 : 2000),
-                                         [this] { return stop.load(); });
+                        changed.wait(lock, [this, progress] {
+                            return stop.load() || inputProgress.load() != progress;
+                        });
                     }
                 }
                 return !stop.load();
@@ -452,8 +464,12 @@ class NativeDecoder final : public yeney::Decoder {
         } catch (const std::exception &e) {
             movie->publish();
             if (!stop) {
-                std::lock_guard<std::mutex> lock(mutex);
-                failure = e.what();
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    failure = e.what();
+                }
+                if (notifyPlayer)
+                    notifyPlayer();
             }
         }
     }
@@ -461,8 +477,15 @@ public:
     NativeDecoder(const yeney::DecoderConfig &config, const std::string &host,
                   const std::string &track, unsigned offsetMs,
                   std::function<void(const std::string &)> logger, unsigned port, std::function<void()> depthProof)
-        : decoder(yeney::makeDecoder(withOrigin(config, pcmOriginKnown, movie, pcmFrames, fileFromStart, config.codec == 'l' && !offsetMs))),
-          codec(config.codec), depth16(std::move(depthProof)), log(std::move(logger)) {
+        : codec(config.codec), depth16(std::move(depthProof)), notifyPlayer(config.notifyProgress), log(std::move(logger)) {
+        auto workerConfig =
+            withOrigin(config, pcmOriginKnown, movie, pcmFrames, fileFromStart, config.codec == 'l' && !offsetMs);
+        workerConfig.notifyProgress = [this] {
+            inputChanged();
+            if (notifyPlayer)
+                notifyPlayer();
+        };
+        decoder = yeney::makeDecoder(workerConfig);
         worker = std::thread([this, host, track, offsetMs, port, rawPcm = config.codec == 'p',
                               preload = config.codec == 'l' && !offsetMs,
                               pcmWidth = config.size >= '0' && config.size <= '3' &&
@@ -472,20 +495,26 @@ public:
         });
     }
     ~NativeDecoder() override {
-        stop = true;
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            stop = true;
+        }
         movie->cancel();
-        changed.notify_all();
+        changed.notify_one();
         worker.join();
+        // The decoder worker owns its callback until it has joined.
+        decoder.reset();
     }
     bool hasIndependentEncodedSource() const override { return true; }
     size_t feed(const uint8_t *, size_t bytes) override {
         allowance += bytes;
-        changed.notify_all();
+        if (bytes)
+            inputChanged();
         return bytes;
     }
     void finish() override {
         sharedEof = true; // The immutable HTTP source still owns its own EOF.
-        changed.notify_all();
+        inputChanged();
     }
     size_t take(yeney::Frame *frames, size_t count) override {
         auto n = decoder->take(frames, count);
@@ -493,7 +522,6 @@ public:
             announced = true;
             if (log) log("first_pcm ingested_bytes=" + std::to_string(ingested.load()));
         }
-        changed.notify_all();
         return n;
     }
     bool sourceStart(uint64_t &frame) const override { return decoder->sourceStart(frame); }

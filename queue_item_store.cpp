@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -555,6 +556,9 @@ void Item::finish() {
             store->spill(*state, lock);
         state->finished = true;
         state->producedMs = state->elapsedMs();
+        std::printf("yeney: queue row complete occurrence=%s frames=%llu produced_ms=%lld\n",
+                    state->descriptor.occurrence.c_str(), static_cast<unsigned long long>(state->produced),
+                    static_cast<long long>(state->producedMs));
         if (store->config.packRows && state->descriptor.kind == PromiseKind::Exact &&
             state->descriptor.promisedFrames && FlacLayout::supportsRate(state->descriptor.rate)) {
             try { store->packJobs.emplace_back(state); }
