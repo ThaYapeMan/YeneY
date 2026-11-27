@@ -382,12 +382,12 @@
         "fast": "test-fast-run",
         "full": "test-run"
       },
-      "phase": "parallel",
-      "reason": "Loopback refill probe, FLAC block-size and PCM proofs, seek-chain predictions, listen and mix answers, replays, and row metadata, named timeouts and restored play mode.",
+      "phase": "quiet",
+      "reason": "The loopback joins require low-latency WebSocket position samples. Also covers FLAC and PCM proofs, seek-chain predictions, listen and mix answers, row metadata, timeouts and restored play mode.",
       "seconds": 120,
       "modes": ["fast", "full"],
       "label": "refill-probe",
-      "time_judging": false
+      "time_judging": true
     },
     {
       "name": "build-upgrade",
