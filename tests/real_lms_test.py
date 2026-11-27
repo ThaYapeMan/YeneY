@@ -273,6 +273,8 @@ fixture_count = 20 if playqueue_case else 4 if scale_mb else 12 if os.environ.ge
 for i,rate in enumerate((44100,)*fixture_count if nav_media or scale_mb else (44100,48000)*(fixture_count//2)):
     path=base/f'input-{i}.wav'
     seconds = 360 if os.environ.get('YENEY_WS_LIFECYCLE') == '1' and i < 2 else 180 if (os.environ.get('YENEY_TIMING_03') == '1' or os.environ.get('YENEY_TIMING_03D') == '1') and i < 2 else 61 if nav_media else 90 if os.environ.get('YENEY_NAV_CASE') in ('S4b', 'S4c', 'S4d') else 24
+    if os.environ.get('YENEY_WORK_DRIVEN_ROOM') == 'producing' and i in (0, 1, 3, 5):
+        seconds = 180
     if packed_rows:
         seconds = 300 if packed_rows == 'benchmark' and i < 3 else 8
     if depth_rows:
@@ -683,6 +685,10 @@ try:
     if depth_rows:
         from queue_depth_real_lms import run
         run(globals())
+        raise SystemExit(0)
+    if role := os.environ.get('YENEY_WORK_DRIVEN_ROOM'):
+        from work_driven_rooms import room
+        room(globals(), role)
         raise SystemExit(0)
     if packed_rows:
         from queue_packed_real_lms import run

@@ -135,6 +135,25 @@
   },
   "steps": [
     {
+      "name": "work-driven-room-isolation",
+      "target": "main",
+      "command": "python3 tests/work_driven_rooms.py",
+      "environment": {
+        "YENEY_QUEUE_FORMAT": "flac-fixed-packed"
+      },
+      "prerequisites": {
+        "full": "test-run"
+      },
+      "phase": "quiet",
+      "reason": "Keep the two-room workload isolated when comparing the speaker and LMS clocks.",
+      "seconds": 25,
+      "modes": [
+        "full"
+      ],
+      "label": "work-driven-room-isolation",
+      "time_judging": true
+    },
+    {
       "name": "queue-flac-writer",
       "label": "queue-flac-writer",
       "target": "main",
@@ -216,7 +235,7 @@
         "full": "test-run"
       },
       "phase": "parallel",
-      "reason": "Real LMS cold fixed row and two packed successors with sample-exact joins.",
+      "reason": "Real LMS initial row readiness and packed successors with sample-exact joins.",
       "seconds": 40,
       "modes": [
         "full"
@@ -246,13 +265,14 @@
       "target": "main",
       "command": "python3 tests/real_lms_test.py",
       "environment": {
-        "YENEY_QUEUE_PACKED_REAL_LMS": "fixed-controls"
+        "YENEY_QUEUE_PACKED_REAL_LMS": "fixed-controls",
+        "YENEY_QUEUE_FORMAT": "flac-fixed"
       },
       "prerequisites": {
         "full": "test-run"
       },
       "phase": "parallel",
-      "reason": "Capture-based seek and pause requests on a cold fixed row.",
+      "reason": "Capture-based seek and pause requests with the fixed representation selected.",
       "seconds": 40,
       "modes": [
         "full"
@@ -7781,6 +7801,7 @@
   "orders": {
     "full": [
       "queue-body-pacing",
+      "work-driven-room-isolation",
       "queue-flac-writer",
       "queue-flac-http",
       "queue-pacing-tail-crossing",

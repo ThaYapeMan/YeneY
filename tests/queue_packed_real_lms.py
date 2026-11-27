@@ -43,8 +43,13 @@ def run(context):
                     print(next(line.strip() for line in status if line.startswith('VmHWM:')), flush=True)
                 print(f'PASS five-minute-track album, elapsed {time.monotonic()-start:.2f} s', flush=True)
                 return
-            assert [re.search(r'pack=(\w+)', line)[1] for line in log] == ['fixed', 'packed', 'packed'], log
-            print('PASS real LMS cold fixed row and two packed successors, sample-exact joins and LMS indices', flush=True)
+            forms = [re.search(r'pack=(\w+) reason=(\w[\w-]*)', line).groups() for line in log]
+            assert len(forms) == 3 and forms[1:] == [('packed', 'ready')] * 2, log
+            initial_form, initial_reason = forms[0]
+            # The eight-second first row may finish packing before the device asks.
+            assert (initial_form == 'packed') == (initial_reason == 'ready'), log
+            print(f'PASS real LMS initial form={initial_form}, two packed successors, '
+                  'sample-exact joins and LMS indices', flush=True)
             return
         if mode == 'fixed-controls':
             wait(lambda: model.current is not None and model.frame >= 44100,
