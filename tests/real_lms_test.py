@@ -49,8 +49,11 @@ class Tap:
         if self.replay:
             from navigation_http_gate import NavigationHTTPGate
             self.http_gate = NavigationHTTPGate(hold_request=1, truncate_held=True)
+        if os.environ.get('YENEY_REAL_LMS_NAV_ONLY') == '1':
+            from navigation_http_gate import NavigationHTTPGate
+            self.http_gate = NavigationHTTPGate(hold_request=1)
         nav_case = os.environ.get('YENEY_NAV_CASE', '')
-        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and (nav_case.startswith('R-') or nav_case in ('A2', 'S2', 'S3', 'B1', 'B2', 'F3', 'D1')):
+        if os.environ.get('YENEY_REAL_LMS_NAV_INVARIANTS') == '1' and (nav_case.startswith('R-') or nav_case in ('A2', 'S2', 'S3', 'B1', 'B2', 'F1', 'F3', 'D1')):
             from navigation_http_gate import NavigationHTTPGate
             self.http_gate = NavigationHTTPGate(hold_request=0 if nav_case == 'D1' else 2 if nav_case == 'A2' else 1,
                                                 hold_following=nav_case in ('R-far', 'R-producing'))

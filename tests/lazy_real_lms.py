@@ -2,7 +2,7 @@
 """Deferred lazy publication/activation against private loopback LMS 9.1.1."""
 import http.client
 from io import BytesIO
-from served_queue_audio import RowReader
+from served_queue_audio import RowHeader, RowReader
 import time
 import socket
 import threading
@@ -35,11 +35,16 @@ def run(context):
                 if not upper:raise
                 body=error.partial
             assert response.status == 200 and body[:4] == (b'fLaC' if url.path.endswith('.flac') else b'RIFF')
-            if body.startswith(b'fLaC'):
-                RowReader(BytesIO(body)).read_pcm()
             assert len(body)<=int(dict(headers)['Content-Length']) if upper else len(body)==int(dict(headers)['Content-Length'])
             return headers,body,elapsed
         finally:conn.close()
+
+    def flac_reader(result):
+        source = BytesIO(result[1])
+        return RowReader(source, RowHeader.read(source, wire_length=len(result[1])))
+
+    def headers_without_length(result):
+        return [(name, value) for name, value in result[0] if name.lower() != 'content-length']
 
     fillers=context['window_ids'][:2]
     targets=[('local', context['window_ids'][2])]
@@ -66,18 +71,19 @@ def run(context):
         assert not [r for r in proxy.records[before:] if ' playlist index ' in r['request'] and not r['request'].endswith(' ?')]
         select_item(2)
         deferred=fetch(lazy)
-        if label == 'local' and url.path.endswith('.flac'):
+        if url.path.endswith('.flac'):
             # The original header is available for the natural row. An
             # upcoming row must keep the depth it declared before activation.
-            natural_audio = RowReader(BytesIO(natural[1]))
-            lazy_audio = RowReader(BytesIO(deferred[1]))
-            assert (natural_audio.header.bits, lazy_audio.header.bits) == (16, 24)
-            assert lazy['resource']['bitsPerSample'] == str(lazy_audio.header.bits)
-            def headers_without_length(result):
-                return [(name, value) for name, value in result[0] if name.lower() != 'content-length']
+            natural_audio, lazy_audio = flac_reader(natural), flac_reader(deferred)
+            original, upcoming = natural_audio.header, lazy_audio.header
+            assert (original.rate, original.samples) == (upcoming.rate, upcoming.samples)
+            assert (original.bits, upcoming.bits) == ((16, 24) if label == 'local' else (24, 24))
+            assert lazy['resource']['bitsPerSample'] == str(upcoming.bits)
             assert headers_without_length(deferred) == headers_without_length(natural)
             assert lazy_audio.read_pcm() == natural_audio.read_pcm(), label
-            identity = '16-bit natural and 24-bit deferred PCM identical'
+            if original.bits == upcoming.bits and bool(original.packed_length) == bool(upcoming.packed_length):
+                assert deferred[:2] == natural[:2], label
+            identity = f'{original.bits}-bit natural and {upcoming.bits}-bit deferred PCM identical'
         else:
             assert deferred[:2]==natural[:2],label
             identity = 'headers/audio byte-identical to natural'

@@ -80,7 +80,7 @@ class Device(Handler):
                 try:
                     if getattr(self.server,'consume_stream',False):
                         while not self.server.closing:
-                            data=r.read(4096)
+                            data=r.read1(4096)
                             if not data:break
                             self.server.stream_audio=getattr(self.server,'stream_audio',b'')+data
                     else:self.server.stream_audio=r.read(128)

@@ -32,6 +32,7 @@ def run(context):
     cli('playlistcontrol cmd:load track_id:' + ','.join(ids), mac)
     wait(lambda: len(items()) == len(ids), 15, 'early Previous initial window')
     select_item(0)
+    wait(context['tap'].http_gate.held.is_set, 5, 'initial producer held before natural Next')
     # Keep a PCM GET waiting across the controller's selection. Its queued
     # activation must use the controller's producer without an LMS echo.
     entered, release = threading.Event(), threading.Event()

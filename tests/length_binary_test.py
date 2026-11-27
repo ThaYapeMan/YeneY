@@ -3,13 +3,14 @@ import os
 tempfile.tempdir = (os.environ.get('TMPDIR') or '/var/tmp')
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 """Real bridge plus strict loopback Sonos/LMS: bounded source count mismatches."""
-import http.client,math,os,struct,time,unittest
+import http.client,math,os,struct,unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import urlsplit
 import queue_binary_test as fixture
 from length_test import alac,signal
-from served_queue_audio import RowReader
+from served_queue_audio import RowHeader, RowReader
 from decoders_test import alac_parts
 
 class Lengths(unittest.TestCase):
@@ -26,16 +27,27 @@ class Lengths(unittest.TestCase):
                     try:
                         if short==9000:
                             h.until(lambda:len(h.packets('STMn'))==1)
-                            time.sleep(.2);self.assertEqual(len(h.packets('STMn')),1)
-                            self.assertFalse(h.items());self.assertIn('source-short',(h.base/'bridge.log').read_text())
+                            h.until(lambda: h.items() == h.sonos.original)
+                            self.assertEqual(len(h.packets('STMn')), 1)
+                            self.assertIn('source-short', (h.base/'bridge.log').read_text())
                             print(f'PASS real binary ALAC {rate} large short: one STMn, Stop/release once, no retry loop',flush=True)
                             continue
                         h.until(lambda:len(h.packets('STMs'))==1)
                         item=h.items()[0];u=urlsplit(item['uri']);connection=http.client.HTTPConnection(u.netloc,timeout=8)
-                        connection.request('GET',u.path+('?' + u.query if u.query else ''));response=connection.getresponse();served=RowReader(response);wave=served.read_wav();connection.close()
+                        connection.request('GET',u.path+('?' + u.query if u.query else ''))
+                        response = connection.getresponse()
+                        wire = response.read()
+                        self.assertEqual(len(wire), int(response.getheader('Content-Length')))
+                        connection.close()
+                        payload = BytesIO(wire)
+                        served = RowReader(payload, RowHeader.read(payload, wire_length=len(wire)))
+                        wave = served.read_wav()
                         target=rate if rate<=48000 else 48000;factor=rate//target
                         expected=(len(values)+1000+factor-1)//factor
-                        self.assertEqual(len(wave),44+expected*6);self.assertEqual(int(item['resource']['size']),served.header.declared_length)
+                        self.assertEqual(len(wave), 44 + expected * 6)
+                        self.assertEqual(len(wire), served.header.wire_length)
+                        if 'size' in item['resource']:
+                            self.assertEqual(int(item['resource']['size']), served.header.wire_length)
                         log=(h.base/'bridge.log').read_text();self.assertEqual(log.count('source-short padded '),1)
                         self.assertNotIn('relay fault=',log);self.assertFalse(h.packets('STMn'));self.assertEqual(len(h.sonos.actions('Stop')),0)
                         h.state(1,math.ceil(expected/target),'STOPPED')
@@ -58,8 +70,11 @@ class Lengths(unittest.TestCase):
                 h=fixture.Binary(rates=(44100,),seconds=4)
                 try:
                     if delta==6000:
-                        h.until(lambda:len(h.packets('STMn'))==1);time.sleep(.2);self.assertEqual(len(h.packets('STMn')),1)
-                        self.assertFalse(h.items());print('PASS real binary FLAC large short: one STMn and owned release',flush=True);continue
+                        h.until(lambda: len(h.packets('STMn')) == 1)
+                        h.until(lambda: h.items() == h.sonos.original)
+                        self.assertEqual(len(h.packets('STMn')), 1)
+                        print('PASS real binary FLAC large short: one STMn and owned release', flush=True)
+                        continue
                     h.until(lambda:len(h.packets('STMs'))==1)
                     item=h.items()[0];u=urlsplit(item['uri']);c=http.client.HTTPConnection(u.netloc,timeout=8)
                     c.request('GET',u.path+('?' + u.query if u.query else ''));response=c.getresponse();body=RowReader(response).read_wav();c.close()

@@ -73,7 +73,7 @@ class RowHeader:
     seek_points: tuple = ()
 
     @classmethod
-    def read(cls, source):
+    def read(cls, source, *, wire_length=None):
         magic = source.read(4)
         if magic == b"RIFF":
             wire = magic + source.read(40)
@@ -106,9 +106,10 @@ class RowHeader:
                 points = [(sample, offset) for sample, offset, _ in struct.iter_unpack(">QQH", body)
                           if sample < samples]
         assert points
-        content_range = source.getheader("Content-Range")
-        total = int(content_range.rsplit("/", 1)[1] if content_range else source.getheader("Content-Length"))
-        return cls(wire, rate, samples, bits, True, total,
+        if wire_length is None:
+            content_range = source.getheader("Content-Range")
+            wire_length = int(content_range.rsplit("/", 1)[1] if content_range else source.getheader("Content-Length"))
+        return cls(wire, rate, samples, bits, True, wire_length,
                    tuple((sample, offset + len(wire)) for sample, offset in points))
 
     @property

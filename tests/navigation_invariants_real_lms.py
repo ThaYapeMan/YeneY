@@ -113,6 +113,7 @@ def run(c):
         first_seek = rng.randint(12, 14) if seed else 12
         far_seek, forward_seek = first_seek + 8, first_seek + 4
         backward_seek = first_seek - 8
+        starts = len(c['packets']('STMs'))
         cli(f'time {first_seek}', mac)
         wait(lambda: 'reason=seek-partial edits=2' in log()[mark:], 15, 'shortened row installed')
         partial = row(initial)
@@ -124,6 +125,10 @@ def run(c):
         if case in ('R-forward', 'R-app'):
             rate = int.from_bytes(prefix[24:28], 'little')
             fetch(partial, limit=44 + (5 * rate + 4096) * 6)
+            # Covered seeks require a confirmed audible row as well as PCM.
+            # The reader can now get its prefix before position confirmation.
+            wait(lambda: len(c['packets']('STMs')) > starts, 8,
+                 'shortened producer confirmed audible')
         commands = {'R-time': 'time 0', 'R-index': 'playlist index 0', 'R-backward': f'time {backward_seek}',
                     'R-forward': f'time {forward_seek}', 'R-far': f'time {far_seek}', 'R-producing': 'time 0'}
         mark, actions = len(log()), len(sonos.requests)
@@ -524,6 +529,7 @@ def run(c):
         print(next(line for line in text.splitlines() if 'window pairing ' in line), flush=True)
         print(f'PASS {case} paired retained frame-zero target: no re-production, no Seek, stable audible URI, one command, byte identity', flush=True)
     elif case == 'F1':
+        wait(c['tap'].http_gate.held.is_set, 5, 'initial producer held before lazy GET burst')
         before = len(proxy.records)
         # Queue a second live request while the first selection is settling.
         targets = [row(1), row(2), row(3)]
@@ -854,12 +860,20 @@ def run(c):
                 cli('pause 1', mac)
                 wait(lambda: sonos.transport_state == 'PAUSED_PLAYBACK' and
                      json.loads((base / ('stream-pacing-' + b'Study'.hex() + '.json')).read_text())['playback']['state'] == 'PAUSED', 5, 'soak pause')
+                paused_ms = round(float(cli('time ?', mac)[-1]) * 1000)
+                wire = c['tap'].records
+                resume_mark = len(wire)
                 cli('pause 0', mac)
                 wait(lambda: sonos.transport_state == 'PLAYING', 5, 'soak resume')
                 pause_cycles += 1
                 # Pause cycles are additional to the 200 navigation steps.
-                # Resume retains the current seek offset, if any.
                 settle(index, True)
+                resume_commands = [packet.get('command') for packet in wire[resume_mark:]]
+                if 'q' in resume_commands and 's' in resume_commands[resume_commands.index('q') + 1:]:
+                    # LMS can start a new stream at its paused time when its
+                    # previous audio source already ended during decode-ahead.
+                    lms_offset = paused_ms
+                    print(f'SOAK seed={seed} step={steps} resumed_lms_offset_ms={lms_offset}', flush=True)
             elif operation == 'app-position':
                 fetch(row(index))
                 previous_position = sum(int(n) * weight for n, weight in zip(sonos.position['RelTime'].split(':'), (3600, 60, 1)))

@@ -11,10 +11,13 @@ checkout = Path(os.environ.get('YENEY_WORKER_BASELINE', ROOT))
 with tempfile.TemporaryDirectory(prefix='yeney-worker-boundary-', dir=os.environ.get('TMPDIR') or '/var/tmp') as directory:
     work = Path(directory)
     source = (checkout/'core_queue_sink.cpp').read_text()
-    assert source.count('            job.run();') == 1
-    source = '#include <unistd.h>\n#include <cstdlib>\n' + source.replace('            job.run();', '''            if (const char *trigger = std::getenv("YENEY_TEST_WORKER_TRIGGER"); trigger && access(trigger, F_OK) == 0)
+    worker = source.index('void CoreQueueSink::work() {')
+    body = '        try {\n'
+    boundary = source.index(body, worker) + len(body)
+    trigger = """            if (const char *path = std::getenv("YENEY_TEST_WORKER_TRIGGER"); path && access(path, F_OK) == 0)
                 throw std::logic_error("injected programming error");
-            job.run();''')
+"""
+    source = '#include <unistd.h>\n#include <cstdlib>\n' + source[:boundary] + trigger + source[boundary:]
     (work/'sink.cpp').write_text(source)
     subprocess.run(['g++', '-std=c++17', '-g', '-O2', '-Wall', '-Wextra', '-I'+str(checkout),
                     '-c', str(work/'sink.cpp'), '-o', str(work/'sink.o')], check=True)

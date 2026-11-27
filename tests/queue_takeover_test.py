@@ -220,6 +220,7 @@ def podcast_then_local():
         assert h.sonos.uri.startswith('http://')
         assert not h.sonos.actions('SaveQueue') and not h.sonos.actions('SetCrossfadeMode')
         assert not h.commands.count('stop')
+        h.until(lambda:bool(getattr(h.sonos,'stream_audio',b'')))
         print('PASS podcast takes live Spotify via existing HTTP SetAVTransportURI and Play; no queue acquisition or LMS stop',flush=True)
         h.lms.strm('q')
         h.until(lambda:len(h.sonos.actions('Stop'))>=1)
