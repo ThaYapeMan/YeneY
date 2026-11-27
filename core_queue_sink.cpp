@@ -882,6 +882,11 @@ void CoreQueueSink::reanchorSpeaker(uint64_t id, uint32_t origin, uint32_t posit
     records.at(id).sourceOriginMs = origin;
     records.at(id).seekPositionMs = position;
 }
+void CoreQueueSink::rebindRecoveredClock(uint64_t from, uint64_t to) {
+    std::lock_guard<std::mutex> lock(mutex);
+    if (recoveredClockOccurrence == from)
+        recoveredClockOccurrence = to;
+}
 void CoreQueueSink::useSpeakerClock() {
     std::lock_guard<std::mutex> lock(mutex);
     speakerClock = true;

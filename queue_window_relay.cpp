@@ -209,6 +209,8 @@ void QueueRoom::Impl::reconcileWindow() {
         } else if (target.size() == 1 && target.front().item &&
             target.front().item == navigationItem->item && !target.front().originMs &&
             !navigationItem->originMs && target.front().sourceUrl == navigationItem->sourceUrl) {
+            if (speakerSelection)
+                queue.rebindRecoveredClock(target.front().stream, navigationItem->stream);
             rowOwner.rebindClock(target.front(), navigationItem->stream);
             if (navigationItem->uri != target.front().uri) owned.erase(navigationItem->uri);
             reused = true;

@@ -153,6 +153,7 @@ public:
     bool takeQueueCachedStart() override { return cachedStartRequested.exchange(false); }
     bool takeQueueRefetch() override { return refetchRequested.exchange(false); }
     void reanchorSpeaker(uint64_t occurrence, uint32_t sourceOriginMs, uint32_t seekPositionMs);
+    void rebindRecoveredClock(uint64_t from, uint64_t to);
     void speakerPosition(uint64_t occurrence, uint64_t renderedFrame, yeney::PlaybackState, bool recovered = false);
     void positionClock(uint64_t occurrence, std::function<std::optional<uint32_t>()> clock);
     void extrapolateSpeakerClock(bool enabled) { extrapolateSpeaker = enabled; }
